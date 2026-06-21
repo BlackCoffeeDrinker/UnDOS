@@ -57,7 +57,7 @@ The Stage 1.5 loader maps the hardware memory architecture according to this phy
 | **Stage 1.5 Runtime Base**     | `0x00100000`                | `0x00100000`          | Identity-mapped via GRUB                  |
 | **Hardware Abstraction Layer** | `0x80000000`                | `0x00800000` (8MB)    | Supervisor, Present, Read/Write (`0x003`) |
 | **Kernel Core Space**          | `0xC0000000`                | `0x01000000` (16MB)   | Supervisor, Present, Read/Write (`0x003`) |
-| **WinNT Recursive Directory**  | `0xFFC00000`                | Page Dir Physical     | Map slot 1023 straight into itself        |
+| **Recursive Directory**        | `0xFFC00000`                | Page Dir Physical     | Map slot 1023 straight into itself        |
 
 ## Executable & Compatibility Model
 
@@ -128,6 +128,13 @@ The GUI is heavily inspired by GDI and the classic Windows 3.1 / Workgroups envi
 
 ## Developer
 
+### How to build
+
+1. Clone the repository and navigate to the project directory.
+2. In the `[DockerGccCross](DockerGccCross)` directory there's a Dockerfile for making a build container
+3. Run `cmake` in a compatible environment to generate the build system.
+4. Build `BootIso` target using the generated build system; this builds everything with the x86-old hal
+
 ### Adding a New Cross-Binary Function
 
 1. Declare the function interface prototype in a header inside `kernel_headers` using either `UNDOS_KERNEL_API` or `UNDOS_HAL_API`.
@@ -148,9 +155,7 @@ The GUI is heavily inspired by GDI and the classic Windows 3.1 / Workgroups envi
 * **Maintain C-Linkage on Exports:** Any function annotated with API visibility must use `extern "C"` to prevent C++ name-mangling, as the Stage 1.5 dynamic symbol map
   matches string identifiers exactly.
 
----
-
-## Next Todos
+# Next Todos
 
 * [ ] Fix crash when transferring execution context from Stage 1.5 over to HAL
 * [ ] Implement initial GDT reload structure inside x86 HAL initialization sequence
