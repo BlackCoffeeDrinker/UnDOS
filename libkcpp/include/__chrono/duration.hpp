@@ -1,0 +1,526 @@
+
+#pragma once
+
+#include <__compare/ordering.hpp>
+#include <__compare/three_way_comparable.hpp>
+#include <__config.hpp>
+#include <__type_traits/common_type.hpp>
+#include <__type_traits/enable_if.hpp>
+#include <__type_traits/is_convertible.hpp>
+#include <__type_traits/is_floating_point.hpp>
+#include <limits.hpp>
+#include <ratio.hpp>
+
+namespace kstd {
+
+namespace chrono {
+
+template <class _Rep, class _Period = ratio<1> >
+class duration;
+
+template <class _Tp>
+inline const bool __is_duration_v = false;
+
+template <class _Rep, class _Period>
+inline const bool __is_duration_v<duration<_Rep, _Period> > = true;
+
+template <class _Rep, class _Period>
+inline const bool __is_duration_v<const duration<_Rep, _Period> > = true;
+
+template <class _Rep, class _Period>
+inline const bool __is_duration_v<volatile duration<_Rep, _Period> > = true;
+
+template <class _Rep, class _Period>
+inline const bool __is_duration_v<const volatile duration<_Rep, _Period> > = true;
+
+} // namespace chrono
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+struct common_type<chrono::duration<_Rep1, _Period1>, chrono::duration<_Rep2, _Period2> > {
+  typedef chrono::duration<typename common_type<_Rep1, _Rep2>::type, __ratio_gcd<_Period1, _Period2> > type;
+};
+
+namespace chrono {
+
+// duration_cast
+
+template <class _FromDuration,
+          class _ToDuration,
+          class _Period = typename ratio_divide<typename _FromDuration::period, typename _ToDuration::period>::type,
+          bool          = _Period::num == 1,
+          bool          = _Period::den == 1>
+struct __duration_cast;
+
+template <class _FromDuration, class _ToDuration, class _Period>
+struct __duration_cast<_FromDuration, _ToDuration, _Period, true, true> {
+   constexpr _ToDuration operator()(const _FromDuration& __fd) const {
+    return _ToDuration(static_cast<typename _ToDuration::rep>(__fd.count()));
+  }
+};
+
+template <class _FromDuration, class _ToDuration, class _Period>
+struct __duration_cast<_FromDuration, _ToDuration, _Period, true, false> {
+   constexpr _ToDuration operator()(const _FromDuration& __fd) const {
+    typedef typename common_type<typename _ToDuration::rep, typename _FromDuration::rep, intmax_t>::type _Ct;
+    return _ToDuration(
+        static_cast<typename _ToDuration::rep>(static_cast<_Ct>(__fd.count()) / static_cast<_Ct>(_Period::den)));
+  }
+};
+
+template <class _FromDuration, class _ToDuration, class _Period>
+struct __duration_cast<_FromDuration, _ToDuration, _Period, false, true> {
+   constexpr _ToDuration operator()(const _FromDuration& __fd) const {
+    typedef typename common_type<typename _ToDuration::rep, typename _FromDuration::rep, intmax_t>::type _Ct;
+    return _ToDuration(
+        static_cast<typename _ToDuration::rep>(static_cast<_Ct>(__fd.count()) * static_cast<_Ct>(_Period::num)));
+  }
+};
+
+template <class _FromDuration, class _ToDuration, class _Period>
+struct __duration_cast<_FromDuration, _ToDuration, _Period, false, false> {
+   constexpr _ToDuration operator()(const _FromDuration& __fd) const {
+    typedef typename common_type<typename _ToDuration::rep, typename _FromDuration::rep, intmax_t>::type _Ct;
+    return _ToDuration(static_cast<typename _ToDuration::rep>(
+        static_cast<_Ct>(__fd.count()) * static_cast<_Ct>(_Period::num) / static_cast<_Ct>(_Period::den)));
+  }
+};
+
+template <class _ToDuration, class _Rep, class _Period, enable_if_t<__is_duration_v<_ToDuration>, int> = 0>
+[[__nodiscard__]] inline  constexpr _ToDuration
+duration_cast(const duration<_Rep, _Period>& __fd) {
+  return __duration_cast<duration<_Rep, _Period>, _ToDuration>()(__fd);
+}
+
+template <class _Rep>
+struct treat_as_floating_point : is_floating_point<_Rep> {};
+
+#if _LIBCPP_STD_VER >= 17
+template <class _Rep>
+inline constexpr bool treat_as_floating_point_v = treat_as_floating_point<_Rep>::value;
+#endif
+
+template <class _Rep>
+struct duration_values {
+public:
+  [[__nodiscard__]]  static constexpr _Rep zero() noexcept { return _Rep(0); }
+  [[__nodiscard__]]  static constexpr _Rep max() noexcept {
+    return numeric_limits<_Rep>::max();
+  }
+  [[__nodiscard__]]  static constexpr _Rep min() noexcept {
+    return numeric_limits<_Rep>::lowest();
+  }
+};
+
+template <class _ToDuration, class _Rep, class _Period, enable_if_t<__is_duration_v<_ToDuration>, int> = 0>
+[[__nodiscard__]] inline  constexpr _ToDuration floor(const duration<_Rep, _Period>& __d) {
+  _ToDuration __t = chrono::duration_cast<_ToDuration>(__d);
+  if (__t > __d)
+    __t = __t - _ToDuration{1};
+  return __t;
+}
+
+template <class _ToDuration, class _Rep, class _Period, enable_if_t<__is_duration_v<_ToDuration>, int> = 0>
+[[__nodiscard__]] inline  constexpr _ToDuration ceil(const duration<_Rep, _Period>& __d) {
+  _ToDuration __t = chrono::duration_cast<_ToDuration>(__d);
+  if (__t < __d)
+    __t = __t + _ToDuration{1};
+  return __t;
+}
+
+template <class _ToDuration, class _Rep, class _Period, enable_if_t<__is_duration_v<_ToDuration>, int> = 0>
+[[__nodiscard__]] inline  constexpr _ToDuration round(const duration<_Rep, _Period>& __d) {
+  _ToDuration __lower = chrono::floor<_ToDuration>(__d);
+  _ToDuration __upper = __lower + _ToDuration{1};
+  auto __lower_diff   = __d - __lower;
+  auto __upper_diff   = __upper - __d;
+  if (__lower_diff < __upper_diff)
+    return __lower;
+  if (__lower_diff > __upper_diff)
+    return __upper;
+  return __lower.count() & 1 ? __upper : __lower;
+}
+
+// duration
+
+template <class _Rep, class _Period>
+class duration {
+  static_assert(!__is_duration_v<_Rep>, "A duration representation can not be a duration");
+  static_assert(__is_ratio_v<_Period>, "Second template parameter of duration must be a std::ratio");
+  static_assert(_Period::num > 0, "duration period must be positive");
+
+  template <class _R1, class _R2>
+  struct __no_overflow {
+  private:
+    static const intmax_t __gcd_n1_n2 = __static_gcd<_R1::num, _R2::num>;
+    static const intmax_t __gcd_d1_d2 = __static_gcd<_R1::den, _R2::den>;
+    static const intmax_t __n1        = _R1::num / __gcd_n1_n2;
+    static const intmax_t __d1        = _R1::den / __gcd_d1_d2;
+    static const intmax_t __n2        = _R2::num / __gcd_n1_n2;
+    static const intmax_t __d2        = _R2::den / __gcd_d1_d2;
+    static const intmax_t max         = -((intmax_t(1) << (sizeof(intmax_t) * CHAR_BIT - 1)) + 1);
+
+    template <intmax_t _Xp, intmax_t _Yp, bool __overflow>
+    struct __mul // __overflow == false
+    {
+      static const intmax_t value = _Xp * _Yp;
+    };
+
+    template <intmax_t _Xp, intmax_t _Yp>
+    struct __mul<_Xp, _Yp, true> {
+      static const intmax_t value = 1;
+    };
+
+  public:
+    static const bool value = (__n1 <= max / __d2) && (__n2 <= max / __d1);
+    typedef ratio<__mul<__n1, __d2, !value>::value, __mul<__n2, __d1, !value>::value> type;
+  };
+
+public:
+  typedef _Rep rep;
+  typedef typename _Period::type period;
+
+private:
+  rep __rep_;
+
+public:
+  constexpr duration() = default;
+
+
+  template <class _Rep2,
+            enable_if_t<is_convertible<const _Rep2&, rep>::value &&
+                              (treat_as_floating_point<rep>::value || !treat_as_floating_point<_Rep2>::value),
+                          int> = 0>
+   constexpr explicit duration(const _Rep2& __r) : __rep_(__r) {}
+
+  // conversions
+  template <class _Rep2,
+            class _Period2,
+            enable_if_t<__no_overflow<_Period2, period>::value && (treat_as_floating_point<rep>::value ||
+                                                                     (__no_overflow<_Period2, period>::type::den == 1 &&
+                                                                      !treat_as_floating_point<_Rep2>::value)),
+                          int> = 0>
+   constexpr duration(const duration<_Rep2, _Period2>& __d)
+      : __rep_(chrono::duration_cast<duration>(__d).count()) {}
+
+  // observer
+
+  [[__nodiscard__]]  constexpr rep count() const { return __rep_; }
+
+  // arithmetic
+
+  [[__nodiscard__]]  constexpr typename common_type<duration>::type operator+() const {
+    return typename common_type<duration>::type(*this);
+  }
+  [[__nodiscard__]]  constexpr typename common_type<duration>::type operator-() const {
+    return typename common_type<duration>::type(-__rep_);
+  }
+   constexpr duration& operator++() {
+    ++__rep_;
+    return *this;
+  }
+   constexpr duration operator++(int) { return duration(__rep_++); }
+   constexpr duration& operator--() {
+    --__rep_;
+    return *this;
+  }
+   constexpr duration operator--(int) { return duration(__rep_--); }
+
+   constexpr duration& operator+=(const duration& __d) {
+    __rep_ += __d.count();
+    return *this;
+  }
+   constexpr duration& operator-=(const duration& __d) {
+    __rep_ -= __d.count();
+    return *this;
+  }
+
+   constexpr duration& operator*=(const rep& __rhs) {
+    __rep_ *= __rhs;
+    return *this;
+  }
+   constexpr duration& operator/=(const rep& __rhs) {
+    __rep_ /= __rhs;
+    return *this;
+  }
+   constexpr duration& operator%=(const rep& __rhs) {
+    __rep_ %= __rhs;
+    return *this;
+  }
+   constexpr duration& operator%=(const duration& __rhs) {
+    __rep_ %= __rhs.count();
+    return *this;
+  }
+
+  // special values
+
+  [[__nodiscard__]]  static constexpr duration zero() noexcept {
+    return duration(duration_values<rep>::zero());
+  }
+  [[__nodiscard__]]  static constexpr duration min() noexcept {
+    return duration(duration_values<rep>::min());
+  }
+  [[__nodiscard__]]  static constexpr duration max() noexcept {
+    return duration(duration_values<rep>::max());
+  }
+};
+
+typedef duration<long long, nano> nanoseconds;
+typedef duration<long long, micro> microseconds;
+typedef duration<long long, milli> milliseconds;
+typedef duration<long long > seconds;
+typedef duration< long, ratio< 60> > minutes;
+typedef duration< long, ratio<3600> > hours;
+#if _LIBCPP_STD_VER >= 20
+typedef duration< int, ratio_multiply<ratio<24>, hours::period>> days;
+typedef duration< int, ratio_multiply<ratio<7>, days::period>> weeks;
+typedef duration< int, ratio_multiply<ratio<146097, 400>, days::period>> years;
+typedef duration< int, ratio_divide<years::period, ratio<12>>> months;
+#endif
+// Duration ==
+
+template <class _LhsDuration, class _RhsDuration>
+struct __duration_eq {
+   constexpr bool operator()(const _LhsDuration& __lhs, const _RhsDuration& __rhs) const {
+    typedef typename common_type<_LhsDuration, _RhsDuration>::type _Ct;
+    return _Ct(__lhs).count() == _Ct(__rhs).count();
+  }
+};
+
+template <class _LhsDuration>
+struct __duration_eq<_LhsDuration, _LhsDuration> {
+   constexpr bool operator()(const _LhsDuration& __lhs, const _LhsDuration& __rhs) const {
+    return __lhs.count() == __rhs.count();
+  }
+};
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+inline  constexpr bool
+operator==(const duration<_Rep1, _Period1>& __lhs, const duration<_Rep2, _Period2>& __rhs) {
+  return __duration_eq<duration<_Rep1, _Period1>, duration<_Rep2, _Period2> >()(__lhs, __rhs);
+}
+
+#if _LIBCPP_STD_VER <= 17
+
+// Duration !=
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+inline  constexpr bool
+operator!=(const duration<_Rep1, _Period1>& __lhs, const duration<_Rep2, _Period2>& __rhs) {
+  return !(__lhs == __rhs);
+}
+
+#endif // _LIBCPP_STD_VER <= 17
+
+// Duration <
+
+template <class _LhsDuration, class _RhsDuration>
+struct __duration_lt {
+   constexpr bool operator()(const _LhsDuration& __lhs, const _RhsDuration& __rhs) const {
+    typedef typename common_type<_LhsDuration, _RhsDuration>::type _Ct;
+    return _Ct(__lhs).count() < _Ct(__rhs).count();
+  }
+};
+
+template <class _LhsDuration>
+struct __duration_lt<_LhsDuration, _LhsDuration> {
+   constexpr bool operator()(const _LhsDuration& __lhs, const _LhsDuration& __rhs) const {
+    return __lhs.count() < __rhs.count();
+  }
+};
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+inline  constexpr bool
+operator<(const duration<_Rep1, _Period1>& __lhs, const duration<_Rep2, _Period2>& __rhs) {
+  return __duration_lt<duration<_Rep1, _Period1>, duration<_Rep2, _Period2> >()(__lhs, __rhs);
+}
+
+// Duration >
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+inline  constexpr bool
+operator>(const duration<_Rep1, _Period1>& __lhs, const duration<_Rep2, _Period2>& __rhs) {
+  return __rhs < __lhs;
+}
+
+// Duration <=
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+inline  constexpr bool
+operator<=(const duration<_Rep1, _Period1>& __lhs, const duration<_Rep2, _Period2>& __rhs) {
+  return !(__rhs < __lhs);
+}
+
+// Duration >=
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+inline  constexpr bool
+operator>=(const duration<_Rep1, _Period1>& __lhs, const duration<_Rep2, _Period2>& __rhs) {
+  return !(__lhs < __rhs);
+}
+
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+  requires three_way_comparable<common_type_t<_Rep1, _Rep2>>
+ constexpr auto
+operator<=>(const duration<_Rep1, _Period1>& __lhs, const duration<_Rep2, _Period2>& __rhs) {
+  using _Ct = common_type_t<duration<_Rep1, _Period1>, duration<_Rep2, _Period2>>;
+  return _Ct(__lhs).count() <=> _Ct(__rhs).count();
+}
+
+
+// Duration +
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+[[__nodiscard__]] inline  constexpr
+typename common_type<duration<_Rep1, _Period1>, duration<_Rep2, _Period2> >::type
+operator+(const duration<_Rep1, _Period1>& __lhs, const duration<_Rep2, _Period2>& __rhs) {
+  typedef typename common_type<duration<_Rep1, _Period1>, duration<_Rep2, _Period2> >::type _Cd;
+  return _Cd(_Cd(__lhs).count() + _Cd(__rhs).count());
+}
+
+// Duration -
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+[[__nodiscard__]] inline  constexpr
+typename common_type<duration<_Rep1, _Period1>, duration<_Rep2, _Period2> >::type
+operator-(const duration<_Rep1, _Period1>& __lhs, const duration<_Rep2, _Period2>& __rhs) {
+  typedef typename common_type<duration<_Rep1, _Period1>, duration<_Rep2, _Period2> >::type _Cd;
+  return _Cd(_Cd(__lhs).count() - _Cd(__rhs).count());
+}
+
+// Duration *
+
+template <class _Rep1,
+          class _Period,
+          class _Rep2,
+          enable_if_t<is_convertible<const _Rep2&, typename common_type<_Rep1, _Rep2>::type>::value, int> = 0>
+[[__nodiscard__]] inline 
+constexpr duration<typename common_type<_Rep1, _Rep2>::type, _Period>
+operator*(const duration<_Rep1, _Period>& __d, const _Rep2& __s) {
+  typedef typename common_type<_Rep1, _Rep2>::type _Cr;
+  typedef duration<_Cr, _Period> _Cd;
+  return _Cd(_Cd(__d).count() * static_cast<_Cr>(__s));
+}
+
+template <class _Rep1,
+          class _Period,
+          class _Rep2,
+          enable_if_t<is_convertible<const _Rep1&, typename common_type<_Rep1, _Rep2>::type>::value, int> = 0>
+[[__nodiscard__]] inline 
+constexpr duration<typename common_type<_Rep1, _Rep2>::type, _Period>
+operator*(const _Rep1& __s, const duration<_Rep2, _Period>& __d) {
+  return __d * __s;
+}
+
+// Duration /
+
+template <class _Rep1,
+          class _Period,
+          class _Rep2,
+          enable_if_t<!__is_duration_v<_Rep2> &&
+                            is_convertible<const _Rep2&, typename common_type<_Rep1, _Rep2>::type>::value,
+                        int> = 0>
+[[__nodiscard__]] inline 
+constexpr duration<typename common_type<_Rep1, _Rep2>::type, _Period>
+operator/(const duration<_Rep1, _Period>& __d, const _Rep2& __s) {
+  typedef typename common_type<_Rep1, _Rep2>::type _Cr;
+  typedef duration<_Cr, _Period> _Cd;
+  return _Cd(_Cd(__d).count() / static_cast<_Cr>(__s));
+}
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+[[__nodiscard__]] inline  constexpr typename common_type<_Rep1, _Rep2>::type
+operator/(const duration<_Rep1, _Period1>& __lhs, const duration<_Rep2, _Period2>& __rhs) {
+  typedef typename common_type<duration<_Rep1, _Period1>, duration<_Rep2, _Period2> >::type _Ct;
+  return _Ct(__lhs).count() / _Ct(__rhs).count();
+}
+
+// Duration %
+
+template <class _Rep1,
+          class _Period,
+          class _Rep2,
+          enable_if_t<!__is_duration_v<_Rep2> &&
+                            is_convertible<const _Rep2&, typename common_type<_Rep1, _Rep2>::type>::value,
+                        int> = 0>
+[[__nodiscard__]] inline 
+constexpr duration<typename common_type<_Rep1, _Rep2>::type, _Period>
+operator%(const duration<_Rep1, _Period>& __d, const _Rep2& __s) {
+  typedef typename common_type<_Rep1, _Rep2>::type _Cr;
+  typedef duration<_Cr, _Period> _Cd;
+  return _Cd(_Cd(__d).count() % static_cast<_Cr>(__s));
+}
+
+template <class _Rep1, class _Period1, class _Rep2, class _Period2>
+[[__nodiscard__]] inline  constexpr
+typename common_type<duration<_Rep1, _Period1>, duration<_Rep2, _Period2> >::type
+operator%(const duration<_Rep1, _Period1>& __lhs, const duration<_Rep2, _Period2>& __rhs) {
+  typedef typename common_type<_Rep1, _Rep2>::type _Cr;
+  typedef typename common_type<duration<_Rep1, _Period1>, duration<_Rep2, _Period2> >::type _Cd;
+  return _Cd(static_cast<_Cr>(_Cd(__lhs).count()) % static_cast<_Cr>(_Cd(__rhs).count()));
+}
+
+} // namespace chrono
+
+// Suffixes for duration literals [time.duration.literals]
+inline namespace literals {
+inline namespace chrono_literals {
+
+[[__nodiscard__]]  constexpr chrono::hours operator""h(unsigned long long __h) {
+  return chrono::hours(static_cast<chrono::hours::rep>(__h));
+}
+
+[[__nodiscard__]]  constexpr chrono::duration<long double, ratio<3600, 1>>
+operator""h(long double __h) {
+  return chrono::duration<long double, ratio<3600, 1>>(__h);
+}
+
+[[__nodiscard__]]  constexpr chrono::minutes operator""min(unsigned long long __m) {
+  return chrono::minutes(static_cast<chrono::minutes::rep>(__m));
+}
+
+[[__nodiscard__]]  constexpr chrono::duration<long double, ratio<60, 1>>
+operator""min(long double __m) {
+  return chrono::duration<long double, ratio<60, 1>>(__m);
+}
+
+[[__nodiscard__]]  constexpr chrono::seconds operator""s(unsigned long long __s) {
+  return chrono::seconds(static_cast<chrono::seconds::rep>(__s));
+}
+
+[[__nodiscard__]]  constexpr chrono::duration<long double> operator""s(long double __s) {
+  return chrono::duration<long double>(__s);
+}
+
+[[__nodiscard__]]  constexpr chrono::milliseconds operator""ms(unsigned long long __ms) {
+  return chrono::milliseconds(static_cast<chrono::milliseconds::rep>(__ms));
+}
+
+[[__nodiscard__]]  constexpr chrono::duration<long double, milli> operator""ms(long double __ms) {
+  return chrono::duration<long double, milli>(__ms);
+}
+
+[[__nodiscard__]]  constexpr chrono::microseconds operator""us(unsigned long long __us) {
+  return chrono::microseconds(static_cast<chrono::microseconds::rep>(__us));
+}
+
+[[__nodiscard__]]  constexpr chrono::duration<long double, micro> operator""us(long double __us) {
+  return chrono::duration<long double, micro>(__us);
+}
+
+[[__nodiscard__]]  constexpr chrono::nanoseconds operator""ns(unsigned long long __ns) {
+  return chrono::nanoseconds(static_cast<chrono::nanoseconds::rep>(__ns));
+}
+
+[[__nodiscard__]]  constexpr chrono::duration<long double, nano> operator""ns(long double __ns) {
+  return chrono::duration<long double, nano>(__ns);
+}
+} // namespace chrono_literals
+} // namespace literals
+
+namespace chrono { // hoist the literals into namespace std::chrono
+using namespace literals::chrono_literals;
+} // namespace chrono
+
+
+}

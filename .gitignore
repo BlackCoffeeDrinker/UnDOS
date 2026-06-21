@@ -1,0 +1,6 @@
+/bin/os.iso
+/bin/isofiles/boot/*.elf
+/bin/isofiles/boot/undos-boot
+/cmake-build*/
+.DS_Store
+.idea/
