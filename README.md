@@ -29,11 +29,11 @@ The boot execution sequence shifts through four distinct environments before lau
         ▼ (Loads Stage 1.5 ELF + Modules)
 [ Stage 1.5 Trampoline ] ── (Parses headers, populates boot_info_t)
         │
-        ▼ (Performs cross-binary relocation & enables paging)
+        ▼ 
+[ Kernel Core ] 
+        |
+        ▼ 
 [ Hardware Abstraction Layer (HAL) ] ── (Initializes GDT/IDT/PIC/PIT)
-        │
-        ▼ (Batons execution down)
-[ Kernel Core ] ── (Initializes PMM via dynamic bitmap placement)
 
 ```
 

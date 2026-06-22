@@ -21,18 +21,12 @@ kernel::x86::regs cpu_cpuid(int code) {
   return r;
 }
 
-UNDOS_HAL_API void HAL_PlatformInit(kernel::boot_info_t &boot_info) {
+UNDOS_HAL_API void HAL_PlatformInit(const kernel::boot_info_t &boot_info) {
   kernel::x86::early::init_serial();
-  
+
   kernel::arch::early_print_fmt("HAL\r\n");
   kernel::x86::init_gdt();
   kernel::x86::init_idt();
-
-  while (1);
-  
-  
-  // Hand off control to the completely pure core kernel
-  kernel::kernel_core_main(boot_info);
 }
 
 namespace std {

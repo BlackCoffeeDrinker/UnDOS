@@ -1,6 +1,7 @@
 
 add_executable(boot_x86_old
         entry.S
+        trampoline.S
         multiboot.hpp
         trampoline.cpp
 )

@@ -11,4 +11,3 @@
 #include "arch/virtual_memory.hpp"
 
 
-UNDOS_HAL_API void HAL_PlatformInit(kernel::boot_info_t &boot_info);

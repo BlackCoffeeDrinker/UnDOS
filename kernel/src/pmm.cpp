@@ -18,6 +18,8 @@ inline bool test_bit(size_t frame) noexcept { return (bitmap[frame / 32] & (1u <
 
 void init(const boot_info_t &boot_info) {
   uint64_t max_memory = 0;
+  arch::early_print_fmt("Parsing system memory layout with page size {}...\n\r", boot_info.page_size);
+
 
   page_size = boot_info.page_size;
 
@@ -66,7 +68,7 @@ void init(const boot_info_t &boot_info) {
   const uintptr_t pmm_end = boot_info.kernel_physical_end + (bitmap_size_words * sizeof(uint32_t));
   reserve_region(boot_info.kernel_physical_start, pmm_end - boot_info.kernel_physical_start);
 
-  arch::early_print("Physical Memory Manager online!\n");
+  arch::early_print("Physical Memory Manager online!\n\r");
 }
 
 UNDOS_KERNEL_API void reserve_region(uintptr_t base, size_t length) {

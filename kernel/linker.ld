@@ -1,5 +1,4 @@
-ENTRY(kernel_main)
-
+ENTRY(kernel_core_main)
 
 SECTIONS
 {

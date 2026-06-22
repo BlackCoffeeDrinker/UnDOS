@@ -15,7 +15,6 @@ inline uint8_t inb(uint16_t port) {
   return ret;
 }
 
-
 void init_serial() {
   outb(COM1 + 1, 0x00);// Disable all interrupts
   outb(COM1 + 3, 0x80);// Enable DLAB (set baud rate divisor)

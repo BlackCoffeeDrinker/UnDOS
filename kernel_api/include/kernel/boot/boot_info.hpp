@@ -7,7 +7,8 @@ enum class MemoryRegionType : uint32_t {
   AVAILABLE = 1,   // Usable RAM for the PMM / Allocator
   RESERVED = 2,    // Hardware, ACPI tables, or bad memory
   ACPI_RECLAIM = 3,// Safe to reclaim after ACPI initialization
-  BOOTLOADER = 4   // Memory used by the bootloader itself
+  BOOTLOADER = 4,  // Memory used by the bootloader itself
+  KERNEL_STACK = 5,// Kernel stack memory
 };
 
 struct memory_region_t {
@@ -20,7 +21,7 @@ struct boot_info_t {
   uint32_t page_size;
   uint32_t hal_more_into_addr;
 
-  const memory_region_t *memory_map;
+  memory_region_t *memory_map;
   size_t memory_map_count;
 
   uintptr_t kernel_physical_start;
@@ -31,6 +32,6 @@ struct boot_info_t {
   uintptr_t hal_virtual_start;
   uintptr_t hal_virtual_end;
 
-  const char *command_line;// Raw boot arguments string
+  char *command_line;// Raw boot arguments string
 };
 }// namespace kernel
