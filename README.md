@@ -33,7 +33,7 @@ The boot execution sequence shifts through four distinct environments before lau
 [ Kernel Core ] 
         |
         ▼ 
-[ Hardware Abstraction Layer (HAL) ] ── (Initializes GDT/IDT/PIC/PIT)
+[ Hardware Abstraction Layer (HAL) ] ── (Initializes GDT/IDT/PIC/PIT/VMM)
 
 ```
 
@@ -42,7 +42,7 @@ The boot execution sequence shifts through four distinct environments before lau
 1. **Multiboot (GRUB):** Selects the target image, reads `grub.cfg`, configures raw 32-bit protected mode, and exposes the system topology map.
 2. **Stage 1.5 (Trampoline):** Executes identity-mapped at physical `0x00100000` (1MB). It parses the raw Multiboot modules, maps sections to target physical frames,
    cross-stitches undefined references across binary barriers, sets up high-half tables, and enables the CPU MMU paging bit.
-3. **HAL (`hal_x86_old`):** Executes in high-half space starting at `0x80000000`. Handles ISA bus configurations, static non-PnP devices via `CONFIG.REG`, legacy PIC/APIC
+3. **HAL (`hal_x86_old`):** Executes in high-half space immediately following the Kernel Core. Handles ISA bus configurations, static non-PnP devices via `CONFIG.REG`, legacy PIC/APIC
    wiring, and basic interrupt context delivery.
 4. **Kernel Core (`kernel`):** Executes in high-half space starting at `0xC0000000`. Architecture-agnostic payload containing the VFS, scheduler, Object Manager, NT-style
    personality subsystems, and high-level process execution engines.
@@ -51,18 +51,18 @@ The boot execution sequence shifts through four distinct environments before lau
 
 The Stage 1.5 loader maps the hardware memory architecture according to this physical-to-virtual layout layout contract:
 
-| Subsystem Component            | Virtual Base Address (VMA)  | Target Physical Frame | Mapping Scheme / Flags                    |
-|--------------------------------|-----------------------------|-----------------------|-------------------------------------------|
-| **Low-Memory Identity Line**   | `0x00000000` - `0x003FFFFF` | `0x00000000`          | Temporary Execution Coverage (`0x003`)    |
-| **Stage 1.5 Runtime Base**     | `0x00100000`                | `0x00100000`          | Identity-mapped via GRUB                  |
-| **Hardware Abstraction Layer** | `0x80000000`                | `0x00800000` (8MB)    | Supervisor, Present, Read/Write (`0x003`) |
-| **Kernel Core Space**          | `0xC0000000`                | `0x01000000` (16MB)   | Supervisor, Present, Read/Write (`0x003`) |
-| **Recursive Directory**        | `0xFFC00000`                | Page Dir Physical     | Map slot 1023 straight into itself        |
+| Subsystem Component            | Virtual Base Address (VMA)             | Target Physical Frame                 | Mapping Scheme / Flags                    |
+|--------------------------------|----------------------------------------|---------------------------------------|-------------------------------------------|
+| **Low-Memory Identity Line**   | `0x00000000` - `0x003FFFFF`            | `0x00000000`                          | Temporary Execution Coverage (`0x003`)    |
+| **Stage 1.5 Runtime Base**     | `0x00100000`                           | `0x00100000`                          | Identity-mapped via GRUB                  |
+| **Kernel Core Space**          | `0xC0000000`                           | `0x01000000` (16MB)                   | Supervisor, Present, Read/Write (`0x003`) |
+| **Hardware Abstraction Layer** | `0xC0000000` + Kernel Size             | `0x01000000` + Kernel Size            | Supervisor, Present, Read/Write (`0x003`) |
+| **Recursive Directory**        | `0xFFC00000`                           | Page Dir Physical                     | Map slot 1023 straight into itself        |
 
 ## Executable & Compatibility Model
 
-UnDOS treats **ELF** as its native executable format. To circumvent the performance overhead of Position Independent Code (`-fPIC`), Global Offset Tables (`GOT`), and
-Procedure Linkage Tables (`PLT`), the HAL and Kernel are compiled as absolute binaries with dynamic static linking attributes:
+UnDOS treats **ELF** as its native executable format. While it uses absolute binaries for the Kernel and HAL, the Stage 1.5 loader implements **In-Place GOT Patching**
+and runtime relocation handling. This allows these modules to be dynamically placed in memory while supporting cross-binary function calls through standard ELF mechanisms:
 
 * **`--emit-relocs`**: Retains internal relocation records (`.rel.text`, `.rel.data`) inside the output ELF executables.
 * **`--unresolved-symbols=ignore-all`**: Permits the cross-compiler to generate an executable even if functions belonging to the matching binary are missing, designating
@@ -83,7 +83,8 @@ enum class MemoryRegionType : uint32_t {
   AVAILABLE = 1,   // Usable RAM for the PMM / Allocator
   RESERVED = 2,    // Hardware, ACPI tables, or bad memory
   ACPI_RECLAIM = 3,// Safe to reclaim after ACPI initialization
-  BOOTLOADER = 4   // Memory used by the bootloader itself
+  BOOTLOADER = 4,  // Memory used by the bootloader itself
+  KERNEL_STACK = 5 // Kernel stack memory
 };
 
 struct memory_region_t {
@@ -96,7 +97,7 @@ struct boot_info_t {
   uint32_t page_size;
   uint32_t hal_more_into_addr;
 
-  const memory_region_t *memory_map;
+  memory_region_t *memory_map;
   size_t memory_map_count;
 
   uintptr_t kernel_physical_start;
@@ -107,7 +108,7 @@ struct boot_info_t {
   uintptr_t hal_virtual_start;
   uintptr_t hal_virtual_end;
 
-  const char *command_line;        // Raw boot flags forwarded from GRUB
+  char *command_line;        // Raw boot flags forwarded from GRUB
 };
 
 ```
@@ -157,7 +158,7 @@ The GUI is heavily inspired by GDI and the classic Windows 3.1 / Workgroups envi
 
 # Next Todos
 
-* [ ] Fix crash when transferring execution context from Stage 1.5 over to HAL
+* [x] Fix crash when transferring execution context from Stage 1.5 over to Kernel
 * [ ] Implement initial GDT reload structure inside x86 HAL initialization sequence
 * [ ] Complete early device tree parsing from `CONFIG.REG` file node arrays
 
