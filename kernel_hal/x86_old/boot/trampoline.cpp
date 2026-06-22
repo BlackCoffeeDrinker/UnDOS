@@ -11,6 +11,7 @@
 extern "C" [[noreturn]] void entry_trampoline(uint32_t entry, uint32_t boot_info, uint32_t stack_top);
 
 namespace {
+#define PAGE_ALIGN_UP(addr) (((addr) + 4095) & ~4095)
 constexpr size_t MAX_GLOBAL_SYMBOLS = 1024;
 constexpr size_t DEFAULT_STACK_SIZE = 16384;
 
@@ -410,7 +411,7 @@ void calculate_layout(multiboot_module_t *kernel_module, multiboot_module_t *hal
   const uintptr_t hal_original_base = get_elf_load_vaddr(hal_module->mod_start);
   const uintptr_t hal_original_end = calculate_elf_virtual_end(hal_module->mod_start);
   const uintptr_t hal_size = hal_original_end - hal_original_base;
-  g_hal_virtual_end = (g_hal_virtual_base + hal_size + 4095) & ~4095;
+  g_hal_virtual_end = PAGE_ALIGN_UP(g_hal_virtual_base + hal_size);
   g_hal_physical_base = KERNEL_PHYSICAL_BASE + (g_hal_virtual_base - KERNEL_VIRTUAL_BASE);
 
   setup_got(kernel_module, kernel_got, KERNEL_VIRTUAL_BASE);
@@ -440,7 +441,7 @@ void load_and_link(const multiboot_module_t *kernel_module, const multiboot_modu
   write_fmt("Stage 1.5: Relocations applied and modules cross-stitched.\n\r");
 }
 
-void setup_paging(uintptr_t kernel_stack_top, size_t space_needed) {
+void setup_paging(uintptr_t stack_bottom, uintptr_t stack_top, uintptr_t boot_info_end) {
   kmemset(boot_page_dir, 0, sizeof(boot_page_dir));
   kmemset(identity_page_table, 0, sizeof(identity_page_table));
   kmemset(hal_page_table, 0, sizeof(hal_page_table));
@@ -477,11 +478,16 @@ void setup_paging(uintptr_t kernel_stack_top, size_t space_needed) {
   };
 
   const uintptr_t hal_size = g_hal_virtual_end - g_hal_virtual_base;
+  const uintptr_t stack_phys_start = PAGE_ALIGN_UP(g_hal_physical_base + hal_size);
+  const uintptr_t boot_info_phys_start = PAGE_ALIGN_UP(stack_phys_start + (stack_top - stack_bottom));
 
   // Map everything sequentially
   map_virtual_range(KERNEL_VIRTUAL_BASE, g_kernel_virtual_end, KERNEL_PHYSICAL_BASE);
   map_virtual_range(g_hal_virtual_base, g_hal_virtual_end, g_hal_physical_base);
-  map_virtual_range(g_hal_virtual_end, kernel_stack_top + space_needed, g_hal_physical_base + hal_size);
+
+  // Map Stack and Boot Info separately on their own clean pages
+  map_virtual_range(stack_bottom, stack_top, stack_phys_start);
+  map_virtual_range(stack_top, boot_info_end, boot_info_phys_start);
 
   // Connect the recursive tracking entry loop into slot 1023
   boot_page_dir[1023] = reinterpret_cast<uint32_t>(boot_page_dir) | 0x003;
@@ -523,7 +529,7 @@ kernel::boot_info_t *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kerne
   }
 
   // Populate structural allocations
-  boot_info_ptr->memory_map[0].base = g_hal_virtual_end;
+  boot_info_ptr->memory_map[0].base = PAGE_ALIGN_UP(g_hal_virtual_end);
   boot_info_ptr->memory_map[0].length = DEFAULT_STACK_SIZE;
   boot_info_ptr->memory_map[0].type = kernel::MemoryRegionType::KERNEL_STACK;
 
@@ -586,7 +592,8 @@ extern "C" void kernel_main(uint32_t mb_physical_addr) {
   load_and_link(kernel_module, hal_module, kernel_got, hal_got);
 
   // High-half calculations
-  const auto kernel_stack_top = g_hal_virtual_end + DEFAULT_STACK_SIZE;
+  const auto kernel_stack_bottom = PAGE_ALIGN_UP(g_hal_virtual_end);
+  const auto kernel_stack_top = kernel_stack_bottom + DEFAULT_STACK_SIZE;
 
   size_t memory_map_count = 2;// 1 for stack, 1 for boot info
   if (mbi->flags & MULTIBOOT_INFO_MEM_MAP) {
@@ -602,12 +609,13 @@ extern "C" void kernel_main(uint32_t mb_physical_addr) {
   }
   const size_t memory_region_size = sizeof(kernel::memory_region_t) * memory_map_count;
   const size_t command_line_size = (mbi->flags & MULTIBOOT_INFO_CMDLINE) ? kstrlen(reinterpret_cast<const char *>(mbi->cmdline)) + 1 : 0;
-  const auto space_needed = sizeof(kernel::boot_info_t) + memory_region_size + command_line_size;
-  
-  setup_paging(kernel_stack_top, space_needed);
+  const auto space_needed = PAGE_ALIGN_UP(sizeof(kernel::boot_info_t) + memory_region_size + command_line_size);
+  const auto boot_info_end = kernel_stack_top + space_needed;
 
-  write_fmt("Stage 1.5: Stack: bottom=0x{x}, top=0x{x}, size={}\n\r", g_hal_virtual_end, kernel_stack_top, DEFAULT_STACK_SIZE);
-  write_fmt("Stage 1.5: Boot Info: start=0x{x}, length={}\n\r", kernel_stack_top, space_needed);
+  setup_paging(kernel_stack_bottom, kernel_stack_top, boot_info_end);
+
+  write_fmt("Stage 1.5: Stack: bottom=0x{x}, top=0x{x}, size={}\n\r", kernel_stack_bottom, kernel_stack_top, DEFAULT_STACK_SIZE);
+  write_fmt("Stage 1.5: Boot Info: start=0x{x}, end=0x{x}, length={}\n\r", kernel_stack_top, boot_info_end, space_needed);
 
   auto *boot_info = fill_boot_info(mbi, kernel_stack_top, space_needed, memory_map_count);
 
