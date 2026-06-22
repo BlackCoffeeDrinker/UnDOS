@@ -19,6 +19,7 @@ add_library(libkcpp INTERFACE
         include/utility.hpp
         include/chrono.hpp
         include/ratio.hpp
+        include/functional.hpp
 )
 
 target_include_directories(libkcpp INTERFACE include/)

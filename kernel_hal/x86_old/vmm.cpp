@@ -1,11 +1,11 @@
 
 #include "vmm.hpp"
 
-#include <kernel/k_arch.hpp>
+#include <kernel/hal_interface.hpp>
 
 #include <tuple.hpp>
 
-namespace kernel::x86 {
+namespace hal::x86 {
 
 constexpr uintptr_t RECURSIVE_PT_WINDOW = 0xFFC00000;
 constexpr uintptr_t RECURSIVE_PD_WINDOW = 0xFFFFF000;
@@ -19,37 +19,37 @@ inline page_table_entry_t *get_page_table(uintptr_t virtual_addr) noexcept {
   return reinterpret_cast<page_table_entry_t *>(RECURSIVE_PT_WINDOW + (pd_index * 4096));
 }
 
-PageFlags translate_flags(arch::vmm::ProtectFlags flags) noexcept {
+PageFlags translate_flags(ProtectFlags flags) noexcept {
   // Pages mapped via map_page must be present by default
   auto x86_flags = PageFlags::PRESENT;
 
-  if (has_flag(flags, arch::vmm::ProtectFlags::WRITE)) {
+  if (has_flag(flags, ProtectFlags::WRITE)) {
     x86_flags = x86_flags | PageFlags::WRITABLE;
   }
-  if (has_flag(flags, arch::vmm::ProtectFlags::USER)) {
+  if (has_flag(flags, ProtectFlags::USER)) {
     x86_flags = x86_flags | PageFlags::USER;
   }
-  if (has_flag(flags, arch::vmm::ProtectFlags::NOCACHE)) {
+  if (has_flag(flags, ProtectFlags::NOCACHE)) {
     x86_flags = x86_flags | PageFlags::CACHE_DISABLE | PageFlags::WRITE_THROUGH;
   }
 
   return x86_flags;
 }
-}// namespace kernel::x86
+}// namespace hal::x86
 
-namespace kernel::arch::vmm {
+namespace hal::arch::vmm {
 // Initializes the raw hardware paging structures (e.g., sets up recursive mapping)
 void init() noexcept {
 }
 
-bool lower_map_page(uintptr_t virtual_addr, uintptr_t physical_addr, vmm::ProtectFlags flags) noexcept {
+bool lower_map_page(uintptr_t virtual_addr, uintptr_t physical_addr, ProtectFlags flags) noexcept {
   const uintptr_t pd_index = virtual_addr >> 22;
   const uintptr_t pt_index = (virtual_addr >> 12) & 0x3FF;
 
   // Handle x86 multi-level table allocation safely within the HAL
   if (auto *directory = x86::get_page_directory();
       !directory[pd_index].is_present()) {
-    uintptr_t new_table_phys = pmm::allocate_frame();
+    uintptr_t new_table_phys = PMM_Allocate_Frames(1);
     if (!new_table_phys) {
       return false;
     }
@@ -105,7 +105,7 @@ void lower_unmap_page(uintptr_t virtual_addr) noexcept {
     directory[pd_index].clear();
 
     // Return the page table's frame back to the global physical pool
-    pmm::free_frame(page_table_phys);
+    PMM_Free_Frame(page_table_phys);
 
     // Context note: Because the page table itself is now gone from virtual space,
     // we must also ensure the recursive mapping area for this table is invalidated
@@ -117,4 +117,4 @@ void lower_unmap_page(uintptr_t virtual_addr) noexcept {
 void flush_tlb(uintptr_t virtual_addr) noexcept {
   asm volatile("invlpg (%0)" ::"r"(virtual_addr) : "memory");
 }
-}// namespace kernel::arch::vmm
+}// namespace hal::arch::vmm

@@ -12,6 +12,7 @@
 #include <__type_traits/copy_cv.hpp>
 #include <__type_traits/copy_cvref.hpp>
 #include <__type_traits/decay.hpp>
+#include <__type_traits/desugars_to.hpp>
 #include <__type_traits/detected_or.hpp>
 #include <__type_traits/disjunction.hpp>
 #include <__type_traits/extent.hpp>
@@ -30,6 +31,7 @@
 #include <__type_traits/is_enum.hpp>
 #include <__type_traits/is_final.hpp>
 #include <__type_traits/is_function.hpp>
+#include <__type_traits/is_generic_transparent_comparator.hpp>
 #include <__type_traits/is_implicitly_default_constructible.hpp>
 #include <__type_traits/is_integral.hpp>
 #include <__type_traits/is_member_pointer.hpp>
@@ -55,6 +57,7 @@
 #include <__type_traits/lazy.hpp>
 #include <__type_traits/make_const_lvalue_ref.hpp>
 #include <__type_traits/make_signed.hpp>
+#include <__type_traits/make_transparent.hpp>
 #include <__type_traits/make_unsigned.hpp>
 #include <__type_traits/maybe_const.hpp>
 #include <__type_traits/nat.hpp>

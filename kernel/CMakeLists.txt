@@ -9,9 +9,6 @@ add_executable(kernel
 
         src/vmm.cpp
         src/vmm.hpp
-        src/pmm.cpp
-        src/pmm.hpp
-        src/Object.hpp
         src/time.cpp
 )
 

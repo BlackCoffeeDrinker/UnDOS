@@ -2,9 +2,9 @@
 #include <kernel/time.hpp>
 #include <tuple.hpp>
 
-namespace kernel::time {
+namespace hal::time {
 // Called by the HAL to tell the Executive how much time passes per tick
-UNDOS_KERNEL_API void se_set_time_increment(uint32_t nanoseconds) noexcept {
+UNDOS_KERNEL_API void se_set_time_increment(kstd::chrono::nanoseconds nanoseconds) noexcept {
   kstd::ignore = nanoseconds;
 }
 
@@ -16,7 +16,7 @@ UNDOS_KERNEL_API void ke_update_system_time() noexcept {
 }
 
 // Public API for drivers/kernel to get the true elapsed time in milliseconds
-UNDOS_KERNEL_API uint64_t ke_query_system_time_ms() noexcept {
-  return 0;
+UNDOS_KERNEL_API kstd::chrono::milliseconds ke_query_system_time_ms() noexcept {
+  return {};
 }
 }// namespace kernel::time

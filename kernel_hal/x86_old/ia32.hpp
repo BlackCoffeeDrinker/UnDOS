@@ -1,6 +1,6 @@
 #pragma once
 
-#include <kernel/k_arch.hpp>
+#include <kernel/hal_interface.hpp>
 
 #define PAGING_FLAG_PRESENT 0x001
 #define PAGING_FLAG_WRITE 0x002

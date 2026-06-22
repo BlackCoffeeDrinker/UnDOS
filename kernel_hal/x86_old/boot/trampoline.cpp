@@ -11,7 +11,8 @@
 extern "C" [[noreturn]] void entry_trampoline(uint32_t entry, uint32_t boot_info, uint32_t stack_top);
 
 namespace {
-#define PAGE_ALIGN_UP(addr) (((addr) + 4095) & ~4095)
+constexpr uintptr_t PAGE_ALIGN_UP(uintptr_t addr) { return (addr + 4095) & ~4095; }
+
 constexpr size_t MAX_GLOBAL_SYMBOLS = 1024;
 constexpr size_t DEFAULT_STACK_SIZE = 16384;
 
@@ -120,10 +121,10 @@ uintptr_t translate_vaddr_to_paddr(uint32_t vaddr) {
 }
 
 uintptr_t get_elf_load_vaddr(uint32_t module_start) {
-  const auto *ehdr = reinterpret_cast<kernel::Elf32_Ehdr *>(module_start);
-  const auto *phdr_table = reinterpret_cast<kernel::Elf32_Phdr *>(module_start + ehdr->e_phoff);
+  const auto *ehdr = reinterpret_cast<hal::Elf32_Ehdr *>(module_start);
+  const auto *phdr_table = reinterpret_cast<hal::Elf32_Phdr *>(module_start + ehdr->e_phoff);
   for (size_t i = 0; i < ehdr->e_phnum; ++i) {
-    if (phdr_table[i].p_type == kernel::PT_LOAD) return phdr_table[i].p_vaddr;
+    if (phdr_table[i].p_type == hal::PT_LOAD) return phdr_table[i].p_vaddr;
   }
 
   panic("Stage 1.5: Failed to find PT_LOAD segment in ELF header");
@@ -164,14 +165,14 @@ __attribute__((aligned(4096))) uint32_t kernel_page_table[1024];
 
 
 void collect_symbols_from_module(uintptr_t module_start, uintptr_t v_base_override = 0) {
-  const auto *ehdr = reinterpret_cast<kernel::Elf32_Ehdr *>(module_start);
-  const auto *shdr_table = reinterpret_cast<kernel::Elf32_Shdr *>(module_start + ehdr->e_shoff);
+  const auto *ehdr = reinterpret_cast<hal::Elf32_Ehdr *>(module_start);
+  const auto *shdr_table = reinterpret_cast<hal::Elf32_Shdr *>(module_start + ehdr->e_shoff);
 
   // Locate the string table for section names
   const auto section_str_tab = reinterpret_cast<const char *>(module_start + shdr_table[ehdr->e_shstrndx].sh_offset);
 
-  const kernel::Elf32_Shdr *symtab_sh = nullptr;
-  const kernel::Elf32_Shdr *strtab_sh = nullptr;
+  const hal::Elf32_Shdr *symtab_sh = nullptr;
+  const hal::Elf32_Shdr *strtab_sh = nullptr;
 
   for (size_t i = 0; i < ehdr->e_shnum; ++i) {
     const char *name = section_str_tab + shdr_table[i].sh_name;
@@ -181,9 +182,9 @@ void collect_symbols_from_module(uintptr_t module_start, uintptr_t v_base_overri
 
   if (!symtab_sh || !strtab_sh) return;
 
-  const auto *symbols = reinterpret_cast<kernel::Elf32_Sym *>(module_start + symtab_sh->sh_offset);
+  const auto *symbols = reinterpret_cast<hal::Elf32_Sym *>(module_start + symtab_sh->sh_offset);
   const auto strings = reinterpret_cast<const char *>(module_start + strtab_sh->sh_offset);
-  const size_t num_symbols = symtab_sh->sh_size / sizeof(kernel::Elf32_Sym);
+  const size_t num_symbols = symtab_sh->sh_size / sizeof(hal::Elf32_Sym);
   const uintptr_t original_base = get_elf_load_vaddr(module_start);
 
   for (size_t i = 0; i < num_symbols; ++i) {
@@ -201,12 +202,12 @@ void collect_symbols_from_module(uintptr_t module_start, uintptr_t v_base_overri
 }
 
 void load_and_copy_segments(uintptr_t module_start, uintptr_t v_base_override = 0) {
-  const auto *ehdr = reinterpret_cast<kernel::Elf32_Ehdr *>(module_start);
-  const auto *phdr_table = reinterpret_cast<kernel::Elf32_Phdr *>(module_start + ehdr->e_phoff);
+  const auto *ehdr = reinterpret_cast<hal::Elf32_Ehdr *>(module_start);
+  const auto *phdr_table = reinterpret_cast<hal::Elf32_Phdr *>(module_start + ehdr->e_phoff);
   const uintptr_t original_base = get_elf_load_vaddr(module_start);
 
   for (size_t i = 0; i < ehdr->e_phnum; ++i) {
-    if (phdr_table[i].p_type == kernel::PT_LOAD) {
+    if (phdr_table[i].p_type == hal::PT_LOAD) {
       uintptr_t vaddr = phdr_table[i].p_vaddr;
       if (v_base_override) vaddr = vaddr - original_base + v_base_override;
 
@@ -228,12 +229,12 @@ void load_and_copy_segments(uintptr_t module_start, uintptr_t v_base_override = 
 }
 
 void setup_got(multiboot_module_t *mod, module_got_t &got, uintptr_t v_base_override = 0) {
-  const auto *ehdr = reinterpret_cast<kernel::Elf32_Ehdr *>(mod->mod_start);
-  const auto *shdr_table = reinterpret_cast<kernel::Elf32_Shdr *>(mod->mod_start + ehdr->e_shoff);
+  const auto *ehdr = reinterpret_cast<hal::Elf32_Ehdr *>(mod->mod_start);
+  const auto *shdr_table = reinterpret_cast<hal::Elf32_Shdr *>(mod->mod_start + ehdr->e_shoff);
   const auto section_str_tab = reinterpret_cast<const char *>(mod->mod_start + shdr_table[ehdr->e_shstrndx].sh_offset);
 
-  const kernel::Elf32_Shdr *symtab_sh = nullptr;
-  const kernel::Elf32_Shdr *strtab_sh = nullptr;
+  const hal::Elf32_Shdr *symtab_sh = nullptr;
+  const hal::Elf32_Shdr *strtab_sh = nullptr;
 
   for (size_t i = 0; i < ehdr->e_shnum; ++i) {
     const char *name = section_str_tab + shdr_table[i].sh_name;
@@ -242,9 +243,9 @@ void setup_got(multiboot_module_t *mod, module_got_t &got, uintptr_t v_base_over
   }
   if (!symtab_sh || !strtab_sh) return;
 
-  const auto *symbols = reinterpret_cast<kernel::Elf32_Sym *>(mod->mod_start + symtab_sh->sh_offset);
+  const auto *symbols = reinterpret_cast<hal::Elf32_Sym *>(mod->mod_start + symtab_sh->sh_offset);
   const auto strings = reinterpret_cast<const char *>(mod->mod_start + strtab_sh->sh_offset);
-  const size_t num_symbols = symtab_sh->sh_size / sizeof(kernel::Elf32_Sym);
+  const size_t num_symbols = symtab_sh->sh_size / sizeof(hal::Elf32_Sym);
   const uintptr_t original_base = get_elf_load_vaddr(mod->mod_start);
 
   got.mod = mod;
@@ -269,13 +270,13 @@ void setup_got(multiboot_module_t *mod, module_got_t &got, uintptr_t v_base_over
 
 // Fixed Relocation Engine
 void process_module_relocations(uint32_t module_start, const module_got_t &got, uintptr_t v_base_override = 0) {
-  const auto *ehdr = reinterpret_cast<kernel::Elf32_Ehdr *>(module_start);
-  auto *shdr_table = reinterpret_cast<kernel::Elf32_Shdr *>(module_start + ehdr->e_shoff);
+  const auto *ehdr = reinterpret_cast<hal::Elf32_Ehdr *>(module_start);
+  auto *shdr_table = reinterpret_cast<hal::Elf32_Shdr *>(module_start + ehdr->e_shoff);
   const auto section_str_tab = reinterpret_cast<const char *>(module_start + shdr_table[ehdr->e_shstrndx].sh_offset);
   const uintptr_t original_base = get_elf_load_vaddr(module_start);
 
-  const kernel::Elf32_Shdr *symtab_sh = nullptr;
-  const kernel::Elf32_Shdr *strtab_sh = nullptr;
+  const hal::Elf32_Shdr *symtab_sh = nullptr;
+  const hal::Elf32_Shdr *strtab_sh = nullptr;
 
   for (size_t i = 0; i < ehdr->e_shnum; ++i) {
     const char *name = section_str_tab + shdr_table[i].sh_name;
@@ -285,23 +286,23 @@ void process_module_relocations(uint32_t module_start, const module_got_t &got, 
 
   if (!symtab_sh || !strtab_sh) return;
 
-  const auto *local_syms = reinterpret_cast<kernel::Elf32_Sym *>(module_start + symtab_sh->sh_offset);
+  const auto *local_syms = reinterpret_cast<hal::Elf32_Sym *>(module_start + symtab_sh->sh_offset);
   const auto local_strings = reinterpret_cast<const char *>(module_start + strtab_sh->sh_offset);
 
   for (size_t i = 0; i < ehdr->e_shnum; ++i) {
-    if (shdr_table[i].sh_type == kernel::SHT_REL) {
+    if (shdr_table[i].sh_type == hal::SHT_REL) {
       const uint32_t target_section_idx = shdr_table[i].sh_info;
       // Skip relocation if target section is not allocated in memory (e.g. .debug_info)
-      if (!(shdr_table[target_section_idx].sh_flags & kernel::SHF_ALLOC)) continue;
+      if (!(shdr_table[target_section_idx].sh_flags & hal::SHF_ALLOC)) continue;
 
-      const auto *rel_array = reinterpret_cast<kernel::Elf32_Rel *>(module_start + shdr_table[i].sh_offset);
-      const size_t rel_entries = shdr_table[i].sh_size / sizeof(kernel::Elf32_Rel);
+      const auto *rel_array = reinterpret_cast<hal::Elf32_Rel *>(module_start + shdr_table[i].sh_offset);
+      const size_t rel_entries = shdr_table[i].sh_size / sizeof(hal::Elf32_Rel);
 
       for (size_t r = 0; r < rel_entries; ++r) {
-        const kernel::Elf32_Rel rel = rel_array[r];
-        const uint32_t sym_idx = kernel::ELF32_R_SYM(rel.r_info);
-        const uint32_t rel_type = kernel::ELF32_R_TYPE(rel.r_info);
-        const kernel::Elf32_Sym &local_sym = local_syms[sym_idx];
+        const hal::Elf32_Rel rel = rel_array[r];
+        const uint32_t sym_idx = hal::ELF32_R_SYM(rel.r_info);
+        const uint32_t rel_type = hal::ELF32_R_TYPE(rel.r_info);
+        const hal::Elf32_Sym &local_sym = local_syms[sym_idx];
 
         uint32_t target_resolved_vma = 0;
         const char *lookup_name = local_strings + local_sym.st_name;
@@ -319,7 +320,7 @@ void process_module_relocations(uint32_t module_start, const module_got_t &got, 
           target_resolved_vma = lookup_global_symbol(lookup_name);
         }
 
-        if (target_resolved_vma == 0 && rel_type != kernel::R_386_GOTPC && rel_type != kernel::R_386_RELATIVE) {
+        if (target_resolved_vma == 0 && rel_type != hal::R_386_GOTPC && rel_type != hal::R_386_RELATIVE) {
           write_fmt("Stage 1.5 LINK ERROR: Unresolved external symbol: {} (Idx={}, Type={})\n\r",
                     lookup_name, sym_idx, rel_type);
           panic("Stage 1.5 LINK ERROR");
@@ -335,25 +336,25 @@ void process_module_relocations(uint32_t module_start, const module_got_t &got, 
         // Phase 3: Perform absolute, relative, or global pointer math modifications
         const uintptr_t load_offset = v_base_override ? (v_base_override - original_base) : 0;
 
-        if (rel_type == kernel::R_386_32) {
+        if (rel_type == hal::R_386_32) {
           if (local_sym.st_shndx != 0) {
             *patch_location += load_offset;
           } else {
             *patch_location += target_resolved_vma;
           }
-        } else if (rel_type == kernel::R_386_PC32 || rel_type == kernel::R_386_PLT32) {
+        } else if (rel_type == hal::R_386_PC32 || rel_type == hal::R_386_PLT32) {
           if (local_sym.st_shndx == 0) {
             *patch_location += (target_resolved_vma - load_offset);
           }
           // Internal PC-relative calls are invariant under linear translation
-        } else if (rel_type == kernel::R_386_GOT32 || rel_type == kernel::R_386_GOT32X) {
+        } else if (rel_type == hal::R_386_GOT32 || rel_type == hal::R_386_GOT32X) {
           const auto offset = static_cast<int32_t>(*patch_location);
           const uintptr_t entry_vaddr = got.vaddr + offset;
           const uintptr_t entry_paddr = translate_vaddr_to_paddr(entry_vaddr);
 
           // In-place GOT: Instruction already has correct offset, just fill the entry
           *reinterpret_cast<uint32_t *>(entry_paddr) = target_resolved_vma;
-        } else if (rel_type == kernel::R_386_RELATIVE) {
+        } else if (rel_type == hal::R_386_RELATIVE) {
           *patch_location += load_offset;
         }
         // GOTOFF and GOTPC are invariant under linear translation of the entire module
@@ -364,13 +365,13 @@ void process_module_relocations(uint32_t module_start, const module_got_t &got, 
 
 // Add this helper function inside the anonymous namespace in trampoline.cpp
 uintptr_t calculate_elf_virtual_end(uintptr_t module_start) {
-  const auto *ehdr = reinterpret_cast<kernel::Elf32_Ehdr *>(module_start);
-  const auto *phdr_table = reinterpret_cast<kernel::Elf32_Phdr *>(module_start + ehdr->e_phoff);
+  const auto *ehdr = reinterpret_cast<hal::Elf32_Ehdr *>(module_start);
+  const auto *phdr_table = reinterpret_cast<hal::Elf32_Phdr *>(module_start + ehdr->e_phoff);
 
   uintptr_t highest_vaddr = 0;
 
   for (size_t i = 0; i < ehdr->e_phnum; ++i) {
-    if (phdr_table[i].p_type == kernel::PT_LOAD) {
+    if (phdr_table[i].p_type == hal::PT_LOAD) {
       if (const uintptr_t segment_end = phdr_table[i].p_vaddr + phdr_table[i].p_memsz;
           segment_end > highest_vaddr) {
         highest_vaddr = segment_end;
@@ -468,7 +469,7 @@ void setup_paging(uintptr_t stack_bottom, uintptr_t stack_top, uintptr_t boot_in
         panic("Stage 1.5: Virtual range exceeds pre-allocated high-half page tables (8MB max)");
       }
 
-      // Calculate physical address for this virtual page. 
+      // Calculate physical address for this virtual page.
       // Mapping is linear: p = p_start + (v - v_start).
       // Mask out any unaligned bits from p_start to prevent corrupting PTE flags.
       const uint32_t p = (p_start + (v - v_start)) & ~4095;
@@ -507,49 +508,53 @@ void setup_paging(uintptr_t stack_bottom, uintptr_t stack_top, uintptr_t boot_in
   write_fmt("Stage 1.5: Paging engaged.\n\r");
 }
 
-kernel::boot_info_t *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_stack_top, size_t space_needed, size_t memory_map_count) {
+kernel::boot_info_t *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_stack_top, size_t space_needed) {
   auto *boot_info_ptr = reinterpret_cast<kernel::boot_info_t *>(kernel_stack_top);
   kmemset(boot_info_ptr, 0, sizeof(kernel::boot_info_t));
   boot_info_ptr->page_size = 4096;
 
-  boot_info_ptr->kernel_physical_start = KERNEL_PHYSICAL_BASE;
-  boot_info_ptr->kernel_physical_end = KERNEL_PHYSICAL_BASE + (g_kernel_virtual_end - KERNEL_VIRTUAL_BASE);
-  boot_info_ptr->kernel_virtual_start = KERNEL_VIRTUAL_BASE;
-  boot_info_ptr->kernel_virtual_end = g_kernel_virtual_end;
-  boot_info_ptr->hal_virtual_start = g_hal_virtual_base;
-  boot_info_ptr->hal_virtual_end = g_hal_virtual_end;
+  boot_info_ptr->mapped_memory[0].type = kernel::MappedMemoryRegionType::KernelCore;
+  boot_info_ptr->mapped_memory[0].virtual_base = KERNEL_VIRTUAL_BASE;
+  boot_info_ptr->mapped_memory[0].physical_base = KERNEL_PHYSICAL_BASE;
+  boot_info_ptr->mapped_memory[0].length = (g_kernel_virtual_end - KERNEL_VIRTUAL_BASE);
 
-  boot_info_ptr->memory_map_count = memory_map_count;
-  boot_info_ptr->memory_map = reinterpret_cast<kernel::memory_region_t *>(boot_info_ptr + 1);
+  boot_info_ptr->mapped_memory[1].type = kernel::MappedMemoryRegionType::HalModule;
+  boot_info_ptr->mapped_memory[1].virtual_base = g_hal_virtual_base;
+  boot_info_ptr->mapped_memory[1].physical_base = g_hal_physical_base;
+  boot_info_ptr->mapped_memory[1].length = (g_hal_virtual_end - g_hal_virtual_base);
 
-  const size_t command_line_size = (mbi->flags & MULTIBOOT_INFO_CMDLINE) ? kstrlen(reinterpret_cast<const char *>(mbi->cmdline)) + 1 : 0;
-  if (command_line_size > 0) {
-    boot_info_ptr->command_line = reinterpret_cast<char *>(boot_info_ptr->memory_map + memory_map_count);
-    kmemcpy(boot_info_ptr->command_line, reinterpret_cast<const char *>(mbi->cmdline), command_line_size);
+  boot_info_ptr->mapped_memory[2].type = kernel::MappedMemoryRegionType::Boot_Stack;
+  boot_info_ptr->mapped_memory[2].virtual_base = kernel_stack_top - DEFAULT_STACK_SIZE;
+  boot_info_ptr->mapped_memory[2].physical_base = translate_vaddr_to_paddr(kernel_stack_top - DEFAULT_STACK_SIZE);
+  boot_info_ptr->mapped_memory[2].length = DEFAULT_STACK_SIZE;
+
+  boot_info_ptr->mapped_memory[3].type = kernel::MappedMemoryRegionType::Boot_Info;
+  boot_info_ptr->mapped_memory[3].virtual_base = reinterpret_cast<uintptr_t>(boot_info_ptr);
+  boot_info_ptr->mapped_memory[3].physical_base = translate_vaddr_to_paddr(reinterpret_cast<uintptr_t>(boot_info_ptr));
+  boot_info_ptr->mapped_memory[3].length = sizeof(kernel::boot_info_t);
+
+  if (mbi->flags & MULTIBOOT_INFO_CMDLINE) {
+    size_t command_line_size = kstrlen(reinterpret_cast<const char *>(mbi->cmdline)) + 1;
+    if (command_line_size >= boot_info_ptr->command_line.size() - 1) {
+      command_line_size = boot_info_ptr->command_line.size() - 1;
+    }
+    kmemcpy(boot_info_ptr->command_line.data(), reinterpret_cast<const char *>(mbi->cmdline), command_line_size);
   }
 
   // Populate structural allocations
-  boot_info_ptr->memory_map[0].base = PAGE_ALIGN_UP(g_hal_virtual_end);
-  boot_info_ptr->memory_map[0].length = DEFAULT_STACK_SIZE;
-  boot_info_ptr->memory_map[0].type = kernel::MemoryRegionType::KERNEL_STACK;
-
-  boot_info_ptr->memory_map[1].base = reinterpret_cast<uintptr_t>(boot_info_ptr);
-  boot_info_ptr->memory_map[1].length = space_needed;
-  boot_info_ptr->memory_map[1].type = kernel::MemoryRegionType::BOOTLOADER;
-
   if (mbi->flags & MULTIBOOT_INFO_MEM_MAP) {
     uintptr_t mmap_ptr = mbi->mmap_addr;
     const uintptr_t mmap_end = mbi->mmap_addr + mbi->mmap_length;
-    int count = 2;
+    size_t count = 0;
 
-    while (mmap_ptr < mmap_end) {
+    while (mmap_ptr < mmap_end && count < boot_info_ptr->mapped_memory.size()) {
       const auto *entry = reinterpret_cast<multiboot_mmap_entry *>(mmap_ptr);
 
-      auto region_type = kernel::MemoryRegionType::RESERVED;
+      auto region_type = kernel::MemoryRegionType::Reserved;
       if (entry->type == multiboot_mmap_entry_type::MULTIBOOT_MEMORY_AVAILABLE) {
-        region_type = kernel::MemoryRegionType::AVAILABLE;
+        region_type = kernel::MemoryRegionType::Available;
       } else if (entry->type == multiboot_mmap_entry_type::MULTIBOOT_MEMORY_ACPI_RECLAIMABLE) {
-        region_type = kernel::MemoryRegionType::ACPI_RECLAIM;
+        region_type = kernel::MemoryRegionType::ACPI_Reclaim;
       }
 
       boot_info_ptr->memory_map[count++] = {
@@ -595,21 +600,7 @@ extern "C" void kernel_main(uint32_t mb_physical_addr) {
   const auto kernel_stack_bottom = PAGE_ALIGN_UP(g_hal_virtual_end);
   const auto kernel_stack_top = kernel_stack_bottom + DEFAULT_STACK_SIZE;
 
-  size_t memory_map_count = 2;// 1 for stack, 1 for boot info
-  if (mbi->flags & MULTIBOOT_INFO_MEM_MAP) {
-    uintptr_t calc_ptr = mbi->mmap_addr;
-    const uintptr_t calc_end = mbi->mmap_addr + mbi->mmap_length;
-    while (calc_ptr < calc_end) {
-      const auto *entry = reinterpret_cast<multiboot_mmap_entry *>(calc_ptr);
-      memory_map_count++;
-      calc_ptr += entry->size + sizeof(entry->size);
-    }
-  } else {
-    memory_map_count = 3;
-  }
-  const size_t memory_region_size = sizeof(kernel::memory_region_t) * memory_map_count;
-  const size_t command_line_size = (mbi->flags & MULTIBOOT_INFO_CMDLINE) ? kstrlen(reinterpret_cast<const char *>(mbi->cmdline)) + 1 : 0;
-  const auto space_needed = PAGE_ALIGN_UP(sizeof(kernel::boot_info_t) + memory_region_size + command_line_size);
+  constexpr auto space_needed = PAGE_ALIGN_UP(sizeof(kernel::boot_info_t));
   const auto boot_info_end = kernel_stack_top + space_needed;
 
   setup_paging(kernel_stack_bottom, kernel_stack_top, boot_info_end);
@@ -617,9 +608,9 @@ extern "C" void kernel_main(uint32_t mb_physical_addr) {
   write_fmt("Stage 1.5: Stack: bottom=0x{x}, top=0x{x}, size={}\n\r", kernel_stack_bottom, kernel_stack_top, DEFAULT_STACK_SIZE);
   write_fmt("Stage 1.5: Boot Info: start=0x{x}, end=0x{x}, length={}\n\r", kernel_stack_top, boot_info_end, space_needed);
 
-  auto *boot_info = fill_boot_info(mbi, kernel_stack_top, space_needed, memory_map_count);
+  auto *boot_info = fill_boot_info(mbi, kernel_stack_top, space_needed);
 
-  auto *kernel_ehdr = reinterpret_cast<kernel::Elf32_Ehdr *>(kernel_module->mod_start);
+  auto *kernel_ehdr = reinterpret_cast<hal::Elf32_Ehdr *>(kernel_module->mod_start);
   uintptr_t entry_point = kernel_ehdr->e_entry;
 
   if (entry_point < KERNEL_VIRTUAL_BASE || entry_point >= g_kernel_virtual_end) {

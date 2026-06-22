@@ -1,15 +1,14 @@
 
 #include "intr.hpp"
 
+#include <kernel/hal_interface.hpp>
 #include <kernel/interrupt.hpp>
-#include <kernel/k_arch.hpp>
 #include <kernel/time.hpp>
 
-#include "debug_serial.hpp"
 #include "strfmt.hpp"
 #include "structs.hpp"
 
-namespace kernel::x86 {
+namespace hal::x86 {
 using uword_t = unsigned int;
 
 static ISR<256> idt;
@@ -54,7 +53,7 @@ void remap_pic() noexcept {
 // Vector 32: The System PIT Timer (IRQ 0)
 [[gnu::interrupt]] void pit_irq_handler(stack_frame *f) {
   // 1. Call the executive kernel timekeeper immediately
-  time::ke_update_system_time();
+  ke_update_system_time();
 
   // 2. Clear down any registered drivers listening to the clock via kinterrupt_t
   if (g_hardware_interrupts[0]) {
@@ -78,16 +77,16 @@ void remap_pic() noexcept {
 // [Exception and Page Fault Handlers remain exactly as you wrote them]
 [[gnu::interrupt]] void interrupt_handler(stack_frame *f) { (void) f; }
 [[gnu::interrupt]] void exception_handler(stack_frame *frame, uword_t error_code) {
+  early_print_fmt("Exception: 0x{x}\n\r", error_code);
   while (true) { __asm__ volatile("hlt"); }
 }
 
 [[gnu::interrupt]] void page_fault_handler(stack_frame *frame, uword_t error_code) {
   uint32_t faulting_address;
   __asm__ volatile("mov %%cr2, %0" : "=r"(faulting_address));
-  char buffer[255];
-  kstd::nomm_string dst(buffer);
-  kstd::format(dst, "Faulting address: 0x{x}\n\r", faulting_address);
-  arch::early_print(buffer);
+
+  early_print_fmt("Faulting address: 0x{x}\n\r", faulting_address);
+
   while (true) { __asm__ volatile("hlt"); }
 }
 
@@ -95,10 +94,12 @@ void init_idt() {
   // Remap hardware lines away from the Exception vector zones
   remap_pic();
 
-  // 1. Register Exception Vectors (0 - 31)
-  for (size_t i = 0; i < 32; ++i) {
+  // 1. Flood the entire IDT with the baseline handler as a safety net
+  for (size_t i = 0; i < 256; ++i) {
     idt.set(i, KERNEL_GDT_SELECTOR, &interrupt_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
   }
+
+  // Map the exceptions
   idt.set(8, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
   idt.set(10, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
   idt.set(11, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
@@ -117,4 +118,4 @@ void init_idt() {
   // Turn interrupts on globally now that the safety net is built!
   asm volatile("sti");
 }
-}// namespace kernel::x86
+}// namespace hal::x86

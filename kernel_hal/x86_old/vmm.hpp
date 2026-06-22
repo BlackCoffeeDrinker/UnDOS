@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-namespace kernel::x86 {
+namespace hal::x86 {
 enum class PageFlags : uint32_t {
   NONE = 0,
   PRESENT = 1 << 0,      // Page is loaded in physical memory

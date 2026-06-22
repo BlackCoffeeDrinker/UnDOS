@@ -4,6 +4,6 @@
 
 #include "structs.hpp"
 
-namespace kernel::x86::pit {
+namespace hal::x86 {
 void configure_frequency(uint32_t target_hz) noexcept;
 }

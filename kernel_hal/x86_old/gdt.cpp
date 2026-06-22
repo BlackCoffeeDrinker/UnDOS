@@ -1,7 +1,7 @@
 #include "gdt.hpp"
 #include "structs.hpp"
 
-namespace kernel::x86 {
+namespace hal::x86 {
 template<size_t N>
 struct GDT {
   static constexpr Descriptor BASIC_DESCRIPTOR =
@@ -27,7 +27,7 @@ struct GDT {
 
   // Basic validity check for 32-bit protected mode
   [[nodiscard]] static constexpr bool is_valid_descriptor(Descriptor d) noexcept {
-    return has_flag(d, Descriptor::PRESENT);
+    return d == static_cast<Descriptor>(0) || has_flag(d, Descriptor::PRESENT);
   }
 
   constexpr void set_entry(size_t idx,

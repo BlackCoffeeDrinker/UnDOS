@@ -4,5 +4,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "../include/kernel/k_arch.hpp"
+#include <Kernel.hpp>
+#include <kernel/hal_interface.hpp>
 

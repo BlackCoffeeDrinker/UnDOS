@@ -6,7 +6,7 @@
 #include <type_traits.hpp>
 #include <utility.hpp>
 
-namespace kernel::x86 {
+namespace hal::x86 {
 // region gdt
 struct [[gnu::packed]] gdtr_t {
   uint16_t limit;
@@ -29,6 +29,10 @@ enum class Descriptor : uint8_t {
   PRESENT = 0b10000000,
 };
 
+constexpr Descriptor operator|(Descriptor lhs, Descriptor rhs) noexcept {
+  return static_cast<Descriptor>(kstd::to_underlying(lhs) | kstd::to_underlying(rhs));
+}
+
 enum class Granularity : uint8_t {
   LIMIT_HIGH = 0x0F,// low 4 bits
   OS = 0b00010000,
@@ -36,6 +40,9 @@ enum class Granularity : uint8_t {
   X32 = 0b01000000,
   BIG_PAGES_4K = 0b10000000,
 };
+constexpr Granularity operator|(Granularity lhs, Granularity rhs) noexcept {
+  return static_cast<Granularity>(kstd::to_underlying(lhs) | kstd::to_underlying(rhs));
+}
 
 struct [[gnu::packed]] gdt_entry_t {
   uint16_t limit_low;
@@ -66,4 +73,4 @@ static_assert(sizeof(const gdt_entry_t *) == 4);
 // endregion
 
 void init_gdt();
-}// namespace kernel::gdt
+}// namespace hal::x86

@@ -8,9 +8,9 @@
 #include <type_traits.hpp>
 #include <utility.hpp>
 
-#include <kernel/k_arch.hpp>
+#include <kernel/hal_interface.hpp>
 
-namespace kernel::x86 {
+namespace hal::x86 {
 template<typename E>
 concept Enum8 = kstd::is_enum_v<E> && sizeof(E) == 1;
 

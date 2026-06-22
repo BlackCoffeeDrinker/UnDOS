@@ -5,7 +5,7 @@
 
 #include "structs.hpp"
 
-namespace kernel::x86 {
+namespace hal::x86 {
 enum class GateType : uint8_t {
   TASK = 0b0101,
   INTERRUPT_16 = 0b0110,
@@ -101,4 +101,4 @@ static_assert(sizeof(idtr_t) == 6);
 
 void init_idt();
 
-}// namespace kernel::x86
+}// namespace hal::x86

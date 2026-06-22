@@ -3,7 +3,7 @@
 
 #include <kernel/time.hpp>
 
-namespace kernel::x86::pit {
+namespace hal::x86 {
 
 constexpr uint32_t PIT_BASE_FREQUENCY = 1193182;
 constexpr uint8_t PIT_COMMAND_PORT = 0x43;
@@ -25,6 +25,6 @@ void set_system_timer_frequency(uint32_t target_hz) noexcept {
   uint32_t nanoseconds_per_tick = 1000000000 / target_hz;
 
   // 3. Update the Executive kernel's increment scale factor
-  //time::se_set_time_increment(nanoseconds_per_tick);
+  se_set_time_increment(kstd::chrono::nanoseconds(nanoseconds_per_tick));
 }
 }// namespace kernel::x86::pit

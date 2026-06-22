@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-namespace kernel {
+namespace hal {
 struct Elf32_Ehdr {
   unsigned char e_ident[16];
   uint16_t e_type;
