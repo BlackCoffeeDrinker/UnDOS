@@ -3,6 +3,7 @@
 
 #include <kernel/__core.hpp>
 #include <kernel/object.hpp>
+
 namespace kernel {
 using interrupt_handler_t = void (*)(kobject_t *interrupt_object, void *context);
 
@@ -14,7 +15,3 @@ struct kinterrupt_t : public kobject_t {
   uint32_t irql;// Interrupt Request Level for priority management
 };
 }// namespace kernel
-
-// Portably connects a hardware interrupt vector to a registered interrupt object
-UNDOS_HAL_API bool connect_interrupt(kernel::kinterrupt_t *interrupt, uint32_t vector, kernel::interrupt_handler_t handler, void *context) noexcept;
-UNDOS_HAL_API void disconnect_interrupt(kernel::kinterrupt_t *interrupt) noexcept;

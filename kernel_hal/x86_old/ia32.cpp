@@ -21,12 +21,9 @@ hal::x86::regs cpu_cpuid(int code) {
 }
 
 UNDOS_HAL_API void HAL_PlatformInit(const kernel::boot_info_t &boot_info) {
-  early_print_fmt("HAL\r\n");
   hal::x86::init_gdt();
   hal::x86::init_idt();
   hal::x86::init_pmm(boot_info);
-  early_print("After init_pmm\n\r");
-  
 }
 
 namespace std {

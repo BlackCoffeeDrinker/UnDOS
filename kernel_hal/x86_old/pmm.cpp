@@ -142,22 +142,44 @@ UNDOS_HAL_API void PMM_Reserve_Region(uintptr_t base, size_t length) noexcept {
 }
 
 UNDOS_HAL_API uintptr_t PMM_Allocate_Frames(size_t count) noexcept {
-  // TODO: Implement getting "count" contiguous frames
+  if (count == 0) return 0;
 
-  // Linear scan for the first free bit (0)
-  for (size_t i = 0; i < bitmap_size_words; ++i) {
-    if (bitmap[i] != BITMAP_INIT) {
-      for (size_t bit = 0; bit < 32; ++bit) {
-        if (const size_t frame = i * 32 + bit; !test_bit(frame)) {
-          set_bit(frame);
-          return frame * page_size;
-        }
+  const size_t max_frames = bitmap_size_words * 32;
+  size_t continuous_free = 0;
+  size_t start_frame = 0;
+
+  for (size_t frame = 0; frame < max_frames; ++frame) {
+    // Optimization: If we aren't currently tracking a continuous free block,
+    // and we are aligned to a word boundary, check if the entire word is full.
+    if (continuous_free == 0 && (frame % 32 == 0)) {
+      if (bitmap[frame / 32] == BITMAP_INIT) {
+        frame += 31;// Skip this word. The loop's ++frame will advance it to the next word.
+        continue;
       }
+    }
+
+    // Check if the current frame is free (0)
+    if (!test_bit(frame)) {
+      if (continuous_free == 0) {
+        start_frame = frame;// Record where this potential block begins
+      }
+      continuous_free++;
+
+      // We found a large enough contiguous block!
+      if (continuous_free == count) {
+        // Mark all frames in the block as allocated (1)
+        for (size_t k = start_frame; k < start_frame + count; ++k) {
+          set_bit(k);
+        }
+        return start_frame * page_size;
+      }
+    } else {
+      // The chain broke; reset the counter and keep searching
+      continuous_free = 0;
     }
   }
 
-  early_print_fmt("Fail to allocate {} frames!", count);
-
+  early_print_fmt("Fail to allocate {} frames!\n\r", count);
   return 0;// Out of memory
 }
 

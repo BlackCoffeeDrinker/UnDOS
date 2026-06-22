@@ -75,7 +75,12 @@ void remap_pic() noexcept {
 }
 
 // [Exception and Page Fault Handlers remain exactly as you wrote them]
-[[gnu::interrupt]] void interrupt_handler(stack_frame *f) { (void) f; }
+[[gnu::interrupt]] void interrupt_handler(stack_frame *f) {
+  early_print_fmt("Unhandled Interrupt/Exception at EIP: 0x{x}\n\r", f->eip);
+  while (true) {
+    __asm__ volatile("cli; hlt");
+  }
+}
 [[gnu::interrupt]] void exception_handler(stack_frame *frame, uword_t error_code) {
   early_print_fmt("Exception: 0x{x}\n\r", error_code);
   while (true) { __asm__ volatile("hlt"); }
