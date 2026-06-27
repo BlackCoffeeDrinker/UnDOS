@@ -135,6 +135,7 @@ The GUI is heavily inspired by GDI and the classic Windows 3.1 / Workgroups envi
 2. In the `[DockerGccCross](DockerGccCross)` directory there's a Dockerfile for making a build container
 3. Run `cmake` in a compatible environment to generate the build system.
 4. Build `BootIso` target using the generated build system; this builds everything with the x86-old hal
+5. Debug with `qemu-system-i386 -machine isapc -cpu 486 -m 32 -S -gdb tcp::1234 -no-reboot -no-shutdown -nodefaults -chardev stdio,id=ser0 -device isa-serial,chardev=ser0 -drive file=os.iso,media=cdrom,readonly=on`
 
 ### Adding a New Cross-Binary Function
 
@@ -149,8 +150,7 @@ The GUI is heavily inspired by GDI and the classic Windows 3.1 / Workgroups envi
 > When generating code modifications or additions for the UnDOS codebase, you must adhere strictly to these constraints:
 
 * **No Standard Library Headers:** Do not include `<iostream>`, `<string>`, `<vector>`, or any hosted standard header. You must use header-only equivalents provided by
-  `<strfmt.hpp>` or `libkcpp`.
-* **Do Not Inject `-fPIC` or `-fpie`:** Compile parameters must enforce static mapping behaviors.
+  `<strfmt.hpp>` or `libkcpp` in the `kstd` namespace.
 * **PMM Initialization Placement:** Any allocation arrays, tracking structures, or page frame bitmaps generated for memory subsystem design must calculate their initial
   position pointers starting exactly at `boot_info->kernel_virtual_end`. Do not use hardcoded markers.
 * **Maintain C-Linkage on Exports:** Any function annotated with API visibility must use `extern "C"` to prevent C++ name-mangling, as the Stage 1.5 dynamic symbol map
@@ -158,7 +158,57 @@ The GUI is heavily inspired by GDI and the classic Windows 3.1 / Workgroups envi
 
 # Next Todos
 
-* [x] Fix crash when transferring execution context from Stage 1.5 over to Kernel
+```mermaid
+sequenceDiagram
+    participant Kernel
+    participant HostCtrl as HostController
+    participant PciBusRoot as PciBus(root)
+    participant PDO as DeviceObject(PDO)
+    participant IOManager
+    participant DriverStore
+    participant Driver as DriverObject
+    participant FDO as FDO/LDO
+    participant Bridge as PciBridgeDevice
+    participant PciBusChild as PciBus(child)
+    
+    Kernel->>HostCtrl: bind PCI host controller
+    HostCtrl->>PciBusRoot: create(bus=0)
+    PciBusRoot->>HostCtrl: scan devices on bus 0
+    
+    alt normal device
+    PciBusRoot->>PDO: create PDO (fill DeviceExtension)
+    PDO->>IOManager: publish IDs and resources
+    IOManager->>DriverStore: match driver for PDO
+    DriverStore->>Driver: load driver
+    IOManager->>Driver: pass PDO to DriverObject (bind)
+    Driver->>FDO: create FDO or install callbacks
+    Driver->>PDO: attach FDO to PDO stack
+    PDO->>Driver: invokeStart (start callback)
+    else PCI-to-PCI bridge
+    PciBusRoot->>Bridge: create bridge PDO
+    Bridge->>HostCtrl: read secondary/subordinate bus numbers
+    Bridge->>PciBusChild: create(bus=secondary)
+    PciBusChild->>HostCtrl: scan devices on child bus
+    loop enumerate child devices
+    PciBusChild->>PDO: create PDO for child device
+    PDO->>IOManager: publish child IDs/resources
+    IOManager->>DriverStore: match driver
+    DriverStore->>Driver: load driver
+    IOManager->>Driver: bind child PDO
+    Driver->>FDO: create/attach FDO for child
+    PDO->>Driver: invokeStart
+    end
+    end
+    
+    %% Teardown / removal flow
+    note over Driver, IOManager: On driver unload or device removal
+    Driver->>FDO: detach / remove FDO
+    IOManager->>PDO: mark PDO removed
+    PciBusRoot->>PDO: remove PDO from device list
+    Bridge->>PciBusChild: destroy child bus (after child PDOs removed)
+    PDO->>Driver: invokeRemove
+```
+
 * [ ] Implement initial GDT reload structure inside x86 HAL initialization sequence
 * [ ] Complete early device tree parsing from `CONFIG.REG` file node arrays
 

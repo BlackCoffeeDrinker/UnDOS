@@ -25,7 +25,6 @@ add_executable(hal_x86_old
 )
 
 target_include_directories(hal_x86_old PUBLIC .)
-target_include_directories(hal_x86_old PRIVATE include)
 target_link_libraries(hal_x86_old PRIVATE libkcpp KernelHeaders)
 target_compile_definitions(hal_x86_old PRIVATE UNDOS_HAL_COMPILE)
 target_compile_options(hal_x86_old PRIVATE -fvisibility=hidden)

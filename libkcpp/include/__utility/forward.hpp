@@ -6,7 +6,7 @@
 #include <__type_traits/remove_reference.hpp>
 
 #if __has_cpp_attribute(_Clang::__lifetimebound__)
-#define _LIFETIMEBOUND [[_Clang::__lifetimebound__]]
+#define _LIFETIMEBOUND [[_Clang::__lifetimebound__]] 
 #else
 #define _LIFETIMEBOUND
 #endif

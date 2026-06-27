@@ -1,12 +1,11 @@
-
 #pragma once
-
 
 #include <kernel/__core.hpp>
 
-#include <kernel/memory/physical_memory.hpp>
-#include <kernel/memory/virtual_memory.hpp>
-
+#include <kernel/KObject.hpp>
+#include <kernel/entry.hpp>
+#include <kernel/hal_interface.hpp>
 #include <kernel/interrupt.hpp>
-#include <kernel/object.hpp>
 #include <kernel/time.hpp>
+
+#include <kernel/memory/virtual_memory.hpp>

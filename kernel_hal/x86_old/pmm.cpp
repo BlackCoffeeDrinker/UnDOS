@@ -2,11 +2,8 @@
 #include <string_view.hpp>
 
 #include <kernel/boot/boot_info.hpp>
-#include <kernel/hal/early_debug.hpp>
-#include <kernel/hal/physical_memory.hpp>
 
 #include "pmm.hpp"
-
 
 namespace {
 uint32_t *bitmap = nullptr;
@@ -39,7 +36,7 @@ kstd::string_view map_type_to_string(kernel::MemoryRegionType type) noexcept {
   return "Unknown";
 }
 
-uintptr_t find_highest_virtual_address(const kernel::boot_info_t &boot_info) {
+uintptr_t find_highest_virtual_address(const kernel::BootInfoT &boot_info) {
   uintptr_t highest_vaddr = 0;
 
   for (const auto &region: boot_info.mapped_memory) {
@@ -54,7 +51,7 @@ uintptr_t find_highest_virtual_address(const kernel::boot_info_t &boot_info) {
   return highest_vaddr;// This is your truly safe 'boot_allocations_end'
 }
 
-uint64_t find_highest_physical_address(const kernel::boot_info_t &boot_info) {
+uint64_t find_highest_physical_address(const kernel::BootInfoT &boot_info) {
   uint64_t max_memory = 0;
 
   for (const auto &region: boot_info.memory_map) {
@@ -72,7 +69,7 @@ uint64_t find_highest_physical_address(const kernel::boot_info_t &boot_info) {
 }// namespace
 
 namespace hal::x86 {
-void init_pmm(const kernel::boot_info_t &boot_info) noexcept {
+void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   uint64_t max_memory = 0;
   early_print_fmt("Parsing system memory layout with page size {}...\n\r", boot_info.page_size);
 
@@ -117,7 +114,7 @@ void init_pmm(const kernel::boot_info_t &boot_info) noexcept {
   // 4. Protect the kernel memory space and the bitmap itself
   for (const auto &region: boot_info.mapped_memory) {
     if (region.type != kernel::MappedMemoryRegionType::None) {
-      PMM_Reserve_Region(region.physical_base, region.length);
+      HAL_PMM_Reserve_Region(region.physical_base, region.length);
     }
   }
 
@@ -125,7 +122,7 @@ void init_pmm(const kernel::boot_info_t &boot_info) noexcept {
 }
 }// namespace hal::x86
 
-UNDOS_HAL_API void PMM_Reserve_Region(uintptr_t base, size_t length) noexcept {
+UNDOS_HAL_API void HAL_PMM_Reserve_Region(uintptr_t base, size_t length) noexcept {
   if (page_size == 0) {
     return;
   }
@@ -141,7 +138,7 @@ UNDOS_HAL_API void PMM_Reserve_Region(uintptr_t base, size_t length) noexcept {
   }
 }
 
-UNDOS_HAL_API uintptr_t PMM_Allocate_Frames(size_t count) noexcept {
+UNDOS_HAL_API uintptr_t HAL_PMM_Allocate_Frames(size_t count) noexcept {
   if (count == 0) return 0;
 
   const size_t max_frames = bitmap_size_words * 32;
@@ -183,7 +180,7 @@ UNDOS_HAL_API uintptr_t PMM_Allocate_Frames(size_t count) noexcept {
   return 0;// Out of memory
 }
 
-UNDOS_HAL_API void PMM_Free_Frame(uintptr_t physical_address) noexcept {
+UNDOS_HAL_API void HAL_PMM_Free_Frame(uintptr_t physical_address) noexcept {
   if (page_size == 0) return;
   const size_t frame = physical_address / page_size;
   clear_bit(frame);

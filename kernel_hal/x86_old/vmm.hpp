@@ -18,6 +18,8 @@ enum class PageFlags : uint32_t {
 };
 
 constexpr PageFlags operator|(PageFlags a, PageFlags b) noexcept { return static_cast<PageFlags>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b)); }
+constexpr PageFlags operator|(uint32_t a, PageFlags b) noexcept { return static_cast<PageFlags>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b)); }
+constexpr PageFlags operator|(PageFlags a, uint32_t b) noexcept { return static_cast<PageFlags>(static_cast<uint32_t>(a) | b); }
 constexpr PageFlags operator&(PageFlags a, PageFlags b) noexcept { return static_cast<PageFlags>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b)); }
 constexpr bool has_flag(PageFlags mask, PageFlags flag) noexcept { return (mask & flag) == flag; }
 
@@ -58,4 +60,4 @@ static_assert(sizeof(page_table_t) == 4096);
 static_assert(sizeof(page_directory_t) == 4096);
 
 
-}// namespace kernel::x86
+}// namespace hal::x86

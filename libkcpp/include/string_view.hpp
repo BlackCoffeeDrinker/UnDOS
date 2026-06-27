@@ -50,8 +50,7 @@ struct basic_string_view {
     return ret;
   }
 
-  [[nodiscard]]
-  constexpr basic_string_view substr(size_type pos = 0, size_type n = npos) const noexcept(false) {
+  [[nodiscard]]   constexpr basic_string_view substr(size_type pos = 0, size_type n = npos) const noexcept(false) {
     const size_type rlen = min<size_t>(n, _len - pos);
     return basic_string_view{_data + pos, rlen};
   }

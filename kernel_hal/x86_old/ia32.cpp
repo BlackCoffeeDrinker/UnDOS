@@ -3,15 +3,6 @@
 #include "gdt.hpp"
 #include "intr.hpp"
 #include "pmm.hpp"
-#include "structs.hpp"
-
-#include "strfmt.hpp"
-
-/* Check if the BIT in FLAGS is set. */
-#define CHECK_FLAG(flags, bit) ((flags) & (1 << (bit)))
-
-// Static storage so it persists when we cross over to src/
-static kernel::memory_region_t internal_mmap[64];
 
 hal::x86::regs cpu_cpuid(int code) {
   hal::x86::regs r{};
@@ -20,15 +11,25 @@ hal::x86::regs cpu_cpuid(int code) {
   return r;
 }
 
-UNDOS_HAL_API void HAL_PlatformInit(const kernel::boot_info_t &boot_info) {
+UNDOS_HAL_API void HAL_Platform_Init(const kernel::BootInfoT &boot_info) noexcept {
   hal::x86::init_gdt();
   hal::x86::init_idt();
   hal::x86::init_pmm(boot_info);
 }
 
-namespace std {
-[[noreturn]] void terminate() noexcept {
-  while (true);
+UNDOS_HAL_API [[noreturn]] void HAL_Platform_Panic(const char *message, const char *file, int line) noexcept {
+  early_print_fmt("\r\n--------\r\nPANIC: {} at {}:{}\r\nSystem Halted\r\n", message, file, line);
+
+  while (true) {
+    __asm__ volatile("cli; hlt");
+  }
 }
 
+UNDOS_HAL_API void HAL_Platform_InitializeSystemTimer() noexcept {
+}
+
+namespace std {
+[[noreturn]] void terminate() noexcept {
+  HAL_Platform_Panic("std::terminate() called", __FILE__, __LINE__);
+}
 }// namespace std

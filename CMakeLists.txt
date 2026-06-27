@@ -2,8 +2,6 @@ cmake_minimum_required(VERSION 3.27)
 
 include(cmake/PreventInSourceBuilds.cmake)
 
-SET(CMAKE_CXX_FLAGS "-Wall -Wextra -m32 -ffreestanding -fno-rtti -fno-exceptions -nostdlib -fno-stack-protector -fno-use-cxa-atexit -fno-builtin")
-SET(CMAKE_C_FLAGS "-Wall -Wextra -m32 -ffreestanding           -fno-exceptions -nostdlib -fno-stack-protector")
 ##
 # This allows to have CMake test the compiler without linking
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
@@ -21,20 +19,32 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-
 ##
 # 1. Global Toolchain/Compiler Sanity Flags for Kernel Space
 add_compile_options(
+        -m32
+        -march=i386
         -nostdlib
         -fno-builtin
         -fno-rtti
         -fno-exceptions
         -ffreestanding
+        -fno-stack-protector
+        -fno-use-cxa-atexit
         -Wall
         -Wextra
 )
 set(tools /usr/local/cross)
-add_link_options(-nostdlib -nostartfiles -nodefaultlibs -nostdinc -nolibc -Wl,--oformat=elf32-i386 -Wl,--nmagic -L ${tools}/lib/gcc/i686-elf/14.1.0/)
+add_link_options(
+        -nostdlib
+        -nostartfiles
+        -nodefaultlibs
+        -nostdinc
+        -nolibc
+        -Wl,--oformat=elf32-i386
+        -Wl,--nmagic
+        -L ${tools}/lib/gcc/i686-elf/14.1.0/)
+
 # Don't link with anything by default unless we say so
 set(CMAKE_C_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C Libraries")
 set(CMAKE_CXX_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C++ Libraries")
@@ -53,6 +63,7 @@ include(FetchContent)
 include(cmake/CPM.cmake)
 include(cmake/StandardProjectSettings.cmake)
 include(cmake/CompilerWarnings.cmake)
+include(cmake/AddDriver.cmake)
 
 #######################################################################################################################
 ## Make options
@@ -88,4 +99,5 @@ add_subdirectory(libkcpp)
 add_subdirectory(kernel_api)
 add_subdirectory(kernel_hal)
 add_subdirectory(kernel)
+add_subdirectory(drivers)
 

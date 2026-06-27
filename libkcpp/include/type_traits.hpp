@@ -23,6 +23,7 @@
 #include <__type_traits/is_base_of.hpp>
 #include <__type_traits/is_class.hpp>
 #include <__type_traits/is_const.hpp>
+#include <__type_traits/is_constant_evaluated.hpp>
 #include <__type_traits/is_constructible.hpp>
 #include <__type_traits/is_convertible.hpp>
 #include <__type_traits/is_core_convertible.hpp>

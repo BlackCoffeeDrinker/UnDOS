@@ -10,6 +10,10 @@ add_executable(kernel
         src/vmm.cpp
         src/vmm.hpp
         src/time.cpp
+        src/driver_loader.cpp
+        src/driver_loader.hpp
+        src/object_manager.cpp
+        src/object_manager.hpp
 )
 
 target_compile_definitions(kernel PRIVATE UNDOS_KERNEL_COMPILE)
@@ -17,11 +21,14 @@ target_link_libraries(kernel PRIVATE undos_warnings undos_options)
 target_link_libraries(kernel PUBLIC libkcpp KernelHeaders)
 target_include_directories(kernel PRIVATE src)
 
-target_compile_options(kernel PRIVATE -fvisibility=hidden)
-target_link_options(kernel PRIVATE -fvisibility=hidden)
+target_compile_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)
+target_link_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)
+
 
 target_link_options(kernel PRIVATE
         "-T" "${CMAKE_CURRENT_SOURCE_DIR}/linker.ld"
+        #"-rdynamic" 
+        "-Wl,--export-dynamic"
         "-nostdlib"
         "-static"
         "-Wl,--emit-relocs"                    # CRITICAL: Keeps relocation sections intact for Stage 1.5

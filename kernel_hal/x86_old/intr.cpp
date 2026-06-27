@@ -16,7 +16,7 @@ static constexpr uint16_t KERNEL_GDT_SELECTOR = 0x8;
 
 // An array of pointers to our KINTERRUPT-style objects for hardware lines (IRQs 0-15)
 // Remapped to vectors 32 through 47
-static kernel::kinterrupt_t *g_hardware_interrupts[16] = {nullptr};
+static kernel::InterruptServiceRoutine *g_hardware_interrupts[16] = {nullptr};
 
 // Helper to tell the PIC chips that we finished handling an interrupt
 inline void pic_send_eoi(uint8_t irq_line) noexcept {
@@ -53,7 +53,7 @@ void remap_pic() noexcept {
 // Vector 32: The System PIT Timer (IRQ 0)
 [[gnu::interrupt]] void pit_irq_handler(stack_frame *f) {
   // 1. Call the executive kernel timekeeper immediately
-  ke_update_system_time();
+  KE_Time_UpdateSystemTime();
 
   // 2. Clear down any registered drivers listening to the clock via kinterrupt_t
   if (g_hardware_interrupts[0]) {
@@ -76,14 +76,13 @@ void remap_pic() noexcept {
 
 // [Exception and Page Fault Handlers remain exactly as you wrote them]
 [[gnu::interrupt]] void interrupt_handler(stack_frame *f) {
+
   early_print_fmt("Unhandled Interrupt/Exception at EIP: 0x{x}\n\r", f->eip);
-  while (true) {
-    __asm__ volatile("cli; hlt");
-  }
+  HAL_Platform_Panic("Unhandled Interrupt/Exception", __FILE__, __LINE__);
 }
 [[gnu::interrupt]] void exception_handler(stack_frame *frame, uword_t error_code) {
   early_print_fmt("Exception: 0x{x}\n\r", error_code);
-  while (true) { __asm__ volatile("hlt"); }
+  HAL_Platform_Panic("Unhandled Exception", __FILE__, __LINE__);
 }
 
 [[gnu::interrupt]] void page_fault_handler(stack_frame *frame, uword_t error_code) {
@@ -92,7 +91,7 @@ void remap_pic() noexcept {
 
   early_print_fmt("Faulting address: 0x{x}\n\r", faulting_address);
 
-  while (true) { __asm__ volatile("hlt"); }
+  HAL_Platform_Panic("Unhandled Page Fault", __FILE__, __LINE__);
 }
 
 void init_idt() {
@@ -121,6 +120,6 @@ void init_idt() {
   idt.set();// Load IDTR
 
   // Turn interrupts on globally now that the safety net is built!
-  asm volatile("sti");
+  //asm volatile("sti");
 }
 }// namespace hal::x86

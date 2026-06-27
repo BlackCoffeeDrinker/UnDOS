@@ -20,6 +20,15 @@ constexpr size_t DEFAULT_STACK_SIZE = 16384;
 constexpr uintptr_t KERNEL_VIRTUAL_BASE = 0xC0000000;
 constexpr uintptr_t KERNEL_PHYSICAL_BASE = 0x01000000;// 16MB Mark Physical Base
 
+// Global Symbol Runtime Registry
+struct runtime_symbol_t {
+  const char *name;
+  uint32_t value;
+};
+
+runtime_symbol_t g_symbol_table[MAX_GLOBAL_SYMBOLS];
+size_t g_symbol_count = 0;
+
 uintptr_t g_hal_virtual_base = 0;
 uintptr_t g_hal_virtual_end = 0;
 uintptr_t g_hal_physical_base = 0;
@@ -130,15 +139,6 @@ uintptr_t get_elf_load_vaddr(uint32_t module_start) {
   panic("Stage 1.5: Failed to find PT_LOAD segment in ELF header");
   return 0;
 }
-
-// Global Symbol Runtime Registry
-struct runtime_symbol_t {
-  const char *name;
-  uint32_t value;
-};
-
-runtime_symbol_t g_symbol_table[MAX_GLOBAL_SYMBOLS];
-size_t g_symbol_count = 0;
 
 void register_global_symbol(const char *name, uint32_t value) {
   if (g_symbol_count >= MAX_GLOBAL_SYMBOLS) return;
@@ -508,9 +508,9 @@ void setup_paging(uintptr_t stack_bottom, uintptr_t stack_top, uintptr_t boot_in
   write_fmt("Stage 1.5: Paging engaged.\n\r");
 }
 
-kernel::boot_info_t *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_stack_top, size_t space_needed) {
-  auto *boot_info_ptr = reinterpret_cast<kernel::boot_info_t *>(kernel_stack_top);
-  kmemset(boot_info_ptr, 0, sizeof(kernel::boot_info_t));
+kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_stack_top, size_t space_needed) {
+  auto *boot_info_ptr = reinterpret_cast<kernel::BootInfoT *>(kernel_stack_top);
+  kmemset(boot_info_ptr, 0, sizeof(kernel::BootInfoT));
   boot_info_ptr->page_size = 4096;
 
   boot_info_ptr->mapped_memory[0].type = kernel::MappedMemoryRegionType::KernelCore;
@@ -531,7 +531,7 @@ kernel::boot_info_t *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kerne
   boot_info_ptr->mapped_memory[3].type = kernel::MappedMemoryRegionType::Boot_Info;
   boot_info_ptr->mapped_memory[3].virtual_base = reinterpret_cast<uintptr_t>(boot_info_ptr);
   boot_info_ptr->mapped_memory[3].physical_base = translate_vaddr_to_paddr(reinterpret_cast<uintptr_t>(boot_info_ptr));
-  boot_info_ptr->mapped_memory[3].length = sizeof(kernel::boot_info_t);
+  boot_info_ptr->mapped_memory[3].length = sizeof(kernel::BootInfoT);
 
   if (mbi->flags & MULTIBOOT_INFO_CMDLINE) {
     size_t command_line_size = kstrlen(reinterpret_cast<const char *>(mbi->cmdline)) + 1;
@@ -557,12 +557,35 @@ kernel::boot_info_t *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kerne
         region_type = kernel::MemoryRegionType::ACPI_Reclaim;
       }
 
+      // TODO: Make sure we don't overflow the address
       boot_info_ptr->memory_map[count++] = {
-          entry->addr,
+          static_cast<uintptr_t>(entry->addr),
           entry->len,
           region_type};
 
       mmap_ptr += entry->size + sizeof(entry->size);
+    }
+  }
+
+  // populate boot modules
+  size_t boot_modules_count = 0;
+  for (uint32_t i = 0; i < mbi->mods_count; i++) {
+    const auto *module = reinterpret_cast<multiboot_module_t *>(mbi->mods_addr + i * sizeof(multiboot_module_t));
+    const auto cmdline = reinterpret_cast<const char *>(module->cmdline);
+
+    if (const bool is_kernel_hal = kstrstr(cmdline, "hal") || kstrstr(cmdline, "kernel");
+        !is_kernel_hal) {
+      boot_info_ptr->boot_modules[boot_modules_count].base_physical = static_cast<uintptr_t>(module->mod_start);
+      boot_info_ptr->boot_modules[boot_modules_count].length = static_cast<size_t>(module->mod_end - module->mod_start);
+
+      const auto name_length = kstrlen(cmdline);
+      kmemcpy(
+          boot_info_ptr->boot_modules[boot_modules_count].name.data(),
+          cmdline,
+          name_length > (boot_info_ptr->boot_modules[boot_modules_count].name.size() - 1)
+              ? boot_info_ptr->boot_modules[boot_modules_count].name.size()
+              : name_length);
+      boot_modules_count++;
     }
   }
 
@@ -600,7 +623,7 @@ extern "C" void kernel_main(uint32_t mb_physical_addr) {
   const auto kernel_stack_bottom = PAGE_ALIGN_UP(g_hal_virtual_end);
   const auto kernel_stack_top = kernel_stack_bottom + DEFAULT_STACK_SIZE;
 
-  constexpr auto space_needed = PAGE_ALIGN_UP(sizeof(kernel::boot_info_t));
+  constexpr auto space_needed = PAGE_ALIGN_UP(sizeof(kernel::BootInfoT));
   const auto boot_info_end = kernel_stack_top + space_needed;
 
   setup_paging(kernel_stack_bottom, kernel_stack_top, boot_info_end);

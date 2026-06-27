@@ -4,6 +4,8 @@
 
 #include <stddef.hpp>
 
+#include <__type_traits/is_constant_evaluated.hpp>
+
 namespace kstd {
 #define EOF (-1)
 
