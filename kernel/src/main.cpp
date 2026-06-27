@@ -23,13 +23,9 @@ UNDOS_KERNEL_API [[noreturn]] void kernel_core_main(const kernel::BootInfoT &boo
   HAL_VMM_EarlyInit(boot_info);
   kernel::vmm::init(boot_info);
 
-  // Load symbols
-  if (boot_info.mapped_memory[0].type == kernel::MappedMemoryRegionType::KernelCore) {
-    auto *header = reinterpret_cast<hal::Elf32_Ehdr *>(boot_info.mapped_memory[0].virtual_base);
-    if (header->e_ident[0] != 0x7F || header->e_ident[1] != 'E' ||
-        header->e_ident[2] != 'L' || header->e_ident[3] != 'F') {
-      early_print("Kernel core is not an ELF file\r\n");
-    } else {
+  for (const auto &module: boot_info.boot_symbols) {
+    if (module.address != 0) {
+      early_print_fmt("Found symbol: name = {}, address = 0x{x}\r\n", module.name.data(), module.address);
     }
   }
 

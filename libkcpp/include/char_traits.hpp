@@ -6,6 +6,8 @@
 
 #include <__type_traits/is_constant_evaluated.hpp>
 
+#include <__compare/three_way_comparable.hpp>
+
 namespace kstd {
 #define EOF (-1)
 
@@ -24,9 +26,7 @@ struct char_traits<char> {
   typedef char char_type;
   typedef int int_type;
 
-#if __cpp_lib_three_way_comparison
-  using comparison_category = strong_ordering;
-#endif
+  using comparison_category = kstd::strong_ordering;
 
   static constexpr void assign(char_type &__c1, const char_type &__c2) noexcept {
     __c1 = __c2;

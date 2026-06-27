@@ -534,11 +534,7 @@ kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_
   boot_info_ptr->mapped_memory[3].length = sizeof(kernel::BootInfoT);
 
   if (mbi->flags & MULTIBOOT_INFO_CMDLINE) {
-    size_t command_line_size = kstrlen(reinterpret_cast<const char *>(mbi->cmdline)) + 1;
-    if (command_line_size >= boot_info_ptr->command_line.size() - 1) {
-      command_line_size = boot_info_ptr->command_line.size() - 1;
-    }
-    kmemcpy(boot_info_ptr->command_line.data(), reinterpret_cast<const char *>(mbi->cmdline), command_line_size);
+    boot_info_ptr->command_line = reinterpret_cast<const char *>(mbi->cmdline);
   }
 
   // Populate structural allocations
@@ -577,15 +573,21 @@ kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_
         !is_kernel_hal) {
       boot_info_ptr->boot_modules[boot_modules_count].base_physical = static_cast<uintptr_t>(module->mod_start);
       boot_info_ptr->boot_modules[boot_modules_count].length = static_cast<size_t>(module->mod_end - module->mod_start);
-
-      const auto name_length = kstrlen(cmdline);
-      kmemcpy(
-          boot_info_ptr->boot_modules[boot_modules_count].name.data(),
-          cmdline,
-          name_length > (boot_info_ptr->boot_modules[boot_modules_count].name.size() - 1)
-              ? boot_info_ptr->boot_modules[boot_modules_count].name.size()
-              : name_length);
+      boot_info_ptr->boot_modules[boot_modules_count].name = cmdline;
       boot_modules_count++;
+    }
+  }
+  
+  // Do we have enought space ?
+  if (boot_modules_count >= boot_info_ptr->boot_modules.size()) {
+    panic("Not enough space in boot info to store all modules");
+  }
+
+  // Copy symbols into the boot info
+  for (size_t i = 0; i < g_symbol_count; i++) {
+    if (i < boot_info_ptr->boot_symbols.size()) {
+      boot_info_ptr->boot_symbols[i].name = g_symbol_table[i].name;
+      boot_info_ptr->boot_symbols[i].address = g_symbol_table[i].value;
     }
   }
 

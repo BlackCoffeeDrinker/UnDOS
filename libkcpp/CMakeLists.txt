@@ -22,6 +22,7 @@ add_library(libkcpp INTERFACE
         include/functional.hpp
         include/memory.hpp
         include/new.hpp
+        include/static_string.hpp
 )
 
 target_include_directories(libkcpp INTERFACE include/)

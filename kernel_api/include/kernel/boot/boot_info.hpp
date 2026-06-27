@@ -1,7 +1,11 @@
 
 #pragma once
+#include "nomm_string.hpp"
+
+
 #include <array.hpp>
 #include <kernel/__core.hpp>
+#include <static_string.hpp>
 
 namespace kernel {
 enum class MemoryRegionType : uint8_t {
@@ -36,7 +40,12 @@ struct MappedMemoryT {
 struct BootModuleT {
   uintptr_t base_physical;
   size_t length;
-  kstd::array<char, 64> name;
+  kstd::static_string<64> name;
+};
+
+struct BootSymbolsT {
+  kstd::static_string<48> name;
+  uintptr_t address;
 };
 
 struct BootInfoT {
@@ -46,6 +55,9 @@ struct BootInfoT {
   kstd::array<MemoryRegionT, 32> memory_map;
   kstd::array<MappedMemoryT, 10> mapped_memory;
   kstd::array<BootModuleT, 15> boot_modules;
-  kstd::array<char, 1024> command_line;
+  
+  kstd::array<BootSymbolsT, 128> boot_symbols; // TODO: This needs to be relocated elsewhere
+  
+  kstd::static_string<1024> command_line;
 };
 }// namespace kernel
