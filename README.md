@@ -6,8 +6,8 @@ Layer (HAL)**.
 Rather than compiling the system into a monolithic binary or relying on complex runtime User-Mode/Kernel-Mode IPC for basic hardware initialization, UnDOS utilizes a
 custom **Stage 1.5 Trampoline Engine** that dynamically cross-links static executables and sets up the high-half paging structures at boot time.
 
-UnDOS is a lightweight, modular operating system targeting Intel 386, 486, and Pentium processors. It is written primarily in modern C++, with a focus on simplicity,
-efficiency, and a familiar graphical environment.
+UnDOS is a lightweight, modular operating system targeting Intel 386, 486, and Pentium processors with goals to support ARM32, PPC, VAX, MIPS. It is written primarily
+in modern C++, with a focus on simplicity, efficiency, and a familiar graphical environment.
 
 ## Goals
 
@@ -15,6 +15,8 @@ efficiency, and a familiar graphical environment.
 - **Developer Experience:** Offer a clean and simple developer experience using modern C++.
 - **Legacy Preservation:** Support classic DOS‑era software through compatibility layers.
 - **Classic UI:** Deliver a lightweight GUI inspired by early Windows environments.
+
+The core Kernel **must** be platform-agnostic and make calls to the HAL for anything platform-dependent.
 
 ## Kernel Architecture & Boot Pipeline
 
@@ -42,7 +44,8 @@ The boot execution sequence shifts through four distinct environments before lau
 1. **Multiboot (GRUB):** Selects the target image, reads `grub.cfg`, configures raw 32-bit protected mode, and exposes the system topology map.
 2. **Stage 1.5 (Trampoline):** Executes identity-mapped at physical `0x00100000` (1MB). It parses the raw Multiboot modules, maps sections to target physical frames,
    cross-stitches undefined references across binary barriers, sets up high-half tables, and enables the CPU MMU paging bit.
-3. **HAL (`hal_x86_old`):** Executes in high-half space immediately following the Kernel Core. Handles ISA bus configurations, static non-PnP devices via `CONFIG.REG`, legacy PIC/APIC
+3. **HAL (`hal_x86_old`):** Executes in high-half space immediately following the Kernel Core. Handles ISA bus configurations, static non-PnP devices via `CONFIG.REG`,
+   legacy PIC/APIC
    wiring, and basic interrupt context delivery.
 4. **Kernel Core (`kernel`):** Executes in high-half space starting at `0xC0000000`. Architecture-agnostic payload containing the VFS, scheduler, Object Manager, NT-style
    personality subsystems, and high-level process execution engines.
@@ -51,18 +54,19 @@ The boot execution sequence shifts through four distinct environments before lau
 
 The Stage 1.5 loader maps the hardware memory architecture according to this physical-to-virtual layout layout contract:
 
-| Subsystem Component            | Virtual Base Address (VMA)             | Target Physical Frame                 | Mapping Scheme / Flags                    |
-|--------------------------------|----------------------------------------|---------------------------------------|-------------------------------------------|
-| **Low-Memory Identity Line**   | `0x00000000` - `0x003FFFFF`            | `0x00000000`                          | Temporary Execution Coverage (`0x003`)    |
-| **Stage 1.5 Runtime Base**     | `0x00100000`                           | `0x00100000`                          | Identity-mapped via GRUB                  |
-| **Kernel Core Space**          | `0xC0000000`                           | `0x01000000` (16MB)                   | Supervisor, Present, Read/Write (`0x003`) |
-| **Hardware Abstraction Layer** | `0xC0000000` + Kernel Size             | `0x01000000` + Kernel Size            | Supervisor, Present, Read/Write (`0x003`) |
-| **Recursive Directory**        | `0xFFC00000`                           | Page Dir Physical                     | Map slot 1023 straight into itself        |
+| Subsystem Component            | Virtual Base Address (VMA)  | Target Physical Frame      | Mapping Scheme / Flags                    |
+|--------------------------------|-----------------------------|----------------------------|-------------------------------------------|
+| **Low-Memory Identity Line**   | `0x00000000` - `0x003FFFFF` | `0x00000000`               | Temporary Execution Coverage (`0x003`)    |
+| **Stage 1.5 Runtime Base**     | `0x00100000`                | `0x00100000`               | Identity-mapped via GRUB                  |
+| **Kernel Core Space**          | `0xC0000000`                | `0x01000000` (16MB)        | Supervisor, Present, Read/Write (`0x003`) |
+| **Hardware Abstraction Layer** | `0xC0000000` + Kernel Size  | `0x01000000` + Kernel Size | Supervisor, Present, Read/Write (`0x003`) |
+| **Recursive Directory**        | `0xFFC00000`                | Page Dir Physical          | Map slot 1023 straight into itself        |
 
 ## Executable & Compatibility Model
 
 UnDOS treats **ELF** as its native executable format. While it uses absolute binaries for the Kernel and HAL, the Stage 1.5 loader implements **In-Place GOT Patching**
-and runtime relocation handling. This allows these modules to be dynamically placed in memory while supporting cross-binary function calls through standard ELF mechanisms:
+and runtime relocation handling. This allows these modules to be dynamically placed in memory while supporting cross-binary function calls through standard ELF
+mechanisms:
 
 * **`--emit-relocs`**: Retains internal relocation records (`.rel.text`, `.rel.data`) inside the output ELF executables.
 * **`--unresolved-symbols=ignore-all`**: Permits the cross-compiler to generate an executable even if functions belonging to the matching binary are missing, designating
@@ -135,7 +139,11 @@ The GUI is heavily inspired by GDI and the classic Windows 3.1 / Workgroups envi
 2. In the `[DockerGccCross](DockerGccCross)` directory there's a Dockerfile for making a build container
 3. Run `cmake` in a compatible environment to generate the build system.
 4. Build `BootIso` target using the generated build system; this builds everything with the x86-old hal
-5. Debug with `qemu-system-i386 -machine isapc -cpu 486 -m 32 -S -gdb tcp::1234 -no-reboot -no-shutdown -nodefaults -chardev stdio,id=ser0 -device isa-serial,chardev=ser0 -drive file=os.iso,media=cdrom,readonly=on`
+5. Debug!
+    1. Debug with
+       `qemu-system-i386 -machine isapc -cpu 486 -m 32 -S -gdb tcp::1234 -no-reboot -no-shutdown -nodefaults -chardev stdio,id=ser0 -device isa-serial,chardev=ser0 -drive file=os.iso,media=cdrom,readonly=on`
+    2. Or with (no display)
+       `qemu-system-i386 -machine isapc -cpu 486 -m 32 -nodefaults -no-reboot -no-shutdown -display none -S -gdb tcp::1234  -chardev stdio,id=ser0,signal=off -device isa-serial,chardev=ser0 -drive file=os.iso,media=cdrom,readonly=on`
 
 ### Adding a New Cross-Binary Function
 
@@ -170,43 +178,42 @@ sequenceDiagram
     participant FDO as FDO/LDO
     participant Bridge as PciBridgeDevice
     participant PciBusChild as PciBus(child)
-    
-    Kernel->>HostCtrl: bind PCI host controller
-    HostCtrl->>PciBusRoot: create(bus=0)
-    PciBusRoot->>HostCtrl: scan devices on bus 0
-    
+    Kernel ->> HostCtrl: bind PCI host controller
+    HostCtrl ->> PciBusRoot: create(bus=0)
+    PciBusRoot ->> HostCtrl: scan devices on bus 0
+
     alt normal device
-    PciBusRoot->>PDO: create PDO (fill DeviceExtension)
-    PDO->>IOManager: publish IDs and resources
-    IOManager->>DriverStore: match driver for PDO
-    DriverStore->>Driver: load driver
-    IOManager->>Driver: pass PDO to DriverObject (bind)
-    Driver->>FDO: create FDO or install callbacks
-    Driver->>PDO: attach FDO to PDO stack
-    PDO->>Driver: invokeStart (start callback)
+        PciBusRoot ->> PDO: create PDO (fill DeviceExtension)
+        PDO ->> IOManager: publish IDs and resources
+        IOManager ->> DriverStore: match driver for PDO
+        DriverStore ->> Driver: load driver
+        IOManager ->> Driver: pass PDO to DriverObject (bind)
+        Driver ->> FDO: create FDO or install callbacks
+        Driver ->> PDO: attach FDO to PDO stack
+        PDO ->> Driver: invokeStart (start callback)
     else PCI-to-PCI bridge
-    PciBusRoot->>Bridge: create bridge PDO
-    Bridge->>HostCtrl: read secondary/subordinate bus numbers
-    Bridge->>PciBusChild: create(bus=secondary)
-    PciBusChild->>HostCtrl: scan devices on child bus
-    loop enumerate child devices
-    PciBusChild->>PDO: create PDO for child device
-    PDO->>IOManager: publish child IDs/resources
-    IOManager->>DriverStore: match driver
-    DriverStore->>Driver: load driver
-    IOManager->>Driver: bind child PDO
-    Driver->>FDO: create/attach FDO for child
-    PDO->>Driver: invokeStart
+        PciBusRoot ->> Bridge: create bridge PDO
+        Bridge ->> HostCtrl: read secondary/subordinate bus numbers
+        Bridge ->> PciBusChild: create(bus=secondary)
+        PciBusChild ->> HostCtrl: scan devices on child bus
+        loop enumerate child devices
+            PciBusChild ->> PDO: create PDO for child device
+            PDO ->> IOManager: publish child IDs/resources
+            IOManager ->> DriverStore: match driver
+            DriverStore ->> Driver: load driver
+            IOManager ->> Driver: bind child PDO
+            Driver ->> FDO: create/attach FDO for child
+            PDO ->> Driver: invokeStart
+        end
     end
-    end
-    
-    %% Teardown / removal flow
+
+%% Teardown / removal flow
     note over Driver, IOManager: On driver unload or device removal
-    Driver->>FDO: detach / remove FDO
-    IOManager->>PDO: mark PDO removed
-    PciBusRoot->>PDO: remove PDO from device list
-    Bridge->>PciBusChild: destroy child bus (after child PDOs removed)
-    PDO->>Driver: invokeRemove
+    Driver ->> FDO: detach / remove FDO
+    IOManager ->> PDO: mark PDO removed
+    PciBusRoot ->> PDO: remove PDO from device list
+    Bridge ->> PciBusChild: destroy child bus (after child PDOs removed)
+    PDO ->> Driver: invokeRemove
 ```
 
 * [ ] Implement initial GDT reload structure inside x86 HAL initialization sequence

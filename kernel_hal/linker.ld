@@ -1,4 +1,4 @@
-ENTRY(HAL_PlatformInit) /* Ensure the entry point is explicitly designated */
+ENTRY(HAL_Platform_Init) /* Ensure the entry point is explicitly designated */
 SECTIONS
 {
     . = 0x80000000;     /* HAL Base VMA */

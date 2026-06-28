@@ -9,6 +9,8 @@ add_executable(kernel
 
         src/vmm.cpp
         src/vmm.hpp
+        src/memory/slab.cpp
+        src/memory/slab.hpp
         src/time.cpp
         src/driver_loader.cpp
         src/driver_loader.hpp
@@ -23,7 +25,6 @@ target_include_directories(kernel PRIVATE src)
 
 target_compile_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)
 target_link_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)
-
 
 target_link_options(kernel PRIVATE
         "-T" "${CMAKE_CURRENT_SOURCE_DIR}/linker.ld"

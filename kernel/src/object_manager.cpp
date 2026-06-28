@@ -11,6 +11,8 @@ class RootNode : public kernel::KObject {
 };
 
 RootNode *root;
+//  \Device, \Driver, \Memory, \FileSystem
+
 }// namespace
 
 

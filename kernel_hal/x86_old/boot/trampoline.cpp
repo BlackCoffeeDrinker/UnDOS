@@ -523,12 +523,12 @@ kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_
   boot_info_ptr->mapped_memory[1].physical_base = g_hal_physical_base;
   boot_info_ptr->mapped_memory[1].length = (g_hal_virtual_end - g_hal_virtual_base);
 
-  boot_info_ptr->mapped_memory[2].type = kernel::MappedMemoryRegionType::Boot_Stack;
+  boot_info_ptr->mapped_memory[2].type = kernel::MappedMemoryRegionType::BootStack;
   boot_info_ptr->mapped_memory[2].virtual_base = kernel_stack_top - DEFAULT_STACK_SIZE;
   boot_info_ptr->mapped_memory[2].physical_base = translate_vaddr_to_paddr(kernel_stack_top - DEFAULT_STACK_SIZE);
   boot_info_ptr->mapped_memory[2].length = DEFAULT_STACK_SIZE;
 
-  boot_info_ptr->mapped_memory[3].type = kernel::MappedMemoryRegionType::Boot_Info;
+  boot_info_ptr->mapped_memory[3].type = kernel::MappedMemoryRegionType::BootInfo;
   boot_info_ptr->mapped_memory[3].virtual_base = reinterpret_cast<uintptr_t>(boot_info_ptr);
   boot_info_ptr->mapped_memory[3].physical_base = translate_vaddr_to_paddr(reinterpret_cast<uintptr_t>(boot_info_ptr));
   boot_info_ptr->mapped_memory[3].length = sizeof(kernel::BootInfoT);

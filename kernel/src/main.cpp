@@ -10,9 +10,15 @@
 UNDOS_KERNEL_API [[noreturn]] void kernel_core_main(const kernel::BootInfoT &boot_info) {
   for (const auto &module: boot_info.boot_modules) {
     if (module.base_physical == 0) { continue; }
-    early_print_fmt("Found module: name = {}, base = 0x{x}, length = 0x{x}\r\n", module.name.data(), module.base_physical, module.length);
+    early_print_fmt("Found module: name = {}, base = 0x{x}, length = 0x{x}\r\n", module.name.data(), static_cast<uintptr_t>(module.base_physical), module.length);
   }
 
+  for (const auto &[name, address]: boot_info.boot_symbols) {
+    if (address != 0) {
+      early_print_fmt("Found symbol: name = {}, address = 0x{x}\r\n", name.data(), static_cast<uintptr_t>(address));
+    }
+  }
+  
   // PHASE 1: Core Hardware Substrate
   // GDT, IDT (masked), PMM initialized, and PIC/APIC remapped. Interrupts are CLEARED (cli).
   HAL_Platform_Init(boot_info);
@@ -22,12 +28,6 @@ UNDOS_KERNEL_API [[noreturn]] void kernel_core_main(const kernel::BootInfoT &boo
   // This turns on a primitive heap so kmalloc() works.
   HAL_VMM_EarlyInit(boot_info);
   kernel::vmm::init(boot_info);
-
-  for (const auto &module: boot_info.boot_symbols) {
-    if (module.address != 0) {
-      early_print_fmt("Found symbol: name = {}, address = 0x{x}\r\n", module.name.data(), module.address);
-    }
-  }
 
   // PHASE 3: Structural Subsystem
   // Object manager spins up using early kmalloc allocations.
@@ -60,6 +60,6 @@ UNDOS_KERNEL_API [[noreturn]] void kernel_core_main(const kernel::BootInfoT &boo
 
   while (1) {
     // Welcome to a fully stable system.
-    asm volatile("hlt");
+    HAL_CPU_Halt();
   };
 }

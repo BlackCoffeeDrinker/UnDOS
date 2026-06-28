@@ -64,6 +64,7 @@ include(cmake/CPM.cmake)
 include(cmake/StandardProjectSettings.cmake)
 include(cmake/CompilerWarnings.cmake)
 include(cmake/AddDriver.cmake)
+include(cmake/AddHal.cmake)
 
 #######################################################################################################################
 ## Make options

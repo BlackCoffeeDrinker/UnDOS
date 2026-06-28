@@ -16,7 +16,7 @@ enum class MemoryRegionType : uint8_t {
 };
 
 struct MemoryRegionT {
-  uintptr_t base;
+  PhysicalAddress base;
   uint64_t length;
   MemoryRegionType type;
 };
@@ -26,26 +26,26 @@ enum class MappedMemoryRegionType : uint8_t {
   Identity = 1,// High-half bootstrapping identity maps (low 1MB)
   KernelCore,  // The primary kernel binary segments (.text, .data, .bss)
   HalModule,   // The cross-stitched HAL binary segments
-  Boot_Stack,  // The initial execution stack space
-  Boot_Info    // The boot_info_t structure and command line allocations
+  BootStack,  // The initial execution stack space
+  BootInfo    // The boot_info_t structure and command line allocations
 };
 
 struct MappedMemoryT {
   MappedMemoryRegionType type;// tracks what this virtual chunk is
-  uintptr_t physical_base;    // Where it lives in real RAM
-  uintptr_t virtual_base;     // Where Stage 1.5 mapped it in the high-half
+  PhysicalAddress physical_base;    // Where it lives in real RAM
+  VirtualAddress virtual_base;     // Where Stage 1.5 mapped it in the high-half
   size_t length;              // Total footprint size
 };
 
 struct BootModuleT {
-  uintptr_t base_physical;
+  PhysicalAddress base_physical;
   size_t length;
   kstd::static_string<64> name;
 };
 
 struct BootSymbolsT {
   kstd::static_string<48> name;
-  uintptr_t address;
+  VirtualAddress address;
 };
 
 struct BootInfoT {
@@ -56,7 +56,7 @@ struct BootInfoT {
   kstd::array<MappedMemoryT, 10> mapped_memory;
   kstd::array<BootModuleT, 15> boot_modules;
   
-  kstd::array<BootSymbolsT, 128> boot_symbols; // TODO: This needs to be relocated elsewhere
+  kstd::array<BootSymbolsT, 128> boot_symbols; // TODO: This needs to be relocated elsewhere; maybe even the kernel should read it's own ELF
   
   kstd::static_string<1024> command_line;
 };

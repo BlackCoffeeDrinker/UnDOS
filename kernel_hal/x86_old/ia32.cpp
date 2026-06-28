@@ -17,6 +17,10 @@ UNDOS_HAL_API void HAL_Platform_Init(const kernel::BootInfoT &boot_info) noexcep
   hal::x86::init_pmm(boot_info);
 }
 
+UNDOS_HAL_API void HAL_CPU_Halt() noexcept {
+  __asm__ volatile("hlt");
+}
+
 UNDOS_HAL_API [[noreturn]] void HAL_Platform_Panic(const char *message, const char *file, int line) noexcept {
   early_print_fmt("\r\n--------\r\nPANIC: {} at {}:{}\r\nSystem Halted\r\n", message, file, line);
 
