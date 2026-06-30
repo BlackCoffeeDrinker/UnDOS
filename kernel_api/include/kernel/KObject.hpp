@@ -2,8 +2,15 @@
 #pragma once
 
 #include <atomic.hpp>
+#include <new.hpp>
+#include <static_string.hpp>
 #include <string_view.hpp>
 #include <type_traits.hpp>
+#include <utility.hpp>
+
+#include <kernel/__core.hpp>
+#include <kernel/adt/avl_tree.hpp>
+#include <kernel/memory/virtual_memory.hpp>
 
 namespace kernel {
 struct ObjectType final {
@@ -39,6 +46,9 @@ consteval ObjectType operator""_type(const char *s, size_t n) {
 
 constexpr auto TYPE_DRIVER = "driver"_type;
 constexpr auto TYPE_DEVICE = "device"_type;
+constexpr auto TYPE_DIRECTORY = "directory"_type;
+constexpr auto TYPE_BUS = "bus"_type;
+constexpr auto TYPE_VMM = "vmm"_type;
 
 // A base structural type for unified C++ tracking
 struct KObject {
@@ -46,14 +56,71 @@ struct KObject {
   kstd::atomic<uint32_t> reference_count{1};
   uint32_t flags{0};
 
+  kstd::static_string<64> name;
+  KObject *parent{nullptr};
+  adt::AvlNode<KObject> node;
+
   virtual ~KObject() = default;
+
+  void retain() {
+    reference_count.fetch_add(1, kstd::memory_order_relaxed);
+  }
+
+  void release() {
+    if (reference_count.fetch_sub(1, kstd::memory_order_acq_rel) == 1) {
+      kstd::atomic_thread_fence(kstd::memory_order_acquire);
+      this->~KObject();
+      KE_Free(this);
+    }
+  }
+
+  bool operator<(const KObject &other) const noexcept {
+    return kstd::string_view(name) < kstd::string_view(other.name);
+  }
+
+  bool operator==(const KObject &other) const noexcept {
+    return kstd::string_view(name) == kstd::string_view(other.name);
+  }
+
+  bool operator<(kstd::string_view other_name) const noexcept {
+    return kstd::string_view(name) < other_name;
+  }
+
+  bool operator==(kstd::string_view other_name) const noexcept {
+    return kstd::string_view(name) == other_name;
+  }
+
+  friend bool operator<(kstd::string_view other_name, const KObject &obj) noexcept {
+    return other_name < kstd::string_view(obj.name);
+  }
+
+  friend bool operator==(kstd::string_view other_name, const KObject &obj) noexcept {
+    return other_name == kstd::string_view(obj.name);
+  }
 
   protected:
   constexpr KObject(const ObjectType type_) noexcept : type(type_) {}
 };
 
+struct KDirectoryObject : KObject {
+  adt::AvlTree<KObject, &KObject::node> children;
+
+  KDirectoryObject() noexcept : KObject{TYPE_DIRECTORY} {}
+
+  ~KDirectoryObject() override {
+    children.clear([](KObject *obj) {
+      if (obj) obj->release();
+    });
+  }
+};
+
 struct KDriverObject : KObject {
   KDriverObject() noexcept : KObject{TYPE_DRIVER} {}
+};
+
+struct KBusObject : KObject {
+  KBusObject() noexcept : KObject{TYPE_BUS} {}
+  
 };
 
 template<typename T>
@@ -70,10 +137,7 @@ class KObjectPtr {
 
   void release() {
     if (_ptr) {
-      if (_ptr->reference_count.fetch_sub(1, kstd::memory_order_acq_rel) == 1) {
-        kstd::atomic_thread_fence(kstd::memory_order_acquire);
-        // TODO
-      }
+      _ptr->release();
     }
   }
 
@@ -123,5 +187,4 @@ class KObjectPtr {
   template<typename U>
   friend class KObjectPtr;
 };
-
 }// namespace kernel

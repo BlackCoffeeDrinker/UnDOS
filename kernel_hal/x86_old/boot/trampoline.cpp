@@ -554,7 +554,7 @@ kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_
       }
 
       // TODO: Make sure we don't overflow the address
-      boot_info_ptr->memory_map[count++] = {
+      boot_info_ptr->memory_regions[count++] = {
           static_cast<uintptr_t>(entry->addr),
           entry->len,
           region_type};

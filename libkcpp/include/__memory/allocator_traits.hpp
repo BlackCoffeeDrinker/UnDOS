@@ -16,6 +16,7 @@
 #include <__type_traits/void_t.hpp>
 #include <__utility/declval.hpp>
 #include <__utility/forward.hpp>
+#include <limits.hpp>
 
 namespace kstd {
 // __pointer

@@ -7,7 +7,6 @@
 #include <utility.hpp>
 
 #include "entry.hpp"
-
 #include "memory/virtual_memory.hpp"
 
 UNDOS_HAL_API void HAL_Platform_Init(const kernel::BootInfoT &boot_info) noexcept;
@@ -15,6 +14,11 @@ UNDOS_HAL_API void HAL_Platform_InitializeSystemTimer() noexcept;
 UNDOS_HAL_API void HAL_Platform_DetectSystemBus() noexcept;
 UNDOS_HAL_API [[noreturn]] void HAL_Platform_Panic(const char *message, const char *file, int line) noexcept;
 UNDOS_HAL_API void HAL_CPU_Halt() noexcept;
+
+// region CPU Execution Environment API
+UNDOS_HAL_API void HAL_CPU_InitializeExecutionEnvironment() noexcept;
+UNDOS_HAL_API void HAL_CPU_ReloadContext() noexcept;
+// endregion
 
 UNDOS_HAL_API void early_print(const char *str);
 UNDOS_HAL_API void early_print_char(char c);

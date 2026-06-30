@@ -4,13 +4,54 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <memory.hpp>
+#include <type_traits.hpp>
+#include <utility.hpp>
+
 #define UNDOS_KERNEL_API extern "C" __attribute__((visibility("default"), used))
+#define UNDOS_KERNEL_CPP_API __attribute__((visibility("default"), used))
 #define UNDOS_HAL_API extern "C" __attribute__((visibility("default"), used))
+
 
 using PhysicalAddressT = uintptr_t;
 using VirtualAddressT = uintptr_t;
 
 namespace kernel {
+
+template<typename ThingToVersion, size_t Version>
+struct Versioned {
+  uint16_t version = Version;
+  size_t size = sizeof(ThingToVersion);
+};
+
+/**
+ * @brief Wrapper for a C-style function pointer.
+ *
+ * `cfunc<R, Args...>` stores a raw function pointer of type `R(*)(Args...)`
+ * and exposes a callable interface. This allows the function pointer to be
+ * passed around as a lightweight object while retaining ABI-stable C linkage.
+ *
+ * @tparam R    Return type of the function.
+ * @tparam Args Parameter types of the function.
+ */
+template<class R, class... Args>
+struct cfunc {
+  using pointer = R (*)(Args...);
+  pointer fn = nullptr;
+
+  constexpr cfunc() = default;
+  constexpr explicit cfunc(pointer p) : fn(p) {}
+  constexpr R operator()(Args... args) const { return fn(args...); }
+  explicit constexpr operator bool() const { return fn != nullptr; }
+  constexpr bool operator==(pointer p) const { return fn == p; }
+  [[nodiscard]] constexpr bool valid() const noexcept { return fn != nullptr; }
+
+  constexpr cfunc &operator=(pointer p) {
+    fn = p;
+    return *this;
+  }
+};
+
 template<typename Tag, typename T>
 struct Address {
   using type = T;

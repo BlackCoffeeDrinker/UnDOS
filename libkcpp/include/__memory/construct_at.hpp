@@ -2,6 +2,9 @@
 #pragma once
 
 #include <__config.hpp>
+#include <type_traits.hpp>
+#include <__memory/addressof.hpp>
+#include <utility.hpp>
 
 namespace kstd {
 

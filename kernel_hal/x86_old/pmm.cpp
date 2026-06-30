@@ -58,7 +58,7 @@ VirtualAddress find_highest_virtual_address(const kernel::BootInfoT &boot_info) 
 uint64_t find_highest_physical_address(const kernel::BootInfoT &boot_info) {
   uint64_t max_memory = 0;
 
-  for (const auto &region: boot_info.memory_map) {
+  for (const auto &region: boot_info.memory_regions) {
     if (region.type == kernel::MemoryRegionType::Available) {
       if (const uint64_t region_end = static_cast<uintptr_t>(region.base) + region.length;
           region_end > max_memory) {
@@ -77,8 +77,8 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   uint64_t max_memory = 0;
   early_print_fmt("Parsing system memory layout with page size {}...\n\r", boot_info.page_size);
 
-  for (size_t i = 0; i < boot_info.memory_map.size(); ++i) {
-    const auto &map = boot_info.memory_map[i];
+  for (size_t i = 0; i < boot_info.memory_regions.size(); ++i) {
+    const auto &map = boot_info.memory_regions[i];
     if (map.type == kernel::MemoryRegionType::None) continue;
     early_print_fmt("Memory map region {} type: {}, base: 0x{:lx}, length: 0x{:lx}\n\r", i, map_type_to_string(map.type), static_cast<uintptr_t>(map.base), map.length);
   }
@@ -104,7 +104,7 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   }
 
   // 3. Mark only the actual available RAM regions as "free" (0)
-  for (const auto &region: boot_info.memory_map) {
+  for (const auto &region: boot_info.memory_regions) {
     if (region.type == kernel::MemoryRegionType::Available) {
       const auto start_frame = static_cast<uintptr_t>(region.base) / page_size;
       const auto frame_count = static_cast<size_t>(region.length / page_size);

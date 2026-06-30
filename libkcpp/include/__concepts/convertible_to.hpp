@@ -1,6 +1,7 @@
 
 #pragma once
 #include <__config.hpp>
+#include <type_traits.hpp>
 
 namespace kstd {
 template<class _From, class _To>

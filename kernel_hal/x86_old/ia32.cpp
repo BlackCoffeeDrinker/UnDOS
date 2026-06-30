@@ -12,9 +12,17 @@ hal::x86::regs cpu_cpuid(int code) {
 }
 
 UNDOS_HAL_API void HAL_Platform_Init(const kernel::BootInfoT &boot_info) noexcept {
+  HAL_CPU_InitializeExecutionEnvironment();
+  hal::x86::init_pmm(boot_info);
+}
+
+UNDOS_HAL_API void HAL_CPU_InitializeExecutionEnvironment() noexcept {
   hal::x86::init_gdt();
   hal::x86::init_idt();
-  hal::x86::init_pmm(boot_info);
+}
+
+UNDOS_HAL_API void HAL_CPU_ReloadContext() noexcept {
+  hal::x86::kernel_gdt.install();
 }
 
 UNDOS_HAL_API void HAL_CPU_Halt() noexcept {
@@ -30,6 +38,11 @@ UNDOS_HAL_API [[noreturn]] void HAL_Platform_Panic(const char *message, const ch
 }
 
 UNDOS_HAL_API void HAL_Platform_InitializeSystemTimer() noexcept {
+}
+
+UNDOS_HAL_API void HAL_Platform_DetectSystemBus() noexcept {
+  // Always add ISA
+  // Detect PCI
 }
 
 namespace std {

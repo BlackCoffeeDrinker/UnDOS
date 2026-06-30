@@ -9,13 +9,24 @@ add_executable(kernel
 
         src/vmm.cpp
         src/vmm.hpp
-        src/memory/slab.cpp
-        src/memory/slab.hpp
         src/time.cpp
         src/driver_loader.cpp
         src/driver_loader.hpp
         src/object_manager.cpp
         src/object_manager.hpp
+        src/common/DoubleListLink.hpp
+        src/common/DoubleList.hpp
+
+        src/memory/Layout.hpp
+        src/memory/Layout.cpp
+        src/memory/Storage.hpp
+        src/memory/Storage.cpp
+        src/memory/Slab.hpp
+        src/memory/Slab.cpp
+        src/memory/Allocator.hpp
+        src/memory/Allocator.cpp
+        src/memory/Cache.hpp
+        src/memory/Cache.cpp
 )
 
 target_compile_definitions(kernel PRIVATE UNDOS_KERNEL_COMPILE)

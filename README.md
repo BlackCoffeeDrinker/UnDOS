@@ -217,5 +217,11 @@ sequenceDiagram
 ```
 
 * [ ] Implement initial GDT reload structure inside x86 HAL initialization sequence
+* [ ] Implement Object Manager
+* [ ] Implement scheduler
+* [ ] Implement VFS
+* [ ] Implement Driver Runtime (loading & executing)
 * [ ] Complete early device tree parsing from `CONFIG.REG` file node arrays
+* [ ] Make a HAL for ACPI x86
+* [ ] Make a HAL for SMP devices
 
