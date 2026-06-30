@@ -12,6 +12,9 @@ add_executable(kernel
         src/time.cpp
         src/driver_loader.cpp
         src/driver_loader.hpp
+        src/event_dispatcher.cpp
+        src/event_dispatcher.hpp
+        src/pnp_manager.cpp
         src/object_manager.cpp
         src/object_manager.hpp
         src/common/DoubleListLink.hpp

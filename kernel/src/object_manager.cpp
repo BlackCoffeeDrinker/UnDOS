@@ -1,5 +1,6 @@
 
 #include "object_manager.hpp"
+#include <kernel/hal_interface.hpp>
 #include <new.hpp>
 
 namespace {
@@ -53,7 +54,6 @@ UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KObject> KE_Ob_LookupObject(kstd::st
   if (path[0] == '\\') {
     path = path.substr(1);
   } else {
-    // Relative lookup not supported yet
     return nullptr;
   }
 
@@ -70,7 +70,9 @@ UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KObject> KE_Ob_LookupObject(kstd::st
     const kernel::KDirectoryObject *dir = static_cast<kernel::KDirectoryObject *>(current);
     current = dir->children.find(part);
 
-    if (!current) return nullptr;
+    if (!current) {
+        return nullptr;
+    }
 
     if (next_slash == kstd::string_view::npos) {
       break;

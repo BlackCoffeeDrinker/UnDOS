@@ -52,6 +52,12 @@ struct cfunc {
   }
 };
 
+template<class R, class... Args>
+struct cfunc<R(Args...)> : cfunc<R, Args...> {
+  using cfunc<R, Args...>::cfunc;
+  using cfunc<R, Args...>::operator=;
+};
+
 template<typename Tag, typename T>
 struct Address {
   using type = T;

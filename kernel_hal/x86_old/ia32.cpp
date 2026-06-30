@@ -29,6 +29,20 @@ UNDOS_HAL_API void HAL_CPU_Halt() noexcept {
   __asm__ volatile("hlt");
 }
 
+UNDOS_HAL_API void HAL_IO_Out8(uint16_t port, uint8_t val) noexcept {
+  asm volatile("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+UNDOS_HAL_API uint8_t HAL_IO_In8(uint16_t port) noexcept {
+  uint8_t ret;
+  asm volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
+  return ret;
+}
+
+UNDOS_HAL_API void HAL_IO_Delay() noexcept {
+  HAL_IO_Out8(0x80, 0);
+}
+
 UNDOS_HAL_API [[noreturn]] void HAL_Platform_Panic(const char *message, const char *file, int line) noexcept {
   early_print_fmt("\r\n--------\r\nPANIC: {} at {}:{}\r\nSystem Halted\r\n", message, file, line);
 

@@ -1,18 +1,12 @@
 #include "kernel/elf.hpp"
 #include "object_manager.hpp"
+#include "pnp_manager.hpp"
 #include "vmm.hpp"
 #include <new.hpp>
 
 #include <Kernel.hpp>
 #include <kernel/hal_interface.hpp>
-
-namespace {
-
-
-struct KDriverRuntimeObject final : kernel::KObject {
-  KDriverRuntimeObject() : KObject(kernel::ObjectType::from_literal("DRIVER_RUNTIME")) {}
-};
-}// namespace
+#include <kernel/pnp.hpp>
 
 UNDOS_KERNEL_API [[noreturn]] void kernel_core_main(const kernel::BootInfoT &boot_info) {
   for (const auto &module: boot_info.boot_modules) {
@@ -25,7 +19,7 @@ UNDOS_KERNEL_API [[noreturn]] void kernel_core_main(const kernel::BootInfoT &boo
       early_print_fmt("Found symbol: name = {}, address = 0x{x}\r\n", name.data(), static_cast<uintptr_t>(address));
     }
   }
-  
+
   // PHASE 1: Core Hardware Substrate
   // GDT, IDT (masked), PMM initialized, and PIC/APIC remapped. Interrupts are CLEARED (cli).
   HAL_Platform_Init(boot_info);
@@ -39,19 +33,7 @@ UNDOS_KERNEL_API [[noreturn]] void kernel_core_main(const kernel::BootInfoT &boo
   // PHASE 3: Structural Subsystem
   // Object manager spins up using early kmalloc allocations.
   ObInit();
-
-  {
-
-    // Register Driver Runtime skeleton
-    auto driver_dir = static_cast<kernel::KDirectoryObject *>(KE_Ob_LookupObject("\\Driver").get());
-    if (driver_dir) {
-      auto runtime_obj = kernel::KE_CreateObject<KDriverRuntimeObject>();
-      if (runtime_obj) {
-        runtime_obj->name = "Runtime";
-        KE_Ob_InsertObject(driver_dir, runtime_obj);
-      }
-    }
-  }
+  Ke_PNP_Init();
 
   // VMM Stage 2 links itself as a system object inside the Object Manager.
   kernel::vmm::late_init();

@@ -13,6 +13,8 @@
 #include <kernel/memory/virtual_memory.hpp>
 
 namespace kernel {
+struct KEvent;
+
 struct ObjectType final {
   uint64_t value{0};
 
@@ -102,35 +104,20 @@ struct KObject {
   constexpr KObject(const ObjectType type_) noexcept : type(type_) {}
 };
 
-struct KDirectoryObject : KObject {
-  adt::AvlTree<KObject, &KObject::node> children;
+template<typename T, size_t Version, ObjectType ObjectTypeId>
+struct KObjectT : KObject, Versioned<T, Version> {
+  static constexpr ObjectType Type = ObjectTypeId;
 
-  KDirectoryObject() noexcept : KObject{TYPE_DIRECTORY} {}
-
-  ~KDirectoryObject() override {
-    children.clear([](KObject *obj) {
-      if (obj) obj->release();
-    });
-  }
-};
-
-struct KDriverObject : KObject {
-  KDriverObject() noexcept : KObject{TYPE_DRIVER} {}
-};
-
-struct KBusObject : KObject {
-  KBusObject() noexcept : KObject{TYPE_BUS} {}
-  
+  constexpr KObjectT() noexcept : KObject(Type) {}
 };
 
 template<typename T>
 class KObjectPtr {
-  static_assert(kstd::is_base_of_v<KObject, T>, "T must derive from KObject");
-
   T *_ptr;
 
   void retain() {
     if (_ptr) {
+      static_assert(kstd::is_base_of_v<KObject, T>, "T must derive from KObject");
       _ptr->reference_count.fetch_add(1, kstd::memory_order_relaxed);
     }
   }
@@ -143,6 +130,7 @@ class KObjectPtr {
 
   public:
   KObjectPtr() noexcept : _ptr{nullptr} {}
+  KObjectPtr(decltype(nullptr)) noexcept : _ptr{nullptr} {}
   KObjectPtr(T *ptr) noexcept : _ptr{ptr} { retain(); }
   KObjectPtr(const KObjectPtr &other) noexcept : _ptr{other._ptr} { retain(); }
   KObjectPtr(KObjectPtr &&other) noexcept : _ptr{other._ptr} { other._ptr = nullptr; }
@@ -175,6 +163,12 @@ class KObjectPtr {
     return *this;
   }
 
+  KObjectPtr &operator=(decltype(nullptr)) noexcept {
+    release();
+    _ptr = nullptr;
+    return *this;
+  }
+
   T *get() const noexcept { return _ptr; }
   T &operator*() const noexcept { return *_ptr; }
   T *operator->() const noexcept { return _ptr; }
@@ -183,8 +177,28 @@ class KObjectPtr {
 
   bool operator==(const KObjectPtr &other) const noexcept { return _ptr == other._ptr; }
   bool operator!=(const KObjectPtr &other) const noexcept { return _ptr != other._ptr; }
+  bool operator==(decltype(nullptr)) const noexcept { return _ptr == nullptr; }
+  bool operator!=(decltype(nullptr)) const noexcept { return _ptr != nullptr; }
 
   template<typename U>
   friend class KObjectPtr;
 };
+
+struct KDirectoryObject : KObjectT<KDirectoryObject, 1, TYPE_DIRECTORY> {
+  adt::AvlTree<KObject, &KObject::node> children;
+
+  ~KDirectoryObject() override {
+    children.clear([](KObject *obj) {
+      if (obj) obj->release();
+    });
+  }
+};
+
+struct KDriverObject : KObjectT<KDriverObject, 1, TYPE_DRIVER> {
+  cfunc<void(KObjectPtr<KDriverObject>, const KEvent &)> eventHandler;
+};
+
+struct KBusObject : KObjectT<KBusObject, 1, TYPE_BUS> {
+};
+
 }// namespace kernel

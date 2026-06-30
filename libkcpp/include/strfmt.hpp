@@ -7,6 +7,7 @@
 #include "nomm_string.hpp"
 #include "string_view.hpp"
 #include "type_traits.hpp"
+#include "static_string.hpp"
 
 namespace kstd {
 namespace detail {
@@ -77,6 +78,8 @@ struct format_arg {
   constexpr format_arg() : type(arg_type::none_type), pointer(nullptr) {}
   explicit constexpr format_arg(const char *str) : type(arg_type::string_view_type), str_view{str} {}
   explicit constexpr format_arg(string_view sv) : type(arg_type::string_view_type), str_view(sv) {}
+  template<size_t N>
+  explicit constexpr format_arg(const static_string<N>& static_string) : type(arg_type::string_view_type), str_view(static_cast<string_view>(static_string)) {}
   explicit constexpr format_arg(const void *ptr) : type(arg_type::pointer_type), pointer(ptr) {}
   //explicit constexpr format_arg(long double ldv) : type(arg_type::long_double_type), long_double_value(ldv) {}
   explicit constexpr format_arg(double dv) : type(arg_type::double_type), double_value(dv) {}

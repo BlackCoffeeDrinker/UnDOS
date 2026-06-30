@@ -15,6 +15,12 @@ UNDOS_HAL_API void HAL_Platform_DetectSystemBus() noexcept;
 UNDOS_HAL_API [[noreturn]] void HAL_Platform_Panic(const char *message, const char *file, int line) noexcept;
 UNDOS_HAL_API void HAL_CPU_Halt() noexcept;
 
+// region Port I/O API
+UNDOS_HAL_API void HAL_IO_Out8(uint16_t port, uint8_t val) noexcept;
+UNDOS_HAL_API uint8_t HAL_IO_In8(uint16_t port) noexcept;
+UNDOS_HAL_API void HAL_IO_Delay() noexcept;
+// endregion
+
 // region CPU Execution Environment API
 UNDOS_HAL_API void HAL_CPU_InitializeExecutionEnvironment() noexcept;
 UNDOS_HAL_API void HAL_CPU_ReloadContext() noexcept;

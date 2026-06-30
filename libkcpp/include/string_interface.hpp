@@ -41,6 +41,86 @@ struct string_interface {
   constexpr const_reference operator[](size_type pos) const noexcept {
     return _data[pos];
   }
+  
+  friend constexpr bool operator==(const string_interface &lhs, const string_interface &rhs) noexcept {
+    if (lhs.length() != rhs.length()) return false;
+    if (lhs.data() == rhs.data()) return true;
+    return traits_type::compare(lhs.data(), rhs.data(), lhs.length()) == 0;
+  }
+
+  friend constexpr bool operator!=(const string_interface &lhs, const string_interface &rhs) noexcept {
+    return !(lhs == rhs);
+  }
+
+  friend constexpr bool operator<(const string_interface &lhs, const string_interface &rhs) noexcept {
+    size_type n = lhs.length() < rhs.length() ? lhs.length() : rhs.length();
+    int res = traits_type::compare(lhs.data(), rhs.data(), n);
+    if (res != 0) return res < 0;
+    return lhs.length() < rhs.length();
+  }
+
+  friend constexpr bool operator>(const string_interface &lhs, const string_interface &rhs) noexcept {
+    return rhs < lhs;
+  }
+
+  friend constexpr bool operator<=(const string_interface &lhs, const string_interface &rhs) noexcept {
+    return !(rhs < lhs);
+  }
+
+  friend constexpr bool operator>=(const string_interface &lhs, const string_interface &rhs) noexcept {
+    return !(lhs < rhs);
+  }
+
+  friend constexpr bool operator==(const string_interface &lhs, const_pointer rhs) noexcept {
+    if (!rhs) return lhs.empty();
+    size_type rhs_len = traits_type::length(rhs);
+    if (lhs.length() != rhs_len) return false;
+    return traits_type::compare(lhs.data(), rhs, lhs.length()) == 0;
+  }
+  friend constexpr bool operator==(const_pointer lhs, const string_interface &rhs) noexcept {
+    return rhs == lhs;
+  }
+  friend constexpr bool operator!=(const string_interface &lhs, const_pointer rhs) noexcept {
+    return !(lhs == rhs);
+  }
+  friend constexpr bool operator!=(const_pointer lhs, const string_interface &rhs) noexcept {
+    return !(lhs == rhs);
+  }
+
+  friend constexpr bool operator<(const string_interface &lhs, const_pointer rhs) noexcept {
+    if (!rhs) return false;
+    size_type rhs_len = traits_type::length(rhs);
+    size_type n = lhs.length() < rhs_len ? lhs.length() : rhs_len;
+    int res = traits_type::compare(lhs.data(), rhs, n);
+    if (res != 0) return res < 0;
+    return lhs.length() < rhs_len;
+  }
+  friend constexpr bool operator<(const_pointer lhs, const string_interface &rhs) noexcept {
+    if (!lhs) return !rhs.empty();
+    size_type lhs_len = traits_type::length(lhs);
+    size_type n = lhs_len < rhs.length() ? lhs_len : rhs.length();
+    int res = traits_type::compare(lhs, rhs.data(), n);
+    if (res != 0) return res < 0;
+    return lhs_len < rhs.length();
+  }
+  friend constexpr bool operator>(const string_interface &lhs, const_pointer rhs) noexcept {
+    return rhs < lhs;
+  }
+  friend constexpr bool operator>(const_pointer lhs, const string_interface &rhs) noexcept {
+    return rhs < lhs;
+  }
+  friend constexpr bool operator<=(const string_interface &lhs, const_pointer rhs) noexcept {
+    return !(rhs < lhs);
+  }
+  friend constexpr bool operator<=(const_pointer lhs, const string_interface &rhs) noexcept {
+    return !(rhs < lhs);
+  }
+  friend constexpr bool operator>=(const string_interface &lhs, const_pointer rhs) noexcept {
+    return !(lhs < rhs);
+  }
+  friend constexpr bool operator>=(const_pointer lhs, const string_interface &rhs) noexcept {
+    return !(lhs < rhs);
+  }
 
   [[nodiscard]] constexpr size_type find(CharT c, size_type pos = 0) const noexcept {
     size_type ret = npos;
