@@ -6,23 +6,27 @@
 #include "common/DoubleList.hpp"
 #include "memory/Cache.hpp"
 
+extern uint32_t g_page_size;
+
 namespace {
-kernel::vmm::AddressSpace g_kernel_address_space;
-uint32_t g_page_size = 4096;
-
-kernel::memory::Cache g_malloc_caches[8];
-const size_t g_cache_sizes[] = {16, 32, 64, 128, 256, 512, 1024, 2048};
-
 struct KVmmObject final : kernel::KObject {
   KVmmObject() : KObject(kernel::TYPE_VMM) {}
 };
 }// namespace
 
 namespace kernel::vmm {
+AddressSpace g_kernel_address_space;
+VirtualAddress g_kernel_module_base = 0xE0000000;
+
+memory::Cache g_malloc_caches[8];
+const size_t g_cache_sizes[] = {16, 32, 64, 128, 256, 512, 1024, 2048};
+
 void init(const BootInfoT &boot_info) noexcept {
   // Initialize kernel address space
   g_kernel_address_space.translation_root = HAL_VMM_GetCurrentTranslationRoot();
   g_kernel_address_space.asid = 0;
+  g_kernel_address_space.current_base = 0;
+  g_kernel_address_space.limit = 0;
 
   // Find the highest virtual address space
   VirtualAddress highest_addr = 0;
@@ -37,9 +41,10 @@ void init(const BootInfoT &boot_info) noexcept {
   // Start heap after the last mapped region + one guard page
   VirtualAddress heap_start = (highest_addr + boot_info.page_size - 1).align_down(boot_info.page_size);
   heap_start += boot_info.page_size;
-  g_page_size = boot_info.page_size;
 
   memory::set_heap_start(heap_start);
+  g_kernel_address_space.current_base = (heap_start + 0x10000000).align_up(0x1000000);
+  g_kernel_address_space.limit = 0xFF000000;
 
   for (size_t i = 0; i < 8; ++i) {
     new (&g_malloc_caches[i]) memory::Cache(g_cache_sizes[i], g_cache_sizes[i], boot_info.page_size);
@@ -85,12 +90,20 @@ AddressSpace *get_kernel_address_space() noexcept {
 }
 
 void *AddressSpace::allocate_region(size_t size, ProtectFlags flags) noexcept {
-  // Basic implementation: use a simple bump allocator for user space for now.
-  // In a real OS, this would search the VAD tree for a hole.
-  static VirtualAddress user_heap_base = 0x10000000;
+  if (current_base == 0) {
+    // Default to user heap range if not initialized
+    current_base = 0x10000000;
+    limit = 0xC0000000;
+  }
 
-  const VirtualAddress addr = user_heap_base;
-  user_heap_base += (size + g_page_size - 1) & ~(g_page_size - 1);
+  const VirtualAddress addr = current_base;
+  const size_t aligned_size = (size + g_page_size - 1) & ~(g_page_size - 1);
+
+  if (current_base + aligned_size > limit) {
+    return nullptr;
+  }
+
+  current_base += aligned_size;
 
   if (auto *vad = KE_CreateObject<VirtualAddressDescriptor>()) {
     vad->start = addr;

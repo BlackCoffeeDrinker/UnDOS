@@ -10,6 +10,9 @@ project(UnDOS
         VERSION 0.0.1
 )
 
+set(tools /usr/local/cross)
+
+
 #######################################################################################################################
 ## Global Project targeting
 #######################################################################################################################
@@ -18,36 +21,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
-
-##
-# 1. Global Toolchain/Compiler Sanity Flags for Kernel Space
-add_compile_options(
-        -m32
-        -march=i386
-        -nostdlib
-        -fno-builtin
-        -fno-rtti
-        -fno-exceptions
-        -ffreestanding
-        -fno-stack-protector
-        -fno-use-cxa-atexit
-        -Wall
-        -Wextra
-)
-set(tools /usr/local/cross)
-add_link_options(
-        -nostdlib
-        -nostartfiles
-        -nodefaultlibs
-        -nostdinc
-        -nolibc
-        -Wl,--oformat=elf32-i386
-        -Wl,--nmagic
-        -L ${tools}/lib/gcc/i686-elf/14.1.0/)
-
-# Don't link with anything by default unless we say so
-set(CMAKE_C_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C Libraries")
-set(CMAKE_CXX_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C++ Libraries")
 
 #######################################################################################################################
 ## CMake Module configuration
@@ -87,6 +60,36 @@ undos_set_project_warnings(
         "")
 
 target_compile_features(undos_options INTERFACE cxx_std_${CMAKE_CXX_STANDARD})
+if (NOT TESTING_ONLY)
+    # Don't link with anything by default unless we say so
+    set(CMAKE_C_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C Libraries")
+    set(CMAKE_CXX_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C++ Libraries")
+    
+    target_compile_options(undos_options INTERFACE
+    #add_compile_options(
+            -m32
+            -march=i386
+            -nostdlib
+            -fno-builtin
+            -fno-rtti
+            -fno-exceptions
+            -ffreestanding
+            -fno-stack-protector
+            -fno-use-cxa-atexit
+            -Wall
+            -Wextra
+    )
+    target_link_options(undos_options INTERFACE
+    #add_link_options(
+            -nostdlib
+            -nostartfiles
+            -nodefaultlibs
+            -nostdinc
+            -nolibc
+            -Wl,--oformat=elf32-i386
+            -Wl,--nmagic
+            -L ${tools}/lib/gcc/i686-elf/14.1.0/)
+endif ()
 
 #######################################################################################################################
 ## Load up third parties
@@ -98,7 +101,11 @@ add_subdirectory(third_party)
 #######################################################################################################################
 add_subdirectory(libkcpp)
 add_subdirectory(kernel_api)
-add_subdirectory(kernel_hal)
-add_subdirectory(kernel)
-add_subdirectory(drivers)
+if (NOT TESTING_ONLY)
+    add_subdirectory(kernel_hal)
+    add_subdirectory(kernel)
+    add_subdirectory(drivers)
+else ()
+    add_subdirectory(hosted_test)
+endif ()
 

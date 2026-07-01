@@ -10,6 +10,7 @@ function(add_hal TARGET_NAME)
             PRIVATE
             libkcpp
             KernelHeaders
+            undos_options undos_warnings
     )
 
     target_compile_definitions(${TARGET_NAME}

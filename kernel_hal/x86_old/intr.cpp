@@ -5,6 +5,7 @@
 #include <kernel/interrupt.hpp>
 #include <kernel/time.hpp>
 
+#include "__tuple/ignore.hpp"
 #include "strfmt.hpp"
 #include "structs.hpp"
 
@@ -52,6 +53,8 @@ void remap_pic() noexcept {
 
 // Vector 32: The System PIT Timer (IRQ 0)
 [[gnu::interrupt]] void pit_irq_handler(stack_frame *f) {
+  kstd::ignore = f;
+
   // 1. Call the executive kernel timekeeper immediately
   KE_Time_UpdateSystemTime();
 
@@ -67,6 +70,8 @@ void remap_pic() noexcept {
 
 // Vector 33: The Keyboard or Generic IRQ 1 Shared Dispatcher
 [[gnu::interrupt]] void generic_irq1_handler(stack_frame *f) {
+  kstd::ignore = f;
+
   if (g_hardware_interrupts[1]) {
     auto *intro_obj = g_hardware_interrupts[1];
     intro_obj->service_routine(intro_obj, intro_obj->service_context);
@@ -81,15 +86,18 @@ void remap_pic() noexcept {
   HAL_Platform_Panic("Unhandled Interrupt/Exception", __FILE__, __LINE__);
 }
 [[gnu::interrupt]] void exception_handler(stack_frame *frame, uword_t error_code) {
+  kstd::ignore = frame;
   early_print_fmt("Exception: 0x{x}\n\r", error_code);
   HAL_Platform_Panic("Unhandled Exception", __FILE__, __LINE__);
 }
 
 [[gnu::interrupt]] void page_fault_handler(stack_frame *frame, uword_t error_code) {
+  kstd::ignore = frame;
+
   uint32_t faulting_address;
   __asm__ volatile("mov %%cr2, %0" : "=r"(faulting_address));
 
-  early_print_fmt("Faulting address: 0x{x}\n\r", faulting_address);
+  early_print_fmt("Faulting address: 0x{x}, error_code: 0x{x}\n\r", faulting_address, error_code);
 
   HAL_Platform_Panic("Unhandled Page Fault", __FILE__, __LINE__);
 }
@@ -99,8 +107,13 @@ void init_idt() {
   remap_pic();
 
   // 1. Flood the entire IDT with the baseline handler as a safety net
-  for (size_t i = 0; i < 256; ++i) {
-    idt.set(i, KERNEL_GDT_SELECTOR, &interrupt_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  for (uint16_t i = 0; i < 256; ++i) {
+    idt.set(
+        static_cast<uint8_t>(i),
+        KERNEL_GDT_SELECTOR,
+        &interrupt_handler,
+        GateType::INTERRUPT_32,
+        IDTFlags::PRESENT);
   }
 
   // Map the exceptions

@@ -27,7 +27,7 @@ template <class _Tp, class _Up>
 concept __unqualified_swappable_with =
     (__class_or_enum<remove_cvref_t<_Tp>> || __class_or_enum<remove_cvref_t<_Up>>) &&
     requires(_Tp&& __t, _Up&& __u) {
-        swap(kstd::forward<_Tp>(__t), kstd::forward<_Up>(__u));
+        swap(forward<_Tp>(__t), forward<_Up>(__u));
     };
 // clang-format on
 
@@ -53,8 +53,8 @@ struct __fn {
   template<class _Tp, class _Up>
     requires __unqualified_swappable_with<_Tp, _Up>
   constexpr void operator()(_Tp &&__t, _Up &&__u) const
-      noexcept(noexcept(swap(kstd::forward<_Tp>(__t), kstd::forward<_Up>(__u)))) {
-    swap(kstd::forward<_Tp>(__t), kstd::forward<_Up>(__u));
+      noexcept(noexcept(swap(forward<_Tp>(__t), forward<_Up>(__u)))) {
+    swap(forward<_Tp>(__t), forward<_Up>(__u));
   }
 
   // 2.2   Otherwise, if `E1` and `E2` are lvalues of array types with equal extent and...
@@ -72,7 +72,7 @@ struct __fn {
   template<__exchangeable _Tp>
   constexpr void operator()(_Tp &__x, _Tp &__y) const
       noexcept(is_nothrow_move_constructible_v<_Tp> && is_nothrow_move_assignable_v<_Tp>) {
-    __y = kstd::exchange(__x, kstd::move(__y));
+    __y = exchange(__x, move(__y));
   }
 };
 }// namespace __swap
@@ -87,10 +87,10 @@ concept swappable = requires(_Tp &__a, _Tp &__b) { ranges::swap(__a, __b); };
 
 template<class _Tp, class _Up>
 concept swappable_with = common_reference_with<_Tp, _Up> && requires(_Tp &&__t, _Up &&__u) {
-  ranges::swap(kstd::forward<_Tp>(__t), kstd::forward<_Tp>(__t));
-  ranges::swap(kstd::forward<_Up>(__u), kstd::forward<_Up>(__u));
-  ranges::swap(kstd::forward<_Tp>(__t), kstd::forward<_Up>(__u));
-  ranges::swap(kstd::forward<_Up>(__u), kstd::forward<_Tp>(__t));
+  ranges::swap(forward<_Tp>(__t), forward<_Tp>(__t));
+  ranges::swap(forward<_Up>(__u), forward<_Up>(__u));
+  ranges::swap(forward<_Tp>(__t), forward<_Up>(__u));
+  ranges::swap(forward<_Up>(__u), forward<_Tp>(__t));
 };
 
 }// namespace kstd

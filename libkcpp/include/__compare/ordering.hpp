@@ -27,10 +27,20 @@ struct _CmpUnspecifiedParam {
   // can be constructed from literal 0, but this conflicts with `-Wzero-as-null-pointer-constant`.
   template<class _Tp, class = enable_if_t<is_same_v<_Tp, int>>>
   consteval _CmpUnspecifiedParam(_Tp __zero) noexcept
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpedantic" // Suppress extension warnings
+#endif
+
 #if __has_attribute(__enable_if__)
       __attribute__((__enable_if__(
           __zero == 0, "Only literal 0 is allowed as the operand of a comparison with one of the ordering types")))
 #endif
+  
+#if defined(__clang__)
+  #pragma clang diagnostic pop
+#endif
+
   {
     (void) __zero;
   }

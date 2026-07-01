@@ -70,18 +70,7 @@ function(
                 -Wsuggest-override # warn if an overridden member function is not marked 'override' or 'final'
         )
     endif()
-
-    if("${CUDA_WARNINGS}" STREQUAL "")
-        set(CUDA_WARNINGS
-                -Wall
-                -Wextra
-                -Wunused
-                -Wconversion
-                -Wshadow
-                # TODO add more Cuda warnings
-        )
-    endif()
-
+    
     if(WARNINGS_AS_ERRORS)
         message(TRACE "Warnings are treated as errors")
         list(APPEND CLANG_WARNINGS -Werror)

@@ -105,11 +105,11 @@ struct format_arg {
 };
 
 template<typename T>
-format_arg make_arg(T arg) {
+format_arg make_arg(const T& arg) {
   if constexpr (kstd::is_enum_v<T>) {
     return format_arg(kstd::underlying_type_t<T>(arg));
   } else {
-    return format_arg(static_cast<decay_t<T>>(arg));
+    return format_arg(arg);
   }
 }
 
@@ -128,7 +128,7 @@ inline format_options make_options(const string_view &options_string) {
 }
 
 template<typename... Args>
-array<format_arg, sizeof...(Args)> make_args(Args... args) {
+array<format_arg, sizeof...(Args)> make_args(const Args&... args) {
   return {make_arg(args)...};
 }
 
@@ -193,6 +193,21 @@ inline void handlePrintArgument(DESTINATION &target, const format_arg &arg, cons
       target('0');
       target('x');
       print_uint(reinterpret_cast<uintptr_t>(arg.pointer), 16);
+      break;
+    case format_arg::arg_type::bool_type:
+      if (arg.bool_value) {
+        target('T');
+        target('r');
+        target('u');
+        target('e');
+      }
+      else {
+        target('F');
+        target('a');
+        target('l');
+        target('s');
+        target('e');
+      }
       break;
     default:
       // Fallback for unhandled types

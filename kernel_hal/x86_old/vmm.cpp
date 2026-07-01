@@ -104,16 +104,22 @@ UNDOS_HAL_API bool HAL_VMM_MapPage(VirtualAddress virtual_addr, PhysicalAddress 
     }
 
     directory[pd_index].set_page_table(
-        static_cast<uint32_t>(static_cast<uintptr_t>(new_table_phys)),
+        static_cast<uintptr_t>(new_table_phys),
         hal::x86::PageFlags::PRESENT       // Present frame
             | hal::x86::PageFlags::WRITABLE// Writable frame
             | hal::x86::PageFlags::USER    // User frame
     );
 
+    // Flush the recursive window address for this page table
+    HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (pd_index * 4096)));
+
     auto *page_table = hal::x86::get_page_table(virtual_addr);
     for (size_t i = 0; i < 1024; ++i) {
       page_table[i].clear();
     }
+    
+    // We should also flush the directory entry itself, just in case
+    HAL_VMM_Flush(virtual_addr);
   }
 
   auto *page_table = hal::x86::get_page_table(virtual_addr);
@@ -122,7 +128,7 @@ UNDOS_HAL_API bool HAL_VMM_MapPage(VirtualAddress virtual_addr, PhysicalAddress 
   }
 
   // Translate generic flags to raw x86 bits
-  page_table[pt_index].set_frame(static_cast<uint32_t>(static_cast<uintptr_t>(physical_addr)), hal::x86::translate_flags(flags));
+  page_table[pt_index].set_frame(static_cast<uintptr_t>(physical_addr), hal::x86::translate_flags(flags));
 
   return true;
 }
@@ -150,7 +156,7 @@ UNDOS_HAL_API void HAL_VMM_UnmapPage(VirtualAddress virtual_addr) noexcept {
     // 3. If no pages remain in this table, reclaim the page table frame itself!
     if (table_is_empty) {
       // Grab the physical address of the page table before we sever the connection
-      const PhysicalAddress page_table_phys = static_cast<uintptr_t>(directory[pd_index].get_page_table());
+      const PhysicalAddress page_table_phys = directory[pd_index].get_page_table();
 
       // Clear the directory entry so the MMU stops looking here
       directory[pd_index].clear();

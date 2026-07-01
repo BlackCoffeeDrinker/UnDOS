@@ -11,7 +11,7 @@ namespace kstd {
 
 template<class _Fn, class... _Args>
 concept invocable = requires(_Fn &&__fn, _Args &&...__args) {
-  kstd::invoke(kstd::forward<_Fn>(__fn), kstd::forward<_Args>(__args)...);// not required to be equality preserving
+  invoke(forward<_Fn>(__fn), forward<_Args>(__args)...);// not required to be equality preserving
 };
 
 // [concept.regular.invocable]

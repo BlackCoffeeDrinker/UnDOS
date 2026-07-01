@@ -25,6 +25,8 @@ struct AddressSpace {
   VadTree vads;
   PhysicalAddress translation_root;// Architecture-specific root (e.g., CR3, TTBR, satp)
   uint32_t asid;                   // Address Space Identifier (if supported by arch)
+  VirtualAddress current_base;
+  VirtualAddress limit;
 
   // Prepare for VAD tracking
   void *allocate_region(size_t size, ProtectFlags flags) noexcept;

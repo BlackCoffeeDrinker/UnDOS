@@ -47,6 +47,7 @@ struct basic_static_string : string_interface<CharT, Traits> {
 
   constexpr basic_static_string &operator=(const basic_static_string &other) noexcept {
     if (this != &other) {
+      this->_data = _buffer;
       this->_len = other._len;
       for (size_type i = 0; i <= other._len; ++i) {
         _buffer[i] = other._buffer[i];
@@ -56,6 +57,7 @@ struct basic_static_string : string_interface<CharT, Traits> {
   }
 
   constexpr basic_static_string &operator=(const basic_string_view<CharT, Traits> &sv) noexcept {
+    this->_data = _buffer;
     this->_len = 0;
     append(sv);
     return *this;
@@ -63,7 +65,7 @@ struct basic_static_string : string_interface<CharT, Traits> {
 
   [[nodiscard]] constexpr size_type capacity() const noexcept { return N; }
 
-  constexpr operator const CharT *() const noexcept { return _buffer; }
+  explicit constexpr operator const CharT *() const noexcept { return _buffer; }
   [[nodiscard]] constexpr pointer data() noexcept { return _buffer; }
   [[nodiscard]] constexpr const_pointer data() const noexcept { return _buffer; }
 
@@ -112,6 +114,7 @@ struct basic_static_string : string_interface<CharT, Traits> {
   }
 
   constexpr basic_static_string &operator=(const_pointer sv) noexcept {
+    this->_data = _buffer;
     this->_len = 0;
     append(sv);
     return *this;

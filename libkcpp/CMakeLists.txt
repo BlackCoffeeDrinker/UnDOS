@@ -23,8 +23,12 @@ add_library(libkcpp INTERFACE
         include/memory.hpp
         include/new.hpp
         include/static_string.hpp
+        include/expected.hpp
 )
 
 target_include_directories(libkcpp INTERFACE include/)
-target_compile_options(libkcpp INTERFACE -Wno-error=literal-suffix)
+
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(libkcpp INTERFACE -Wno-error=literal-suffix)
+endif ()
 

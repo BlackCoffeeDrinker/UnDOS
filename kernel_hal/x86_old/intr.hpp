@@ -45,11 +45,11 @@ struct [[gnu::packed]] idt_entry_t {
   }
 
   void set_handler(uint32_t isr_address, uint16_t selector, GateType type, IDTFlags flags) noexcept {
-    isr_low = isr_address & 0xFFFF;
+    isr_low = static_cast<uint16_t>(isr_address & 0xFFFF);
     kernel_cs = selector;
     reserved = 0;
     attributes = static_cast<uint8_t>(type | flags);
-    isr_high = (isr_address >> 16) & 0xFFFF;
+    isr_high = static_cast<uint16_t>((isr_address >> 16) & 0xFFFF);
   }
 };
 

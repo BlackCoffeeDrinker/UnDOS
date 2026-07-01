@@ -1,7 +1,8 @@
 #include "event_dispatcher.hpp"
 #include "object_manager.hpp"
-#include <kernel/hal_interface.hpp>
-#include <kernel/pnp.hpp>
+#include "pnp_manager.hpp"
+
+#include <Kernel.hpp>
 
 static kernel::KObjectPtr<kernel::KDriverObject> s_registeredDrivers[32];
 static size_t s_registeredDriverCount = 0;
@@ -50,7 +51,7 @@ void Ke_PNP_ReportNewDevice(kernel::KObjectPtr<kernel::KDeviceObject> parent, ke
 }
 
 void Ke_PNP_DispatchEvent(kernel::KObjectPtr<kernel::KDeviceObject> device, const kernel::KEvent &event) {
-  kernel::EventDispatcher::DispatchToDevice(device, event);
+  kernel::Ke_Event_DispatchToDevice(device, event);
 }
 
 void Ke_PNP_EnumerateBus(kernel::KObjectPtr<kernel::KDeviceObject> busDevice) {

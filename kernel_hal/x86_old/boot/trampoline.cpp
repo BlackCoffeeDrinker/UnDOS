@@ -1,17 +1,17 @@
 #include <stddef.h>
-#include <stdint.h>
 
 #include "multiboot.hpp"
 
 #include <kernel/boot/boot_info.hpp>
 #include <kernel/elf.hpp>
+#include <new.hpp>
 #include <strfmt.hpp>
 
 // Declare the assembly trampoline signature
 extern "C" [[noreturn]] void entry_trampoline(uint32_t entry, uint32_t boot_info, uint32_t stack_top);
 
 namespace {
-constexpr uintptr_t PAGE_ALIGN_UP(uintptr_t addr) { return (addr + 4095) & ~4095; }
+constexpr uintptr_t PAGE_ALIGN_UP(uintptr_t addr) { return (addr + 4095) & ~static_cast<uintptr_t>(4095); }
 
 constexpr size_t MAX_GLOBAL_SYMBOLS = 1024;
 constexpr size_t DEFAULT_STACK_SIZE = 16384;
@@ -108,12 +108,6 @@ bool kstrstr(const char *haystack, const char *needle) {
     haystack++;
   }
   return false;
-}
-
-size_t kstrlen(const char *s) {
-  size_t len = 0;
-  while (*s++) len++;
-  return len;
 }
 
 // Helper to deduce the target backing storage address from a designated linked virtual address
@@ -349,7 +343,7 @@ void process_module_relocations(uint32_t module_start, const module_got_t &got, 
           // Internal PC-relative calls are invariant under linear translation
         } else if (rel_type == hal::R_386_GOT32 || rel_type == hal::R_386_GOT32X) {
           const auto offset = static_cast<int32_t>(*patch_location);
-          const uintptr_t entry_vaddr = got.vaddr + offset;
+          const uintptr_t entry_vaddr = got.vaddr + static_cast<uintptr_t>(offset);
           const uintptr_t entry_paddr = translate_vaddr_to_paddr(entry_vaddr);
 
           // In-place GOT: Instruction already has correct offset, just fill the entry
@@ -380,7 +374,7 @@ uintptr_t calculate_elf_virtual_end(uintptr_t module_start) {
   }
 
   // Page-align (4KB) to ensure the kernel doesn't map partial pages
-  return (highest_vaddr + 4095) & ~4095;
+  return (highest_vaddr + 4095) & ~static_cast<uintptr_t>(4095);
 }
 
 void find_modules(const multiboot_info_t *mbi, multiboot_module_t *&kernel_module, multiboot_module_t *&hal_module) {
@@ -456,7 +450,7 @@ void setup_paging(uintptr_t stack_bottom, uintptr_t stack_top, uintptr_t boot_in
 
   auto map_virtual_range = [](uint32_t v_start, uint32_t v_end, uint32_t p_start) {
     // Align loop start down to page boundary
-    for (uint32_t v = v_start & ~4095; v < v_end; v += 4096) {
+    for (uint32_t v = v_start & ~static_cast<uint32_t>(4095); v < v_end; v += 4096) {
       const uint32_t slot = v >> 22;
       const uint32_t entry = (v >> 12) & 0x3FF;
 
@@ -472,7 +466,7 @@ void setup_paging(uintptr_t stack_bottom, uintptr_t stack_top, uintptr_t boot_in
       // Calculate physical address for this virtual page.
       // Mapping is linear: p = p_start + (v - v_start).
       // Mask out any unaligned bits from p_start to prevent corrupting PTE flags.
-      const uint32_t p = (p_start + (v - v_start)) & ~4095;
+      const uint32_t p = (p_start + (v - v_start)) & ~static_cast<uint32_t>(4095);
       pt[entry] = p | 0x003;
       boot_page_dir[slot] = reinterpret_cast<uint32_t>(pt) | 0x003;
     }
@@ -508,9 +502,9 @@ void setup_paging(uintptr_t stack_bottom, uintptr_t stack_top, uintptr_t boot_in
   write_fmt("Stage 1.5: Paging engaged.\n\r");
 }
 
-kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_stack_top, size_t space_needed) {
+kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_stack_top) {
   auto *boot_info_ptr = reinterpret_cast<kernel::BootInfoT *>(kernel_stack_top);
-  kmemset(boot_info_ptr, 0, sizeof(kernel::BootInfoT));
+  new (boot_info_ptr) kernel::BootInfoT();
   boot_info_ptr->page_size = 4096;
 
   boot_info_ptr->mapped_memory[0].type = kernel::MappedMemoryRegionType::KernelCore;
@@ -633,7 +627,7 @@ extern "C" void kernel_main(uint32_t mb_physical_addr) {
   write_fmt("Stage 1.5: Stack: bottom=0x{x}, top=0x{x}, size={}\n\r", kernel_stack_bottom, kernel_stack_top, DEFAULT_STACK_SIZE);
   write_fmt("Stage 1.5: Boot Info: start=0x{x}, end=0x{x}, length={}\n\r", kernel_stack_top, boot_info_end, space_needed);
 
-  auto *boot_info = fill_boot_info(mbi, kernel_stack_top, space_needed);
+  auto *boot_info = fill_boot_info(mbi, kernel_stack_top);
 
   auto *kernel_ehdr = reinterpret_cast<hal::Elf32_Ehdr *>(kernel_module->mod_start);
   uintptr_t entry_point = kernel_ehdr->e_entry;

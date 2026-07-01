@@ -20,7 +20,7 @@ struct string_interface {
 
   static constexpr size_type npos = static_cast<size_type>(-1);
 
-  constexpr operator const CharT *() const noexcept { return _data; }
+  explicit constexpr operator const CharT *() const noexcept { return _data; }
 
   [[nodiscard]] constexpr pointer data() noexcept { return _data; }
   [[nodiscard]] constexpr const_pointer data() const noexcept { return _data; }
@@ -95,6 +95,7 @@ struct string_interface {
     if (res != 0) return res < 0;
     return lhs.length() < rhs_len;
   }
+  
   friend constexpr bool operator<(const_pointer lhs, const string_interface &rhs) noexcept {
     if (!lhs) return !rhs.empty();
     size_type lhs_len = traits_type::length(lhs);
@@ -103,9 +104,11 @@ struct string_interface {
     if (res != 0) return res < 0;
     return lhs_len < rhs.length();
   }
+  
   friend constexpr bool operator>(const string_interface &lhs, const_pointer rhs) noexcept {
     return rhs < lhs;
   }
+  
   friend constexpr bool operator>(const_pointer lhs, const string_interface &rhs) noexcept {
     return rhs < lhs;
   }

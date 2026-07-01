@@ -12,11 +12,7 @@
 
 namespace kstd {
 template<class _Tp>
-using __swap_result_t =
-    enable_if_t<is_move_constructible<_Tp>::value && is_move_assignable<_Tp>::value>;
-
-template<class _Tp>
-inline __swap_result_t<_Tp> constexpr swap(_Tp &__x, _Tp &__y) noexcept(is_nothrow_move_constructible<_Tp>::value && is_nothrow_move_assignable<_Tp>::value) {
+inline constexpr __swap_result_t<_Tp> swap(_Tp &__x, _Tp &__y) noexcept(is_nothrow_move_constructible_v<_Tp> && is_nothrow_move_assignable_v<_Tp>) {
   _Tp __t(kstd::move(__x));
   __x = kstd::move(__y);
   __y = kstd::move(__t);

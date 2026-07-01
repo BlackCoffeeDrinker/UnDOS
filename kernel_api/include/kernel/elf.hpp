@@ -62,6 +62,10 @@ struct Elf32_Rel {
 };
 
 constexpr uint32_t PT_LOAD = 1;
+constexpr uint32_t SHT_NULL = 0;
+constexpr uint32_t SHT_PROGBITS = 1;
+constexpr uint32_t SHT_SYMTAB = 2;
+constexpr uint32_t SHT_STRTAB = 3;
 constexpr uint32_t SHT_REL = 9;
 constexpr uint32_t SHF_ALLOC = 0x2;
 
@@ -80,4 +84,4 @@ constexpr uint32_t R_386_GOT32X = 43;
 constexpr uint32_t ELF32_R_SYM(uint32_t val) { return val >> 8; }
 constexpr uint32_t ELF32_R_TYPE(uint32_t val) { return val & 0xff; }
 
-}// namespace kernel
+}// namespace hal

@@ -34,23 +34,23 @@ struct array {
   // Iterators
 
   // iterators:
-  [[__nodiscard__]] constexpr iterator begin() noexcept {
+  [[nodiscard]] constexpr iterator begin() noexcept {
     return iterator(data());
   }
-  [[__nodiscard__]] constexpr const_iterator begin() const noexcept {
+  [[nodiscard]] constexpr const_iterator begin() const noexcept {
     return const_iterator(data());
   }
-  [[__nodiscard__]] constexpr iterator end() noexcept {
+  [[nodiscard]] constexpr iterator end() noexcept {
     return iterator(data() + N);
   }
-  [[__nodiscard__]] constexpr const_iterator end() const noexcept {
+  [[nodiscard]] constexpr const_iterator end() const noexcept {
     return const_iterator(data() + N);
   }
 
-  [[__nodiscard__]] constexpr value_type *data() noexcept {
+  [[nodiscard]] constexpr value_type *data() noexcept {
     return elements;
   }
-  [[__nodiscard__]] constexpr const value_type *data() const noexcept {
+  [[nodiscard]] constexpr const value_type *data() const noexcept {
     return elements;
   }
 
@@ -58,10 +58,62 @@ struct array {
   constexpr size_t size() const { return N; }
 };
 
+template<class T>
+struct array<T, 0> {
+  // types:
+  using __self = array;
+  using value_type = T;
+  using reference = value_type &;
+  using const_reference = const value_type &;
+  using pointer = value_type *;
+  using const_pointer = const value_type *;
+
+  using iterator = pointer;
+  using const_iterator = const_pointer;
+  using size_type = size_t;
+  using difference_type = ptrdiff_t;
+  using reverse_iterator = kstd::reverse_iterator<iterator>;
+  using const_reverse_iterator = kstd::reverse_iterator<const_iterator>;
+
+  // Accessors
+  T &operator[](size_t) { return *data(); }
+  const T &operator[](size_t) const { return *data(); }
+
+  // iterators:
+  [[nodiscard]] constexpr iterator begin() noexcept {
+    return nullptr;
+  }
+  [[nodiscard]] constexpr const_iterator begin() const noexcept {
+    return nullptr;
+  }
+  [[nodiscard]] constexpr iterator end() noexcept {
+    return nullptr;
+  }
+  [[nodiscard]] constexpr const_iterator end() const noexcept {
+    return nullptr;
+  }
+
+  [[nodiscard]] constexpr value_type *data() noexcept {
+    return nullptr;
+  }
+  [[nodiscard]] constexpr const value_type *data() const noexcept {
+    return nullptr;
+  }
+
+  // Size
+  constexpr size_t size() const { return 0; }
+};
+
 template<size_t _Ip, class _Tp, size_t _Size>
-[[__nodiscard__]] inline constexpr _Tp &get(array<_Tp, _Size> &__a) noexcept {
+[[nodiscard]] inline constexpr _Tp &get(array<_Tp, _Size> &__a) noexcept {
   static_assert(_Ip < _Size, "Index out of bounds in std::get<> (std::array)");
-  return __a.__elems_[_Ip];
+  return __a.elements[_Ip];
+}
+
+template<size_t _Ip, class _Tp, size_t _Size>
+[[nodiscard]] inline constexpr const _Tp &get(const array<_Tp, _Size> &__a) noexcept {
+  static_assert(_Ip < _Size, "Index out of bounds in std::get<> (std::array)");
+  return __a.elements[_Ip];
 }
 
 }// namespace kstd

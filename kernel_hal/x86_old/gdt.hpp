@@ -63,11 +63,11 @@ struct [[gnu::packed]] gdt_entry_t {
                         Granularity gran_flags) noexcept
       : limit_low(limit & 0xFFFF),
         base_low(base & 0xFFFF),
-        base_mid((base >> 16) & 0xFF),
+        base_mid(static_cast<uint8_t>((base >> 16) & 0xFF)),
         access(kstd::to_underlying(access_flags)),
         granularity(((limit >> 16) & 0x0F) |
                     kstd::to_underlying(gran_flags)),
-        base_high((base >> 24) & 0xFF) {}
+        base_high(static_cast<uint8_t>((base >> 24) & 0xFF)) {}
 };
 
 static_assert(sizeof(gdt_entry_t) == 8);

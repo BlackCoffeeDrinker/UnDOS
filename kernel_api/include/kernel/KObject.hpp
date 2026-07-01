@@ -124,6 +124,7 @@ class KObjectPtr {
 
   void release() {
     if (_ptr) {
+      static_assert(kstd::is_base_of_v<KObject, T>, "T must derive from KObject");
       _ptr->release();
     }
   }
@@ -196,6 +197,9 @@ struct KDirectoryObject : KObjectT<KDirectoryObject, 1, TYPE_DIRECTORY> {
 
 struct KDriverObject : KObjectT<KDriverObject, 1, TYPE_DRIVER> {
   cfunc<void(KObjectPtr<KDriverObject>, const KEvent &)> eventHandler;
+  uintptr_t load_base{0};
+  size_t total_size{0};
+  cfunc<void(KObjectPtr<KDriverObject>&)> entry_point;
 };
 
 struct KBusObject : KObjectT<KBusObject, 1, TYPE_BUS> {

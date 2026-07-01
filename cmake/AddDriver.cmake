@@ -9,6 +9,7 @@ function(add_driver TARGET_NAME)
             PRIVATE
             libkcpp
             KernelHeaders
+            undos_options undos_warnings
     )
 
     target_compile_definitions(${TARGET_NAME}
@@ -24,7 +25,7 @@ function(add_driver TARGET_NAME)
     target_link_options(${TARGET_NAME}
             PRIVATE
             -fvisibility=hidden
-            "-T${CMAKE_SOURCE_DIR}/drivers/linker.ld"
+            "-T${CMAKE_SOURCE_DIR}/drivers/driver.ld"
             -nostdlib
             -static
             -Wl,--emit-relocs

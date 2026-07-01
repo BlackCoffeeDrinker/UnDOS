@@ -2,16 +2,16 @@
 
 namespace kernel {
 
-void EventDispatcher::DispatchToDevice(KObjectPtr<KDeviceObject> device, const KEvent &event) {
+void Ke_Event_DispatchToDevice(kernel::KObjectPtr<kernel::KDeviceObject> device, const kernel::KEvent &event) {
   if (device && device->driverObject) {
-    DispatchToDriver(device->driverObject, event);
+    Ke_Event_DispatchToDriver(device->driverObject, event);
   }
 }
 
-void EventDispatcher::DispatchToDriver(KObjectPtr<KDriverObject> driver, const KEvent &event) {
+void Ke_Event_DispatchToDriver(kernel::KObjectPtr<kernel::KDriverObject> driver, const kernel::KEvent &event) {
   if (driver && driver->eventHandler) {
     driver->eventHandler(driver, event);
   }
 }
 
-} // namespace kernel
+}// namespace kernel

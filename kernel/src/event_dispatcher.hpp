@@ -1,14 +1,10 @@
 #pragma once
 
-#include <kernel/io.hpp>
 #include <kernel/event.hpp>
+#include <kernel/io.hpp>
+
 
 namespace kernel {
-
-class EventDispatcher {
-public:
-  static void DispatchToDevice(KObjectPtr<KDeviceObject> device, const KEvent &event);
-  static void DispatchToDriver(KObjectPtr<KDriverObject> driver, const KEvent &event);
-};
-
-} // namespace kernel
+void Ke_Event_DispatchToDevice(kernel::KObjectPtr<kernel::KDeviceObject> device, const kernel::KEvent &event);
+void Ke_Event_DispatchToDriver(kernel::KObjectPtr<kernel::KDriverObject> driver, const kernel::KEvent &event);
+}// namespace kernel

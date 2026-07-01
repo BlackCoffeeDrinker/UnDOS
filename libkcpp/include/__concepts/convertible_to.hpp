@@ -5,5 +5,5 @@
 
 namespace kstd {
 template<class _From, class _To>
-concept convertible_to = is_convertible_v<_From, _To> && requires { static_cast<_To>(kstd::declval<_From>()); };
+concept convertible_to = is_convertible_v<_From, _To> && requires { static_cast<_To>(declval<_From>()); };
 }// namespace kstd

@@ -1,6 +1,6 @@
 
 #include "object_manager.hpp"
-#include <kernel/hal_interface.hpp>
+#include <Kernel.hpp>
 #include <new.hpp>
 
 namespace {
@@ -71,7 +71,7 @@ UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KObject> KE_Ob_LookupObject(kstd::st
     current = dir->children.find(part);
 
     if (!current) {
-        return nullptr;
+      return nullptr;
     }
 
     if (next_slash == kstd::string_view::npos) {
