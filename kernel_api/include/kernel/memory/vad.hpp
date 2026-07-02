@@ -1,7 +1,7 @@
 #pragma once
 
 #include <kernel/adt/avl_tree.hpp>
-#include <kernel/memory/virtual_memory.hpp>
+#include <kernel/memory/protect.hpp>
 #include <stdint.h>
 
 namespace kernel::vmm {

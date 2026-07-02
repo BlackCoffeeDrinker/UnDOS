@@ -25,7 +25,7 @@ class Cache {
 
   void *allocate() noexcept;
   void free(void *ptr) noexcept;
-  void free(void *ptr, Slab *slab) noexcept;
+  void free(void *ptr, Slab &slab) noexcept;
 
   size_t reclaim() noexcept;
 

@@ -32,7 +32,7 @@ class SymbolTable {
 };
 
 
-bool Ke_Driver_Init(const kernel::BootInfoT &boot_info);
+bool KE_DRIVER_Init(const kernel::BootInfoT &boot_info);
 
 
 enum class ElfResult { Success,
@@ -40,6 +40,6 @@ enum class ElfResult { Success,
                        BoundsViolation,
                        AllocationFailure };
 
-ElfResult Ke_Drv_LoadDriverModule(const uint8_t *raw_blob, size_t blob_size, kernel::KObjectPtr<kernel::KDriverObject> &out_driver);
+ElfResult Driver_Load_From_Memory(const uint8_t *raw_blob, size_t blob_size, kernel::KObjectPtr<kernel::KDriverObject> &out_driver);
 
 }// namespace kernel

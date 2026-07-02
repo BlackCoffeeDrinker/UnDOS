@@ -51,6 +51,7 @@ constexpr auto TYPE_DEVICE = "device"_type;
 constexpr auto TYPE_DIRECTORY = "directory"_type;
 constexpr auto TYPE_BUS = "bus"_type;
 constexpr auto TYPE_VMM = "vmm"_type;
+constexpr auto TYPE_MODULE = "module"_type;
 
 // A base structural type for unified C++ tracking
 struct KObject {
@@ -70,9 +71,9 @@ struct KObject {
 
   void release() {
     if (reference_count.fetch_sub(1, kstd::memory_order_acq_rel) == 1) {
-      kstd::atomic_thread_fence(kstd::memory_order_acquire);
-      this->~KObject();
-      KE_Free(this);
+      //      kstd::atomic_thread_fence(kstd::memory_order_acquire);
+      //      this->~KObject();
+      //      KE_Free(this);
     }
   }
 
@@ -115,14 +116,14 @@ template<typename T>
 class KObjectPtr {
   T *_ptr;
 
-  void retain() {
+  void _inc_ref() {
     if (_ptr) {
       static_assert(kstd::is_base_of_v<KObject, T>, "T must derive from KObject");
       _ptr->reference_count.fetch_add(1, kstd::memory_order_relaxed);
     }
   }
 
-  void release() {
+  void _dec_ref() {
     if (_ptr) {
       static_assert(kstd::is_base_of_v<KObject, T>, "T must derive from KObject");
       _ptr->release();
@@ -132,32 +133,32 @@ class KObjectPtr {
   public:
   KObjectPtr() noexcept : _ptr{nullptr} {}
   KObjectPtr(decltype(nullptr)) noexcept : _ptr{nullptr} {}
-  KObjectPtr(T *ptr) noexcept : _ptr{ptr} { retain(); }
-  KObjectPtr(const KObjectPtr &other) noexcept : _ptr{other._ptr} { retain(); }
+  KObjectPtr(T *ptr) noexcept : _ptr{ptr} { _inc_ref(); }
+  KObjectPtr(const KObjectPtr &other) noexcept : _ptr{other._ptr} { _inc_ref(); }
   KObjectPtr(KObjectPtr &&other) noexcept : _ptr{other._ptr} { other._ptr = nullptr; }
 
   template<typename U>
     requires(kstd::is_base_of_v<T, U>)
-  KObjectPtr(const KObjectPtr<U> &other) noexcept : _ptr{other.get()} { retain(); }
+  KObjectPtr(const KObjectPtr<U> &other) noexcept : _ptr{other.get()} { _inc_ref(); }
 
   template<typename U>
     requires(kstd::is_base_of_v<T, U>)
   KObjectPtr(KObjectPtr<U> &&other) noexcept : _ptr{other.get()} { other._ptr = nullptr; }
 
-  ~KObjectPtr() { release(); }
+  ~KObjectPtr() { _dec_ref(); }
 
   KObjectPtr &operator=(const KObjectPtr &other) noexcept {
     if (this != &other) {
-      release();
+      _dec_ref();
       _ptr = other._ptr;
-      retain();
+      _inc_ref();
     }
     return *this;
   }
 
   KObjectPtr &operator=(KObjectPtr &&other) noexcept {
     if (this != &other) {
-      release();
+      _dec_ref();
       _ptr = other._ptr;
       other._ptr = nullptr;
     }
@@ -165,21 +166,36 @@ class KObjectPtr {
   }
 
   KObjectPtr &operator=(decltype(nullptr)) noexcept {
-    release();
+    _dec_ref();
     _ptr = nullptr;
     return *this;
   }
 
+  T *release() noexcept {
+    auto ptr = _ptr;
+    _dec_ref();
+    _ptr = nullptr;
+    return ptr;
+  }
   T *get() const noexcept { return _ptr; }
   T &operator*() const noexcept { return *_ptr; }
   T *operator->() const noexcept { return _ptr; }
 
+  explicit operator KObject *() const noexcept { return _ptr; }
   explicit operator bool() const noexcept { return _ptr != nullptr; }
 
   bool operator==(const KObjectPtr &other) const noexcept { return _ptr == other._ptr; }
   bool operator!=(const KObjectPtr &other) const noexcept { return _ptr != other._ptr; }
   bool operator==(decltype(nullptr)) const noexcept { return _ptr == nullptr; }
   bool operator!=(decltype(nullptr)) const noexcept { return _ptr != nullptr; }
+
+  template<typename U>
+  KObjectPtr<U> As() const noexcept {
+    if (U::Type == _ptr->type) {
+      return KObjectPtr<U>(static_cast<U *>(_ptr));
+    }
+    return nullptr;
+  }
 
   template<typename U>
   friend class KObjectPtr;
@@ -195,14 +211,12 @@ struct KDirectoryObject : KObjectT<KDirectoryObject, 1, TYPE_DIRECTORY> {
   }
 };
 
-struct KDriverObject : KObjectT<KDriverObject, 1, TYPE_DRIVER> {
-  cfunc<void(KObjectPtr<KDriverObject>, const KEvent &)> eventHandler;
-  uintptr_t load_base{0};
-  size_t total_size{0};
-  cfunc<void(KObjectPtr<KDriverObject>&)> entry_point;
+struct KBusObject : KObjectT<KBusObject, 1, TYPE_BUS> {
 };
 
-struct KBusObject : KObjectT<KBusObject, 1, TYPE_BUS> {
+struct KModuleObject : KObjectT<KModuleObject, 1, TYPE_MODULE> {
+  PhysicalAddress base_physical;
+  size_t length;
 };
 
 }// namespace kernel

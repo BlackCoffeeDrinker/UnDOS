@@ -98,7 +98,7 @@ UNDOS_HAL_API bool HAL_VMM_MapPage(VirtualAddress virtual_addr, PhysicalAddress 
   // Handle x86 multi-level table allocation safely within the HAL
   if (auto *directory = hal::x86::get_page_directory();
       !directory[pd_index].is_present()) {
-    const PhysicalAddress new_table_phys = HAL_PMM_Allocate_Frames(1);
+    const PhysicalAddress new_table_phys = HAL_PMM_AllocateFrames(1);
     if (!new_table_phys) {
       return false;
     }
@@ -162,7 +162,7 @@ UNDOS_HAL_API void HAL_VMM_UnmapPage(VirtualAddress virtual_addr) noexcept {
       directory[pd_index].clear();
 
       // Return the page table's frame back to the global physical pool
-      HAL_PMM_Free_Frames(page_table_phys, 1);
+      HAL_PMM_FreeFrames(page_table_phys, 1);
 
       // Context note: Because the page table itself is now gone from virtual space,
       // we must also ensure the recursive mapping area for this table is invalidated

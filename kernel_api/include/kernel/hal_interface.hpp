@@ -1,19 +1,20 @@
 #pragma once
 
-#include <kernel/__core.hpp>
 
 #include <strfmt.hpp>
 #include <string_view.hpp>
 #include <utility.hpp>
 
-#include "entry.hpp"
-#include "memory/virtual_memory.hpp"
+#include <kernel/__core.hpp>
+#include <kernel/entry.hpp>
+#include <kernel/memory/virtual_memory.hpp>
 
-UNDOS_HAL_API void HAL_Platform_Init(const kernel::BootInfoT &boot_info) noexcept;
-UNDOS_HAL_API void HAL_Platform_InitializeSystemTimer() noexcept;
-UNDOS_HAL_API void HAL_Platform_DetectSystemBus() noexcept;
-UNDOS_HAL_API [[noreturn]] void HAL_Platform_Panic(const char *message, const char *file, int line) noexcept;
+UNDOS_HAL_API void HAL_PLATFORM_Init(const kernel::BootInfoT &boot_info) noexcept;
+UNDOS_HAL_API void HAL_PLATFORM_InitializeSystemTimer() noexcept;
+UNDOS_HAL_API void HAL_PLATFORM_AfterObjectManager() noexcept;
+UNDOS_HAL_API [[noreturn]] void HAL_PLATFORM_Panic(const char *message, const char *file, int line) noexcept;
 UNDOS_HAL_API void HAL_CPU_Halt() noexcept;
+UNDOS_HAL_API [[noreturn]] void HAL_PLATFORM_Shutdown() noexcept;
 
 // region Port I/O API
 UNDOS_HAL_API void HAL_IO_Out8(uint16_t port, uint8_t val) noexcept;
@@ -22,7 +23,7 @@ UNDOS_HAL_API void HAL_IO_Delay() noexcept;
 // endregion
 
 // region CPU Execution Environment API
-UNDOS_HAL_API void HAL_CPU_InitializeExecutionEnvironment() noexcept;
+UNDOS_HAL_API uint32_t HAL_PLATFORM_GetCpuCount() noexcept;
 UNDOS_HAL_API void HAL_CPU_ReloadContext() noexcept;
 // endregion
 
@@ -33,10 +34,10 @@ template<typename... Args>
 void early_print_fmt(const kstd::string_view &fmt, Args &&...args) { kstd::format_dst(early_print_char, fmt, args...); }
 
 // region Physical Memory Manager API
-UNDOS_HAL_API kernel::PhysicalAddress HAL_PMM_Allocate_Frames(size_t count) noexcept;
-UNDOS_HAL_API kernel::PhysicalAddress HAL_PMM_Allocate_Frames_DMA(size_t count) noexcept;
-UNDOS_HAL_API void HAL_PMM_Free_Frames(kernel::PhysicalAddress base, size_t count) noexcept;
-UNDOS_HAL_API void HAL_PMM_Reserve_Region(kernel::PhysicalAddress base, size_t length) noexcept;
+UNDOS_HAL_API kernel::PhysicalAddress HAL_PMM_AllocateFrames(size_t count) noexcept;
+UNDOS_HAL_API kernel::PhysicalAddress HAL_PMM_AllocateFramesDMA(size_t count) noexcept;
+UNDOS_HAL_API void HAL_PMM_FreeFrames(kernel::PhysicalAddress base, size_t count) noexcept;
+UNDOS_HAL_API void HAL_PMM_ReserveRegion(kernel::PhysicalAddress base, size_t length) noexcept;
 // endregion
 
 // region Virtual Memory Manager API

@@ -19,13 +19,14 @@ class AvlTree {
 
   constexpr AvlTree() noexcept = default;
 
-  void insert(T *node) noexcept {
+  void insert(T &node) noexcept {
+    T *node_ptr = &node;
     if (!root) {
-      root = node;
-      (node->*NodeMember).parent = nullptr;
-      (node->*NodeMember).left = nullptr;
-      (node->*NodeMember).right = nullptr;
-      (node->*NodeMember).height = 1;
+      root = node_ptr;
+      (node_ptr->*NodeMember).parent = nullptr;
+      (node_ptr->*NodeMember).left = nullptr;
+      (node_ptr->*NodeMember).right = nullptr;
+      (node_ptr->*NodeMember).height = 1;
       return;
     }
 
@@ -34,22 +35,22 @@ class AvlTree {
 
     while (current) {
       parent = current;
-      if (*node < *current) {
+      if (node < *current) {
         current = (current->*NodeMember).left;
       } else {
         current = (current->*NodeMember).right;
       }
     }
 
-    (node->*NodeMember).parent = parent;
-    (node->*NodeMember).left = nullptr;
-    (node->*NodeMember).right = nullptr;
-    (node->*NodeMember).height = 1;
+    (node_ptr->*NodeMember).parent = parent;
+    (node_ptr->*NodeMember).left = nullptr;
+    (node_ptr->*NodeMember).right = nullptr;
+    (node_ptr->*NodeMember).height = 1;
 
-    if (*node < *parent) {
-      (parent->*NodeMember).left = node;
+    if (node < *parent) {
+      (parent->*NodeMember).left = node_ptr;
     } else {
-      (parent->*NodeMember).right = node;
+      (parent->*NodeMember).right = node_ptr;
     }
 
     rebalance(parent);
@@ -101,6 +102,11 @@ class AvlTree {
   }
 
   template<typename F>
+  void each(F &&callback) noexcept {
+    each_recursive(root, callback);
+  }
+
+  template<typename F>
   void clear(F &&callback) noexcept {
     clear_recursive(root, callback);
     root = nullptr;
@@ -113,6 +119,14 @@ class AvlTree {
     clear_recursive((node->*NodeMember).left, callback);
     clear_recursive((node->*NodeMember).right, callback);
     callback(node);
+  }
+
+  template<typename F>
+  void each_recursive(T *node, F &&callback) noexcept {
+    if (!node) return;
+    each_recursive((node->*NodeMember).left, callback);
+    callback(node);
+    each_recursive((node->*NodeMember).right, callback);
   }
 
   static int get_height(T *node) noexcept {

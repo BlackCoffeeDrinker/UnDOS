@@ -25,6 +25,6 @@ void set_system_timer_frequency(uint32_t target_hz) noexcept {
   uint32_t nanoseconds_per_tick = 1000000000 / target_hz;
 
   // 3. Update the Executive kernel's increment scale factor
-  KE_Time_SetIncrement(kstd::chrono::nanoseconds(nanoseconds_per_tick));
+  KE_TIME_SetIncrement(kstd::chrono::nanoseconds(nanoseconds_per_tick));
 }
 }// namespace kernel::x86::pit

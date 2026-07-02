@@ -56,7 +56,7 @@ void remap_pic() noexcept {
   kstd::ignore = f;
 
   // 1. Call the executive kernel timekeeper immediately
-  KE_Time_UpdateSystemTime();
+  KE_TIME_UpdateSystemTime();
 
   // 2. Clear down any registered drivers listening to the clock via kinterrupt_t
   if (g_hardware_interrupts[0]) {
@@ -83,12 +83,12 @@ void remap_pic() noexcept {
 [[gnu::interrupt]] void interrupt_handler(stack_frame *f) {
 
   early_print_fmt("Unhandled Interrupt/Exception at EIP: 0x{x}\n\r", f->eip);
-  HAL_Platform_Panic("Unhandled Interrupt/Exception", __FILE__, __LINE__);
+  HAL_PLATFORM_Panic("Unhandled Interrupt/Exception", __FILE__, __LINE__);
 }
 [[gnu::interrupt]] void exception_handler(stack_frame *frame, uword_t error_code) {
   kstd::ignore = frame;
   early_print_fmt("Exception: 0x{x}\n\r", error_code);
-  HAL_Platform_Panic("Unhandled Exception", __FILE__, __LINE__);
+  HAL_PLATFORM_Panic("Unhandled Exception", __FILE__, __LINE__);
 }
 
 [[gnu::interrupt]] void page_fault_handler(stack_frame *frame, uword_t error_code) {
@@ -99,7 +99,7 @@ void remap_pic() noexcept {
 
   early_print_fmt("Faulting address: 0x{x}, error_code: 0x{x}\n\r", faulting_address, error_code);
 
-  HAL_Platform_Panic("Unhandled Page Fault", __FILE__, __LINE__);
+  HAL_PLATFORM_Panic("Unhandled Page Fault", __FILE__, __LINE__);
 }
 
 void init_idt() {

@@ -18,9 +18,9 @@ Slab *find_slab(void *ptr) noexcept {
   return g_global_registry.find(reinterpret_cast<uintptr_t>(ptr));
 }
 
-Slab *Allocator::allocate_slab(Cache *cache) noexcept {
+Slab *Allocator::allocate_slab(Cache &cache) noexcept {
   const size_t pages = layout_.slab_size / layout_.page_size;
-  const PhysicalAddress phys = HAL_PMM_Allocate_Frames(pages);
+  const PhysicalAddress phys = HAL_PMM_AllocateFrames(pages);
   if (!phys) return nullptr;
 
   VirtualAddress virt = g_kernel_heap_current;
@@ -36,28 +36,28 @@ Slab *Allocator::allocate_slab(Cache *cache) noexcept {
   const kstd::span memory(virt.as_ptr<uint8_t>(), layout_.slab_size);
 
   void *slab_storage = memory.data() + layout_.control_offset;
-  auto *slab = new (slab_storage) Slab(layout_, memory, cache);
+  auto *slab = new (slab_storage) Slab(layout_, memory, &cache);
 
-  g_global_registry.insert(slab);
+  g_global_registry.insert(*slab);
   total_allocated_ += layout_.slab_size;
 
   return slab;
 }
 
-void Allocator::free_slab(Slab *slab) noexcept {
-  g_global_registry.remove(slab);
+void Allocator::free_slab(Slab &slab) noexcept {
+  g_global_registry.remove(&slab);
 
   total_allocated_ -= layout_.slab_size;
 
-  const VirtualAddress virt = VirtualAddress::from_ptr(slab->memory().data());
+  const VirtualAddress virt = VirtualAddress::from_ptr(slab.memory().data());
   const PhysicalAddress phys = HAL_VMM_GetPhysicalAddress(virt);
 
-  const size_t pages = slab->memory().size() / layout_.page_size;
+  const size_t pages = slab.memory().size() / layout_.page_size;
   for (size_t i = 0; i < pages; ++i) {
     HAL_VMM_UnmapPage(virt + i * layout_.page_size);
   }
 
-  HAL_PMM_Free_Frames(phys, pages);
+  HAL_PMM_FreeFrames(phys, pages);
 }
 
 

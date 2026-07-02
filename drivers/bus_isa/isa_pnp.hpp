@@ -7,6 +7,12 @@ namespace kernel::isa {
 // I/O Ports
 constexpr uint16_t PNP_ADDRESS_PORT = 0x0279;
 constexpr uint16_t PNP_WRITE_DATA_PORT = 0x0A79;
+constexpr uint16_t PNP_READ_DATA_PORT = 0x0203;
+
+// Config Control Bits
+constexpr uint8_t CONTROL_RESET_CSN = 0x04; // Bit 2
+constexpr uint8_t CONTROL_WAIT_FOR_KEY = 0x02; // Bit 1
+constexpr uint8_t CONTROL_RESET_DRV = 0x01; // Bit 0
 
 // Config Registers
 enum class PnpRegister : uint8_t {
@@ -39,16 +45,5 @@ enum class PnpRegister : uint8_t {
   DmaChannel0 = 0x74,
   DmaChannel1 = 0x75,
 };
-
-// Config Control Bits
-constexpr uint8_t CONTROL_RESET_CSN = 0x04; // Bit 2
-constexpr uint8_t CONTROL_WAIT_FOR_KEY = 0x02; // Bit 1
-constexpr uint8_t CONTROL_RESET_DRV = 0x01; // Bit 0
-
-// Wait, I should double check these bits.
-// Bits:
-// 0: Reset all cards (software reset)
-// 1: Wait for Key (go to Sleep state)
-// 2: Reset CSN (all cards set CSN to 0)
 
 } // namespace kernel::isa

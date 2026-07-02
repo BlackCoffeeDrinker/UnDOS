@@ -53,13 +53,38 @@ void init(const BootInfoT &boot_info) noexcept {
 
 void late_init() noexcept {
   // Register VMM
-  if (const auto memory_dir = static_cast<KDirectoryObject *>(KE_Ob_LookupObject("\\Memory").get())) {
+  if (const auto memory_dir = KE_OB_LookupObject("\\Memory").As<KDirectoryObject>()) {
     if (const auto vmm_obj = KE_CreateObject<KVmmObject>()) {
       vmm_obj->name = "VMM";
-      KE_Ob_InsertObject(memory_dir, vmm_obj);
+      KE_OB_InsertObject(memory_dir, vmm_obj);
     }
   }
 }
+
+void *allocate_user_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept {
+  const size_t count = (size + g_page_size - 1) / g_page_size;
+
+  const PhysicalAddress phys = HAL_PMM_AllocateFrames(count);
+  if (!phys) return nullptr;
+
+  // Use the AddressSpace's VAD tree to find a free region
+  void *virt = KE_VMM_AllocateRegion(as, size, flags);
+  if (!virt) {
+    HAL_PMM_FreeFrames(phys, count);
+    return nullptr;
+  }
+
+  VirtualAddress v_addr = VirtualAddress::from_ptr(virt);
+  for (size_t i = 0; i < count; ++i) {
+    if (!HAL_VMM_MapPage(v_addr + i * g_page_size, phys + i * g_page_size, flags | ProtectFlags::USER)) {
+      return nullptr;
+    }
+    HAL_VMM_Flush(v_addr + i * g_page_size);
+  }
+
+  return virt;
+}
+} // namespace kernel::vmm
 
 UNDOS_KERNEL_API void *KE_Malloc(size_t size) noexcept {
   if (size == 0) [[unlikely]] {
@@ -67,8 +92,8 @@ UNDOS_KERNEL_API void *KE_Malloc(size_t size) noexcept {
   }
 
   for (size_t i = 0; i < 8; ++i) {
-    if (size <= g_cache_sizes[i]) {
-      return g_malloc_caches[i].allocate();
+    if (size <= kernel::vmm::g_cache_sizes[i]) {
+      return kernel::vmm::g_malloc_caches[i].allocate();
     }
   }
 
@@ -80,82 +105,61 @@ UNDOS_KERNEL_API void KE_Free(void *ptr) noexcept {
     return;
   }
 
-  if (auto *slab = memory::find_slab(ptr)) {
-    slab->cache()->free(ptr, slab);
+  if (auto *slab = kernel::memory::find_slab(ptr)) {
+    slab->cache()->free(ptr, *slab);
   }
 }
 
-AddressSpace *get_kernel_address_space() noexcept {
-  return &g_kernel_address_space;
-}
-
-void *AddressSpace::allocate_region(size_t size, ProtectFlags flags) noexcept {
-  if (current_base == 0) {
+UNDOS_KERNEL_API void *KE_VMM_AllocateRegion(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
+  if (as.current_base == 0) {
     // Default to user heap range if not initialized
-    current_base = 0x10000000;
-    limit = 0xC0000000;
+    as.current_base = 0x10000000;
+    as.limit = 0xC0000000;
   }
 
-  const VirtualAddress addr = current_base;
+  const kernel::VirtualAddress addr = as.current_base;
   const size_t aligned_size = (size + g_page_size - 1) & ~(g_page_size - 1);
 
-  if (current_base + aligned_size > limit) {
+  if (as.current_base + aligned_size > as.limit) {
     return nullptr;
   }
 
-  current_base += aligned_size;
+  as.current_base += aligned_size;
 
-  if (auto *vad = KE_CreateObject<VirtualAddressDescriptor>()) {
+  if (auto *vad = KE_CreateObject<kernel::vmm::VirtualAddressDescriptor>()) {
     vad->start = addr;
     vad->end = addr + size;
     vad->flags = flags;
-    vads.insert(vad);
+    as.vads.insert(*vad);
   }
 
   return addr.as_ptr();
 }
 
-void AddressSpace::free_region(void *addr) noexcept {
-  auto *vad = vads.find(VirtualAddress::from_ptr(addr));
+UNDOS_KERNEL_API void KE_VMM_FreeRegion(kernel::vmm::AddressSpace &as, void *addr) noexcept {
+  auto *vad = as.vads.find(kernel::VirtualAddress::from_ptr(addr));
   if (vad) {
-    vads.remove(vad);
+    as.vads.remove(vad);
     KE_Free(vad);
   }
 }
 
-void *AddressSpace::allocate_user_data(size_t size) noexcept {
-  return allocate_user_memory(*this, size, ProtectFlags::READ | ProtectFlags::WRITE);
+UNDOS_KERNEL_API void *KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept {
+  return kernel::vmm::allocate_user_memory(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
 }
 
-void *AddressSpace::allocate_user_process(size_t size) noexcept {
-  return allocate_user_memory(*this, size, ProtectFlags::READ | ProtectFlags::EXECUTE);
+UNDOS_KERNEL_API void *KE_VMM_AllocateUserProcess(kernel::vmm::AddressSpace &as, size_t size) noexcept {
+  return kernel::vmm::allocate_user_memory(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE);
 }
 
-
-void *allocate_user_memory(vmm::AddressSpace &as, size_t size, vmm::ProtectFlags flags) noexcept {
-  const size_t count = (size + g_page_size - 1) / g_page_size;
-
-  const PhysicalAddress phys = HAL_PMM_Allocate_Frames(count);
-  if (!phys) return nullptr;
-
-  // Use the AddressSpace's VAD tree to find a free region
-  void *virt = as.allocate_region(size, flags);
-  if (!virt) {
-    HAL_PMM_Free_Frames(phys, count);
-    return nullptr;
-  }
-
-  VirtualAddress v_addr = VirtualAddress::from_ptr(virt);
-  for (size_t i = 0; i < count; ++i) {
-    if (!HAL_VMM_MapPage(v_addr + i * g_page_size, phys + i * g_page_size, flags | vmm::ProtectFlags::USER)) {
-      return nullptr;
-    }
-    HAL_VMM_Flush(v_addr + i * g_page_size);
-  }
-
-  return virt;
+UNDOS_KERNEL_API kernel::vmm::AddressSpace &KE_VMM_GetKernelAddressSpace() noexcept {
+  return kernel::vmm::g_kernel_address_space;
 }
-}// namespace kernel::vmm
+
+UNDOS_KERNEL_API bool KE_VMM_MapPhysical(kernel::vmm::AddressSpace &as, kernel::VirtualAddress virt, kernel::PhysicalAddress phys, kernel::vmm::ProtectFlags flags) noexcept {
+  (void)as; // TODO: Use the address space's translation root if not current
+  return HAL_VMM_MapPage(virt, phys, flags);
+}
 
 
 UNDOS_KERNEL_CPP_API void *operator new(size_t size) {

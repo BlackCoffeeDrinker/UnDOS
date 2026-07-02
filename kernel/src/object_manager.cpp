@@ -8,31 +8,46 @@ kernel::KObjectPtr<kernel::KDirectoryObject> g_root;
 }
 
 void ObInit() {
-  g_root = kernel::KE_CreateObject<kernel::KDirectoryObject>();
+  g_root = KE_CreateObject<kernel::KDirectoryObject>();
   if (g_root) g_root->name = "";
 
-  if (const auto device = kernel::KE_CreateObject<kernel::KDirectoryObject>()) {
+  if (const auto device = KE_CreateObject<kernel::KDirectoryObject>()) {
     device->name = "Device";
-    KE_Ob_InsertObject(g_root.get(), device);
+    KE_OB_InsertObject(g_root, device);
   }
 
-  if (const auto driver = kernel::KE_CreateObject<kernel::KDirectoryObject>()) {
+  if (const auto driver = KE_CreateObject<kernel::KDirectoryObject>()) {
     driver->name = "Driver";
-    KE_Ob_InsertObject(g_root.get(), driver);
+    KE_OB_InsertObject(g_root, driver);
   }
 
-  if (const auto memory = kernel::KE_CreateObject<kernel::KDirectoryObject>()) {
+  if (const auto memory = KE_CreateObject<kernel::KDirectoryObject>()) {
     memory->name = "Memory";
-    KE_Ob_InsertObject(g_root.get(), memory);
+    KE_OB_InsertObject(g_root, memory);
   }
 
-  if (const auto fs = kernel::KE_CreateObject<kernel::KDirectoryObject>()) {
+  if (const auto fs = KE_CreateObject<kernel::KDirectoryObject>()) {
     fs->name = "FileSystem";
-    KE_Ob_InsertObject(g_root.get(), fs);
+    KE_OB_InsertObject(g_root, fs);
+  }
+
+  if (const auto system = KE_CreateObject<kernel::KDirectoryObject>()) {
+    system->name = "System";
+    KE_OB_InsertObject(g_root, system);
+
+    if (const auto initial = KE_CreateObject<kernel::KDirectoryObject>()) {
+      initial->name = "Initial";
+      KE_OB_InsertObject(system, initial);
+      if (const auto boot_modules = KE_CreateObject<kernel::KDirectoryObject>()) {
+        boot_modules->name = "BootModules";
+        KE_OB_InsertObject(initial, boot_modules);
+      }
+    }
   }
 }
 
-UNDOS_KERNEL_API bool KE_Ob_InsertObject(kernel::KDirectoryObject *parent, kernel::KObject *child) noexcept {
+UNDOS_KERNEL_API bool KE_OB_InsertObject(const kernel::KObjectPtr<kernel::KDirectoryObject>& parent, const kernel::KObjectPtr<kernel::KObject>& child) noexcept {
+//UNDOS_KERNEL_API bool KE_OB_InsertObject(kernel::KDirectoryObject *parent, kernel::KObject *child) noexcept {
   if (!parent || !child) return false;
 
   // Check if name already exists
@@ -40,13 +55,13 @@ UNDOS_KERNEL_API bool KE_Ob_InsertObject(kernel::KDirectoryObject *parent, kerne
     return false;
   }
 
-  child->parent = parent;
+  child->parent = parent.get();
   child->retain();// The directory holds a reference
-  parent->children.insert(child);
+  parent->children.insert(*child.get());
   return true;
 }
 
-UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KObject> KE_Ob_LookupObject(kstd::string_view path) noexcept {
+UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KObject> KE_OB_LookupObject(kstd::string_view path) noexcept {
   if (path.empty()) return nullptr;
 
   kernel::KObject *current = g_root.get();
@@ -83,6 +98,6 @@ UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KObject> KE_Ob_LookupObject(kstd::st
   return current;
 }
 
-UNDOS_KERNEL_API kernel::KDirectoryObject *KE_Ob_GetRootDirectory() noexcept {
-  return g_root.get();
+UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetRootDirectory() noexcept {
+  return g_root;
 }

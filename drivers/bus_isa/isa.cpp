@@ -5,7 +5,6 @@
 #include <Kernel.hpp>
 
 namespace kernel::isa {
-static uint16_t s_readDataPort = 0x0203;
 
 static void WriteConfigReg(PnpRegister reg) {
   HAL_IO_Out8(PNP_ADDRESS_PORT, static_cast<uint8_t>(reg));
@@ -16,7 +15,7 @@ static void WriteData(uint8_t val) {
 }
 
 static uint8_t ReadData() {
-  return HAL_IO_In8(s_readDataPort);
+  return HAL_IO_In8(PNP_READ_DATA_PORT);
 }
 
 static void SendInitiationKey() {
@@ -30,7 +29,7 @@ static void SendInitiationKey() {
   }
 }
 
-static bool Isolate(uint8_t *serial) {
+static bool Isolate(uint8_t (&serial)[9]) {
   uint8_t checksum = 0x6A;
   WriteConfigReg(PnpRegister::SerialIsolation);
   HAL_IO_Delay();
@@ -53,17 +52,17 @@ static bool Isolate(uint8_t *serial) {
   return serial[8] == checksum && (serial[0] != 0 || serial[1] != 0);
 }
 
-static void EnumerateDevices(kernel::KObjectPtr<kernel::KDriverObject> driver) {
+static void EnumerateDevices(const KObjectPtr<KDriverObject>& driver) {
   early_print("ISA PnP: Starting enumeration...\r\n");
   SendInitiationKey();
 
   WriteConfigReg(PnpRegister::ConfigControl);
-  WriteData(0x04);// CONTROL_RESET_CSN
+  WriteData(CONTROL_RESET_CSN);
   HAL_IO_Delay();
   HAL_IO_Delay();
 
   WriteConfigReg(PnpRegister::SetReadDataPort);
-  WriteData(static_cast<uint8_t>(s_readDataPort >> 2));
+  WriteData(PNP_READ_DATA_PORT >> 2);
   HAL_IO_Delay();
 
   uint8_t csn = 1;
@@ -83,7 +82,7 @@ static void EnumerateDevices(kernel::KObjectPtr<kernel::KDriverObject> driver) {
 
       if (const auto pdo = KE_CreateObject<KDeviceObject>(driver)) {
         pdo->name = "ISAPNP_PDO";
-        Ke_PNP_ReportNewDevice(nullptr, pdo);
+        KE_PNP_ReportNewDevice(nullptr, pdo);
       }
       csn++;
     } else {
@@ -93,13 +92,13 @@ static void EnumerateDevices(kernel::KObjectPtr<kernel::KDriverObject> driver) {
   }
 
   WriteConfigReg(PnpRegister::ConfigControl);
-  WriteData(0x02);// CONTROL_WAIT_FOR_KEY
+  WriteData(CONTROL_WAIT_FOR_KEY);
 }
 
-static void HandleEvent(kernel::KObjectPtr<kernel::KDriverObject> driver, const KEvent &event) {
+static void HandleEvent(const KObjectPtr<KDriverObject>& driver, const KEvent &event) {
   if (event.type == EventType::Pnp) {
-    auto &pnpEvent = static_cast<const KPnpEvent &>(event);
-    if (pnpEvent.minorFunction == PnpMinorFunction::QueryDeviceRelations) {
+    if (auto &pnpEvent = static_cast<const KPnpEvent &>(event);
+        pnpEvent.minorFunction == PnpMinorFunction::QueryDeviceRelations) {
       EnumerateDevices(driver);
     }
   }
@@ -112,9 +111,9 @@ extern "C" void DriverEntry(kernel::KObjectPtr<kernel::KDriverObject> &driver) {
   driver->name = "ISAPNP";
   driver->eventHandler = kernel::isa::HandleEvent;
 
-  if (const auto busDevice = kernel::KE_CreateObject<kernel::KDeviceObject>(driver)) {
+  if (const auto busDevice = KE_CreateObject<kernel::KDeviceObject>(driver)) {
     busDevice->name = "IsaPnpBus";
     busDevice->deviceType = kernel::DeviceType::Bus;
-    Ke_PNP_EnumerateBus(busDevice);
+    KE_PNP_EnumerateBus(busDevice);
   }
 }

@@ -5,7 +5,8 @@
 UNDOS_KERNEL_API [[nodiscard]] void *KE_Malloc(size_t size) noexcept;
 UNDOS_KERNEL_API void KE_Free(void *ptr) noexcept;
 
-namespace kernel {
+#include <kernel/memory/protect.hpp>
+
 template<typename T, typename... Args>
 T *KE_CreateObject(Args &&...args) {
   void *p = KE_Malloc(sizeof(T));
@@ -13,22 +14,32 @@ T *KE_CreateObject(Args &&...args) {
   return new (p) T(kstd::forward<Args>(args)...);
 }
 
-namespace vmm {
-// Platform-agnostic protection flags
-enum class ProtectFlags : uint32_t {
-  NONE = 0,
-  READ = 1 << 0,
-  WRITE = 1 << 1,
-  EXECUTE = 1 << 2,
-  USER = 1 << 3,
-  NOCACHE = 1 << 4
+#include <kernel/memory/vad.hpp>
+
+namespace kernel::vmm {
+
+/**
+ * @brief Platform-agnostic representation of a virtual address space.
+ *
+ * This structure is designed to be cross-platform (i386, ARM, MIPS, RISC-V, PPC):
+ * - i386: translation_root = CR3 physical address, asid = unused (or PCID).
+ * - ARM: translation_root = TTBR0 physical address, asid = ASID from CONTEXTIDR or TTBR.
+ * - MIPS: translation_root = Page Table base, asid = ASID.
+ * - RISC-V: translation_root = PPN from satp, asid = ASID from satp.
+ * - PPC: translation_root = SDR1 or Segment Table base, asid = LPID/ASID.
+ */
+struct AddressSpace {
+  VadTree vads;
+  PhysicalAddress translation_root;// Architecture-specific root (e.g., CR3, TTBR, satp)
+  uint32_t asid;                   // Address Space Identifier (if supported by arch)
+  VirtualAddress current_base;
+  VirtualAddress limit;
 };
+} // namespace kernel::vmm
 
-constexpr ProtectFlags operator|(ProtectFlags a, ProtectFlags b) noexcept { return static_cast<ProtectFlags>(kstd::to_underlying(a) | kstd::to_underlying(b)); }
-constexpr ProtectFlags operator&(ProtectFlags a, ProtectFlags b) noexcept { return static_cast<ProtectFlags>(kstd::to_underlying(a) & kstd::to_underlying(b)); }
-constexpr ProtectFlags operator~(ProtectFlags a) noexcept { return static_cast<ProtectFlags>(~kstd::to_underlying(a)); }
-constexpr bool has_flag(ProtectFlags mask, ProtectFlags flag) noexcept { return (mask & flag) == flag; }
-
-
-}// namespace vmm
-}// namespace kernel
+UNDOS_KERNEL_API void *KE_VMM_AllocateRegion(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags) noexcept;
+UNDOS_KERNEL_API void KE_VMM_FreeRegion(kernel::vmm::AddressSpace &as, void *addr) noexcept;
+UNDOS_KERNEL_API void *KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept;
+UNDOS_KERNEL_API void *KE_VMM_AllocateUserProcess(kernel::vmm::AddressSpace &as, size_t size) noexcept;
+UNDOS_KERNEL_API bool KE_VMM_MapPhysical(kernel::vmm::AddressSpace &as, kernel::VirtualAddress virt, kernel::PhysicalAddress phys, kernel::vmm::ProtectFlags flags) noexcept;
+UNDOS_KERNEL_API kernel::vmm::AddressSpace &KE_VMM_GetKernelAddressSpace() noexcept;

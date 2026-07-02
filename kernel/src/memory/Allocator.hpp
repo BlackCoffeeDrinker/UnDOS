@@ -17,8 +17,8 @@ class Allocator {
   public:
   explicit Allocator(const Layout &layout) noexcept : layout_(layout) {}
 
-  Slab *allocate_slab(Cache *cache) noexcept;
-  void free_slab(Slab *slab) noexcept;
+  Slab *allocate_slab(Cache &cache) noexcept;
+  void free_slab(Slab &slab) noexcept;
 
   size_t total_allocated_bytes() const noexcept { return total_allocated_; }
 };

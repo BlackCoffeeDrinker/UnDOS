@@ -29,24 +29,24 @@ void *Cache::allocate() noexcept {
 void Cache::free(void *ptr) noexcept {
   Slab *slab = find_slab(ptr);
   if (!slab) return;
-  free(ptr, slab);
+  free(ptr, *slab);
 }
 
-void Cache::free(void *ptr, Slab *slab) noexcept {
-  const bool was_full = slab->full();
-  slab->free(ptr);
+void Cache::free(void *ptr, Slab &slab) noexcept {
+  const bool was_full = slab.full();
+  slab.free(ptr);
   allocated_ -= layout_.object_size;
 
-  if (slab->empty()) {
+  if (slab.empty()) {
     if (!was_full) {
-      partial_slabs_.remove(slab);
+      partial_slabs_.remove(&slab);
     } else {
-      full_slabs_.remove(slab);
+      full_slabs_.remove(&slab);
     }
-    free_slabs_.push_back(slab);
+    free_slabs_.push_back(&slab);
   } else if (was_full) {
-    full_slabs_.remove(slab);
-    partial_slabs_.push_back(slab);
+    full_slabs_.remove(&slab);
+    partial_slabs_.push_back(&slab);
   }
 }
 
@@ -54,7 +54,7 @@ Slab *Cache::get_available_slab() noexcept {
   if (!partial_slabs_.empty()) return &partial_slabs_.front();
   if (!free_slabs_.empty()) return &free_slabs_.front();
 
-  Slab *new_slab = allocator_.allocate_slab(this);
+  Slab *new_slab = allocator_.allocate_slab(*this);
   if (new_slab) {
     free_slabs_.push_back(new_slab);
   }
@@ -66,7 +66,7 @@ size_t Cache::reclaim() noexcept {
   while (!free_slabs_.empty()) {
     Slab *slab = &free_slabs_.front();
     free_slabs_.remove(slab);
-    allocator_.free_slab(slab);
+    allocator_.free_slab(*slab);
     count++;
   }
   return count;

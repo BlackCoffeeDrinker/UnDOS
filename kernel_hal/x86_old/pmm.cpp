@@ -12,8 +12,8 @@ namespace {
 uint32_t *bitmap = nullptr;
 size_t total_frames = 0;
 size_t bitmap_size_words = 0;
-uint32_t page_size = 0;
 
+constexpr uint32_t PAGE_SIZE = 4096;
 constexpr uint32_t BITMAP_INIT = 0xFFFFFFFFu;
 constexpr size_t BITMAP_WORD_SIZE = 32;
 constexpr size_t ISA_DMA_LIMIT = 0x1000000;// 16 MB
@@ -83,15 +83,13 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
     early_print_fmt("Memory map region {} type: {}, base: 0x{:lx}, length: 0x{:lx}\n\r", i, map_type_to_string(map.type), static_cast<uintptr_t>(map.base), map.length);
   }
 
-  page_size = boot_info.page_size;
-
   // 1. Find the highest physical address to calculate total required frames
   max_memory = find_highest_physical_address(boot_info);
 
   early_print_fmt("Total available memory: 0x{:lx}\n\r", max_memory);
 
   // Explicitly cast the division result to size_t.
-  total_frames = static_cast<size_t>(max_memory / page_size);
+  total_frames = static_cast<size_t>(max_memory / PAGE_SIZE);
   bitmap_size_words = total_frames / 32;
   if (total_frames % 32 != 0) bitmap_size_words++;
 
@@ -106,8 +104,8 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   // 3. Mark only the actual available RAM regions as "free" (0)
   for (const auto &region: boot_info.memory_regions) {
     if (region.type == kernel::MemoryRegionType::Available) {
-      const auto start_frame = static_cast<uintptr_t>(region.base) / page_size;
-      const auto frame_count = static_cast<size_t>(region.length / page_size);
+      const auto start_frame = static_cast<uintptr_t>(region.base) / PAGE_SIZE;
+      const auto frame_count = static_cast<size_t>(region.length / PAGE_SIZE);
 
       for (size_t f = 0; f < frame_count; ++f) {
         clear_bit(start_frame + f);
@@ -118,7 +116,7 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   // 4. Protect the kernel memory space and the bitmap itself
   for (const auto &region: boot_info.mapped_memory) {
     if (region.type != kernel::MappedMemoryRegionType::None) {
-      HAL_PMM_Reserve_Region(region.physical_base, region.length);
+      HAL_PMM_ReserveRegion(region.physical_base, region.length);
     }
   }
 
@@ -126,27 +124,23 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
 }
 }// namespace hal::x86
 
-UNDOS_HAL_API void HAL_PMM_Reserve_Region(PhysicalAddress base, size_t length) noexcept {
-  if (page_size == 0) {
-    return;
-  }
-
+UNDOS_HAL_API void HAL_PMM_ReserveRegion(PhysicalAddress base, size_t length) noexcept {
   early_print_fmt("Reserving region at 0x{:x} for 0x{:x} bytes\n\r", static_cast<uintptr_t>(base), length);
 
-  const size_t start_frame = static_cast<uintptr_t>(base) / page_size;
-  size_t frame_count = length / page_size;
-  if (length % page_size != 0) frame_count++;
+  const size_t start_frame = static_cast<uintptr_t>(base) / PAGE_SIZE;
+  size_t frame_count = length / PAGE_SIZE;
+  if (length % PAGE_SIZE != 0) frame_count++;
 
   for (size_t i = 0; i < frame_count; ++i) {
     set_bit(start_frame + i);
   }
 }
 
-UNDOS_HAL_API PhysicalAddress HAL_PMM_Allocate_Frames(size_t count) noexcept {
+UNDOS_HAL_API PhysicalAddress HAL_PMM_AllocateFrames(size_t count) noexcept {
   if (count == 0) return 0;
 
   const size_t max_frames = bitmap_size_words * 32;
-  const size_t dma_frames = ISA_DMA_LIMIT / page_size;
+  constexpr size_t dma_frames = ISA_DMA_LIMIT / PAGE_SIZE;
 
   size_t continuous_free = 0;
   size_t start_frame = 0;
@@ -165,7 +159,7 @@ UNDOS_HAL_API PhysicalAddress HAL_PMM_Allocate_Frames(size_t count) noexcept {
       continuous_free++;
       if (continuous_free == count) {
         for (size_t k = start_frame; k < start_frame + count; ++k) set_bit(k);
-        return start_frame * page_size;
+        return start_frame * PAGE_SIZE;
       }
     } else {
       continuous_free = 0;
@@ -182,7 +176,7 @@ UNDOS_HAL_API PhysicalAddress HAL_PMM_Allocate_Frames(size_t count) noexcept {
       continuous_free++;
       if (continuous_free == count) {
         for (size_t k = start_frame; k < start_frame + count; ++k) set_bit(k);
-        return start_frame * page_size;
+        return start_frame * PAGE_SIZE;
       }
     } else {
       continuous_free = 0;
@@ -193,11 +187,11 @@ UNDOS_HAL_API PhysicalAddress HAL_PMM_Allocate_Frames(size_t count) noexcept {
   return 0;
 }
 
-UNDOS_HAL_API PhysicalAddress HAL_PMM_Allocate_Frames_DMA(size_t count) noexcept {
+UNDOS_HAL_API PhysicalAddress HAL_PMM_AllocateFramesDMA(size_t count) noexcept {
   if (count == 0) return 0;
 
   const size_t max_frames = bitmap_size_words * 32;
-  const size_t dma_frames = ISA_DMA_LIMIT / page_size;
+  constexpr size_t dma_frames = ISA_DMA_LIMIT / PAGE_SIZE;
 
   size_t continuous_free = 0;
   size_t start_frame = 0;
@@ -208,7 +202,7 @@ UNDOS_HAL_API PhysicalAddress HAL_PMM_Allocate_Frames_DMA(size_t count) noexcept
       continuous_free++;
       if (continuous_free == count) {
         for (size_t k = start_frame; k < start_frame + count; ++k) set_bit(k);
-        return start_frame * page_size;
+        return start_frame * PAGE_SIZE;
       }
     } else {
       continuous_free = 0;
@@ -218,9 +212,8 @@ UNDOS_HAL_API PhysicalAddress HAL_PMM_Allocate_Frames_DMA(size_t count) noexcept
   return 0;
 }
 
-UNDOS_HAL_API void HAL_PMM_Free_Frames(PhysicalAddress base, size_t count) noexcept {
-  if (page_size == 0) return;
-  const size_t start_frame = static_cast<uintptr_t>(base) / page_size;
+UNDOS_HAL_API void HAL_PMM_FreeFrames(PhysicalAddress base, size_t count) noexcept {
+  const size_t start_frame = static_cast<uintptr_t>(base) / PAGE_SIZE;
   for (size_t i = 0; i < count; ++i) {
     clear_bit(start_frame + i);
   }

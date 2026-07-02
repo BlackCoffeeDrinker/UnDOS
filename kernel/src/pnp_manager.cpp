@@ -7,7 +7,7 @@
 static kernel::KObjectPtr<kernel::KDriverObject> s_registeredDrivers[32];
 static size_t s_registeredDriverCount = 0;
 
-static kernel::KObjectPtr<kernel::KDriverObject> FindDriverForDevice(kernel::KObjectPtr<kernel::KDeviceObject> device) {
+static kernel::KObjectPtr<kernel::KDriverObject> FindDriverForDevice(const kernel::KObjectPtr<kernel::KDeviceObject>& device) {
   (void) device;
   // Match any device to the first registered driver (for testing)
   if (s_registeredDriverCount > 0) {
@@ -20,23 +20,23 @@ static kernel::KObjectPtr<kernel::KDriverObject> FindDriverForDevice(kernel::KOb
   return nullptr;
 }
 
-void Ke_PNP_Init() {
+void KE_PNP_Init() {
   // PnP Manager initialization
 }
 
-void Ke_PNP_RegisterDriver(kernel::KObjectPtr<kernel::KDriverObject> driver) {
+void KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriverObject>& driver) {
   if (s_registeredDriverCount < 32) {
     s_registeredDrivers[s_registeredDriverCount++] = driver;
   }
 }
 
-void Ke_PNP_ReportNewDevice(kernel::KObjectPtr<kernel::KDeviceObject> parent, kernel::KObjectPtr<kernel::KDeviceObject> pdo) {
+void KE_PNP_ReportNewDevice(const kernel::KObjectPtr<kernel::KDeviceObject>& parent, const kernel::KObjectPtr<kernel::KDeviceObject>& pdo) {
   (void) parent;
   if (!pdo) return;
 
   // 1. Add to \Device directory
-  if (const auto devDir = KE_Ob_LookupObject("\\Device")) {
-    KE_Ob_InsertObject(static_cast<kernel::KDirectoryObject *>(devDir.get()), pdo.get());
+  if (const auto devDir = KE_OB_LookupObject("\\Device")) {
+    KE_OB_InsertObject(devDir.As<kernel::KDirectoryObject>(), pdo);
   }
 
   // 2. Matching and Attachment
@@ -46,16 +46,16 @@ void Ke_PNP_ReportNewDevice(kernel::KObjectPtr<kernel::KDeviceObject> parent, ke
 
     // Notify driver about the new device
     constexpr kernel::KPnpEvent startEvent(kernel::PnpMinorFunction::StartDevice);
-    Ke_PNP_DispatchEvent(pdo, startEvent);
+    KE_PNP_DispatchEvent(pdo, startEvent);
   }
 }
 
-void Ke_PNP_DispatchEvent(kernel::KObjectPtr<kernel::KDeviceObject> device, const kernel::KEvent &event) {
-  kernel::Ke_Event_DispatchToDevice(device, event);
+void KE_PNP_DispatchEvent(const kernel::KObjectPtr<kernel::KDeviceObject>& device, const kernel::KEvent &event) {
+  KE_EVENT_DispatchToDevice(device, event);
 }
 
-void Ke_PNP_EnumerateBus(kernel::KObjectPtr<kernel::KDeviceObject> busDevice) {
+void KE_PNP_EnumerateBus(const kernel::KObjectPtr<kernel::KDeviceObject>& busDevice) {
   if (!busDevice) return;
   constexpr kernel::KPnpEvent enumEvent(kernel::PnpMinorFunction::QueryDeviceRelations);
-  Ke_PNP_DispatchEvent(busDevice, enumEvent);
+  KE_PNP_DispatchEvent(busDevice, enumEvent);
 }
