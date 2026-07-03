@@ -1,7 +1,6 @@
 
 #pragma once
-
-// Private header for PnP Manager
+#include <kernel/kobject/KDriverObject.hpp>
 
 void KE_PNP_Init();
-void KE_PNP_RegisterDriver(kernel::KObjectPtr<kernel::KDriverObject> driver);
+void KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriverObject> &driver);

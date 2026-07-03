@@ -63,7 +63,7 @@ UNDOS_HAL_API [[noreturn]] void HAL_PLATFORM_Shutdown() noexcept {
 }
 
 UNDOS_HAL_API void HAL_PLATFORM_AfterObjectManager() noexcept {
-  KE_DRIVER_Load(R"(\System\Initial\BootModules\isa_bus)");
+  KE_DRIVER_Load(R"(\System\Initial\BootModules\bus_isa)");
   // Always add ISA
   // Detect PCI
 }

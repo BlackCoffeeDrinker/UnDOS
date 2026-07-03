@@ -16,6 +16,7 @@ set(CMAKE_CXX_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C++ Libraries")
 set(tools                   /usr/local/cross)
 set(CMAKE_C_COMPILER        ${tools}/bin/i686-elf-gcc)
 set(CMAKE_CXX_COMPILER      ${tools}/bin/i686-elf-g++)
+set(CMAKE_ASM_COMPILER      ${tools}/bin/i686-elf-gcc)
 
 set(CMAKE_LINKER            ${tools}/bin/i686-elf-ld)
 # set(CMAKE_CXX_LINK_EXECUTABLE  "<CMAKE_LINKER> <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")

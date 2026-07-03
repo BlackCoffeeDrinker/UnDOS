@@ -4,21 +4,74 @@
 
 #include <Kernel.hpp>
 
-namespace kernel::isa {
+namespace {
 
-static void WriteConfigReg(PnpRegister reg) {
+struct IsaBusContext {
+  kernel::KObjectPtr<kernel::KPhysicalDeviceObject> children[32];
+  size_t childCount = 0;
+};
+
+struct IsaCardContext {
+  uint8_t serial[9];
+  char hardwareId[16];
+  uint8_t csn;
+};
+
+// I/O Ports
+constexpr uint16_t PNP_ADDRESS_PORT = 0x0279;
+constexpr uint16_t PNP_WRITE_DATA_PORT = 0x0A79;
+constexpr uint16_t PNP_READ_DATA_PORT = 0x0203;
+
+// Config Control Bits
+constexpr uint8_t CONTROL_RESET_CSN = 0x04;   // Bit 2
+constexpr uint8_t CONTROL_WAIT_FOR_KEY = 0x02;// Bit 1
+constexpr uint8_t CONTROL_RESET_DRV = 0x01;   // Bit 0
+
+// Config Registers
+enum class PnpRegister : uint8_t {
+  SetReadDataPort = 0x00,
+  SerialIsolation = 0x01,
+  ConfigControl = 0x02,
+  Wake = 0x03,
+  ResourceData = 0x04,
+  Status = 0x05,
+  CardSelectNumber = 0x06,
+  LogicalDeviceNumber = 0x07,
+
+  // Logical Device Configuration
+  Activate = 0x30,
+  IoRangeCheck = 0x31,
+
+  // I/O Descriptors (up to 8)
+  IoBaseHigh0 = 0x60,
+  IoBaseLow0 = 0x61,
+  IoBaseHigh1 = 0x62,
+  IoBaseLow1 = 0x63,
+
+  // IRQ Descriptors (up to 2)
+  IrqLevel0 = 0x70,
+  IrqType0 = 0x71,
+  IrqLevel1 = 0x72,
+  IrqType1 = 0x73,
+
+  // DMA Descriptors (up to 2)
+  DmaChannel0 = 0x74,
+  DmaChannel1 = 0x75,
+};
+
+void WriteConfigReg(PnpRegister reg) {
   HAL_IO_Out8(PNP_ADDRESS_PORT, static_cast<uint8_t>(reg));
 }
 
-static void WriteData(uint8_t val) {
+void WriteData(uint8_t val) {
   HAL_IO_Out8(PNP_WRITE_DATA_PORT, val);
 }
 
-static uint8_t ReadData() {
+uint8_t ReadData() {
   return HAL_IO_In8(PNP_READ_DATA_PORT);
 }
 
-static void SendInitiationKey() {
+void SendInitiationKey() {
   uint8_t val = 0x6A;
   HAL_IO_Out8(PNP_ADDRESS_PORT, 0);
   HAL_IO_Out8(PNP_ADDRESS_PORT, 0);
@@ -29,7 +82,7 @@ static void SendInitiationKey() {
   }
 }
 
-static bool Isolate(uint8_t (&serial)[9]) {
+bool Isolate(uint8_t (&serial)[9]) {
   uint8_t checksum = 0x6A;
   WriteConfigReg(PnpRegister::SerialIsolation);
   HAL_IO_Delay();
@@ -52,7 +105,33 @@ static bool Isolate(uint8_t (&serial)[9]) {
   return serial[8] == checksum && (serial[0] != 0 || serial[1] != 0);
 }
 
-static void EnumerateDevices(const KObjectPtr<KDriverObject>& driver) {
+void* Isa_AllocateCommonBuffer(kernel::DmaOperation* /*self*/, size_t /*size*/, kernel::PhysicalAddress* physicalAddress, bool /*cacheEnabled*/) {
+  // TODO: Implement contiguous allocation < 16MB
+  if (physicalAddress) *physicalAddress = 0;
+  return nullptr;
+}
+
+void Isa_FreeCommonBuffer(kernel::DmaOperation* /*self*/, size_t /*size*/, kernel::PhysicalAddress /*physicalAddress*/, void* /*virtualAddress*/) {
+  // TODO
+}
+
+kernel::DmaOperation* Isa_GetDmaAdapter(const kernel::KObjectPtr<kernel::KPhysicalDeviceObject>& /*device*/) {
+  static kernel::DmaOperation adapter;
+  static bool initialized = false;
+  if (!initialized) {
+    adapter.AllocateCommonBuffer = Isa_AllocateCommonBuffer;
+    adapter.FreeCommonBuffer = Isa_FreeCommonBuffer;
+    initialized = true;
+  }
+  return &adapter;
+}
+
+void Isa_EnumerateDevices(const kernel::KObjectPtr<kernel::KPhysicalDeviceObject> &busPdo) {
+  auto *ctx = busPdo->deviceExtension.as<IsaBusContext>();
+  if (!ctx) return;
+
+  ctx->childCount = 0;
+
   early_print("ISA PnP: Starting enumeration...\r\n");
   SendInitiationKey();
 
@@ -66,7 +145,7 @@ static void EnumerateDevices(const KObjectPtr<KDriverObject>& driver) {
   HAL_IO_Delay();
 
   uint8_t csn = 1;
-  while (csn < 32) {
+  while (csn < 32 && ctx->childCount < 32) {
     WriteConfigReg(PnpRegister::Wake);
     WriteData(0);
     HAL_IO_Delay();
@@ -80,10 +159,27 @@ static void EnumerateDevices(const KObjectPtr<KDriverObject>& driver) {
       WriteConfigReg(PnpRegister::CardSelectNumber);
       WriteData(csn);
 
-      if (const auto pdo = KE_CreateObject<KDeviceObject>(driver)) {
-        pdo->name = "ISAPNP_PDO";
-        KE_PNP_ReportNewDevice(nullptr, pdo);
+      auto child = KE_IO_CreateDevice(busPdo->driverObject,
+                                      sizeof(IsaCardContext),
+                                      "IsaPnpCard",
+                                      kernel::device_type::Unknown);
+      if (child) {
+        auto *childCtx = child->deviceExtension.as<IsaCardContext>();
+        for (int i = 0; i < 9; i++) childCtx->serial[i] = serial[i];
+        childCtx->csn = csn;
+        // Simple EISA ID formatting (PNPXXXX)
+        childCtx->hardwareId[0] = 'P';
+        childCtx->hardwareId[1] = 'N';
+        childCtx->hardwareId[2] = 'P';
+        childCtx->hardwareId[3] = 'S';
+        childCtx->hardwareId[4] = 'A';
+        childCtx->hardwareId[5] = 'M';
+        childCtx->hardwareId[6] = 'P';
+        childCtx->hardwareId[7] = '\0';
+
+        ctx->children[ctx->childCount++] = child;
       }
+
       csn++;
     } else {
       if (csn == 1) early_print("ISA PnP: No cards found.\r\n");
@@ -95,25 +191,45 @@ static void EnumerateDevices(const KObjectPtr<KDriverObject>& driver) {
   WriteData(CONTROL_WAIT_FOR_KEY);
 }
 
-static void HandleEvent(const KObjectPtr<KDriverObject>& driver, const KEvent &event) {
-  if (event.type == EventType::Pnp) {
-    if (auto &pnpEvent = static_cast<const KPnpEvent &>(event);
-        pnpEvent.minorFunction == PnpMinorFunction::QueryDeviceRelations) {
-      EnumerateDevices(driver);
-    }
-  }
+size_t Isa_GetChildCount(const kernel::KObjectPtr<kernel::KPhysicalDeviceObject> &busPdo) {
+  auto *ctx = busPdo->deviceExtension.as<IsaBusContext>();
+  return ctx ? ctx->childCount : 0;
 }
 
-}// namespace kernel::isa
+kernel::KObjectPtr<kernel::KPhysicalDeviceObject> Isa_GetChild(const kernel::KObjectPtr<kernel::KPhysicalDeviceObject> &busPdo, size_t index) {
+  auto *ctx = busPdo->deviceExtension.as<IsaBusContext>();
+  if (ctx && index < ctx->childCount) {
+    return ctx->children[index];
+  }
+  return nullptr;
+}
+
+kstd::string_view Isa_GetHardwareId(const kernel::KObjectPtr<kernel::KPhysicalDeviceObject> &childPdo) {
+  auto *ctx = childPdo->deviceExtension.as<IsaCardContext>();
+  if (ctx) {
+    return ctx->hardwareId;
+  }
+  return "UNKNOWN_ISA_DEVICE";
+}
+
+void HandleEvent(const kernel::KObjectPtr<kernel::KDriverObject> & /*driver*/, const kernel::KEvent &event) {
+  (void) event;
+}
+
+
+} // namespace
 
 extern "C" void DriverEntry(kernel::KObjectPtr<kernel::KDriverObject> &driver) {
   early_print("DriverEntry called!\r\n");
-  driver->name = "ISAPNP";
-  driver->eventHandler = kernel::isa::HandleEvent;
+  driver->eventHandler = HandleEvent;
+  driver->EnumerateDevices = Isa_EnumerateDevices;
+  driver->GetChildCount = Isa_GetChildCount;
+  driver->GetChild = Isa_GetChild;
+  driver->GetHardwareId = Isa_GetHardwareId;
+  driver->GetDmaAdapter = Isa_GetDmaAdapter;
 
-  if (const auto busDevice = KE_CreateObject<kernel::KDeviceObject>(driver)) {
-    busDevice->name = "IsaPnpBus";
-    busDevice->deviceType = kernel::DeviceType::Bus;
-    KE_PNP_EnumerateBus(busDevice);
-  }
+  KE_IO_CreateDevice(driver,
+                     sizeof(IsaBusContext),
+                     "IsaBus",
+                     kernel::device_type::Bus);
 }

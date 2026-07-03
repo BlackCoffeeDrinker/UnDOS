@@ -2,7 +2,7 @@
 #include "intr.hpp"
 
 #include <kernel/hal_interface.hpp>
-#include <kernel/interrupt.hpp>
+#include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
 #include <kernel/time.hpp>
 
 #include "__tuple/ignore.hpp"
@@ -17,7 +17,7 @@ static constexpr uint16_t KERNEL_GDT_SELECTOR = 0x8;
 
 // An array of pointers to our KINTERRUPT-style objects for hardware lines (IRQs 0-15)
 // Remapped to vectors 32 through 47
-static kernel::InterruptServiceRoutine *g_hardware_interrupts[16] = {nullptr};
+static kernel::KInterruptServiceRoutineObject *g_hardware_interrupts[16] = {nullptr};
 
 // Helper to tell the PIC chips that we finished handling an interrupt
 inline void pic_send_eoi(uint8_t irq_line) noexcept {

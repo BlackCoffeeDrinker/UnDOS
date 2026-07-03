@@ -1,8 +1,12 @@
 
 #include "driver_loader.hpp"
+
+#include "pnp_manager.hpp"
+#include "stdkrn.hpp"
 #include "vmm.hpp"
 #include <Kernel.hpp>
 #include <kernel/elf.hpp>
+#include <memory.hpp>
 #include <new.hpp>
 
 namespace {
@@ -78,8 +82,10 @@ void ProcessRelocations(const uint8_t *raw_blob, uintptr_t delta) {
 
   for (size_t i = 0; i < header->e_shnum; ++i) {
     if (shdrs[i].sh_type == hal::SHT_REL) {
-      const uint32_t target_section_idx = shdrs[i].sh_info;
-      if (!(shdrs[target_section_idx].sh_flags & hal::SHF_ALLOC)) continue;
+      if (const uint32_t target_section_idx = shdrs[i].sh_info;
+          !(shdrs[target_section_idx].sh_flags & hal::SHF_ALLOC)) {
+        continue;
+      }
 
       const auto *rels = reinterpret_cast<const hal::Elf32_Rel *>(raw_blob + shdrs[i].sh_offset);
       const size_t rel_count = shdrs[i].sh_size / sizeof(hal::Elf32_Rel);
@@ -99,8 +105,14 @@ void ProcessRelocations(const uint8_t *raw_blob, uintptr_t delta) {
 }// namespace
 
 namespace kernel {
+SymbolTable::~SymbolTable() {
+  symbols.clear([](SymbolEntry *entry) {
+    delete entry;
+  });
+}
+
 void SymbolTable::Register(kstd::string_view name, uintptr_t address) {
-  auto *entry = new SymbolEntry();
+  auto entry = KE_CreateObject<SymbolEntry>();
   entry->name = name;
   entry->address = address;
   symbols.insert(*entry);
@@ -110,7 +122,6 @@ uintptr_t SymbolTable::Resolve(kstd::string_view name) const {
   const auto *entry = symbols.find(name);
   return entry ? entry->address : 0;
 }
-
 
 bool KE_DRIVER_Init(const kernel::BootInfoT &boot_info) {
   for (const auto &sym: boot_info.boot_symbols) {
@@ -131,6 +142,10 @@ ElfResult Driver_Load_From_Memory(const uint8_t *raw_blob, size_t blob_size, ker
   const uint64_t phdr_end = static_cast<uint64_t>(header->e_phoff) +
                             (static_cast<uint64_t>(header->e_phnum) * header->e_phentsize);
   if (phdr_end > blob_size) return ElfResult::BoundsViolation;
+
+  const uint64_t shdr_end = static_cast<uint64_t>(header->e_shoff) +
+                            (static_cast<uint64_t>(header->e_shnum) * header->e_shentsize);
+  if (shdr_end > blob_size) return ElfResult::BoundsViolation;
 
   uintptr_t min_vaddr = 0xFFFFFFFF;
   uintptr_t max_vaddr = 0;
@@ -171,34 +186,88 @@ ElfResult Driver_Load_From_Memory(const uint8_t *raw_blob, size_t blob_size, ker
 
   ProcessRelocations(raw_blob, load_delta);
 
+  // Metadata extraction (not copied to memory)
+  if (header->e_shstrndx < header->e_shnum) {
+    const auto *shdrs = reinterpret_cast<const hal::Elf32_Shdr *>(raw_blob + header->e_shoff);
+    const auto &shstrtab = shdrs[header->e_shstrndx];
+    const char *shstr = reinterpret_cast<const char *>(raw_blob + shstrtab.sh_offset);
+    for (size_t i = 0; i < header->e_shnum; ++i) {
+      const char *s_name = shstr + shdrs[i].sh_name;
+      if (kstd::string_view(s_name) == ".driver_name") {
+        const char *d_name = reinterpret_cast<const char *>(raw_blob + shdrs[i].sh_offset);
+        out_driver->name = d_name;
+        break;
+      }
+    }
+  }
+
   out_driver->load_base = assigned_virtual_base;
   out_driver->total_size = total_span;
-  out_driver->entry_point = cfunc<void(KObjectPtr<KDriverObject> &)>(reinterpret_cast<void (*)(KObjectPtr<KDriverObject> &)>(header->e_entry + load_delta));
+  out_driver->entry_point = reinterpret_cast<void (*)(KObjectPtr<KDriverObject> &)>(header->e_entry + load_delta);
 
   return ElfResult::Success;
 }
 }// namespace kernel
 
+UNDOS_KERNEL_API void KE_DRIVER_DiscardEntryPoint(kernel::KObjectPtr<kernel::KDriverObject> &driver) {
+  if (!driver || !driver->entry_point) return;
+
+  const auto entry_addr = reinterpret_cast<uintptr_t>(driver->entry_point.fn);
+  const auto page_addr = entry_addr & ~0xFFFUL;
+
+  const kernel::PhysicalAddress phys = HAL_VMM_GetPhysicalAddress(kernel::VirtualAddress(page_addr));
+  if (phys) {
+    HAL_VMM_UnmapPage(kernel::VirtualAddress(page_addr));
+    HAL_VMM_Flush(kernel::VirtualAddress(page_addr));
+    HAL_PMM_FreeFrames(phys, 1);
+  }
+
+  driver->entry_point = nullptr;
+}
+
 UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(const kstd::string_view &path) {
-  if (path.empty()) return nullptr;
+  if (path.empty()) {
+    return nullptr;
+  }
+
+  kernel::PhysicalAddress module_base{0};
+  size_t module_size{0};
 
   // Object path?
   if (path[0] == '\\') {
     if (const auto module = KE_OB_LookupObjectOfType<kernel::KModuleObject>(path)) {
       // This is a valid module path!
-      if (auto *driver_ptr = KE_CreateObject<kernel::KDriverObject>()) {
-        kernel::KObjectPtr<kernel::KDriverObject> driver_object(driver_ptr);
-        driver_ptr->release(); // KObjectPtr constructor increments refcount, but KE_CreateObject already gave us a reference
-        auto result = kernel::Driver_Load_From_Memory(module->base_physical.as_ptr<const uint8_t>(), module->length, driver_object);
-        if (result != kernel::ElfResult::Success) {
-          return nullptr;
-        }
-        return driver_object;
-      }
+      module_base = module->base_physical;
+      module_size = module->length;
     }
+  } else {
+    // Try the virtual file subsystem
   }
 
-  // Try the virtual file subsystem
+  // Load it
+  if (!module_base || module_size <= 0) {
+    return nullptr;
+  }
+
+  if (auto driver_object = kernel::CreateKObject<kernel::KDriverObject>()) {
+    auto result = kernel::Driver_Load_From_Memory(
+        module_base.as_ptr<const uint8_t>(),
+        module_size,
+        driver_object);
+
+    early_print_fmt("Driver loaded from memory: {}\n\r", driver_object->name);
+
+    if (result != kernel::ElfResult::Success) {
+      return nullptr;
+    }
+
+    driver_object->entry_point(driver_object);
+    // TODO: Unload entry point
+
+    // Register Driver
+    KE_PNP_RegisterDriver(driver_object);
+    return driver_object;
+  }
 
   return nullptr;
 }

@@ -15,6 +15,7 @@ add_executable(kernel
         src/event_dispatcher.cpp
         src/event_dispatcher.hpp
         src/pnp_manager.cpp
+        src/dma_manager.cpp
         src/object_manager.cpp
         src/object_manager.hpp
         src/common/DoubleListLink.hpp
@@ -30,6 +31,7 @@ add_executable(kernel
         src/memory/Allocator.cpp
         src/memory/Cache.hpp
         src/memory/Cache.cpp
+        src/stdkrn.hpp
 )
 
 target_compile_definitions(kernel PRIVATE UNDOS_KERNEL_COMPILE)

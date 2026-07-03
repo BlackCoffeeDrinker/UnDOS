@@ -6,14 +6,6 @@ UNDOS_KERNEL_API [[nodiscard]] void *KE_Malloc(size_t size) noexcept;
 UNDOS_KERNEL_API void KE_Free(void *ptr) noexcept;
 
 #include <kernel/memory/protect.hpp>
-
-template<typename T, typename... Args>
-T *KE_CreateObject(Args &&...args) {
-  void *p = KE_Malloc(sizeof(T));
-  if (!p) return nullptr;
-  return new (p) T(kstd::forward<Args>(args)...);
-}
-
 #include <kernel/memory/vad.hpp>
 
 namespace kernel::vmm {

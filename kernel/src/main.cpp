@@ -4,6 +4,7 @@
 #include "vmm.hpp"
 
 #include <Kernel.hpp>
+#include "stdkrn.hpp"
 
 
 uint32_t g_page_size;
@@ -11,7 +12,7 @@ uint32_t g_page_size;
 namespace {
 const char *GetObjectTypeName(kernel::ObjectType type) {
   if (type == kernel::TYPE_DIRECTORY) return "Directory";
-  if (type == kernel::TYPE_DEVICE) return "Device";
+  if (type == kernel::TYPE_BUS_DEVICE) return "Device";
   if (type == kernel::TYPE_DRIVER) return "Driver";
   if (type == kernel::TYPE_BUS) return "Bus";
   if (type == kernel::TYPE_VMM) return "VMM";
@@ -53,7 +54,7 @@ void InitBootModulesInOb(const kernel::BootInfoT &boot_info) {
       continue;
     }
 
-    if (const auto kmodule = KE_CreateObject<kernel::KModuleObject>()) {
+    if (const auto kmodule = kernel::CreateKObject<kernel::KModuleObject>()) {
       kmodule->base_physical = module.base_physical;
       kmodule->length = module.length;
       kmodule->name = module.name;
@@ -98,10 +99,14 @@ UNDOS_KERNEL_API [[noreturn]] void kernel_core_main(const kernel::BootInfoT &boo
   // Virtual File System infrastructure layers are prepared.
   //VFS_SetupShell();
 
-
   // Tell the HAL the Object Manager is ready.
   // HAL can now safely allocate object handles for PCI/PCIe buses and drivers.
   HAL_PLATFORM_AfterObjectManager();
+
+  // Trigger enumeration on the ISA bus (loaded by the HAL)
+  if (const auto isaBusPdo = KE_OB_LookupObject(R"(\Device\IsaBus)")) {
+    KE_PNP_EnumerateBus(isaBusPdo.As<kernel::KPhysicalDeviceObject>());
+  }
 
   // PHASE 5: System Ignition
   // Safe to reclaim Stage 1.5 bootstrap structures/code now!

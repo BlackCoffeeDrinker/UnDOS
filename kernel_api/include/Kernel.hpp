@@ -7,7 +7,7 @@
 #include <kernel/driver.hpp>
 #include <kernel/entry.hpp>
 #include <kernel/hal_interface.hpp>
-#include <kernel/interrupt.hpp>
+#include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
 #include <kernel/object_manager.hpp>
 #include <kernel/pnp.hpp>
 #include <kernel/time.hpp>

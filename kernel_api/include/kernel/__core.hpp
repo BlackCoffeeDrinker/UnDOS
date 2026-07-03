@@ -58,6 +58,22 @@ struct cfunc<R(Args...)> : cfunc<R, Args...> {
   using cfunc<R, Args...>::operator=;
 };
 
+/**
+ * @brief Wrapper for a raw data buffer (pointer + size).
+ */
+struct data_buffer {
+  void *ptr = nullptr;
+  size_t size = 0;
+
+  constexpr data_buffer() = default;
+  constexpr data_buffer(void *p, size_t s) : ptr(p), size(s) {}
+
+  template<typename T>
+  [[nodiscard]] T *as() const { return reinterpret_cast<T *>(ptr); }
+
+  explicit constexpr operator bool() const { return ptr != nullptr; }
+};
+
 template<typename Tag, typename T>
 struct Address {
   using type = T;

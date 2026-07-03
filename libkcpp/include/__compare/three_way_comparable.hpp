@@ -7,8 +7,19 @@
 #include <__concepts/same_as.hpp>
 #include <__concepts/totally_ordered.hpp>
 #include <__config.hpp>
+#include <__type_traits/remove_reference.hpp>
+
+#include <__utility/declval.hpp>
 
 namespace kstd {
+
+template<class _Tp, class _Up = _Tp>
+struct compare_three_way_result {
+  using type = decltype(declval<const remove_reference_t<_Tp>&>() <=> declval<const remove_reference_t<_Up>&>());
+};
+
+template<class _Tp, class _Up = _Tp>
+using compare_three_way_result_t = typename compare_three_way_result<_Tp, _Up>::type;
 
 template<class _Tp, class _Cat>
 concept __compares_as = same_as<common_comparison_category_t<_Tp, _Cat>, _Cat>;

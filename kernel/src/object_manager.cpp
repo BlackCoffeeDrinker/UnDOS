@@ -1,6 +1,8 @@
 
 #include "object_manager.hpp"
+#include "stdkrn.hpp"
 #include <Kernel.hpp>
+#include <kernel/io.hpp>
 #include <new.hpp>
 
 namespace {
@@ -8,37 +10,37 @@ kernel::KObjectPtr<kernel::KDirectoryObject> g_root;
 }
 
 void ObInit() {
-  g_root = KE_CreateObject<kernel::KDirectoryObject>();
+  g_root = kernel::CreateKObject<kernel::KDirectoryObject>();
   if (g_root) g_root->name = "";
 
-  if (const auto device = KE_CreateObject<kernel::KDirectoryObject>()) {
+  if (const auto device = kernel::CreateKObject<kernel::KDirectoryObject>()) {
     device->name = "Device";
     KE_OB_InsertObject(g_root, device);
   }
 
-  if (const auto driver = KE_CreateObject<kernel::KDirectoryObject>()) {
+  if (const auto driver = kernel::CreateKObject<kernel::KDirectoryObject>()) {
     driver->name = "Driver";
     KE_OB_InsertObject(g_root, driver);
   }
 
-  if (const auto memory = KE_CreateObject<kernel::KDirectoryObject>()) {
+  if (const auto memory = kernel::CreateKObject<kernel::KDirectoryObject>()) {
     memory->name = "Memory";
     KE_OB_InsertObject(g_root, memory);
   }
 
-  if (const auto fs = KE_CreateObject<kernel::KDirectoryObject>()) {
+  if (const auto fs = kernel::CreateKObject<kernel::KDirectoryObject>()) {
     fs->name = "FileSystem";
     KE_OB_InsertObject(g_root, fs);
   }
 
-  if (const auto system = KE_CreateObject<kernel::KDirectoryObject>()) {
+  if (const auto system = kernel::CreateKObject<kernel::KDirectoryObject>()) {
     system->name = "System";
     KE_OB_InsertObject(g_root, system);
 
-    if (const auto initial = KE_CreateObject<kernel::KDirectoryObject>()) {
+    if (const auto initial = kernel::CreateKObject<kernel::KDirectoryObject>()) {
       initial->name = "Initial";
       KE_OB_InsertObject(system, initial);
-      if (const auto boot_modules = KE_CreateObject<kernel::KDirectoryObject>()) {
+      if (const auto boot_modules = kernel::CreateKObject<kernel::KDirectoryObject>()) {
         boot_modules->name = "BootModules";
         KE_OB_InsertObject(initial, boot_modules);
       }
@@ -100,4 +102,25 @@ UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KObject> KE_OB_LookupObject(kstd::st
 
 UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetRootDirectory() noexcept {
   return g_root;
+}
+
+UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KPhysicalDeviceObject> KE_IO_CreateDevice(
+  kernel::KObjectPtr<kernel::KDriverObject> driver,
+  size_t deviceExtensionSize,
+  const kstd::string_view& deviceName,
+  kernel::DeviceType deviceType) 
+{
+  auto pdo = kernel::CreateKObject<kernel::KPhysicalDeviceObject>(driver);
+  if (!pdo) return nullptr;
+
+  pdo->name = deviceName;
+  pdo->deviceType = deviceType;
+  if (deviceExtensionSize > 0) {
+    pdo->deviceExtension = kernel::data_buffer(KE_Malloc(deviceExtensionSize), deviceExtensionSize);
+  }
+  // Insert into \Device directory
+  if (const auto devDir = KE_OB_LookupObject("\\Device")) {
+    KE_OB_InsertObject(devDir.As<kernel::KDirectoryObject>(), pdo);
+  }
+  return pdo;
 }

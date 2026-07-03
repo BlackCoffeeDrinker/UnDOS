@@ -1,4 +1,5 @@
 #include "vmm.hpp"
+#include "stdkrn.hpp"
 
 #include "object_manager.hpp"
 #include <kernel/hal_interface.hpp>
@@ -54,7 +55,7 @@ void init(const BootInfoT &boot_info) noexcept {
 void late_init() noexcept {
   // Register VMM
   if (const auto memory_dir = KE_OB_LookupObject("\\Memory").As<KDirectoryObject>()) {
-    if (const auto vmm_obj = KE_CreateObject<KVmmObject>()) {
+    if (const auto vmm_obj = kernel::CreateKObject<KVmmObject>()) {
       vmm_obj->name = "VMM";
       KE_OB_InsertObject(memory_dir, vmm_obj);
     }

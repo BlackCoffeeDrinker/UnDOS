@@ -16,7 +16,7 @@ struct default_delete {
   template <class _Up, enable_if_t<is_convertible<_Up*, _Tp*>::value, int> = 0>
   constexpr default_delete(const default_delete<_Up>&) noexcept {}
 
-  void operator()(_Tp* __ptr) const noexcept {
+  constexpr void operator()(_Tp* __ptr) const noexcept {
     static_assert(sizeof(_Tp) > 0, "default_delete can not delete incomplete type");
     static_assert(!is_void<_Tp>::value, "default_delete can not delete incomplete type");
     delete __ptr;
@@ -30,7 +30,7 @@ struct default_delete<_Tp[]> {
   template <class _Up, enable_if_t<is_convertible<_Up(*)[], _Tp(*)[]>::value, int> = 0>
   constexpr default_delete(const default_delete<_Up[]>&) noexcept {}
 
-  void operator()(_Tp* __ptr) const noexcept {
+  constexpr void operator()(_Tp* __ptr) const noexcept {
     static_assert(sizeof(_Tp) > 0, "default_delete can not delete incomplete type");
     delete[] __ptr;
   }

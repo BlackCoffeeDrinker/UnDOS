@@ -1,4 +1,5 @@
 
+#include "stdkrn.hpp"
 #include <kernel/time.hpp>
 #include <tuple.hpp>
 

@@ -10,6 +10,8 @@ project(UnDOS
         VERSION 0.0.1
 )
 
+enable_language(ASM)
+
 set(tools /usr/local/cross)
 
 

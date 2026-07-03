@@ -27,6 +27,12 @@ class SymbolTable {
   adt::AvlTree<SymbolEntry, &SymbolEntry::node> symbols;
 
   public:
+  SymbolTable() = default;
+  ~SymbolTable();
+
+  SymbolTable(const SymbolTable &) = delete;
+  SymbolTable &operator=(const SymbolTable &) = delete;
+
   void Register(kstd::string_view name, uintptr_t address);
   uintptr_t Resolve(kstd::string_view name) const;
 };
@@ -42,4 +48,8 @@ enum class ElfResult { Success,
 
 ElfResult Driver_Load_From_Memory(const uint8_t *raw_blob, size_t blob_size, kernel::KObjectPtr<kernel::KDriverObject> &out_driver);
 
+void KE_DRIVER_DiscardEntryPoint(kernel::KObjectPtr<kernel::KDriverObject> &driver);
+
 }// namespace kernel
+
+UNDOS_KERNEL_API void KE_DRIVER_DiscardEntryPoint(kernel::KObjectPtr<kernel::KDriverObject> &driver);
