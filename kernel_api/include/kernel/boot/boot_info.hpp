@@ -1,11 +1,11 @@
 
 #pragma once
-#include "nomm_string.hpp"
-
-
 #include <array.hpp>
-#include <kernel/__core.hpp>
+#include <nomm_string.hpp>
 #include <static_string.hpp>
+
+#include <kernel/__core.hpp>
+#include <kernel/memory/address.hpp>
 
 namespace kernel {
 enum class MemoryRegionType : uint8_t {
@@ -56,7 +56,8 @@ struct BootInfoT {
   kstd::array<MappedMemoryT, 10> mapped_memory;
   kstd::array<BootModuleT, 15> boot_modules;
 
-  kstd::array<BootSymbolsT, 128> boot_symbols;// TODO: This needs to be relocated elsewhere; maybe even the kernel should read it's own ELF
+  // TODO: This needs to be relocated elsewhere; maybe even the kernel should read it's own ELF
+  kstd::array<BootSymbolsT, 2048> boot_symbols;
 
   kstd::static_string<1024> command_line;
 };

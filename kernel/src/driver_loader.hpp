@@ -6,50 +6,7 @@
 #include <static_string.hpp>
 #include <string_view.hpp>
 
-namespace kernel {
-
-struct SymbolEntry {
-  kstd::static_string<64> name;
-  uintptr_t address;
-  adt::AvlNode<SymbolEntry> node;
-
-  bool operator<(const SymbolEntry &other) const { return name < other.name; }
-  bool operator==(const SymbolEntry &other) const { return name == other.name; }
-
-  bool operator<(kstd::string_view other_name) const { return kstd::string_view(name) < other_name; }
-  bool operator==(kstd::string_view other_name) const { return kstd::string_view(name) == other_name; }
-
-  friend bool operator<(kstd::string_view lhs, const SymbolEntry &rhs) { return lhs < kstd::string_view(rhs.name); }
-  friend bool operator==(kstd::string_view lhs, const SymbolEntry &rhs) { return lhs == kstd::string_view(rhs.name); }
-};
-
-class SymbolTable {
-  adt::AvlTree<SymbolEntry, &SymbolEntry::node> symbols;
-
-  public:
-  SymbolTable() = default;
-  ~SymbolTable();
-
-  SymbolTable(const SymbolTable &) = delete;
-  SymbolTable &operator=(const SymbolTable &) = delete;
-
-  void Register(kstd::string_view name, uintptr_t address);
-  uintptr_t Resolve(kstd::string_view name) const;
-};
-
-
-bool KE_DRIVER_Init(const kernel::BootInfoT &boot_info);
-
-
-enum class ElfResult { Success,
-                       InvalidHeader,
-                       BoundsViolation,
-                       AllocationFailure };
-
-ElfResult Driver_Load_From_Memory(const uint8_t *raw_blob, size_t blob_size, kernel::KObjectPtr<kernel::KDriverObject> &out_driver);
-
-void KE_DRIVER_DiscardEntryPoint(kernel::KObjectPtr<kernel::KDriverObject> &driver);
-
-}// namespace kernel
-
-UNDOS_KERNEL_API void KE_DRIVER_DiscardEntryPoint(kernel::KObjectPtr<kernel::KDriverObject> &driver);
+namespace kernel::driver {
+void init(const kernel::BootInfoT &boot_info);
+KObjectPtr<KDriverObject> load_from_memory(PhysicalAddress module_base, size_t module_size);
+}// namespace kernel::driver

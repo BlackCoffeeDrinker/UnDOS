@@ -59,5 +59,6 @@ struct [[gnu::aligned(4096)]] page_directory_t {
 static_assert(sizeof(page_table_t) == 4096);
 static_assert(sizeof(page_directory_t) == 4096);
 
+void init_vmm() noexcept;
 
 }// namespace hal::x86

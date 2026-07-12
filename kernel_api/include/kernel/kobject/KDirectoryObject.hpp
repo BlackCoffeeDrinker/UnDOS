@@ -1,5 +1,6 @@
 #pragma once
 
+#include <kernel/__core.hpp>
 #include <kernel/adt/avl_tree.hpp>
 #include <kernel/kobject/KObject.hpp>
 #include <kernel/kobject/KObjectT.hpp>
@@ -12,9 +13,13 @@ struct KDirectoryObject : KObjectT<KDirectoryObject, 1, TYPE_DIRECTORY> {
 
   ~KDirectoryObject() override {
     children.clear([](KObject *obj) {
-      if (obj) obj->release();
+      if (obj) KE_OB_Release(obj);
     });
   }
 };
 
-} // namespace kernel
+template<>
+struct ObjectTypeOf<TYPE_DIRECTORY> {
+  using type = KDirectoryObject;
+};
+}// namespace kernel

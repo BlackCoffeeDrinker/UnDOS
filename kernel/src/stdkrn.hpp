@@ -4,6 +4,12 @@
 #include <type_traits.hpp>
 #include <utility.hpp>
 
+#if __STDC_HOSTED__
+// On a hosted build (e.g. the host test binary), placement new comes from the
+// standard library rather than libkcpp's freestanding new.hpp.
+#include <new>
+#endif
+
 #include <Kernel.hpp>
 
 template<typename T, typename... Args>
@@ -14,17 +20,16 @@ T *KE_CreateObject(Args &&...args) {
 }
 
 namespace kernel {
-
 using ::KE_CreateObject;
 
 template<typename T, typename... Args>
   requires(kstd::is_base_of_v<KObject, T>)
-KObjectPtr<T> CreateKObject(Args &&...args) {
+KObjectPtr<T> CreateKObject(const kstd::static_string<64> &name, Args &&...args) {
   auto *ptr = KE_CreateObject<T>(kstd::forward<Args>(args)...);
   if (!ptr) return nullptr;
+  ptr->name = name;
   KObjectPtr<T> res(ptr);
-  ptr->release();
+  KE_OB_Release(ptr);
   return res;
 }
-
 }// namespace kernel

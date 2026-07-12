@@ -20,6 +20,10 @@ enum class IDTFlags : uint8_t {
   PRESENT = 0b10000000
 };
 
+constexpr IDTFlags operator|(IDTFlags a, IDTFlags b) noexcept {
+  return static_cast<IDTFlags>(kstd::to_underlying(a) | kstd::to_underlying(b));
+}
+
 enum class IDTAttr : uint8_t {};
 
 constexpr IDTAttr operator|(GateType a, IDTFlags b) noexcept {

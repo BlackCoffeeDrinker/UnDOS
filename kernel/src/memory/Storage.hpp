@@ -1,6 +1,6 @@
 
 #pragma once
-#include "../common/DoubleListLink.hpp"
+#include <kernel/common/DoubleListLink.hpp>
 
 namespace kernel::memory {
 

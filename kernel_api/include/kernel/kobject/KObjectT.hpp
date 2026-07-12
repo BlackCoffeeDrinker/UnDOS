@@ -11,6 +11,7 @@ struct KObjectT : KObject, Versioned<T, Version> {
   static constexpr ObjectType Type = ObjectTypeId;
 
   constexpr KObjectT() noexcept : KObject(Type) {}
+  constexpr KObjectT(const kstd::static_string<64> &name_) noexcept : KObject(Type, name_) {}
 };
 
-} // namespace kernel
+}// namespace kernel

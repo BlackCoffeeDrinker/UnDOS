@@ -11,16 +11,24 @@ void *Cache::allocate() noexcept {
   Slab *slab = get_available_slab();
   if (!slab) return nullptr;
 
+  const bool was_empty = slab->empty();
   void *ptr = slab->allocate();
   allocated_ += layout_.object_size;
 
-  if (slab->full()) {
+  if (was_empty) {
+    // Slab was sitting in free_slabs_ (either freshly allocated or fully
+    // freed and reused). It may go straight to full when only a single
+    // object fits per slab, so it must be removed from free_slabs_ either
+    // way, not assumed to land in partial_slabs_ first.
+    free_slabs_.remove(slab);
+    if (slab->full()) {
+      full_slabs_.push_back(slab);
+    } else {
+      partial_slabs_.push_back(slab);
+    }
+  } else if (slab->full()) {
     partial_slabs_.remove(slab);
     full_slabs_.push_back(slab);
-  } else if (slab->allocated_count() == 1) {
-    // Just moved from free to partial
-    free_slabs_.remove(slab);
-    partial_slabs_.push_back(slab);
   }
 
   return ptr;

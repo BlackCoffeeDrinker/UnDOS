@@ -5,12 +5,10 @@
 #include <stddef.hpp>
 
 #include <__type_traits/is_constant_evaluated.hpp>
-
 #include <__compare/three_way_comparable.hpp>
 
 namespace kstd {
 #define EOF (-1)
-
 
 // 21.1
 /**
@@ -47,16 +45,47 @@ struct char_traits<char> {
       return 0;
 #if __cplusplus >= 201703L
     if (is_constant_evaluated()) {
-      for (size_t __i = 0; __i < __n; ++__i) {
-        if (lt(__s1[__i], __s2[__i]))
+      for (size_t i = 0; i < __n; ++i) {
+        if (lt(__s1[i], __s2[i]))
           return -1;
-        if (lt(__s2[__i], __s1[__i]))
+        if (lt(__s2[i], __s1[i]))
           return 1;
       }
       return 0;
     }
 #endif
-    return __builtin_memcmp(__s1, __s2, __n);
+
+    // Optimized comparison using uint32_t
+    const char_type *p1 = __s1;
+    const char_type *p2 = __s2;
+    size_t remaining = __n;
+
+    // Check if both pointers are 4-byte aligned
+    if ((reinterpret_cast<uintptr_t>(p1) & 3) == 0 &&
+        (reinterpret_cast<uintptr_t>(p2) & 3) == 0) {
+      // Process 4 bytes at a time
+      while (remaining >= 4) {
+        const uint32_t w1 = *reinterpret_cast<const uint32_t *>(p1);
+        const uint32_t w2 = *reinterpret_cast<const uint32_t *>(p2);
+        if (w1 != w2) {
+          // Found difference, fall back to byte comparison
+          break;
+        }
+        p1 += 4;
+        p2 += 4;
+        remaining -= 4;
+      }
+    }
+
+    // Compare remaining bytes
+    for (size_t i = 0; i < remaining; ++i) {
+      if (lt(p1[i], p2[i]))
+        return -1;
+      if (lt(p2[i], p1[i]))
+        return 1;
+    }
+
+    return 0;
   }
 
   static constexpr size_t
@@ -71,7 +100,7 @@ struct char_traits<char> {
 #endif
 
     auto count = s;
-    for (; *count; ++count);
+    for (; *count; ++count) {}
     return static_cast<size_t>(count - s);
   }
 
@@ -81,9 +110,9 @@ struct char_traits<char> {
       return nullptr;
 #if __cplusplus >= 201703L
     if (is_constant_evaluated()) {
-      for (size_t __i = 0; __i < __n; ++__i)
-        if (eq(__s[__i], __a))
-          return __s + __i;
+      for (size_t i = 0; i < __n; ++i)
+        if (eq(__s[i], __a))
+          return __s + i;
       return nullptr;
     }
 #endif

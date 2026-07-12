@@ -1,4 +1,5 @@
 #include <memory.hpp>
+#include <compare>
 #include <catch2/catch_test_macros.hpp>
 
 struct TestStruct {

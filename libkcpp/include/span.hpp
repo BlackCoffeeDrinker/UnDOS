@@ -38,11 +38,11 @@ public:
     constexpr span() noexcept requires (Extent == 0) : _data(nullptr) {}
 
     constexpr span(pointer ptr, size_type count) : _data(ptr) {
-        // (void)count;
+        (void)count;
     }
 
     constexpr span(pointer first, pointer last) : _data(first) {
-        // (void)(last - first);
+        (void)(last - first);
     }
 
     template <size_t N>
@@ -164,6 +164,7 @@ public:
 
     // Element access
     constexpr reference operator[](size_type idx) const { return _data[idx]; }
+    constexpr reference operator[](int idx) const { return _data[idx]; }
     constexpr reference front() const { return _data[0]; }
     constexpr reference back() const { return _data[_size - 1]; }
 

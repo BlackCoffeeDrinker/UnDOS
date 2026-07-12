@@ -34,15 +34,8 @@ PageFlags translate_flags(kernel::vmm::ProtectFlags flags) noexcept {
 
   return x86_flags;
 }
-}// namespace hal::x86
 
-UNDOS_HAL_API void HAL_VMM_EarlyInit(const kernel::BootInfoT &boot_info) noexcept {
-  // Stage 1.5 currently sets the page size to be 4096 bytes
-  // Double check
-  if (boot_info.page_size != 4096) {
-    early_print("Stage 1.5 did not set the page size to 4096 bytes");
-  }
-
+void init_vmm() noexcept {
   // Read the active Page Directory established by Stage 1.5
   uintptr_t current_pd_phys;
   __asm__ volatile("mov %%cr3, %0" : "=r"(current_pd_phys));
@@ -50,30 +43,28 @@ UNDOS_HAL_API void HAL_VMM_EarlyInit(const kernel::BootInfoT &boot_info) noexcep
   // Access the page directory structure directly using the recursive window.
   // Stage 1.5 must have pre-mapped this entry; we explicitly assert its validity
   // and re-apply permissions to ensure the HAL can modify any page table.
-  auto *directory = hal::x86::get_page_directory();
+  auto *directory = get_page_directory();
 
   constexpr size_t recursive_slot = 1023;// 0xFFC00000 >> 22
 
-  directory[recursive_slot].set_page_table(
-      static_cast<uint32_t>(current_pd_phys),
-      hal::x86::PageFlags::PRESENT |
-          hal::x86::PageFlags::WRITABLE |
-          hal::x86::PageFlags::USER);
+  directory[recursive_slot].set_page_table(current_pd_phys, PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER);
 
   // Force a global TLB flush by reloading CR3 to validate our window setup immediately
   __asm__ volatile("mov %0, %%cr3" ::"r"(current_pd_phys) : "memory");
 }
+}// namespace hal::x86
 
-UNDOS_HAL_API void HAL_VMM_FinalizeInit() noexcept {
+
+UNDOS_HAL_API_DEF void HAL_VMM_FinalizeInit() noexcept {
 }
 
-UNDOS_HAL_API PhysicalAddress HAL_VMM_GetCurrentTranslationRoot() noexcept {
+UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_GetCurrentTranslationRoot() noexcept {
   uintptr_t current_pd_phys;
   __asm__ volatile("mov %%cr3, %0" : "=r"(current_pd_phys));
   return current_pd_phys;
 }
 
-UNDOS_HAL_API PhysicalAddress HAL_VMM_GetPhysicalAddress(VirtualAddress virt) noexcept {
+UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_GetPhysicalAddress(VirtualAddress virt) noexcept {
   const uintptr_t pd_index = static_cast<uintptr_t>(virt >> 22);
   const uintptr_t pt_index = static_cast<uintptr_t>((virt >> 12) & 0x3FF);
   const uintptr_t page_offset = static_cast<uintptr_t>(virt & 0xFFF);
@@ -87,11 +78,95 @@ UNDOS_HAL_API PhysicalAddress HAL_VMM_GetPhysicalAddress(VirtualAddress virt) no
   return page_table[pt_index].get_frame() + page_offset;
 }
 
-UNDOS_HAL_API void HAL_VMM_SwitchAddressSpace(PhysicalAddress new_root) noexcept {
+UNDOS_HAL_API_DEF void HAL_VMM_SwitchAddressSpace(PhysicalAddress new_root) noexcept {
   __asm__ volatile("mov %0, %%cr3" ::"r"(static_cast<uintptr_t>(new_root)) : "memory");
 }
 
-UNDOS_HAL_API bool HAL_VMM_MapPage(VirtualAddress virtual_addr, PhysicalAddress physical_addr, kernel::vmm::ProtectFlags flags) noexcept {
+namespace {
+// A page directory index in the kernel's higher-half that is guaranteed to be
+// unused by any real mapping; borrowed briefly to peek at a not-yet-active
+// page directory frame through the recursive window mechanism.
+constexpr size_t TEMP_PD_SLOT = 1022;
+}// namespace
+
+UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_CreateAddressSpace() noexcept {
+  const PhysicalAddress new_pd_phys = HAL_PMM_AllocateFrames(1);
+  if (!new_pd_phys) {
+    return 0;
+  }
+
+  auto *directory = hal::x86::get_page_directory();
+
+  // Temporarily alias the new page directory's frame as a page table so we can
+  // read/write its 1024 entries through the recursive window.
+  directory[TEMP_PD_SLOT].set_page_table(
+      static_cast<uintptr_t>(new_pd_phys),
+      hal::x86::PageFlags::PRESENT | hal::x86::PageFlags::WRITABLE);
+  HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
+
+  auto *new_pd = reinterpret_cast<hal::x86::page_directory_entry_t *>(
+      hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096));
+
+  constexpr size_t kernel_split = 768;// 0xC0000000 >> 22
+
+  // Empty user half
+  for (size_t i = 0; i < kernel_split; ++i) {
+    new_pd[i].clear();
+  }
+
+  // Clone the kernel's higher-half mappings so the new address space can still
+  // execute kernel code / access kernel data after a CR3 switch.
+  for (size_t i = kernel_split; i < 1023; ++i) {
+    new_pd[i] = directory[i];
+  }
+
+  // Self-map the recursive slot so the new address space can walk/modify its
+  // own page tables once it becomes active.
+  new_pd[1023].set_page_table(
+      static_cast<uintptr_t>(new_pd_phys),
+      hal::x86::PageFlags::PRESENT | hal::x86::PageFlags::WRITABLE);
+
+  // Tear down the temporary alias.
+  directory[TEMP_PD_SLOT].clear();
+  HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
+
+  return new_pd_phys;
+}
+
+UNDOS_HAL_API_DEF void HAL_VMM_DestroyAddressSpace(PhysicalAddress root) noexcept {
+  if (!root) {
+    return;
+  }
+
+  auto *directory = hal::x86::get_page_directory();
+
+  directory[TEMP_PD_SLOT].set_page_table(
+      static_cast<uintptr_t>(root),
+      hal::x86::PageFlags::PRESENT | hal::x86::PageFlags::WRITABLE);
+  HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
+
+  auto *target_pd = reinterpret_cast<hal::x86::page_directory_entry_t *>(
+      hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096));
+
+  constexpr size_t kernel_split = 768;// 0xC0000000 >> 22
+
+  // Reclaim any user-half page table frames; callers are responsible for
+  // freeing the physical frames backing individual pages (tracked via VADs)
+  // before calling this.
+  for (size_t i = 0; i < kernel_split; ++i) {
+    if (target_pd[i].is_present()) {
+      HAL_PMM_FreeFrames(target_pd[i].get_page_table(), 1);
+      target_pd[i].clear();
+    }
+  }
+
+  directory[TEMP_PD_SLOT].clear();
+  HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
+
+  HAL_PMM_FreeFrames(root, 1);
+}
+
+UNDOS_HAL_API_DEF bool HAL_VMM_MapPage(VirtualAddress virtual_addr, PhysicalAddress physical_addr, kernel::vmm::ProtectFlags flags) noexcept {
   const uintptr_t pd_index = static_cast<uintptr_t>(virtual_addr >> 22);
   const uintptr_t pt_index = static_cast<uintptr_t>((virtual_addr >> 12) & 0x3FF);
 
@@ -117,7 +192,7 @@ UNDOS_HAL_API bool HAL_VMM_MapPage(VirtualAddress virtual_addr, PhysicalAddress 
     for (size_t i = 0; i < 1024; ++i) {
       page_table[i].clear();
     }
-    
+
     // We should also flush the directory entry itself, just in case
     HAL_VMM_Flush(virtual_addr);
   }
@@ -133,7 +208,7 @@ UNDOS_HAL_API bool HAL_VMM_MapPage(VirtualAddress virtual_addr, PhysicalAddress 
   return true;
 }
 
-UNDOS_HAL_API void HAL_VMM_UnmapPage(VirtualAddress virtual_addr) noexcept {
+UNDOS_HAL_API_DEF void HAL_VMM_UnmapPage(VirtualAddress virtual_addr) noexcept {
   const uintptr_t pd_index = static_cast<uintptr_t>(virtual_addr >> 22);
   const uintptr_t pt_index = static_cast<uintptr_t>((virtual_addr >> 12) & 0x3FF);
 
@@ -172,6 +247,6 @@ UNDOS_HAL_API void HAL_VMM_UnmapPage(VirtualAddress virtual_addr) noexcept {
 }
 
 // Force the hardware to flush its address translation caches (TLB)
-UNDOS_HAL_API void HAL_VMM_Flush(VirtualAddress virtual_addr) noexcept {
+UNDOS_HAL_API_DEF void HAL_VMM_Flush(VirtualAddress virtual_addr) noexcept {
   asm volatile("invlpg (%0)" ::"r"(static_cast<uintptr_t>(virtual_addr)) : "memory");
 }

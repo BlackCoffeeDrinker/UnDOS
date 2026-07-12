@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include <kernel/kobject/DeviceType.hpp>
+#include <Kernel.hpp>
 
 using namespace kernel;
 

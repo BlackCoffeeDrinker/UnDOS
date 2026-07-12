@@ -37,10 +37,10 @@ void write_char(char c) {
 }
 }// namespace
 
-UNDOS_HAL_API void early_print(const char *str) {
+UNDOS_HAL_API_DEF void early_print(const char *str) noexcept {
   while (*str) write_char(*str++);
 }
 
-UNDOS_HAL_API void early_print_char(char c) {
+UNDOS_HAL_API_DEF void early_print_char(char c) noexcept {
   write_char(c);
 }

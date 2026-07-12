@@ -2,125 +2,230 @@
 #include "object_manager.hpp"
 #include "stdkrn.hpp"
 #include <Kernel.hpp>
-#include <kernel/io.hpp>
 #include <new.hpp>
 
 namespace {
 kernel::KObjectPtr<kernel::KDirectoryObject> g_root;
+kernel::KObjectPtr<kernel::KDirectoryObject> g_device;
+kernel::KObjectPtr<kernel::KDirectoryObject> g_driver;
+kernel::KObjectPtr<kernel::KDirectoryObject> g_memory;
+kernel::KObjectPtr<kernel::KDirectoryObject> g_filesystem;
+kernel::KObjectPtr<kernel::KDirectoryObject> g_thread;
+kernel::KObjectPtr<kernel::KDirectoryObject> g_process;
+kernel::KObjectPtr<kernel::KDirectoryObject> g_vfs;
+kernel::KObjectPtr<kernel::KDirectoryObject> g_file;
+
+kernel::KObjectPtr<kernel::KObject> LookupChild(
+    const kernel::KObjectPtr<kernel::KDirectoryObject> &parent,
+    const kstd::string_view &path) noexcept {
+  if (!parent) return nullptr;
+  if (path.empty()) return nullptr;
+  if (path == ".") return parent;
+  if (path == "..") return parent->parent;
+
+  return parent->children.find(path);
 }
 
-void ObInit() {
-  g_root = kernel::CreateKObject<kernel::KDirectoryObject>();
-  if (g_root) g_root->name = "";
+kernel::KObjectPtr<kernel::KObject> LookupPathFrom(
+    const kernel::KObjectPtr<kernel::KDirectoryObject> &parent,
+    const kstd::string_view &path) noexcept {
+  if (!parent) return nullptr;
+  if (path.empty()) return nullptr;
+  if (path == ".") return parent;
+  if (path == "..") return parent->parent;
 
-  if (const auto device = kernel::CreateKObject<kernel::KDirectoryObject>()) {
-    device->name = "Device";
-    KE_OB_InsertObject(g_root, device);
-  }
+  kernel::KObjectPtr<kernel::KDirectoryObject> current = parent;
+  kstd::string_view::size_type pos = 0;
 
-  if (const auto driver = kernel::CreateKObject<kernel::KDirectoryObject>()) {
-    driver->name = "Driver";
-    KE_OB_InsertObject(g_root, driver);
-  }
+  while (pos != kstd::string_view::npos) {
+    const auto next_slash = path.find(kObPathSeperatorChar, pos);
+    const auto part = (next_slash == kstd::string_view::npos) ? path.substr(pos) : path.substr(pos, next_slash - pos);
+    pos = (next_slash == kstd::string_view::npos) ? kstd::string_view::npos : next_slash + 1;
 
-  if (const auto memory = kernel::CreateKObject<kernel::KDirectoryObject>()) {
-    memory->name = "Memory";
-    KE_OB_InsertObject(g_root, memory);
-  }
-
-  if (const auto fs = kernel::CreateKObject<kernel::KDirectoryObject>()) {
-    fs->name = "FileSystem";
-    KE_OB_InsertObject(g_root, fs);
-  }
-
-  if (const auto system = kernel::CreateKObject<kernel::KDirectoryObject>()) {
-    system->name = "System";
-    KE_OB_InsertObject(g_root, system);
-
-    if (const auto initial = kernel::CreateKObject<kernel::KDirectoryObject>()) {
-      initial->name = "Initial";
-      KE_OB_InsertObject(system, initial);
-      if (const auto boot_modules = kernel::CreateKObject<kernel::KDirectoryObject>()) {
-        boot_modules->name = "BootModules";
-        KE_OB_InsertObject(initial, boot_modules);
+    // Try and find "part" in current, this might not be a directory!
+    if (auto partObj = LookupChild(current, part)) {
+      // Are we at the end of the path request? if so just return this
+      if (next_slash == kstd::string_view::npos) {
+        return partObj;
       }
+
+      // Otherwise, this should be a directory!
+      if (partObj->type != kernel::TYPE_DIRECTORY) {
+        // Path error
+        return nullptr;
+      }
+
+      // It's a directory, so continue
+      current = partObj.As<kernel::KDirectoryObject>();
+    } else {
+      // Child wasn't found
+      return nullptr;
     }
   }
-}
 
-UNDOS_KERNEL_API bool KE_OB_InsertObject(const kernel::KObjectPtr<kernel::KDirectoryObject>& parent, const kernel::KObjectPtr<kernel::KObject>& child) noexcept {
-//UNDOS_KERNEL_API bool KE_OB_InsertObject(kernel::KDirectoryObject *parent, kernel::KObject *child) noexcept {
-  if (!parent || !child) return false;
+  return nullptr;
+}
+}// namespace
+
+namespace kernel::objectmanager {
+void init() {
+  early_print_fmt("Initializing Object Manager\r\n");
+
+  g_root = kernel::CreateKObject<KDirectoryObject>("<Root>");
+  g_device = kernel::CreateKObject<KDirectoryObject>("Device");
+  g_driver = kernel::CreateKObject<KDirectoryObject>("Driver");
+  g_memory = kernel::CreateKObject<KDirectoryObject>("Memory");
+  g_thread = kernel::CreateKObject<KDirectoryObject>("Threads");
+  g_process = kernel::CreateKObject<KDirectoryObject>("Processes");
+  g_filesystem = kernel::CreateKObject<KDirectoryObject>("FileSystem");
+  g_vfs = kernel::CreateKObject<KDirectoryObject>("VFS");
+  g_file = kernel::CreateKObject<KDirectoryObject>("File");
+
+  KE_OB_InsertObject(g_root, g_device);
+  KE_OB_InsertObject(g_root, g_driver);
+  KE_OB_InsertObject(g_root, g_memory);
+  KE_OB_InsertObject(g_root, g_filesystem);
+  KE_OB_InsertObject(g_root, g_thread);
+  KE_OB_InsertObject(g_root, g_process);
+  KE_OB_InsertObject(g_root, g_vfs);
+  KE_OB_InsertObject(g_root, g_file);
+
+  const auto system = kernel::CreateKObject<KDirectoryObject>("System");
+  const auto initial = kernel::CreateKObject<KDirectoryObject>("Initial");
+  const auto boot_modules = kernel::CreateKObject<KDirectoryObject>("BootModules");
+
+  KE_OB_InsertObject(g_root, system);
+  KE_OB_InsertObject(system, initial);
+  KE_OB_InsertObject(initial, boot_modules);
+
+  early_print_fmt("Initial Object Manager started\r\n");
+}
+}// namespace kernel::objectmanager
+
+UNDOS_KERNEL_API_DEF bool KE_OB_InsertObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
+  if (!parent || !child) [[unlikely]] {
+    early_print_fmt("KE_OB_InsertObject failed\r\n");
+    return false;
+  }
+
+  if (child->parent != nullptr) [[unlikely]] {
+    // Child already has a parent
+    early_print_fmt("KE_OB_InsertObject failed for object {}: Object already has a parent\r\n", child->name);
+    return false;
+  }
 
   // Check if name already exists
   if (parent->children.find(kstd::string_view(child->name))) {
+    early_print_fmt("KE_OB_InsertObject failed for object {}\r\n", child->name);
     return false;
   }
 
   child->parent = parent.get();
-  child->retain();// The directory holds a reference
+  KE_OB_Retain(child.get());
   parent->children.insert(*child.get());
+
   return true;
 }
 
-UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KObject> KE_OB_LookupObject(kstd::string_view path) noexcept {
+UNDOS_KERNEL_API_DEF bool KE_OB_RemoveObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
+  if (!parent || !child) [[unlikely]] {
+    return false;
+  }
+
+  if (child->parent != parent.get()) [[unlikely]] {
+    return false;
+  }
+
+  parent->children.remove(child.get());
+  child->parent = nullptr;
+
+  // Undo the retain KE_OB_InsertObject performed on insertion.
+  KE_OB_Release(child.get());
+
+  return true;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KObject> KE_OB_LookupObject(const kstd::string_view &path) noexcept {
   if (path.empty()) return nullptr;
 
-  kernel::KObject *current = g_root.get();
+  if (path[0] == kObPathSeperatorChar) [[likely]] {
+    return LookupPathFrom(g_root, path.substr(1));
+  }
 
-  if (path[0] == '\\') {
-    path = path.substr(1);
-  } else {
+  return nullptr;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KObject> KE_OB_LookupObjectWithRoot(const kernel::KObjectPtr<kernel::KObject> &root, const kstd::string_view &path) noexcept {
+  if (!root) return nullptr;
+  if (path.empty()) return root;
+
+  if (root->type != kernel::TYPE_DIRECTORY) [[unlikely]] {
     return nullptr;
   }
 
-  if (path.empty()) return current;
-
-  while (!path.empty()) {
-    const size_t next_slash = path.find('\\');
-    kstd::string_view part = (next_slash == kstd::string_view::npos) ? path : path.substr(0, next_slash);
-
-    if (current->type != kernel::TYPE_DIRECTORY) {
-      return nullptr;
-    }
-
-    const kernel::KDirectoryObject *dir = static_cast<kernel::KDirectoryObject *>(current);
-    current = dir->children.find(part);
-
-    if (!current) {
-      return nullptr;
-    }
-
-    if (next_slash == kstd::string_view::npos) {
-      break;
-    }
-    path = path.substr(next_slash + 1);
+  if (path[0] == kObPathSeperatorChar) [[unlikely]] {
+    return nullptr;
   }
 
-  return current;
+  return LookupPathFrom(root.As<kernel::KDirectoryObject>(), path);
 }
 
-UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetRootDirectory() noexcept {
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KObject> KE_OB_FindDirectChild(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kstd::string_view &name) noexcept {
+  return LookupChild(parent, name);
+}
+
+UNDOS_KERNEL_API_DEF void KE_OB_Retain(kernel::KObject *obj) noexcept {
+  if (!obj) [[unlikely]] {
+    return;
+  }
+  obj->reference_count.fetch_add(1, kstd::memory_order_relaxed);
+}
+
+UNDOS_KERNEL_API_DEF void KE_OB_Release(kernel::KObject *obj) noexcept {
+  if (!obj) [[unlikely]] {
+    return;
+  }
+
+  if (obj->reference_count.fetch_sub(1, kstd::memory_order_acq_rel) == 1) {
+    kstd::atomic_thread_fence(kstd::memory_order_acquire);
+    obj->~KObject();
+    KE_Free(obj);
+    obj = nullptr;
+  }
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetRootDirectory() noexcept {
   return g_root;
 }
 
-UNDOS_KERNEL_API kernel::KObjectPtr<kernel::KPhysicalDeviceObject> KE_IO_CreateDevice(
-  kernel::KObjectPtr<kernel::KDriverObject> driver,
-  size_t deviceExtensionSize,
-  const kstd::string_view& deviceName,
-  kernel::DeviceType deviceType) 
-{
-  auto pdo = kernel::CreateKObject<kernel::KPhysicalDeviceObject>(driver);
-  if (!pdo) return nullptr;
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetThreadsDirectory() noexcept {
+  return g_thread;
+}
 
-  pdo->name = deviceName;
-  pdo->deviceType = deviceType;
-  if (deviceExtensionSize > 0) {
-    pdo->deviceExtension = kernel::data_buffer(KE_Malloc(deviceExtensionSize), deviceExtensionSize);
-  }
-  // Insert into \Device directory
-  if (const auto devDir = KE_OB_LookupObject("\\Device")) {
-    KE_OB_InsertObject(devDir.As<kernel::KDirectoryObject>(), pdo);
-  }
-  return pdo;
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetProcessDirectory() noexcept {
+  return g_process;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetDriverDirectory() noexcept {
+  return g_driver;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetDeviceDirectory() noexcept {
+  return g_device;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetMemoryDirectory() noexcept {
+  return g_memory;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetVFSDirectory() noexcept {
+  return g_vfs;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetFilesystemRoot() noexcept {
+  return g_filesystem;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetFileRoot() noexcept {
+  return g_file;
 }

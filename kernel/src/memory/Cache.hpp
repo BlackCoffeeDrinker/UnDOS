@@ -1,6 +1,6 @@
 
 #pragma once
-#include "../common/DoubleList.hpp"
+#include <kernel/common/DoubleList.hpp>
 #include "Allocator.hpp"
 #include "Layout.hpp"
 #include "Slab.hpp"

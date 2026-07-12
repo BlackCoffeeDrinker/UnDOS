@@ -1,5 +1,8 @@
 
 #pragma once
 
+constexpr char kObPathSeperatorChar = '/';
 
-void ObInit();
+namespace kernel::objectmanager {
+void init();
+}

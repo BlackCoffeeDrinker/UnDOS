@@ -38,6 +38,8 @@ class __compressed_pair : private __compressed_pair_elem<_T1, 0>,
   using _Base2 = __compressed_pair_elem<_T2, 1>;
 
 public:
+  constexpr __compressed_pair() = default;
+
   template <class _U1, class _U2>
   constexpr explicit __compressed_pair(_U1&& __u1, _U2&& __u2)
       : _Base1(kstd::forward<_U1>(__u1)), _Base2(kstd::forward<_U2>(__u2)) {}

@@ -5,3 +5,4 @@
 
 #include <__functional/invoke.hpp>
 #include <__functional/operations.hpp>
+#include <__functional/hash.hpp>

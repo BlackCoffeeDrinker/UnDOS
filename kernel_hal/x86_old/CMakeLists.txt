@@ -9,11 +9,13 @@ set_source_files_properties(
 add_hal(hal_x86_old
         ia32.cpp
         ia32.hpp
+        context.cpp
         structs.hpp
         intr.hpp
         intr.cpp
         gdt.cpp
         gdt.hpp
+        tss.hpp
         vmm.cpp
         vmm.hpp
         pmm.cpp
@@ -21,5 +23,9 @@ add_hal(hal_x86_old
         pit.cpp
         pit.hpp
         pmm.hpp
+
+        atomic_op/atomic_fetch_add_4.cpp
+        atomic_op/atomic_fetch_sub_4.cpp
+        atomic_op/MemModelToPlatformEnum.hpp
 )
 

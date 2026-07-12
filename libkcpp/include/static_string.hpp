@@ -2,8 +2,8 @@
 #pragma once
 
 #include <__config.hpp>
+#include <__algo/min.hpp>
 #include <char_traits.hpp>
-#include <string_interface.hpp>
 #include <string_view.hpp>
 
 namespace kstd {
@@ -14,7 +14,7 @@ namespace kstd {
  * @tparam N Number of characters to allocate
  */
 template<size_t N, typename CharT = char, typename Traits = char_traits<CharT>>
-struct basic_static_string : string_interface<CharT, Traits> {
+struct basic_static_string {
   using traits_type = Traits;
   using value_type = CharT;
   using pointer = CharT *;
@@ -25,76 +25,112 @@ struct basic_static_string : string_interface<CharT, Traits> {
   using iterator = pointer;
   using const_iterator = const_pointer;
 
-  constexpr basic_static_string() noexcept : string_interface<CharT, Traits>(_buffer, 0), _buffer{} {
-    _buffer[0] = CharT();
+  static constexpr size_type npos = static_cast<size_type>(-1);
+
+  constexpr basic_static_string() noexcept : _len(0), _buffer{} {
+    if constexpr (N > 0) {
+      _buffer[0] = CharT();
+    }
   }
 
-  constexpr basic_static_string(const CharT *str) noexcept : string_interface<CharT, Traits>(_buffer, 0), _buffer{} {
+  constexpr basic_static_string(const CharT *str) noexcept : _len(0), _buffer{} {
+    if constexpr (N > 0) {
+      _buffer[0] = CharT();
+    }
     append(str);
   }
 
   constexpr basic_static_string(const basic_string_view<CharT, Traits> &sv) noexcept
-      : string_interface<CharT, Traits>(_buffer, 0), _buffer{} {
+      : _len(0), _buffer{} {
+    if constexpr (N > 0) {
+      _buffer[0] = CharT();
+    }
     append(sv);
   }
 
   constexpr basic_static_string(const basic_static_string &other) noexcept
-      : string_interface<CharT, Traits>(_buffer, other._len), _buffer{} {
-    for (size_type i = 0; i <= other._len; ++i) {
-      _buffer[i] = other._buffer[i];
+      : _len(other._len), _buffer{} {
+    if constexpr (N > 0) {
+      for (size_type i = 0; i <= other._len; ++i) {
+        _buffer[i] = other._buffer[i];
+      }
     }
   }
 
   constexpr basic_static_string &operator=(const basic_static_string &other) noexcept {
     if (this != &other) {
-      this->_data = _buffer;
       this->_len = other._len;
-      for (size_type i = 0; i <= other._len; ++i) {
-        _buffer[i] = other._buffer[i];
+      if constexpr (N > 0) {
+        for (size_type i = 0; i <= other._len; ++i) {
+          _buffer[i] = other._buffer[i];
+        }
       }
     }
     return *this;
   }
 
   constexpr basic_static_string &operator=(const basic_string_view<CharT, Traits> &sv) noexcept {
-    this->_data = _buffer;
     this->_len = 0;
     append(sv);
     return *this;
   }
 
-  [[nodiscard]] constexpr size_type capacity() const noexcept { return N; }
+  constexpr basic_static_string &operator=(const_pointer sv) noexcept {
+    this->_len = 0;
+    append(sv);
+    return *this;
+  }
 
-  explicit constexpr operator const CharT *() const noexcept { return _buffer; }
   [[nodiscard]] constexpr pointer data() noexcept { return _buffer; }
   [[nodiscard]] constexpr const_pointer data() const noexcept { return _buffer; }
+  [[nodiscard]] constexpr size_type length() const noexcept { return _len; }
+  [[nodiscard]] constexpr size_type size() const noexcept { return _len; }
+  [[nodiscard]] constexpr bool empty() const noexcept { return _len == 0; }
+  constexpr void clear() noexcept {
+    _len = 0;
+    if constexpr (N > 0) {
+      _buffer[0] = CharT();
+    }
+  }
 
   [[nodiscard]] constexpr iterator begin() noexcept { return _buffer; }
-  [[nodiscard]] constexpr iterator end() noexcept { return _buffer + this->_len; }
+  [[nodiscard]] constexpr iterator end() noexcept { return _buffer + _len; }
   [[nodiscard]] constexpr const_iterator begin() const noexcept { return _buffer; }
-  [[nodiscard]] constexpr const_iterator end() const noexcept { return _buffer + this->_len; }
+  [[nodiscard]] constexpr const_iterator end() const noexcept { return _buffer + _len; }
   [[nodiscard]] constexpr const_iterator cbegin() const noexcept { return _buffer; }
-  [[nodiscard]] constexpr const_iterator cend() const noexcept { return _buffer + this->_len; }
+  [[nodiscard]] constexpr const_iterator cend() const noexcept { return _buffer + _len; }
 
   constexpr reference operator[](size_type pos) noexcept { return _buffer[pos]; }
   constexpr const_reference operator[](size_type pos) const noexcept { return _buffer[pos]; }
 
-  [[nodiscard]] constexpr size_type find(CharT c, size_type pos = 0) const noexcept {
-    size_type ret = this->npos;
-    if (pos < this->_len) {
-      const size_type n = this->_len - pos;
-      const CharT *p = traits_type::find(_buffer + pos, n, c);
-      if (p)
-        ret = static_cast<size_type>(p - _buffer);
-    }
-    return ret;
+  constexpr reference back() noexcept { return _buffer[_len - 1]; }
+  constexpr const_reference back() const noexcept { return _buffer[_len - 1]; }
+
+  [[nodiscard]] static constexpr size_type capacity() noexcept { return N > 0 ? N - 1 : 0; }
+
+  constexpr operator basic_string_view<CharT, Traits>() const noexcept {
+    return basic_string_view<CharT, Traits>(_buffer, _len);
   }
 
   constexpr void append(CharT c) noexcept {
-    if (this->_len >= N)
+    if constexpr (N == 0) return;
+    if (this->_len >= N - 1)
       return;
     _buffer[this->_len++] = c;
     _buffer[this->_len] = CharT();
+  }
+
+  constexpr void push_back(CharT c) noexcept {
+    append(c);
+  }
+
+  constexpr void pop_back() noexcept {
+    if (_len > 0) {
+      --_len;
+      if constexpr (N > 0) {
+        _buffer[_len] = CharT();
+      }
+    }
   }
 
   constexpr void append(const CharT *str) noexcept {
@@ -102,9 +138,10 @@ struct basic_static_string : string_interface<CharT, Traits> {
   }
 
   constexpr void append(const basic_string_view<CharT, Traits> &sv) noexcept {
+    if constexpr (N == 0) return;
     size_type to_copy = sv.length();
-    if (this->_len + to_copy > N) {
-      to_copy = N - this->_len;
+    if (this->_len + to_copy > N - 1) {
+      to_copy = (N - 1) - this->_len;
     }
     for (size_type i = 0; i < to_copy; ++i) {
       _buffer[this->_len + i] = sv[i];
@@ -113,22 +150,143 @@ struct basic_static_string : string_interface<CharT, Traits> {
     _buffer[this->_len] = CharT();
   }
 
-  constexpr basic_static_string &operator=(const_pointer sv) noexcept {
-    this->_data = _buffer;
-    this->_len = 0;
-    append(sv);
-    return *this;
+  [[nodiscard]] constexpr size_type find(CharT c, size_type pos = 0) const noexcept {
+    size_type ret = npos;
+    if (pos < _len) {
+      const size_type n = _len - pos;
+      const CharT *p = traits_type::find(_buffer + pos, n, c);
+      if (p)
+        ret = static_cast<size_type>(p - _buffer);
+    }
+    return ret;
   }
 
-  constexpr operator basic_string_view<CharT, Traits>() const noexcept {
-    return basic_string_view<CharT, Traits>(this->data(), this->length());
+  [[nodiscard]] constexpr size_type rfind(basic_string_view<CharT, Traits> v, size_type pos = npos) const noexcept {
+    return basic_string_view<CharT, Traits>(*this).rfind(v, pos);
+  }
+
+  [[nodiscard]] constexpr size_type rfind(CharT c, size_type pos = npos) const noexcept {
+    return basic_string_view<CharT, Traits>(*this).rfind(c, pos);
+  }
+
+  [[nodiscard]] constexpr size_type rfind(const CharT* s, size_type pos, size_type count) const noexcept {
+    return basic_string_view<CharT, Traits>(*this).rfind(s, pos, count);
+  }
+
+  [[nodiscard]] constexpr size_type rfind(const CharT* s, size_type pos = npos) const noexcept {
+    return basic_string_view<CharT, Traits>(*this).rfind(s, pos);
+  }
+
+  [[nodiscard]] constexpr basic_string_view<CharT, Traits> substr(size_type pos = 0, size_type n = npos) const noexcept {
+    if (pos > _len) pos = _len;
+    const size_type rlen = min<size_t>(n, _len - pos);
+    return basic_string_view<CharT, Traits>{_buffer + pos, rlen};
+  }
+
+  // Comparison operators
+  friend constexpr bool operator==(const basic_static_string &lhs, const basic_static_string &rhs) noexcept {
+    return static_cast<basic_string_view<CharT, Traits>>(lhs) == static_cast<basic_string_view<CharT, Traits>>(rhs);
+  }
+  friend constexpr bool operator==(const basic_static_string &lhs, const basic_string_view<CharT, Traits> &rhs) noexcept {
+    return static_cast<basic_string_view<CharT, Traits>>(lhs) == rhs;
+  }
+  friend constexpr bool operator==(const basic_string_view<CharT, Traits> &lhs, const basic_static_string &rhs) noexcept {
+    return lhs == static_cast<basic_string_view<CharT, Traits>>(rhs);
+  }
+
+  friend constexpr bool operator!=(const basic_static_string &lhs, const basic_static_string &rhs) noexcept {
+    return !(lhs == rhs);
+  }
+  friend constexpr bool operator!=(const basic_static_string &lhs, const basic_string_view<CharT, Traits> &rhs) noexcept {
+    return !(lhs == rhs);
+  }
+  friend constexpr bool operator!=(const basic_string_view<CharT, Traits> &lhs, const basic_static_string &rhs) noexcept {
+    return !(lhs == rhs);
+  }
+
+  friend constexpr bool operator<(const basic_static_string &lhs, const basic_static_string &rhs) noexcept {
+    return static_cast<basic_string_view<CharT, Traits>>(lhs) < static_cast<basic_string_view<CharT, Traits>>(rhs);
+  }
+  friend constexpr bool operator<(const basic_static_string &lhs, const basic_string_view<CharT, Traits> &rhs) noexcept {
+    return static_cast<basic_string_view<CharT, Traits>>(lhs) < rhs;
+  }
+  friend constexpr bool operator<(const basic_string_view<CharT, Traits> &lhs, const basic_static_string &rhs) noexcept {
+    return lhs < static_cast<basic_string_view<CharT, Traits>>(rhs);
+  }
+
+  friend constexpr bool operator>(const basic_static_string &lhs, const basic_static_string &rhs) noexcept {
+    return rhs < lhs;
+  }
+  friend constexpr bool operator>(const basic_static_string &lhs, const basic_string_view<CharT, Traits> &rhs) noexcept {
+    return rhs < lhs;
+  }
+  friend constexpr bool operator>(const basic_string_view<CharT, Traits> &lhs, const basic_static_string &rhs) noexcept {
+    return rhs < lhs;
+  }
+
+  friend constexpr bool operator<=(const basic_static_string &lhs, const basic_static_string &rhs) noexcept {
+    return !(rhs < lhs);
+  }
+  friend constexpr bool operator<=(const basic_static_string &lhs, const basic_string_view<CharT, Traits> &rhs) noexcept {
+    return !(rhs < lhs);
+  }
+  friend constexpr bool operator<=(const basic_string_view<CharT, Traits> &lhs, const basic_static_string &rhs) noexcept {
+    return !(rhs < lhs);
+  }
+
+  friend constexpr bool operator>=(const basic_static_string &lhs, const basic_static_string &rhs) noexcept {
+    return !(lhs < rhs);
+  }
+  friend constexpr bool operator>=(const basic_static_string &lhs, const basic_string_view<CharT, Traits> &rhs) noexcept {
+    return !(lhs < rhs);
+  }
+  friend constexpr bool operator>=(const basic_string_view<CharT, Traits> &lhs, const basic_static_string &rhs) noexcept {
+    return !(lhs < rhs);
+  }
+
+  friend constexpr bool operator==(const basic_static_string &lhs, const_pointer rhs) noexcept {
+    return static_cast<basic_string_view<CharT, Traits>>(lhs) == rhs;
+  }
+  friend constexpr bool operator==(const_pointer lhs, const basic_static_string &rhs) noexcept {
+    return lhs == static_cast<basic_string_view<CharT, Traits>>(rhs);
+  }
+  friend constexpr bool operator!=(const basic_static_string &lhs, const_pointer rhs) noexcept {
+    return !(lhs == rhs);
+  }
+  friend constexpr bool operator!=(const_pointer lhs, const basic_static_string &rhs) noexcept {
+    return !(lhs == rhs);
+  }
+  friend constexpr bool operator<(const basic_static_string &lhs, const_pointer rhs) noexcept {
+    return static_cast<basic_string_view<CharT, Traits>>(lhs) < rhs;
+  }
+  friend constexpr bool operator<(const_pointer lhs, const basic_static_string &rhs) noexcept {
+    return lhs < static_cast<basic_string_view<CharT, Traits>>(rhs);
+  }
+  friend constexpr bool operator>(const basic_static_string &lhs, const_pointer rhs) noexcept {
+    return rhs < lhs;
+  }
+  friend constexpr bool operator>(const_pointer lhs, const basic_static_string &rhs) noexcept {
+    return rhs < lhs;
+  }
+  friend constexpr bool operator<=(const basic_static_string &lhs, const_pointer rhs) noexcept {
+    return !(rhs < lhs);
+  }
+  friend constexpr bool operator<=(const_pointer lhs, const basic_static_string &rhs) noexcept {
+    return !(rhs < lhs);
+  }
+  friend constexpr bool operator>=(const basic_static_string &lhs, const_pointer rhs) noexcept {
+    return !(lhs < rhs);
+  }
+  friend constexpr bool operator>=(const_pointer lhs, const basic_static_string &rhs) noexcept {
+    return !(lhs < rhs);
   }
 
   private:
-  CharT _buffer[N + 1];
+  size_type _len = 0;
+  CharT _buffer[N];
 };
 
 template<size_t N>
 using static_string = basic_static_string<N, char, char_traits<char>>;
 
-}// namespace kstd
+} // namespace kstd

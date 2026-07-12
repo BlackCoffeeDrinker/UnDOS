@@ -11,19 +11,6 @@
 
 namespace kstd {
 namespace detail {
-struct destination {
-  nomm_string target;
-  size_t current_pos;
-
-  void put(char c) {
-    target[current_pos++] = c;
-  }
-
-  void operator()(char c) {
-    target[current_pos++] = c;
-  }
-};
-
 struct format_options {
   enum class NumberFormat {
     decimal,
@@ -58,28 +45,30 @@ struct format_arg {
     ulong_long_type,
   };
 
-  const arg_type type;
+  arg_type type;
 
   union {
-    const int int_value;
-    const unsigned int uint_value;
-    const unsigned long ulong_value;
-    const bool bool_value;
-    const char char_value;
-    const float float_value;
-    const double double_value;
-    const long double long_double_value;
+    int int_value;
+    unsigned int uint_value;
+    unsigned long ulong_value;
+    bool bool_value;
+    char char_value;
+    float float_value;
+    double double_value;
+    // long double long_double_value;
     const void *pointer;
-    const string_view str_view;
-    const long long long_long_value;
-    const unsigned long long ulong_long_value;
+    string_view str_view;
+    long long long_long_value;
+    unsigned long long ulong_long_value;
   };
 
   constexpr format_arg() : type(arg_type::none_type), pointer(nullptr) {}
-  explicit constexpr format_arg(const char *str) : type(arg_type::string_view_type), str_view{str} {}
+  explicit constexpr format_arg(const char *str) : type(arg_type::string_view_type), str_view(str) {}
   explicit constexpr format_arg(string_view sv) : type(arg_type::string_view_type), str_view(sv) {}
   template<size_t N>
-  explicit constexpr format_arg(const static_string<N>& static_string) : type(arg_type::string_view_type), str_view(static_cast<string_view>(static_string)) {}
+  explicit constexpr format_arg(const static_string<N>& static_string) : type(arg_type::string_view_type), str_view(static_string.data(), static_string.length()) {}
+  template<typename Traits>
+  explicit constexpr format_arg(const basic_nomm_string<char, Traits>& nomm_str) : type(arg_type::string_view_type), str_view(nomm_str.data(), nomm_str.length()) {}
   explicit constexpr format_arg(const void *ptr) : type(arg_type::pointer_type), pointer(ptr) {}
   //explicit constexpr format_arg(long double ldv) : type(arg_type::long_double_type), long_double_value(ldv) {}
   explicit constexpr format_arg(double dv) : type(arg_type::double_type), double_value(dv) {}
@@ -93,7 +82,7 @@ struct format_arg {
   explicit constexpr format_arg(long long llv) : type(arg_type::long_long_type), long_long_value(llv) {}
 
   [[nodiscard]] constexpr bool is_numeric() const {
-    return type == arg_type::long_double_type ||
+    return // type == arg_type::long_double_type ||
            type == arg_type::double_type ||
            type == arg_type::float_type ||
            type == arg_type::ulong_long_type ||
@@ -236,11 +225,15 @@ void format_dst(DESTINATION destination, const string_view &fmt, Args &&...args)
       // Do we have something between {} ?
       if (closing - current_pos > 1) {
         const auto options = detail::make_options(fmt.substr(current_pos + 1, closing - current_pos - 1));
-        detail::handlePrintArgument(destination, fmt_args[next_unnumbered_arg], options);
-        next_unnumbered_arg++;
+        if (next_unnumbered_arg < fmt_args.size()) {
+          detail::handlePrintArgument(destination, fmt_args[next_unnumbered_arg], options);
+          next_unnumbered_arg++;
+        }
       } else {
-        detail::handlePrintArgument(destination, fmt_args[next_unnumbered_arg], {});
-        next_unnumbered_arg++;
+        if (next_unnumbered_arg < fmt_args.size()) {
+          detail::handlePrintArgument(destination, fmt_args[next_unnumbered_arg], {});
+          next_unnumbered_arg++;
+        }
       }
 
       current_pos = closing;
@@ -255,8 +248,22 @@ void format_dst(DESTINATION destination, const string_view &fmt, Args &&...args)
 
 template<typename... Args>
 void format(nomm_string &destination, string_view fmt, Args &&...args) {
-  detail::destination target{destination, 0};
+  destination.clear();
+  auto target = [&](char c) {
+    destination.append(c);
+  };
   format_dst(target, fmt, kstd::forward<Args>(args)...);
 }
+
+template<size_t N, typename... Args>
+void format(static_string<N> &destination, string_view fmt, Args &&...args) {
+  destination.clear();
+  auto target = [&](char c) {
+    destination.append(c);
+  };
+  format_dst(target, fmt, kstd::forward<Args>(args)...);
+}
+
+
 
 }// namespace kstd

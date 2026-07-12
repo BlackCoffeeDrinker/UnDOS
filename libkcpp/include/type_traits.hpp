@@ -12,6 +12,7 @@
 #include <__type_traits/copy_cv.hpp>
 #include <__type_traits/copy_cvref.hpp>
 #include <__type_traits/decay.hpp>
+#include <__type_traits/dependent_type.hpp>
 #include <__type_traits/desugars_to.hpp>
 #include <__type_traits/detected_or.hpp>
 #include <__type_traits/disjunction.hpp>
@@ -50,8 +51,10 @@
 #include <__type_traits/is_signed.hpp>
 #include <__type_traits/is_swappable.hpp>
 #include <__type_traits/is_trivially_copyable.hpp>
+#include <__type_traits/is_trivially_destructible.hpp>
 #include <__type_traits/is_trivially_relocatable.hpp>
 #include <__type_traits/is_union.hpp>
+#include <__type_traits/is_unqualified.hpp>
 #include <__type_traits/is_valid_expansion.hpp>
 #include <__type_traits/is_void.hpp>
 #include <__type_traits/is_volatile.hpp>

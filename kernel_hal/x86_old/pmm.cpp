@@ -9,7 +9,8 @@ using kernel::VirtualAddress;
 #include "pmm.hpp"
 
 namespace {
-uint32_t *bitmap = nullptr;
+uint32_t bitmap_internal[4096];// Supports up to 512MB RAM
+uint32_t *bitmap = bitmap_internal;
 size_t total_frames = 0;
 size_t bitmap_size_words = 0;
 
@@ -28,31 +29,12 @@ bool test_bit(size_t frame) noexcept { return (bitmap[frame_to_word(frame)] & (1
 
 kstd::string_view map_type_to_string(kernel::MemoryRegionType type) noexcept {
   switch (type) {
-    case kernel::MemoryRegionType::Available:
-      return "Available";
-    case kernel::MemoryRegionType::Reserved:
-      return "Reserved";
-    case kernel::MemoryRegionType::ACPI_Reclaim:
-      return "ACPI Reclaim";
-    case kernel::MemoryRegionType::None:
-      return "Not used";
+    case kernel::MemoryRegionType::Available: return "Available";
+    case kernel::MemoryRegionType::Reserved: return "Reserved";
+    case kernel::MemoryRegionType::ACPI_Reclaim: return "ACPI Reclaim";
+    case kernel::MemoryRegionType::None: return "Not used";
   }
   return "Unknown";
-}
-
-VirtualAddress find_highest_virtual_address(const kernel::BootInfoT &boot_info) {
-  VirtualAddress highest_vaddr = 0;
-
-  for (const auto &region: boot_info.mapped_memory) {
-    if (region.type != kernel::MappedMemoryRegionType::None) {
-      if (VirtualAddress region_end = region.virtual_base + region.length;
-          region_end > highest_vaddr) {
-        highest_vaddr = region_end;
-      }
-    }
-  }
-
-  return highest_vaddr;// This is your truly safe 'boot_allocations_end'
 }
 
 uint64_t find_highest_physical_address(const kernel::BootInfoT &boot_info) {
@@ -93,8 +75,11 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   bitmap_size_words = total_frames / 32;
   if (total_frames % 32 != 0) bitmap_size_words++;
 
-  // 2. Find a safe spot to place the bitmap array itself!
-  bitmap = find_highest_virtual_address(boot_info).as_ptr<uint32_t>();
+  if (bitmap_size_words > 4096) {
+    early_print("PMM: RAM exceeds bitmap capacity! Truncating to 512MB.\r\n");
+    bitmap_size_words = 4096;
+    total_frames = 4096 * 32;
+  }
 
   // Initialize the entire bitmap as "fully reserved/used" for safety
   for (size_t i = 0; i < bitmap_size_words; ++i) {
@@ -104,6 +89,7 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   // 3. Mark only the actual available RAM regions as "free" (0)
   for (const auto &region: boot_info.memory_regions) {
     if (region.type == kernel::MemoryRegionType::Available) {
+      if (region.base < 0x100000) continue;// Skip the first 1MB to avoid returning address 0
       const auto start_frame = static_cast<uintptr_t>(region.base) / PAGE_SIZE;
       const auto frame_count = static_cast<size_t>(region.length / PAGE_SIZE);
 
@@ -124,7 +110,7 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
 }
 }// namespace hal::x86
 
-UNDOS_HAL_API void HAL_PMM_ReserveRegion(PhysicalAddress base, size_t length) noexcept {
+UNDOS_HAL_API_DEF void HAL_PMM_ReserveRegion(PhysicalAddress base, size_t length) noexcept {
   early_print_fmt("Reserving region at 0x{:x} for 0x{:x} bytes\n\r", static_cast<uintptr_t>(base), length);
 
   const size_t start_frame = static_cast<uintptr_t>(base) / PAGE_SIZE;
@@ -136,7 +122,7 @@ UNDOS_HAL_API void HAL_PMM_ReserveRegion(PhysicalAddress base, size_t length) no
   }
 }
 
-UNDOS_HAL_API PhysicalAddress HAL_PMM_AllocateFrames(size_t count) noexcept {
+UNDOS_HAL_API_DEF PhysicalAddress HAL_PMM_AllocateFrames(size_t count) noexcept {
   if (count == 0) return 0;
 
   const size_t max_frames = bitmap_size_words * 32;
@@ -187,7 +173,7 @@ UNDOS_HAL_API PhysicalAddress HAL_PMM_AllocateFrames(size_t count) noexcept {
   return 0;
 }
 
-UNDOS_HAL_API PhysicalAddress HAL_PMM_AllocateFramesDMA(size_t count) noexcept {
+UNDOS_HAL_API_DEF PhysicalAddress HAL_PMM_AllocateFramesDMA(size_t count) noexcept {
   if (count == 0) return 0;
 
   const size_t max_frames = bitmap_size_words * 32;
@@ -212,7 +198,7 @@ UNDOS_HAL_API PhysicalAddress HAL_PMM_AllocateFramesDMA(size_t count) noexcept {
   return 0;
 }
 
-UNDOS_HAL_API void HAL_PMM_FreeFrames(PhysicalAddress base, size_t count) noexcept {
+UNDOS_HAL_API_DEF void HAL_PMM_FreeFrames(PhysicalAddress base, size_t count) noexcept {
   const size_t start_frame = static_cast<uintptr_t>(base) / PAGE_SIZE;
   for (size_t i = 0; i < count; ++i) {
     clear_bit(start_frame + i);

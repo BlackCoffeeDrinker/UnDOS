@@ -12,6 +12,7 @@
 #include <__concepts/copyable.hpp>
 #include <__concepts/derived_from.hpp>
 #include <__concepts/destructible.hpp>
+#include <__concepts/different_from.hpp>
 #include <__concepts/equality_comparable.hpp>
 #include <__concepts/invocable.hpp>
 #include <__concepts/movable.hpp>

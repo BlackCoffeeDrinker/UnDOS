@@ -1,5 +1,6 @@
 #include "gdt.hpp"
 #include "structs.hpp"
+#include "tss.hpp"
 
 namespace hal::x86 {
 
@@ -15,6 +16,7 @@ struct GDT {
   static constexpr uint16_t OFFSET_KERNEL_DATA = (0x02u * 0x08u);// 0x10
   static constexpr uint16_t OFFSET_USER_DATA = (0x03u * 0x08u);  // 0x18
   static constexpr uint16_t OFFSET_USER_CODE = (0x04u * 0x08u);  // 0x20
+  static constexpr uint16_t OFFSET_TSS = (0x05u * 0x08u);        // 0x28
 
   enum {
     GDT_MAX_DESCRIPTORS = N,
@@ -64,7 +66,8 @@ struct GDT {
   }
 };
 
-GDT<5> kernel_gdt;
+GDT<6> kernel_gdt;
+tss_entry_t kernel_tss;
 
 void init_gdt() {
   // Slot 0: Null Descriptor
@@ -96,10 +99,32 @@ void init_gdt() {
                        Descriptor::PRESENT | Descriptor::CODE_DATA | Descriptor::EXECUTABLE | Descriptor::READWRITE | Descriptor::DPL3,
                        flags);
 
+  // Slot 5: Task State Segment (32-bit TSS, byte granularity)
+  for (auto &b: reinterpret_cast<uint8_t (&)[sizeof(tss_entry_t)]>(kernel_tss)) b = 0;
+  kernel_tss.ss0 = GDT<6>::OFFSET_KERNEL_DATA;
+  kernel_tss.iomap_base = sizeof(tss_entry_t);
+
+  kernel_gdt.set_entry(5,
+                       reinterpret_cast<uint32_t>(&kernel_tss), sizeof(tss_entry_t) - 1,
+                       Descriptor::PRESENT | Descriptor::ACCESS | Descriptor::EXECUTABLE,
+                       static_cast<Granularity>(0));
+
   kernel_gdt.install();
+
+  __asm__ volatile("ltr %w0" ::"r"(static_cast<uint16_t>(GDT<6>::OFFSET_TSS)));
+}
+
+void tss_set_esp0(uint32_t esp0) noexcept {
+  kernel_tss.esp0 = esp0;
 }
 
 void reload_gdt() {
   kernel_gdt.install();
 }
 }// namespace hal::x86
+
+#include <kernel/hal_interface.hpp>
+
+UNDOS_HAL_API_DEF void HAL_CPU_SetKernelStack(kernel::VirtualAddress kernel_stack_top) noexcept {
+  hal::x86::tss_set_esp0(static_cast<uint32_t>(kernel_stack_top.value));
+}

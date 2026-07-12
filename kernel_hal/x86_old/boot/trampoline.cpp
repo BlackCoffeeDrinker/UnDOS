@@ -13,7 +13,7 @@ extern "C" [[noreturn]] void entry_trampoline(uint32_t entry, uint32_t boot_info
 namespace {
 constexpr uintptr_t PAGE_ALIGN_UP(uintptr_t addr) { return (addr + 4095) & ~static_cast<uintptr_t>(4095); }
 
-constexpr size_t MAX_GLOBAL_SYMBOLS = 1024;
+constexpr size_t MAX_GLOBAL_SYMBOLS = 2048;
 constexpr size_t DEFAULT_STACK_SIZE = 16384;
 
 // Fixed memory mapping zones for compilation deployment
@@ -26,7 +26,7 @@ struct runtime_symbol_t {
   uint32_t value;
 };
 
-runtime_symbol_t g_symbol_table[MAX_GLOBAL_SYMBOLS];
+kstd::array<runtime_symbol_t, MAX_GLOBAL_SYMBOLS> g_symbol_table;
 size_t g_symbol_count = 0;
 
 uintptr_t g_hal_virtual_base = 0;
@@ -135,14 +135,14 @@ uintptr_t get_elf_load_vaddr(uint32_t module_start) {
 }
 
 void register_global_symbol(const char *name, uint32_t value) {
-  if (g_symbol_count >= MAX_GLOBAL_SYMBOLS) return;
+  if (g_symbol_count >= g_symbol_table.size()) return;
   g_symbol_table[g_symbol_count++] = {name, value};
 }
 
 uint32_t lookup_global_symbol(const char *name) {
-  for (size_t i = 0; i < g_symbol_count; ++i) {
-    if (kstrcmp(g_symbol_table[i].name, name)) {
-      return g_symbol_table[i].value;
+  for (auto & i : g_symbol_table) {
+    if (kstrcmp(i.name, name)) {
+      return i.value;
     }
   }
 

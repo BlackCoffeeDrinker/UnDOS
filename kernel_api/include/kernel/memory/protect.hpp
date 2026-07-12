@@ -1,5 +1,7 @@
 #pragma once
+
 #include <kernel/__core.hpp>
+#include <utility.hpp>
 
 namespace kernel::vmm {
 

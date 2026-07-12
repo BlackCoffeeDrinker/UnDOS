@@ -4,6 +4,26 @@
 
 #include <chrono.hpp>
 
-UNDOS_KERNEL_API void KE_TIME_SetIncrement(kstd::chrono::nanoseconds nanoseconds) noexcept;
-UNDOS_KERNEL_API void KE_TIME_UpdateSystemTime() noexcept;
-UNDOS_KERNEL_API [[nodiscard]] kstd::chrono::milliseconds KE_TIME_GetSystemTime() noexcept;
+/**
+ * @ingroup TIME
+ * @brief Method KE_TIME_SetIncrement
+ *
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    void,
+    KE_TIME_SetIncrement,
+    kstd::chrono::nanoseconds nanoseconds);
+
+/**
+ * @ingroup TIME
+ * @brief Method KE_TIME_UpdateSystemTime
+ *
+ */
+UNDOS_KERNEL_PUBLIC_V1API(void, KE_TIME_UpdateSystemTime);
+
+/**
+ * @ingroup TIME
+ * @brief Method KE_TIME_GetSystemTime
+ *
+ */
+UNDOS_KERNEL_PUBLIC_V1API([[nodiscard]] kstd::chrono::milliseconds, KE_TIME_GetSystemTime);

@@ -1,70 +1,101 @@
 #include "vmm.hpp"
 #include "stdkrn.hpp"
 
-#include "object_manager.hpp"
 #include <kernel/hal_interface.hpp>
 
-#include "common/DoubleList.hpp"
 #include "memory/Cache.hpp"
 
 extern uint32_t g_page_size;
 
+//#define KALLOC_DEBUG 1
+
 namespace {
 struct KVmmObject final : kernel::KObject {
-  KVmmObject() : KObject(kernel::TYPE_VMM) {}
+  KVmmObject() : KObject(kernel::TYPE_VMM, "VMM") {}
 };
+
+constexpr size_t g_cache_sizes[] = {16, 32, 64, 128, 256, 512, 1024, 2048};
+
+kernel::vmm::AddressSpace g_kernel_address_space;
+kstd::array<kernel::memory::Cache, 8> g_malloc_caches;
 }// namespace
 
 namespace kernel::vmm {
-AddressSpace g_kernel_address_space;
-VirtualAddress g_kernel_module_base = 0xE0000000;
+void init() noexcept {
+  // Start heap after the last mapped region + one guard page
+  const VirtualAddress heap_start = (HAL_VMM_GetHighestVirtualAddress() + g_page_size - 1)
+                                        .align_down(g_page_size) +
+                                    g_page_size;
 
-memory::Cache g_malloc_caches[8];
-const size_t g_cache_sizes[] = {16, 32, 64, 128, 256, 512, 1024, 2048};
-
-void init(const BootInfoT &boot_info) noexcept {
   // Initialize kernel address space
   g_kernel_address_space.translation_root = HAL_VMM_GetCurrentTranslationRoot();
   g_kernel_address_space.asid = 0;
-  g_kernel_address_space.current_base = 0;
-  g_kernel_address_space.limit = 0;
-
-  // Find the highest virtual address space
-  VirtualAddress highest_addr = 0;
-  for (const auto &region: boot_info.mapped_memory) {
-    if (region.type == MappedMemoryRegionType::None) continue;
-    if (VirtualAddress end = region.virtual_base + region.length;
-        end > highest_addr) {
-      highest_addr = end;
-    }
-  }
-
-  // Start heap after the last mapped region + one guard page
-  VirtualAddress heap_start = (highest_addr + boot_info.page_size - 1).align_down(boot_info.page_size);
-  heap_start += boot_info.page_size;
-
-  memory::set_heap_start(heap_start);
+  g_kernel_address_space.current_base = nullptr;
+  g_kernel_address_space.limit = nullptr;
   g_kernel_address_space.current_base = (heap_start + 0x10000000).align_up(0x1000000);
   g_kernel_address_space.limit = 0xFF000000;
 
-  for (size_t i = 0; i < 8; ++i) {
-    new (&g_malloc_caches[i]) memory::Cache(g_cache_sizes[i], g_cache_sizes[i], boot_info.page_size);
+  memory::set_heap_start(heap_start);
+  for (size_t i = 0; i < g_malloc_caches.size(); ++i) {
+    new (&g_malloc_caches[i]) memory::Cache(g_cache_sizes[i], g_cache_sizes[i], g_page_size);
   }
+
+  early_print_fmt("UnDOS Heap initialized at {}\r\n", heap_start.as_ptr<>());
 }
 
 void late_init() noexcept {
   // Register VMM
-  if (const auto memory_dir = KE_OB_LookupObject("\\Memory").As<KDirectoryObject>()) {
-    if (const auto vmm_obj = kernel::CreateKObject<KVmmObject>()) {
-      vmm_obj->name = "VMM";
-      KE_OB_InsertObject(memory_dir, vmm_obj);
-    }
+  KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), kernel::CreateKObject<KVmmObject>("VMM"));
+
+  early_print_fmt("VMM: Registered with OM\r\n");
+}
+
+bool create_user_address_space(AddressSpace &out_as) noexcept {
+  const PhysicalAddress root = HAL_VMM_CreateAddressSpace();
+  if (!root) {
+    return false;
   }
+
+  out_as.vads = VadTree();
+  out_as.translation_root = root;
+  out_as.asid = 0;
+  out_as.current_base = 0x10000000;
+  out_as.limit = 0xC0000000;
+
+  return true;
+}
+
+void destroy_user_address_space(AddressSpace &as) noexcept {
+  if (!as.translation_root) {
+    return;
+  }
+
+  // Reclaim the physical frames backing each mapped region while the target
+  // address space is active, since HAL_VMM_GetPhysicalAddress walks whatever
+  // page directory CR3 currently points at.
+  const PhysicalAddress caller_root = HAL_VMM_GetCurrentTranslationRoot();
+  HAL_CPU_DisableInterrupts();
+
+  HAL_VMM_SwitchAddressSpace(as.translation_root);
+
+  as.vads.clear([](VirtualAddressDescriptor *vad) noexcept {
+    for (VirtualAddress page = vad->start; page < vad->end; page += g_page_size) {
+      if (const PhysicalAddress phys = HAL_VMM_GetPhysicalAddress(page)) {
+        HAL_PMM_FreeFrames(phys, 1);
+      }
+    }
+    KE_Free(vad);
+  });
+
+  HAL_VMM_SwitchAddressSpace(caller_root);
+  HAL_CPU_EnableInterrupts();
+
+  HAL_VMM_DestroyAddressSpace(as.translation_root);
+  as.translation_root = PhysicalAddress(0);
 }
 
 void *allocate_user_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept {
   const size_t count = (size + g_page_size - 1) / g_page_size;
-
   const PhysicalAddress phys = HAL_PMM_AllocateFrames(count);
   if (!phys) return nullptr;
 
@@ -75,7 +106,7 @@ void *allocate_user_memory(AddressSpace &as, size_t size, ProtectFlags flags) no
     return nullptr;
   }
 
-  VirtualAddress v_addr = VirtualAddress::from_ptr(virt);
+  const VirtualAddress v_addr = VirtualAddress::from_ptr(virt);
   for (size_t i = 0; i < count; ++i) {
     if (!HAL_VMM_MapPage(v_addr + i * g_page_size, phys + i * g_page_size, flags | ProtectFlags::USER)) {
       return nullptr;
@@ -85,33 +116,51 @@ void *allocate_user_memory(AddressSpace &as, size_t size, ProtectFlags flags) no
 
   return virt;
 }
-} // namespace kernel::vmm
+}// namespace kernel::vmm
 
-UNDOS_KERNEL_API void *KE_Malloc(size_t size) noexcept {
+UNDOS_KERNEL_API_DEF void *KE_Malloc(size_t size) noexcept {
   if (size == 0) [[unlikely]] {
     return nullptr;
   }
 
-  for (size_t i = 0; i < 8; ++i) {
-    if (size <= kernel::vmm::g_cache_sizes[i]) {
-      return kernel::vmm::g_malloc_caches[i].allocate();
+  for (auto &g_malloc_cache: g_malloc_caches) {
+    if (size <= g_malloc_cache.object_size()) {
+      auto allocate = g_malloc_cache.allocate();
+#if defined(KALLOC_DEBUG) && KALLOC_DEBUG == 1
+      early_print_fmt("ALLOC: {} @ {}\r\n", size, allocate);
+#endif
+      return allocate;
     }
   }
 
+  // Larger than the biggest fixed-size cache: fall back to a dedicated,
+  // page-backed allocation instead of failing outright.
+  if (auto *large = kernel::memory::allocate_large(size)) {
+#if defined(KALLOC_DEBUG) && KALLOC_DEBUG == 1
+    early_print_fmt("ALLOC LARGE: {} @ {}\r\n", size, large);
+#endif
+    return large;
+  }
+
+  early_print_fmt("ALLOC FAILED: {}\r\n", size);
   return nullptr;
 }
 
-UNDOS_KERNEL_API void KE_Free(void *ptr) noexcept {
-  if (!ptr) [[unlikely]] {
+UNDOS_KERNEL_API_DEF void KE_Free(void *ptr) noexcept {
+  if (!ptr) [[unlikely]] { return; }
+
+  if (auto *slab = kernel::memory::find_slab(ptr)) {
+#if defined(KALLOC_DEBUG) && KALLOC_DEBUG == 1
+    early_print_fmt("FREE SLAB: {}\r\n", ptr);
+#endif
+    slab->cache()->free(ptr, *slab);
     return;
   }
 
-  if (auto *slab = kernel::memory::find_slab(ptr)) {
-    slab->cache()->free(ptr, *slab);
-  }
+  kernel::memory::free_large(ptr);
 }
 
-UNDOS_KERNEL_API void *KE_VMM_AllocateRegion(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
+UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateRegion(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
   if (as.current_base == 0) {
     // Default to user heap range if not initialized
     as.current_base = 0x10000000;
@@ -137,7 +186,7 @@ UNDOS_KERNEL_API void *KE_VMM_AllocateRegion(kernel::vmm::AddressSpace &as, size
   return addr.as_ptr();
 }
 
-UNDOS_KERNEL_API void KE_VMM_FreeRegion(kernel::vmm::AddressSpace &as, void *addr) noexcept {
+UNDOS_KERNEL_API_DEF void KE_VMM_FreeRegion(kernel::vmm::AddressSpace &as, void *addr) noexcept {
   auto *vad = as.vads.find(kernel::VirtualAddress::from_ptr(addr));
   if (vad) {
     as.vads.remove(vad);
@@ -145,44 +194,35 @@ UNDOS_KERNEL_API void KE_VMM_FreeRegion(kernel::vmm::AddressSpace &as, void *add
   }
 }
 
-UNDOS_KERNEL_API void *KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept {
+UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept {
   return kernel::vmm::allocate_user_memory(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
 }
 
-UNDOS_KERNEL_API void *KE_VMM_AllocateUserProcess(kernel::vmm::AddressSpace &as, size_t size) noexcept {
+UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateUserProcess(kernel::vmm::AddressSpace &as, size_t size) noexcept {
   return kernel::vmm::allocate_user_memory(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE);
 }
 
-UNDOS_KERNEL_API kernel::vmm::AddressSpace &KE_VMM_GetKernelAddressSpace() noexcept {
-  return kernel::vmm::g_kernel_address_space;
+UNDOS_KERNEL_API_DEF kernel::vmm::AddressSpace &KE_VMM_GetKernelAddressSpace() noexcept {
+  return g_kernel_address_space;
 }
 
-UNDOS_KERNEL_API bool KE_VMM_MapPhysical(kernel::vmm::AddressSpace &as, kernel::VirtualAddress virt, kernel::PhysicalAddress phys, kernel::vmm::ProtectFlags flags) noexcept {
-  (void)as; // TODO: Use the address space's translation root if not current
+UNDOS_KERNEL_API_DEF bool KE_VMM_MapPhysical(kernel::vmm::AddressSpace &as, kernel::VirtualAddress virt, kernel::PhysicalAddress phys, kernel::vmm::ProtectFlags flags) noexcept {
+  (void) as;// TODO: Use the address space's translation root if not current
   return HAL_VMM_MapPage(virt, phys, flags);
 }
 
 
-UNDOS_KERNEL_CPP_API void *operator new(size_t size) {
-  return KE_Malloc(size);
-}
-
-UNDOS_KERNEL_CPP_API void *operator new[](size_t size) {
-  return KE_Malloc(size);
-}
-
-UNDOS_KERNEL_CPP_API void operator delete(void *ptr) noexcept {
-  KE_Free(ptr);
-}
-
-UNDOS_KERNEL_CPP_API void operator delete[](void *ptr) noexcept {
-  KE_Free(ptr);
-}
-
-UNDOS_KERNEL_CPP_API void operator delete(void *ptr, size_t) noexcept {
-  KE_Free(ptr);
-}
-
-UNDOS_KERNEL_CPP_API void operator delete[](void *ptr, size_t) noexcept {
-  KE_Free(ptr);
-}
+// On a hosted build (e.g. the host test binary), the C++ runtime/standard
+// library already provides its own global operator new/delete backed by the
+// host's general-purpose allocator; overriding them here with KE_Malloc/Free
+// (which only serve a handful of small, fixed object sizes and require
+// kernel::vmm::init() to have run first) would break every other allocation
+// in the process, including ones made before init() runs.
+#if __STDC_HOSTED__ == 0
+UNDOS_KERNEL_CPP_API void *operator new(size_t size) { return KE_Malloc(size); }
+UNDOS_KERNEL_CPP_API void *operator new[](size_t size) { return KE_Malloc(size); }
+UNDOS_KERNEL_CPP_API void operator delete(void *ptr) noexcept { KE_Free(ptr); }
+UNDOS_KERNEL_CPP_API void operator delete[](void *ptr) noexcept { KE_Free(ptr); }
+UNDOS_KERNEL_CPP_API void operator delete(void *ptr, size_t) noexcept { KE_Free(ptr); }
+UNDOS_KERNEL_CPP_API void operator delete[](void *ptr, size_t) noexcept { KE_Free(ptr); }
+#endif

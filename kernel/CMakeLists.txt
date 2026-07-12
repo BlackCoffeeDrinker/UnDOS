@@ -4,22 +4,33 @@ add_executable(kernel
         src/memchr.cpp
         src/strlen.cpp
 
-        src/Core.hpp
         src/main.cpp
 
         src/vmm.cpp
         src/vmm.hpp
         src/time.cpp
+
+        src/scheduler/ReadyQueue.hpp
+        src/scheduler/Scheduler.hpp
+        src/scheduler/Scheduler.cpp
         src/driver_loader.cpp
         src/driver_loader.hpp
-        src/event_dispatcher.cpp
-        src/event_dispatcher.hpp
+        src/elf_loader.hpp
+        src/elf_loader.cpp
+        src/elf_segment_loader.hpp
+        src/elf_segment_loader.cpp
+        src/process_loader.hpp
+        src/process_loader.cpp
+        src/process.hpp
+        src/process.cpp
+        src/syscall.hpp
+        src/syscall.cpp
         src/pnp_manager.cpp
         src/dma_manager.cpp
+        src/resource_manager.cpp
+        src/resource_manager.hpp
         src/object_manager.cpp
         src/object_manager.hpp
-        src/common/DoubleListLink.hpp
-        src/common/DoubleList.hpp
 
         src/memory/Layout.hpp
         src/memory/Layout.cpp
@@ -32,6 +43,18 @@ add_executable(kernel
         src/memory/Cache.hpp
         src/memory/Cache.cpp
         src/stdkrn.hpp
+        src/module/symbol_entry.cpp
+        src/module/symbol_entry.hpp
+        src/module/symbol_table.cpp
+        src/module/symbol_table.hpp
+        src/guard/guard.cpp
+        src/atexit.cpp
+        src/io.cpp
+        src/vfs.cpp
+        src/vfs.hpp
+        src/user_process.cpp
+        src/initial/boot_modules_vfs.cpp
+        src/initial/boot_modules_vfs.hpp
 )
 
 target_compile_definitions(kernel PRIVATE UNDOS_KERNEL_COMPILE)

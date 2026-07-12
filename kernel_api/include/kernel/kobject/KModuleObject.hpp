@@ -11,4 +11,9 @@ struct KModuleObject : KObjectT<KModuleObject, 1, TYPE_MODULE> {
   size_t length;
 };
 
+template<>
+struct ObjectTypeOf<TYPE_MODULE> {
+  using type = KModuleObject;
+};
+
 } // namespace kernel

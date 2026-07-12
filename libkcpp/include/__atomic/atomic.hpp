@@ -32,6 +32,22 @@ class atomic {
     return __atomic_fetch_sub(&_value, arg, static_cast<int>(order));
   }
 
+  bool compare_exchange_weak(T &expected, T desired, memory_order success, memory_order failure) noexcept {
+    return __atomic_compare_exchange_n(&_value, &expected, desired, true, static_cast<int>(success), static_cast<int>(failure));
+  }
+
+  bool compare_exchange_strong(T &expected, T desired, memory_order success, memory_order failure) noexcept {
+    return __atomic_compare_exchange_n(&_value, &expected, desired, false, static_cast<int>(success), static_cast<int>(failure));
+  }
+
+  bool compare_exchange_weak(T &expected, T desired, memory_order order = memory_order_seq_cst) noexcept {
+    return compare_exchange_weak(expected, desired, order, order);
+  }
+
+  bool compare_exchange_strong(T &expected, T desired, memory_order order = memory_order_seq_cst) noexcept {
+    return compare_exchange_strong(expected, desired, order, order);
+  }
+
   T operator++() noexcept { return fetch_add(1) + 1; }
   T operator++(int) noexcept { return fetch_add(1); }
   T operator--() noexcept { return fetch_sub(1) - 1; }

@@ -46,7 +46,6 @@ include(cmake/AddHal.cmake)
 #######################################################################################################################
 option(UNDOS_WARNINGS_AS_ERRORS "Treat Warnings As Errors" ON)
 
-
 #######################################################################################################################
 ## Make dummy targets for propagating compiler options
 #######################################################################################################################
@@ -66,23 +65,20 @@ if (NOT TESTING_ONLY)
     # Don't link with anything by default unless we say so
     set(CMAKE_C_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C Libraries")
     set(CMAKE_CXX_STANDARD_LIBRARIES "-lgcc" CACHE STRING "Standard C++ Libraries")
-    
+
     target_compile_options(undos_options INTERFACE
-    #add_compile_options(
             -m32
             -march=i386
             -nostdlib
             -fno-builtin
             -fno-rtti
             -fno-exceptions
-            -ffreestanding
             -fno-stack-protector
-            -fno-use-cxa-atexit
+            -ffreestanding
             -Wall
             -Wextra
     )
     target_link_options(undos_options INTERFACE
-    #add_link_options(
             -nostdlib
             -nostartfiles
             -nodefaultlibs
@@ -91,7 +87,9 @@ if (NOT TESTING_ONLY)
             -Wl,--oformat=elf32-i386
             -Wl,--nmagic
             -L ${tools}/lib/gcc/i686-elf/14.1.0/)
+else ()
 endif ()
+
 
 #######################################################################################################################
 ## Load up third parties
@@ -111,3 +109,14 @@ else ()
     add_subdirectory(hosted_test)
 endif ()
 
+
+
+#######################################################################################################################
+## Tools that generate the initial image 
+#######################################################################################################################
+add_custom_target(make-initial-disk
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/bin
+        COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py ${PROJECT_SOURCE_DIR}/bin/fat32.img ${PROJECT_SOURCE_DIR}/bin/filesystem
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Generating initial disk image"
+)

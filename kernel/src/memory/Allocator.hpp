@@ -10,6 +10,13 @@ class Cache;
 void set_heap_start(VirtualAddress start) noexcept;
 Slab *find_slab(void *ptr) noexcept;
 
+// Fallback allocator for objects that don't fit any fixed-size Cache. Backed
+// directly by page frames pulled from the same bump-allocated kernel heap
+// range used by the slab Allocator, with the block size stashed in a small
+// header just before the returned pointer.
+void *allocate_large(size_t size) noexcept;
+void free_large(void *ptr) noexcept;
+
 class Allocator {
   Layout layout_;
   size_t total_allocated_ = 0;
