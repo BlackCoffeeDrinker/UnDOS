@@ -124,13 +124,6 @@ void remap_pic() noexcept {
   HAL_PLATFORM_Panic("Unhandled Page Fault", __FILE__, __LINE__);
 }
 
-// C trampoline called from the raw asm syscall gate below. Bridges into the
-// platform-agnostic kernel dispatcher (cross-stitched at link time, same as
-// KE_TIME_UpdateSystemTime is called from the timer ISR above).
-extern "C" __attribute__((visibility("default"), used)) uint32_t syscall_dispatch_trampoline(uint32_t number, uint32_t arg0, uint32_t arg1, uint32_t arg2) {
-  return static_cast<uint32_t>(KE_SYSCALL_Dispatch(number, arg0, arg1, arg2));
-}
-
 // Vector 0x80: int 0x80 syscall gate (DPL3, callable from ring 3).
 //
 // gnu::interrupt handlers don't expose general-purpose registers, but the
@@ -149,11 +142,11 @@ __asm__(
     "    pushl %esi\n\t"
     "    pushl %edi\n\t"
     "    pushl %ebp\n\t"
-    "    pushl %edx\n\t"// arg2
-    "    pushl %ecx\n\t"// arg1
-    "    pushl %ebx\n\t"// arg0
+    "    pushl %edx\n\t"// flags
+    "    pushl %ecx\n\t"// pointer to __SYS_CALL_DATA
+    "    pushl %ebx\n\t"// size
     "    pushl %eax\n\t"// number
-    "    call syscall_dispatch_trampoline\n\t"
+    "    call KE_SYSCALL_Dispatch\n\t"
     "    addl $16, %esp\n\t"
     "    popl %ebp\n\t"
     "    popl %edi\n\t"
