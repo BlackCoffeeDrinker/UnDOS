@@ -1,6 +1,7 @@
 
 #pragma once
 #include <kernel/KObject.hpp>
+#include <kernel/vfs/vfs_node.hpp>
 
 /**
  * @ingroup VFS

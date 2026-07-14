@@ -8,6 +8,8 @@
 
 namespace kernel {
 
+struct KSubsystemObject;
+
 // Process Control Block (EPROCESS-style). Owns the isolated address space and
 // the thread(s) running inside it. Platform-agnostic: all HAL-specific state
 // lives inside vmm::AddressSpace / KThreadObject.
@@ -16,6 +18,7 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
 
   vmm::AddressSpace address_space{};
   KObjectPtr<KThreadObject> main_thread;
+  KObjectPtr<KSubsystemObject> subsystem;
   int32_t exit_code{0};
   State state{State::Running};
 };

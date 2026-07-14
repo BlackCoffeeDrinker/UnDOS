@@ -14,6 +14,7 @@ kernel::KObjectPtr<kernel::KDirectoryObject> g_thread;
 kernel::KObjectPtr<kernel::KDirectoryObject> g_process;
 kernel::KObjectPtr<kernel::KDirectoryObject> g_vfs;
 kernel::KObjectPtr<kernel::KDirectoryObject> g_file;
+kernel::KObjectPtr<kernel::KDirectoryObject> g_subsystem;
 
 kernel::KObjectPtr<kernel::KObject> LookupChild(
     const kernel::KObjectPtr<kernel::KDirectoryObject> &parent,
@@ -80,6 +81,7 @@ void init() {
   g_filesystem = kernel::CreateKObject<KDirectoryObject>("FileSystem");
   g_vfs = kernel::CreateKObject<KDirectoryObject>("VFS");
   g_file = kernel::CreateKObject<KDirectoryObject>("File");
+  g_subsystem = kernel::CreateKObject<KDirectoryObject>("Subsystems");
 
   KE_OB_InsertObject(g_root, g_device);
   KE_OB_InsertObject(g_root, g_driver);
@@ -89,6 +91,7 @@ void init() {
   KE_OB_InsertObject(g_root, g_process);
   KE_OB_InsertObject(g_root, g_vfs);
   KE_OB_InsertObject(g_root, g_file);
+  KE_OB_InsertObject(g_root, g_subsystem);
 
   const auto system = kernel::CreateKObject<KDirectoryObject>("System");
   const auto initial = kernel::CreateKObject<KDirectoryObject>("Initial");
@@ -228,4 +231,8 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetFiles
 
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetFileRoot() noexcept {
   return g_file;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetSubsystemDirectory() noexcept {
+  return g_subsystem;
 }

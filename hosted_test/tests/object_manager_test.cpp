@@ -36,8 +36,8 @@ TEST_CASE("Object Manager well-known directories are non-null and distinct", "[o
   REQUIRE(vfs.get() != file.get());
   REQUIRE(filesystem.get() != file.get());
 
-  REQUIRE(KE_OB_LookupObject(R"(\VFS)").get() == vfs.get());
-  REQUIRE(KE_OB_LookupObject(R"(\Device)").get() == device.get());
+  REQUIRE(KE_OB_LookupObject("/VFS").get() == vfs.get());
+  REQUIRE(KE_OB_LookupObject("/Device").get() == device.get());
 }
 
 TEST_CASE("KE_OB_InsertObject / KE_OB_RemoveObject", "[ob]") {
@@ -112,13 +112,13 @@ TEST_CASE("KE_OB_LookupObject / KE_OB_LookupObjectWithRoot / KE_OB_FindDirectChi
   REQUIRE(KE_OB_InsertObject(level1, level2));
 
   SECTION("Multi-level absolute path lookup") {
-    const auto found = KE_OB_LookupObject(R"(\Device\ObTest_Level1\ObTest_Level2)");
+    const auto found = KE_OB_LookupObject("/Device/ObTest_Level1/ObTest_Level2");
     REQUIRE(found.get() == level2Ptr);
   }
 
   SECTION("Missing segment returns null") {
-    REQUIRE(KE_OB_LookupObject(R"(\Device\ObTest_Level1\DoesNotExist)") == nullptr);
-    REQUIRE(KE_OB_LookupObject(R"(\Device\DoesNotExist\ObTest_Level2)") == nullptr);
+    REQUIRE(KE_OB_LookupObject("/Device/ObTest_Level1/DoesNotExist") == nullptr);
+    REQUIRE(KE_OB_LookupObject("/Device/DoesNotExist/ObTest_Level2") == nullptr);
   }
 
   SECTION("'.' resolves to the same object, '..' resolves to its parent") {

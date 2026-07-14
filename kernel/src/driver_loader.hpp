@@ -8,5 +8,4 @@
 
 namespace kernel::driver {
 void init(const kernel::BootInfoT &boot_info);
-KObjectPtr<KDriverObject> load_from_memory(PhysicalAddress module_base, size_t module_size);
 }// namespace kernel::driver

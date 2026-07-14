@@ -9,6 +9,8 @@
 #include "vfs.hpp"
 #include "vmm.hpp"
 
+#include <kernel/kobject/KSubsystemObject.hpp>
+
 #include <Kernel.hpp>
 
 uint32_t g_page_size;
@@ -253,7 +255,20 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
     HAL_PLATFORM_Panic("No root filesystem specified\r\n", __FILE__, __LINE__);
   }
 
+  // Register the native ELF loader subsystem, a long-lived singleton used to
+  // bootstrap user processes (see KE_USER_CreateProcess).
+  if (const auto native_elf_loader = kernel::CreateKObject<kernel::KSubsystemObject>("NativeElfLoader")) {
+    native_elf_loader->loader_path = "/System/ELoader.elf";
+    if (!KE_OB_InsertObject(KE_OB_GetSubsystemDirectory(), native_elf_loader)) {
+      early_print_fmt("Failed to register NativeElfLoader subsystem\r\n");
+    }
+  } else {
+    early_print_fmt("Failed to allocate NativeElfLoader subsystem\r\n");
+  }
+
   // Try and find the init
+  early_print_fmt("Loading init\r\n");
+  KE_USER_CreateProcess("/System/init.elf");
 
   DumpObjectTree(KE_OB_GetRootDirectory());
   DumpDeviceTree();

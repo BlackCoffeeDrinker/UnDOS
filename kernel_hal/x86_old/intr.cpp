@@ -92,22 +92,34 @@ void remap_pic() noexcept {
 
 // [Exception and Page Fault Handlers remain exactly as you wrote them]
 [[gnu::interrupt]] void interrupt_handler(stack_frame *f) {
-  early_print_fmt("Unhandled Interrupt/Exception at EIP: 0x{x}\n\r", f->eip);
+  // These handlers are fatal (they always end in HAL_PLATFORM_Panic), and by
+  // the time we get here interrupts are globally enabled (the scheduler
+  // turns them on once threads start running). Without disabling them first,
+  // a timer/keyboard IRQ can fire mid-panic -- e.g. while early_print_fmt is
+  // still formatting -- and preempt into the scheduler, corrupting whatever
+  // we were in the middle of printing and never coming back.
+  __asm__ volatile("cli");
+  early_print_fmt("Unhandled Interrupt/Exception at EIP: 0x{:x}\n\r", f->eip);
   HAL_PLATFORM_Panic("Unhandled Interrupt/Exception", __FILE__, __LINE__);
 }
 [[gnu::interrupt]] void exception_handler(stack_frame *frame, uword_t error_code) {
   kstd::ignore = frame;
-  early_print_fmt("Exception: 0x{x}\n\r", error_code);
+  __asm__ volatile("cli");
+  early_print_fmt("Exception: 0x{:x}\n\r", error_code);
   HAL_PLATFORM_Panic("Unhandled Exception", __FILE__, __LINE__);
 }
 
 [[gnu::interrupt]] void page_fault_handler(stack_frame *frame, uword_t error_code) {
-  kstd::ignore = frame;
+  __asm__ volatile("cli");
 
   uint32_t faulting_address;
   __asm__ volatile("mov %%cr2, %0" : "=r"(faulting_address));
 
-  early_print_fmt("Faulting address: 0x{x}, error_code: 0x{x}\n\r", faulting_address, error_code);
+  early_print_fmt("Page Fault - Stack Frame:\r\n");
+  early_print_fmt("  EIP:    0x{:x}\r\n", frame->eip);
+  early_print_fmt("  CS:     0x{:x}\r\n", frame->cs);
+  early_print_fmt("  EFLAGS: 0x{:x}\r\n", frame->eflags);
+  early_print_fmt("Faulting address: 0x{:x}, error_code: 0x{:x}\r\n", faulting_address, static_cast<uint32_t>(error_code));
 
   HAL_PLATFORM_Panic("Unhandled Page Fault", __FILE__, __LINE__);
 }

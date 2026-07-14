@@ -1,13 +1,14 @@
 
 #pragma once
+#include <memory.hpp>
 
 #include <kernel/__core.hpp>
-#include <kernel/data_buffer.hpp>
 #include <kernel/kobject/KObjectT.hpp>
+#include <kernel/kobject/KVolumeMountObject.hpp>
 
 namespace kernel {
+struct KVFSNode;
 struct KFilesystemObject;
-struct KVolumeMountObject;
 
 struct KFileObject : KObjectT<KFileObject, 1, TYPE_FILE> {
   enum class OpenMode : uint32_t {
@@ -23,9 +24,10 @@ struct KFileObject : KObjectT<KFileObject, 1, TYPE_FILE> {
 
   kstd::static_string<255> actualPath;
   KObjectPtr<KVolumeMountObject> mountPoint;
-  KObjectPtr<KFilesystemObject> fileSystem;
+  kstd::unique_ptr<KVFSNode> vfsNode;
 
-  DataBuffer driverExtension;
+  const KObjectPtr<KFilesystemObject> &FileSystem() const noexcept { return mountPoint->fileSystem; }
+
   OpenMode mode;
   uint64_t offset;
   uint32_t flags;

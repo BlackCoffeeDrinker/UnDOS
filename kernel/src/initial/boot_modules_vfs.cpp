@@ -24,52 +24,74 @@ bool InitialVFS_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject>
   return true;
 }
 
-bool InitialVFS_UnmountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &volume) {
-  (void) volume;
-  return true;
-}
 
 struct FS_DriverExtension {
   kernel::KObjectPtr<kernel::KModuleObject> module;
 };
 
-bool InitialVFS_CreateHandle(const kernel::KObjectPtr<kernel::KFileObject> &file) {
-  // We only support read files
-  if (file->mode != kernel::KFileObject::OpenMode::Read) {
-    early_print_fmt("Invalid open mode for InitialVFS file handle\r\n");
-    return false;
-  }
+bool InitialVFS_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, kernel::KVFSNode &rootOut) {
+  (void) mountPoint;
 
-  const auto root = file->mountPoint->driverExtension.as<FS_VolumeExtension>()->rootDirectory;
-  auto module = KE_OB_FindDirectChildOfType<kernel::KModuleObject>(
-      root, file->actualPath.substr(1));
-
-  if (!module) {
-    early_print_fmt("Failed to find module for path {}\r\n", file->actualPath);
-    return false;
-  }
-
-  file->driverExtension = kernel::DataBuffer::Create<FS_DriverExtension>();
-  file->driverExtension.as<FS_DriverExtension>()->module = kstd::move(module);
+  rootOut.type = kernel::VFSNodeType::Directory;
+  rootOut.fsPrivate = nullptr;
+  rootOut.size = 0;
 
   return true;
 }
 
-uint64_t InitialVFS_ReadHandle(const kernel::KObjectPtr<kernel::KFileObject> &file, const kstd::span<uint8_t> &buffer) {
-  // Read buffer.size() at file->offset
-  const auto ctx = file->driverExtension.as<FS_DriverExtension>();
+bool InitialVFS_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint,
+                       const kernel::KVFSNode &parent,
+                       kstd::string_view name,
+                       kernel::KVFSNode &out) {
+  (void) parent;
+
+  // Lookup file directly
+  if (const auto root = mountPoint->driverExtension.as<FS_VolumeExtension>()->rootDirectory) {
+    if (auto module = KE_OB_FindDirectChildOfType<kernel::KModuleObject>(root, name)) {
+
+      early_print_fmt("Got module {}\r\n", name);
+
+      out.fsPrivate = kernel::DataBuffer::Create<FS_DriverExtension>();
+      auto *ctx = out.fsPrivate.as<FS_DriverExtension>();
+      ctx->module = kstd::move(module);
+      return true;
+    }
+  }
+
+  early_print_fmt("Failed to find module %s\r\n", name);
+  return false;
+}
+
+bool InitialVFS_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &vnode, kernel::KFileObject::OpenMode mode) {
+  (void) mountPoint;
+
+  if (vnode.fsPrivate.as<FS_DriverExtension>()->module == nullptr) {
+    early_print_fmt("Invalid module for InitialVFS file handle\r\n");
+    return false;
+  }
+
+  // We only support read files
+  if (mode != kernel::KFileObject::OpenMode::Read) {
+    early_print_fmt("Invalid open mode for InitialVFS file handle\r\n");
+    return false;
+  }
+
+  return true;
+}
+
+uint64_t InitialVFS_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &vnode, uint64_t offset, const kstd::span<uint8_t> &buffer) {
+  const auto ctx = vnode.fsPrivate.as<FS_DriverExtension>();
 
   size_t to_read = buffer.size();
-  if (file->offset + to_read > ctx->module->length) {
-    to_read = static_cast<uint32_t>(ctx->module->length - file->offset);
+  if (offset + to_read > ctx->module->length) {
+    to_read = static_cast<uint32_t>(ctx->module->length - offset);
   }
 
   __builtin_memcpy(
       buffer.data(),
-      (ctx->module->base_physical + static_cast<kernel::PhysicalAddress::type>(file->offset)).as_ptr<uint8_t>(),
+      (ctx->module->base_physical + static_cast<kernel::PhysicalAddress::type>(offset)).as_ptr<uint8_t>(),
       to_read);
 
-  file->offset += to_read;
   return to_read;
 }
 
@@ -91,7 +113,8 @@ void init() {
     }
 
     filesystem->MountVolume = InitialVFS_MountVolume;
-    filesystem->UnmountVolume = InitialVFS_UnmountVolume;
+    filesystem->GetRootNode = InitialVFS_GetRootNode;
+    filesystem->Lookup = InitialVFS_Lookup;
     filesystem->CreateHandle = InitialVFS_CreateHandle;
     filesystem->ReadHandle = InitialVFS_ReadHandle;
   }

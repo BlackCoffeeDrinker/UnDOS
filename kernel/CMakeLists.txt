@@ -19,8 +19,6 @@ add_executable(kernel
         src/elf_loader.cpp
         src/elf_segment_loader.hpp
         src/elf_segment_loader.cpp
-        src/process_loader.hpp
-        src/process_loader.cpp
         src/process.hpp
         src/process.cpp
         src/syscall.hpp
@@ -55,6 +53,8 @@ add_executable(kernel
         src/user_process.cpp
         src/initial/boot_modules_vfs.cpp
         src/initial/boot_modules_vfs.hpp
+        src/elf_loader.cpp
+        src/elf_loader.hpp
 )
 
 target_compile_definitions(kernel PRIVATE UNDOS_KERNEL_COMPILE)

@@ -9,6 +9,7 @@ add_executable(KernelTests
         resource_arbiter_test.cpp
         panic.cpp
         volume_manager_test.cpp
+        fat_short_name_test.cpp
 
         kernel_host_stubs.cpp
         kernel_host_vmm_stubs.cpp
@@ -23,6 +24,7 @@ add_executable(KernelTests
         ../../kernel/src/memory/Storage.cpp
 
         object_manager_test.cpp
+        subsystem_object_test.cpp
         vmm_test.cpp
 
         ../../drivers/disk_fake/fake_disk_file_backend.cpp

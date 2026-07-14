@@ -106,12 +106,38 @@ void *allocate_user_memory(AddressSpace &as, size_t size, ProtectFlags flags) no
     return nullptr;
   }
 
+  // HAL_VMM_MapPage always writes into whichever page directory is
+  // currently active (CR3), not into an arbitrary AddressSpace, so the
+  // target address space must be made active while the pages are mapped --
+  // mirrors the pattern used by destroy_user_address_space. Without this,
+  // callers that haven't already switched to `as` (e.g. the process's user
+  // stack, mapped before its address space is switched in) would silently
+  // map the pages into the caller's (kernel) address space instead.
+  const PhysicalAddress caller_root = HAL_VMM_GetCurrentTranslationRoot();
+  const bool switch_as = as.translation_root && as.translation_root != caller_root;
+  if (switch_as) {
+    HAL_CPU_DisableInterrupts();
+    HAL_VMM_SwitchAddressSpace(as.translation_root);
+  }
+
+  bool ok = true;
   const VirtualAddress v_addr = VirtualAddress::from_ptr(virt);
   for (size_t i = 0; i < count; ++i) {
     if (!HAL_VMM_MapPage(v_addr + i * g_page_size, phys + i * g_page_size, flags | ProtectFlags::USER)) {
-      return nullptr;
+      ok = false;
+      break;
     }
     HAL_VMM_Flush(v_addr + i * g_page_size);
+  }
+
+  if (switch_as) {
+    HAL_VMM_SwitchAddressSpace(caller_root);
+    HAL_CPU_EnableInterrupts();
+  }
+
+  if (!ok) {
+    HAL_PMM_FreeFrames(phys, count);
+    return nullptr;
   }
 
   return virt;

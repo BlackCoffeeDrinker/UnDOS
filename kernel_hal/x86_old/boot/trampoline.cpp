@@ -153,7 +153,14 @@ uint32_t lookup_global_symbol(const char *name) {
 
 // Statically reserved translation arrays inside Stage 1.5 BSS
 __attribute__((aligned(4096))) uint32_t boot_page_dir[1024];
-__attribute__((aligned(4096))) uint32_t identity_page_table[1024];
+// Identity-mapped low memory: covers 0 - kIdentityMappedMegabytes MB so that
+// GRUB-loaded boot modules (which are placed sequentially in physical memory
+// right after the kernel/HAL images, and can easily spill past the first
+// 4MB) remain accessible through their raw physical address once paging is
+// enabled (e.g. KE_DRIVER_Load reading module bytes via PhysicalAddress::as_ptr()).
+constexpr size_t kIdentityMappedMegabytes = 16;
+constexpr size_t kIdentityPageTables = kIdentityMappedMegabytes / 4;
+__attribute__((aligned(4096))) uint32_t identity_page_table[kIdentityPageTables][1024];
 __attribute__((aligned(4096))) uint32_t hal_page_table[1024];
 __attribute__((aligned(4096))) uint32_t kernel_page_table[1024];
 
@@ -442,11 +449,14 @@ void setup_paging(uintptr_t stack_bottom, uintptr_t stack_top, uintptr_t boot_in
   kmemset(hal_page_table, 0, sizeof(hal_page_table));
   kmemset(kernel_page_table, 0, sizeof(kernel_page_table));
 
-  // Map lower memory space identity lines (0 - 4MB) to preserve execution frame
-  for (size_t i = 0; i < 1024; ++i) {
-    identity_page_table[i] = (i * 4096) | 0x003;
+  // Map lower memory space identity lines (0 - kIdentityMappedMegabytes MB)
+  // to preserve execution frame and keep boot modules reachable by physical address.
+  for (size_t table = 0; table < kIdentityPageTables; ++table) {
+    for (size_t i = 0; i < 1024; ++i) {
+      identity_page_table[table][i] = ((table * 1024 + i) * 4096) | 0x003;
+    }
+    boot_page_dir[table] = reinterpret_cast<uint32_t>(identity_page_table[table]) | 0x003;
   }
-  boot_page_dir[0] = reinterpret_cast<uint32_t>(identity_page_table) | 0x003;
 
   auto map_virtual_range = [](uint32_t v_start, uint32_t v_end, uint32_t p_start) {
     // Align loop start down to page boundary

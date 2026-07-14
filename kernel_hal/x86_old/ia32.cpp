@@ -88,6 +88,12 @@ UNDOS_HAL_API_DEF void HAL_IO_Delay() noexcept {
 }
 
 UNDOS_HAL_API_DEF [[noreturn]] void HAL_PLATFORM_Panic(const char *message, const char *file, int line) noexcept {
+  // Once the scheduler is running, interrupts are globally enabled, so a
+  // timer/keyboard IRQ could otherwise fire mid-print and preempt into
+  // another thread while we're panicking, corrupting the output and never
+  // coming back to finish the halt below.
+  __asm__ volatile("cli");
+
   early_print_fmt("\r\n--------\r\nPANIC: {} at {}:{}\r\nSystem Halted\r\n", message, file, line);
 
   while (true) {

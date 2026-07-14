@@ -6,11 +6,11 @@
 #include <Kernel.hpp>
 #include <kernel/kobject/KProcessObject.hpp>
 
-UNDOS_KERNEL_API_DEF [[noreturn]] void kernel::process::terminate_current(int32_t code) noexcept {
+[[noreturn]] void kernel::process::terminate_current(int32_t code) noexcept {
   const auto thread = KE_SCHED_GetCurrentThread();
 
   if (thread && thread->owner_process) {
-    const auto process = KObjectPtr<KProcessObject>(static_cast<KProcessObject *>(thread->owner_process));
+    const auto process = KObjectPtr(static_cast<KProcessObject *>(thread->owner_process));
 
     process->exit_code = code;
     process->state = KProcessObject::State::Terminated;

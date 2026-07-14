@@ -9,5 +9,10 @@ qemu-system-i386 -machine isapc -cpu 486 -m 32 \
   -nographic \
   -nodefaults \
   -drive file="${SCRIPT_DIR}/bin/os.iso",media=cdrom,readonly=on \
-  -boot d
+  -boot d &
+
+QEMU_PID=$!
+(sleep 15 && kill $QEMU_PID 2>/dev/null) &
+
+wait $QEMU_PID
 

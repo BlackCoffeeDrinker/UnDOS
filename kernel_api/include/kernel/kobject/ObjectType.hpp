@@ -29,6 +29,7 @@ constexpr auto TYPE_PROCESS = "process"_type;
 constexpr auto TYPE_VOLUME_MOUNT = "volume_mount"_type;
 constexpr auto TYPE_FILE_SYSTEM = "file_system"_type;
 constexpr auto TYPE_FILE = "file"_type;
+constexpr auto TYPE_SUBSYSTEM = "subsystem"_type;
 
 template<ObjectType T>
 struct ObjectTypeOf {};

@@ -45,24 +45,33 @@ bool TestFs_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mo
   return true;
 }
 
-bool TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KFileObject> &file) {
-  file->offset = 0;
+bool TestFs_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, kernel::KVFSNode &out) {
+  out.type = kernel::VFSNodeType::Directory;
+  out.size = 0;
   return true;
 }
 
-uint64_t TestFs_ReadHandle(const kernel::KObjectPtr<kernel::KFileObject> &file, const kstd::span<uint8_t> &buffer) {
+bool TestFs_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kstd::string_view, kernel::KVFSNode &out) {
+  out.type = kernel::VFSNodeType::File;
+  out.size = 0;
+  return true;
+}
+
+bool TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kernel::KFileObject::OpenMode) {
+  return true;
+}
+
+uint64_t TestFs_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &buffer) {
   size_t transferred = 0;
-  const auto status = KE_IO_ReadDevice(file->mountPoint->volume, file->offset, buffer, transferred);
+  const auto status = KE_IO_ReadDevice(mount->volume, offset, buffer, transferred);
   if (status != kernel::IoStatus::Success) return 0;
-  file->offset += transferred;
   return transferred;
 }
 
-uint64_t TestFs_WriteHandle(const kernel::KObjectPtr<kernel::KFileObject> &file, const kstd::span<const uint8_t> &buffer) {
+uint64_t TestFs_WriteHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<const uint8_t> &buffer) {
   size_t transferred = 0;
-  const auto status = KE_IO_WriteDevice(file->mountPoint->volume, file->offset, buffer, transferred);
+  const auto status = KE_IO_WriteDevice(mount->volume, offset, buffer, transferred);
   if (status != kernel::IoStatus::Success) return 0;
-  file->offset += transferred;
   return transferred;
 }
 
@@ -95,6 +104,8 @@ struct TestFsFixture {
     filesystem = KE_VFS_RegisterFilesystemDriver(driver, fsName);
     if (filesystem) {
       filesystem->MountVolume = TestFs_MountVolume;
+      filesystem->GetRootNode = TestFs_GetRootNode;
+      filesystem->Lookup = TestFs_Lookup;
       filesystem->CreateHandle = TestFs_CreateHandle;
       filesystem->ReadHandle = TestFs_ReadHandle;
       filesystem->WriteHandle = TestFs_WriteHandle;

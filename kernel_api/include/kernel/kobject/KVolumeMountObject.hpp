@@ -2,13 +2,15 @@
 
 #include <kernel/__core.hpp>
 #include <kernel/data_buffer.hpp>
-#include <kernel/kobject/KFilesystemObject.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 
 namespace kernel {
+struct KVFSNode;
+struct KFilesystemObject;
+
 struct KVolumeMountObject : KObjectT<KVolumeMountObject, 1, TYPE_VOLUME_MOUNT> {
   KDevicePtr<KDevice> volume;              //< Partition
-  KObjectPtr<KFilesystemObject> filesystem;//< Filesystem driver used
+  KObjectPtr<KFilesystemObject> fileSystem;//< Filesystem driver used
 
   DataBuffer driverExtension;
 
@@ -18,9 +20,6 @@ struct KVolumeMountObject : KObjectT<KVolumeMountObject, 1, TYPE_VOLUME_MOUNT> {
   bool isMounted;
   bool isLocked;
   bool isExclusive;
-  
-  // Populated by the driver at mount
-  cfunc<bool(const KObjectPtr<KVolumeMountObject> &)> verifyVolume;
 };
 
 template<>

@@ -4,6 +4,7 @@
 #include "elf_segment_loader.hpp"
 
 #include <Kernel.hpp>
+#include <array.hpp>
 #include <kernel/vfs.hpp>
 #include <span.hpp>
 #include <utility.hpp>
@@ -56,8 +57,10 @@ bool ProcessRelocationsFromVfs(const kernel::KObjectPtr<kernel::KFileObject> &fi
   for (size_t i = 0; i < shnum; ++i) {
     if (shdrs[i].sh_type != hal::SHT_REL) continue;
 
-    const uint32_t target_section_idx = shdrs[i].sh_info;
-    if (target_section_idx >= shnum || !(shdrs[target_section_idx].sh_flags & hal::SHF_ALLOC)) {
+    if (const uint32_t target_section_idx = shdrs[i].sh_info;
+        target_section_idx >= shnum ||
+        !(shdrs[target_section_idx].sh_flags & hal::SHF_ALLOC)) {
+      // Skip this relocation section.
       continue;
     }
 
@@ -203,7 +206,7 @@ bool kernel::elf::ProcessRelocationsFromBlob(const uint8_t *raw_blob, uintptr_t 
 kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &path, const LoadPolicy &policy) noexcept {
   LoadResult result;
 
-  auto file = KE_VFS_OpenFile(path, kernel::KFileObject::OpenMode::Read);
+  auto file = KE_VFS_OpenFile(path, KFileObject::OpenMode::Read);
   if (!file) {
     early_print_fmt("LoadElfFromVfs: Failed to open file\r\n");
     return result;
@@ -219,31 +222,35 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     early_print_fmt("LoadElfFromVfs: Invalid ELF header\r\n");
     return result;
   }
+  early_print_fmt("LoadElfFromVfs: Valid ELF header\r\n");
+  early_print_fmt("  Entry point: 0x{:x}\r\n", header.e_entry);
+  early_print_fmt("  Program headers: {} at offset 0x{:x}\r\n", header.e_phnum, header.e_phoff);
+  early_print_fmt("  Section headers: {} at offset 0x{:x}\r\n", header.e_shnum, header.e_shoff);
+  early_print_fmt("  Machine type: 0x{:x}\r\n", header.e_machine);
 
   // Step 2: read only the program header table.
-  hal::Elf32_Phdr phdrs[MAX_PROGRAM_HEADERS];
+  kstd::array<hal::Elf32_Phdr, MAX_PROGRAM_HEADERS> phdrs;
   const size_t phdrs_size = static_cast<size_t>(header.e_phnum) * sizeof(hal::Elf32_Phdr);
-  if (!ReadExact(file, header.e_phoff, kstd::span(reinterpret_cast<uint8_t *>(phdrs), phdrs_size))) {
+  if (!ReadExact(file, header.e_phoff, kstd::span(reinterpret_cast<uint8_t *>(phdrs.data()), phdrs_size))) {
     KE_VFS_CloseFile(kstd::move(file));
     early_print_fmt("LoadElfFromVfs: Failed to read program header table\r\n");
     return result;
   }
+  early_print_fmt("  Program header table: {} entries at offset 0x{:x}\r\n", header.e_phnum, header.e_phoff);
 
   // Step 3 (relocatable path only): read the section header table, then
   // let the caller capture any named sections it cares about (e.g. a
   // driver's ".driver_name") before relocations are applied.
-  hal::Elf32_Shdr shdrs[MAX_SECTION_HEADERS];
-  bool have_shdrs = false;
+  kstd::array<hal::Elf32_Shdr, MAX_SECTION_HEADERS> shdrs;
   if (policy.relocatable) {
     if (header.e_shnum > MAX_SECTION_HEADERS || header.e_shentsize != sizeof(hal::Elf32_Shdr) ||
-        !ReadExact(file, header.e_shoff, kstd::span(reinterpret_cast<uint8_t *>(shdrs), static_cast<size_t>(header.e_shnum) * sizeof(hal::Elf32_Shdr)))) {
+        !ReadExact(file, header.e_shoff, kstd::span(reinterpret_cast<uint8_t *>(shdrs.data()), static_cast<size_t>(header.e_shnum) * sizeof(hal::Elf32_Shdr)))) {
       KE_VFS_CloseFile(kstd::move(file));
       early_print_fmt("LoadElfFromVfs: Failed to read section header table\r\n");
       return result;
     }
-    have_shdrs = true;
 
-    if (!CaptureSections(file, header, shdrs, policy)) {
+    if (!CaptureSections(file, header, shdrs.data(), policy)) {
       KE_VFS_CloseFile(kstd::move(file));
       early_print_fmt("LoadElfFromVfs: Failed to capture sections\r\n");
       return result;
@@ -312,7 +319,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
       }
     }
 
-    kernel::vmm::ProtectFlags perms;
+    vmm::ProtectFlags perms;
     if (policy.target_as == nullptr) {
       // Mirrors Driver_Load_From_Memory's always-writable mapping (needed
       // so relocations can be patched in place after mapping).
@@ -325,7 +332,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     if (ph.p_flags & 0x1) perms = perms | vmm::ProtectFlags::EXECUTE;
 
     const uintptr_t segment_virt_start = ph.p_vaddr + load_delta;
-    if (!kernel::elf::MapAndCopySegment(segment_virt_start, segment_data, ph.p_filesz, ph.p_memsz, perms)) {
+    if (!MapAndCopySegment(segment_virt_start, segment_data, ph.p_filesz, ph.p_memsz, perms)) {
       early_print_fmt("LoadElfFromVfs: Failed to map and copy segment\r\n");
       ok = false;
     }
@@ -333,8 +340,8 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     if (segment_data) KE_Free(segment_data);
   }
 
-  if (ok && policy.relocatable && have_shdrs) {
-    ok = ProcessRelocationsFromVfs(file, shdrs, header.e_shnum, load_delta, policy.resolve_symbol);
+  if (ok && policy.relocatable) {
+    ok = ProcessRelocationsFromVfs(file, shdrs.data(), header.e_shnum, load_delta, policy.resolve_symbol);
   }
 
   if (ok) {

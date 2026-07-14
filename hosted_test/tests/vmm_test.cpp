@@ -70,8 +70,11 @@ TEST_CASE("KE_Malloc picks the smallest cache that fits and honors many concurre
   EnsureVmmInitialized();
 
   // g_cache_sizes in vmm.cpp tops out at 2048; anything larger than the
-  // largest cache should fail rather than silently corrupt memory.
-  REQUIRE(KE_Malloc(1u << 20) == nullptr);
+  // largest cache falls back to a dedicated, page-backed large allocation
+  // rather than failing outright.
+  void *large = KE_Malloc(1u << 20);
+  REQUIRE(large != nullptr);
+  KE_Free(large);
 
   kstd::array<void *, 64> pointers{};
   for (size_t i = 0; i < pointers.size(); i++) {

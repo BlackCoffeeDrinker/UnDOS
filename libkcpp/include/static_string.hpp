@@ -3,6 +3,9 @@
 
 #include <__config.hpp>
 #include <__algo/min.hpp>
+#include <__type_traits/enable_if.hpp>
+#include <__type_traits/is_pointer.hpp>
+#include <__type_traits/remove_reference.hpp>
 #include <char_traits.hpp>
 #include <string_view.hpp>
 
@@ -244,40 +247,108 @@ struct basic_static_string {
     return !(lhs < rhs);
   }
 
-  friend constexpr bool operator==(const basic_static_string &lhs, const_pointer rhs) noexcept {
-    return static_cast<basic_string_view<CharT, Traits>>(lhs) == rhs;
+  // Pointer overloads for real, dynamically-sized C strings (not fixed-size arrays). Deduced via
+  // a forwarding reference on the un-decayed argument type and SFINAE-constrained to pointer
+  // types only (see the matching comment in string_view.hpp for the full rationale): this keeps
+  // them from ever competing with the fixed-size array overloads below for a `char[M]` argument.
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator==(const basic_static_string &lhs, T &&rhs) noexcept {
+    return static_cast<basic_string_view<CharT, Traits>>(lhs) == static_cast<T &&>(rhs);
   }
-  friend constexpr bool operator==(const_pointer lhs, const basic_static_string &rhs) noexcept {
-    return lhs == static_cast<basic_string_view<CharT, Traits>>(rhs);
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator==(T &&lhs, const basic_static_string &rhs) noexcept {
+    return static_cast<T &&>(lhs) == static_cast<basic_string_view<CharT, Traits>>(rhs);
   }
-  friend constexpr bool operator!=(const basic_static_string &lhs, const_pointer rhs) noexcept {
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator!=(const basic_static_string &lhs, T &&rhs) noexcept {
+    return !(lhs == static_cast<T &&>(rhs));
+  }
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator!=(T &&lhs, const basic_static_string &rhs) noexcept {
+    return !(static_cast<T &&>(lhs) == rhs);
+  }
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator<(const basic_static_string &lhs, T &&rhs) noexcept {
+    return static_cast<basic_string_view<CharT, Traits>>(lhs) < static_cast<T &&>(rhs);
+  }
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator<(T &&lhs, const basic_static_string &rhs) noexcept {
+    return static_cast<T &&>(lhs) < static_cast<basic_string_view<CharT, Traits>>(rhs);
+  }
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator>(const basic_static_string &lhs, T &&rhs) noexcept {
+    return static_cast<T &&>(rhs) < lhs;
+  }
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator>(T &&lhs, const basic_static_string &rhs) noexcept {
+    return rhs < static_cast<T &&>(lhs);
+  }
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator<=(const basic_static_string &lhs, T &&rhs) noexcept {
+    return !(static_cast<T &&>(rhs) < lhs);
+  }
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator<=(T &&lhs, const basic_static_string &rhs) noexcept {
+    return !(rhs < static_cast<T &&>(lhs));
+  }
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator>=(const basic_static_string &lhs, T &&rhs) noexcept {
+    return !(lhs < static_cast<T &&>(rhs));
+  }
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  friend constexpr bool operator>=(T &&lhs, const basic_static_string &rhs) noexcept {
+    return !(static_cast<T &&>(lhs) < rhs);
+  }
+
+  // Fixed-size array overloads: bind exactly (no array-to-pointer decay), so comparing against
+  // a `char[M]` (e.g. a raw on-disk field) correctly uses the array's bound instead of a
+  // strlen-style scan that could read past a non-NUL-terminated array.
+  template<size_t M>
+  friend constexpr bool operator==(const basic_static_string &lhs, const CharT (&rhs)[M]) noexcept {
+    return static_cast<basic_string_view<CharT, Traits>>(lhs) == basic_string_view<CharT, Traits>(rhs);
+  }
+  template<size_t M>
+  friend constexpr bool operator==(const CharT (&lhs)[M], const basic_static_string &rhs) noexcept {
+    return basic_string_view<CharT, Traits>(lhs) == static_cast<basic_string_view<CharT, Traits>>(rhs);
+  }
+  template<size_t M>
+  friend constexpr bool operator!=(const basic_static_string &lhs, const CharT (&rhs)[M]) noexcept {
     return !(lhs == rhs);
   }
-  friend constexpr bool operator!=(const_pointer lhs, const basic_static_string &rhs) noexcept {
+  template<size_t M>
+  friend constexpr bool operator!=(const CharT (&lhs)[M], const basic_static_string &rhs) noexcept {
     return !(lhs == rhs);
   }
-  friend constexpr bool operator<(const basic_static_string &lhs, const_pointer rhs) noexcept {
-    return static_cast<basic_string_view<CharT, Traits>>(lhs) < rhs;
+  template<size_t M>
+  friend constexpr bool operator<(const basic_static_string &lhs, const CharT (&rhs)[M]) noexcept {
+    return static_cast<basic_string_view<CharT, Traits>>(lhs) < basic_string_view<CharT, Traits>(rhs);
   }
-  friend constexpr bool operator<(const_pointer lhs, const basic_static_string &rhs) noexcept {
-    return lhs < static_cast<basic_string_view<CharT, Traits>>(rhs);
+  template<size_t M>
+  friend constexpr bool operator<(const CharT (&lhs)[M], const basic_static_string &rhs) noexcept {
+    return basic_string_view<CharT, Traits>(lhs) < static_cast<basic_string_view<CharT, Traits>>(rhs);
   }
-  friend constexpr bool operator>(const basic_static_string &lhs, const_pointer rhs) noexcept {
+  template<size_t M>
+  friend constexpr bool operator>(const basic_static_string &lhs, const CharT (&rhs)[M]) noexcept {
     return rhs < lhs;
   }
-  friend constexpr bool operator>(const_pointer lhs, const basic_static_string &rhs) noexcept {
+  template<size_t M>
+  friend constexpr bool operator>(const CharT (&lhs)[M], const basic_static_string &rhs) noexcept {
     return rhs < lhs;
   }
-  friend constexpr bool operator<=(const basic_static_string &lhs, const_pointer rhs) noexcept {
+  template<size_t M>
+  friend constexpr bool operator<=(const basic_static_string &lhs, const CharT (&rhs)[M]) noexcept {
     return !(rhs < lhs);
   }
-  friend constexpr bool operator<=(const_pointer lhs, const basic_static_string &rhs) noexcept {
+  template<size_t M>
+  friend constexpr bool operator<=(const CharT (&lhs)[M], const basic_static_string &rhs) noexcept {
     return !(rhs < lhs);
   }
-  friend constexpr bool operator>=(const basic_static_string &lhs, const_pointer rhs) noexcept {
+  template<size_t M>
+  friend constexpr bool operator>=(const basic_static_string &lhs, const CharT (&rhs)[M]) noexcept {
     return !(lhs < rhs);
   }
-  friend constexpr bool operator>=(const_pointer lhs, const basic_static_string &rhs) noexcept {
+  template<size_t M>
+  friend constexpr bool operator>=(const CharT (&lhs)[M], const basic_static_string &rhs) noexcept {
     return !(lhs < rhs);
   }
 

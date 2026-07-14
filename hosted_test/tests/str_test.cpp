@@ -3,6 +3,8 @@
 #include "nomm_string.hpp"
 #include "string_view.hpp"
 
+#include <cstdint>
+
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -112,6 +114,63 @@ TEST_CASE("String rfind") {
     REQUIRE(s.rfind("World", 10) == 6);
     REQUIRE(s.rfind('z') == kstd::string_view::npos);
     REQUIRE(s.rfind("Hello", 0) == 0);
+  }
+}
+
+TEST_CASE("string_view constructed from char[] uses the array bound, not strlen") {
+  // A fixed-size, space-padded, non-NUL-terminated field (e.g. a raw on-disk record), followed
+  // by a non-zero, non-NUL byte. Implicitly converting it via a strlen()-style constructor
+  // would read past the array; the array-bound constructor must stop at N.
+  struct RawField {
+    char name[11];
+    uint8_t next;
+  };
+  RawField raw{{'S', 'Y', 'S', 'T', 'E', 'M', ' ', ' ', ' ', ' ', ' '}, 0x20};
+
+  kstd::string_view sv = raw.name;// should bind the array overload, length == 11
+  REQUIRE(sv.size() == 11);
+  REQUIRE(sv == "SYSTEM     ");
+
+  // A NUL-terminated array truncates at the terminator, matching normal string-literal semantics.
+  char terminated[16] = "Hi";
+  kstd::string_view sv2 = terminated;
+  REQUIRE(sv2.size() == 2);
+  REQUIRE(sv2 == "Hi");
+}
+
+TEST_CASE("Comparisons against char[] use the array bound across all string types") {
+  struct RawField {
+    char name[11];
+    uint8_t next;
+  };
+  RawField raw{{'S', 'Y', 'S', 'T', 'E', 'M', ' ', ' ', ' ', ' ', ' '}, 0x20};
+
+  SECTION("string_view") {
+    kstd::string_view sv("SYSTEM     ", 11);
+    REQUIRE(sv == raw.name);
+    REQUIRE(raw.name == sv);
+    REQUIRE_FALSE(sv != raw.name);
+    REQUIRE_FALSE(sv < raw.name);
+    REQUIRE_FALSE(raw.name < sv);
+    REQUIRE(sv <= raw.name);
+    REQUIRE(sv >= raw.name);
+  }
+
+  SECTION("static_string") {
+    kstd::static_string<12> s;
+    s.append(kstd::string_view("SYSTEM     ", 11));
+    REQUIRE(s == raw.name);
+    REQUIRE(raw.name == s);
+    REQUIRE_FALSE(s != raw.name);
+  }
+
+  SECTION("nomm_string") {
+    char buf[32] = {0};
+    kstd::nomm_string s(buf);
+    s.append(kstd::string_view("SYSTEM     ", 11));
+    REQUIRE(s == raw.name);
+    REQUIRE(raw.name == s);
+    REQUIRE_FALSE(s != raw.name);
   }
 }
 

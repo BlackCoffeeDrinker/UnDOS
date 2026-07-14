@@ -29,8 +29,11 @@ int32_t sys_write(uint32_t buf, uint32_t len) noexcept {
 }
 }// namespace
 
-int32_t kernel::syscall::dispatch(uint32_t number, uint32_t arg0, uint32_t arg1, uint32_t arg2) noexcept {
+
+UNDOS_KERNEL_API_DEF int32_t KE_SYSCALL_Dispatch(uint32_t number, uint32_t arg0, uint32_t arg1, uint32_t arg2) noexcept {
   (void) arg2;
+  
+  //early_print_fmt("Syscall: 0x{:x}, arg0: 0x{:x}, arg1: 0x{:x}, arg2: 0x{:x}\r\n", number, arg0, arg1, arg2);
 
   switch (number) {
     case SYS_EXIT:
@@ -40,8 +43,4 @@ int32_t kernel::syscall::dispatch(uint32_t number, uint32_t arg0, uint32_t arg1,
     default:
       return -1;
   }
-}
-
-UNDOS_KERNEL_API_DEF int32_t KE_SYSCALL_Dispatch(uint32_t number, uint32_t arg0, uint32_t arg1, uint32_t arg2) noexcept {
-  return kernel::syscall::dispatch(number, arg0, arg1, arg2);
 }
