@@ -6,6 +6,7 @@
 #include <kernel/kobject/ObjectType.hpp>
 
 namespace kernel {
+struct KProcessObject;
 
 // Thread Control Block. Platform-agnostic: the only CPU state kept here is the
 // saved kernel stack pointer (kernel_stack_top). The HAL pushes/pops the full
@@ -29,7 +30,7 @@ struct KThreadObject : KObjectT<KThreadObject, 1, TYPE_THREAD> {
   // Non-owning back-pointer to the owning KProcessObject (nullptr for kernel
   // threads). Kept as a raw KObject* to avoid a KThreadObject <-> KProcessObject
   // header cycle; cast back with KObjectPtr<KProcessObject> where needed.
-  KObject *owner_process{nullptr};
+  KProcessObject *owner_process{nullptr};
 
   KThreadObject *rq_next{nullptr};     // intrusive ready-queue links
   KThreadObject *rq_prev{nullptr};

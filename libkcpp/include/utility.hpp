@@ -1,5 +1,6 @@
 
 #pragma once
+
 #include <__config.hpp>
 
 #include <__utility/declval.hpp>
@@ -14,3 +15,4 @@
 #include <__utility/piecewise_construct.hpp>
 #include <__utility/swap.hpp>
 #include <__utility/to_underlying.hpp>
+#include <__utility/byte.hpp>

@@ -10,6 +10,9 @@
 #include <new>
 #endif
 
+constexpr uint32_t __SYS_V1_MAGIC = 0xFEEDBEEF;
+constexpr uint32_t __SYS_V2_MAGIC = 0xFEEDDEAD;
+
 #include <Kernel.hpp>
 
 template<typename T, typename... Args>

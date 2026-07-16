@@ -163,6 +163,11 @@ The GUI is heavily inspired by GDI and the classic Windows 3.1 / Workgroups envi
   position pointers starting exactly at `boot_info->kernel_virtual_end`. Do not use hardcoded markers.
 * **Maintain C-Linkage on Exports:** Any function annotated with API visibility must use `extern "C"` to prevent C++ name-mangling, as the Stage 1.5 dynamic symbol map
   matches string identifiers exactly.
+* **Naming Convention:** All exported API functions must follow the pattern: `<Module UpperCase: KE or HAL>_<System UpperCase>_<Name CamelCase>`.
+  - Examples: `KE_VMM_AllocateRegion`, `HAL_IO_Out8`, `KE_OB_InsertObject`.
+  - These functions **must not** be wrapped in C++ namespaces.
+* **References Over Pointers:** Prefer C++ references over raw pointers. Only use pointers if `nullptr` is a valid and expected state for the parameter or return value.
+* **Smart Pointer Efficiency:** Pass `KObjectPtr<T>` as `const &` to avoid atomic refcount churn when possible.
 
 # Next Todos
 

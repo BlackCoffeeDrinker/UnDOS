@@ -97,3 +97,30 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::vmm::AddressSpace &,
     KE_VMM_GetKernelAddressSpace);
+
+/**
+ * @ingroup VMM
+ * @brief Method KE_VMM_MapBorrowed
+ *
+ * Maps `size` bytes starting at `addr` (as seen from `as`) into the kernel's
+ * address space, so kernel code can safely read/write memory that lives in
+ * another (typically user-mode) address space. Returns the kernel-mapped
+ * pointer, or nullptr on failure. Callers must release the mapping with
+ * KE_VMM_UnmapBorrowed once done.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    void *,
+    KE_VMM_MapBorrowed,
+    void *addr, size_t size, kernel::vmm::AddressSpace &as);
+
+/**
+ * @ingroup VMM
+ * @brief Method KE_VMM_UnmapBorrowed
+ *
+ * Reverses KE_VMM_MapBorrowed: unmaps the kernel-side pages backing `addr`
+ * and frees the kernel virtual region that was reserved for the borrow.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    void,
+    KE_VMM_UnmapBorrowed,
+    void *addr, size_t size, kernel::vmm::AddressSpace &as);

@@ -1,0 +1,98 @@
+/** Flags controlling how a new process is created. */
+enum ProcessFlags {
+    /** No special behavior. */
+    None        = 0,
+    /** The child process is detached from its parent (no notification on exit). */
+    Detached    = 1,
+    /** The child process inherits the parent's environment variables. */
+    InheritEnv  = 2,
+};
+
+/**
+ * Creates a new process from the executable at `path`.
+ */
+syscall V1 PROC CreateProcess [200] {
+    /** Path to the executable to load. */
+    path: IN string;
+    /** Command-line argument string passed to the new process. */
+    argument: IN string;
+    /** Combination of ProcessFlags controlling the new process. */
+    flags: IN c<uint32_t>;
+};
+
+/** Retrieves information about a running or exited process. */
+syscall V1 PROC GetInfo [201] {
+    /** Process ID to query. */
+    pid: IN c<uint32_t>;
+    /** Command line the process was started with (query-length-then-fill). */
+    commandLine: OUT string;
+    /** Exit code of the process, if it has exited. */
+    exitCode: OUT c<uint32_t>;
+};
+
+/** Terminates the current process with the given return code. */
+syscall V1 PROC Exit [202] {
+    /** Return code to report to the parent process. */
+    exitCode: IN c<uint32_t>;
+};
+
+/** Memory protection bit flags, mirrors kernel::vmm::ProtectFlags. */
+enum MemoryProtectFlags {
+    /** No access. */
+    None       = 0,
+    /** Page is readable. */
+    Read       = 1,
+    /** Page is writable. */
+    Write      = 2,
+    /** Page is executable. */
+    Execute    = 4,
+};
+
+/** Allocates `size` bytes of pages with the given protection. */
+syscall V1 MEM AllocatePages [210] {
+    /** Number of bytes to allocate (rounded up to a page boundary). */
+    size: IN c<uint32_t>;
+    /** Protection to apply to the newly allocated pages. */
+    flags: IN enum<MemoryProtectFlags>;
+    /** Base address of the allocated region. */
+    address: OUT c<uint32_t>;
+};
+
+/** Frees a previously allocated page range. */
+syscall V1 MEM FreePages [211] {
+    /** Base address of the region to free. */
+    address: IN c<uint32_t>;
+    /** Size in bytes of the region to free. */
+    size: IN c<uint32_t>;
+};
+
+/** Changes the protection of an existing page range (e.g. mark executable). */
+syscall V1 MEM Protect [212] {
+    /** Base address of the region to reprotect. */
+    address: IN c<uint32_t>;
+    /** Size in bytes of the region to reprotect. */
+    size: IN c<uint32_t>;
+    /** New protection to apply. */
+    flags: IN enum<MemoryProtectFlags>;
+};
+
+// Large, variable-length buffers (file I/O, draw command lists, IPC
+// messages, ...) use buffer<T>: the pointer+length is validated once and
+// then mapped directly, avoiding a copy and the RAM pressure it would cause.
+
+/** Reads data from an open file descriptor into `data`. */
+syscall V1 FS Read [222] {
+    /** Open file descriptor to read from. */
+    fileDescriptor: IN c<uint32_t>;
+    /** Buffer that receives the data read from the file. */
+    data: OUT buffer<c<uint8_t>>;
+};
+
+/** Writes data from `data` to an open file descriptor. */
+syscall V1 FS Write [223] {
+    /** Open file descriptor to write to. */
+    fileDescriptor: IN c<uint32_t>;
+    /** Buffer containing the data to write to the file. */
+    data: IN buffer<c<uint8_t>>;
+};
+

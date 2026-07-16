@@ -237,6 +237,96 @@ UNDOS_KERNEL_API_DEF bool KE_VMM_MapPhysical(kernel::vmm::AddressSpace &as, kern
   return HAL_VMM_MapPage(virt, phys, flags);
 }
 
+UNDOS_KERNEL_API_DEF void *KE_VMM_MapBorrowed(void *addr, size_t size, kernel::vmm::AddressSpace &as) noexcept {
+  if (!addr || size == 0) {
+    return nullptr;
+  }
+
+  const kernel::VirtualAddress user_addr = kernel::VirtualAddress::from_ptr(addr);
+  const kernel::VirtualAddress page_start = user_addr.align_down(g_page_size);
+  const kernel::VirtualAddress page_end = (user_addr + size).align_up(g_page_size);
+  const size_t page_count = (page_end.value - page_start.value) / g_page_size;
+  const size_t offset = user_addr.value - page_start.value;
+
+  auto *phys_pages = static_cast<kernel::PhysicalAddress *>(KE_Malloc(page_count * sizeof(kernel::PhysicalAddress)));
+  if (!phys_pages) {
+    return nullptr;
+  }
+
+  // Walk the source address space's page tables while it's active to
+  // capture the physical frames backing the borrowed range.
+  const kernel::PhysicalAddress caller_root = HAL_VMM_GetCurrentTranslationRoot();
+  const bool switch_to_source = as.translation_root && as.translation_root != caller_root;
+  if (switch_to_source) {
+    HAL_CPU_DisableInterrupts();
+    HAL_VMM_SwitchAddressSpace(as.translation_root);
+  }
+
+  bool ok = true;
+  for (size_t i = 0; i < page_count; ++i) {
+    const kernel::PhysicalAddress phys = HAL_VMM_GetPhysicalAddress(page_start + i * g_page_size);
+    if (!phys) {
+      ok = false;
+      break;
+    }
+    phys_pages[i] = phys;
+  }
+
+  if (switch_to_source) {
+    HAL_VMM_SwitchAddressSpace(caller_root);
+    HAL_CPU_EnableInterrupts();
+  }
+
+  if (!ok) {
+    KE_Free(phys_pages);
+    return nullptr;
+  }
+
+  kernel::vmm::AddressSpace &kernel_as = KE_VMM_GetKernelAddressSpace();
+  void *kernel_region = KE_VMM_AllocateRegion(kernel_as, page_count * g_page_size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+  if (!kernel_region) {
+    KE_Free(phys_pages);
+    return nullptr;
+  }
+
+  const kernel::VirtualAddress kernel_start = kernel::VirtualAddress::from_ptr(kernel_region);
+  for (size_t i = 0; i < page_count; ++i) {
+    if (!HAL_VMM_MapPage(kernel_start + i * g_page_size, phys_pages[i], kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE)) {
+      ok = false;
+      break;
+    }
+    HAL_VMM_Flush(kernel_start + i * g_page_size);
+  }
+
+  KE_Free(phys_pages);
+
+  if (!ok) {
+    KE_VMM_FreeRegion(kernel_as, kernel_region);
+    return nullptr;
+  }
+
+  return (kernel_start + offset).as_ptr();
+}
+
+UNDOS_KERNEL_API_DEF void KE_VMM_UnmapBorrowed(void *addr, size_t size, kernel::vmm::AddressSpace &as) noexcept {
+  (void) as;// The borrow is only ever mapped into the kernel address space.
+  if (!addr) {
+    return;
+  }
+
+  const kernel::VirtualAddress mapped_addr = kernel::VirtualAddress::from_ptr(addr);
+  const kernel::VirtualAddress page_start = mapped_addr.align_down(g_page_size);
+  const kernel::VirtualAddress page_end = (mapped_addr + size).align_up(g_page_size);
+  const size_t page_count = (page_end.value - page_start.value) / g_page_size;
+
+  for (size_t i = 0; i < page_count; ++i) {
+    HAL_VMM_UnmapPage(page_start + i * g_page_size);
+    HAL_VMM_Flush(page_start + i * g_page_size);
+  }
+
+  KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), page_start.as_ptr());
+}
+
 
 // On a hosted build (e.g. the host test binary), the C++ runtime/standard
 // library already provides its own global operator new/delete backed by the

@@ -90,6 +90,16 @@ if (NOT TESTING_ONLY)
 else ()
 endif ()
 
+#######################################################################################################################
+## Generate Syscalls
+#######################################################################################################################
+find_program(PYTHON3_EXECUTABLE NAMES python3 REQUIRED)
+
+add_custom_target(undos-syscalls-gen
+        COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/create-syscalls.py tools/syscalls.txt kernel_userland_shared/include/undos/syscalls userland/ kernel/src/syscalls
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating syscalls from tools/syscalls.txt"
+)
 
 #######################################################################################################################
 ## Load up third parties
@@ -101,13 +111,14 @@ add_subdirectory(third_party)
 #######################################################################################################################
 add_subdirectory(libkcpp)
 add_subdirectory(kernel_api)
+add_subdirectory(kernel_userland_shared)
+
 if (NOT TESTING_ONLY)
     add_subdirectory(kernel_hal)
     add_subdirectory(kernel)
     add_subdirectory(drivers)
 
     add_subdirectory(userland)
-
 
     #######################################################################################################################
     ## Tools that generate the initial image 
@@ -126,12 +137,11 @@ if (NOT TESTING_ONLY)
             DEPENDS kernel hal_x86_old boot_x86_old bus_isa disk_ata volmgr fs_fat
             $<TARGET_FILE:kernel> $<TARGET_FILE:hal_x86_old> $<TARGET_FILE:boot_x86_old>
             $<TARGET_FILE:bus_isa> $<TARGET_FILE:disk_ata> $<TARGET_FILE:volmgr> $<TARGET_FILE:fs_fat>
-            
+
             BYPRODUCTS ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/grub ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/undos-boot
     )
 
     add_custom_target(make-initial-disk
-            COMMAND apk add py3-pip
             COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/bin
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:native_elf_loader> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/ELoader.elf
             COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py ${PROJECT_SOURCE_DIR}/bin/fat32.img ${PROJECT_SOURCE_DIR}/bin/filesystem

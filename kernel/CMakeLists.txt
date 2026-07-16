@@ -21,8 +21,7 @@ add_executable(kernel
         src/elf_segment_loader.cpp
         src/process.hpp
         src/process.cpp
-        src/syscall.hpp
-        src/syscall.cpp
+        src/syscalls/handler_syscall.cpp
         src/pnp_manager.cpp
         src/dma_manager.cpp
         src/resource_manager.cpp
@@ -59,7 +58,7 @@ add_executable(kernel
 
 target_compile_definitions(kernel PRIVATE UNDOS_KERNEL_COMPILE)
 target_link_libraries(kernel PRIVATE undos_warnings undos_options)
-target_link_libraries(kernel PUBLIC libkcpp KernelHeaders)
+target_link_libraries(kernel PUBLIC libkcpp KernelHeaders KernelUserlandShared)
 target_include_directories(kernel PRIVATE src)
 
 target_compile_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)

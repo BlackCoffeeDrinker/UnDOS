@@ -32,7 +32,7 @@ def write_mbr(f):
     mbr[511] = 0xAA
 
     f.seek(0)
-    f.write(mbr)
+    f.__write(mbr)
 
 
 class MinimalFAT16:
@@ -224,7 +224,7 @@ def main():
         f.truncate(IMAGE_SIZE)
         write_mbr(f)
         f.seek(PARTITION_LBA * SECTOR_SIZE)
-        f.write(fat_fs.finalize())
+        f.__write(fat_fs.finalize())
 
     print("Done.")
 

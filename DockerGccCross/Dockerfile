@@ -85,7 +85,7 @@ FROM alpine
 #############################
 WORKDIR /code
 
-RUN apk --no-cache add curl build-base make nasm ninja-build cmake grub xorriso && \
+RUN apk --no-cache add curl build-base make nasm ninja-build cmake grub xorriso python3 py3-pip && \
     rm -rf /var/cache/apk/* 
 
 ENV PATH="/usr/local/cross/bin:/usr/local/bin:${PATH}"

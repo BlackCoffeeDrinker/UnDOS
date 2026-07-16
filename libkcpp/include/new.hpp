@@ -2,6 +2,7 @@
 
 #include <__config.hpp>
 #include <__new/new_handler.hpp>
+#include <__new/launder.hpp>
 
 #if __STDC_HOSTED__ == 0
 // Placement new/delete
