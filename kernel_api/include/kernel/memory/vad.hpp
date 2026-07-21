@@ -1,8 +1,8 @@
 #pragma once
 
 #include <kernel/__core.hpp>
-#include <kernel/memory/address.hpp>
 #include <kernel/adt/avl_tree.hpp>
+#include <kernel/memory/address.hpp>
 #include <kernel/memory/protect.hpp>
 
 #include <stdint.h>
@@ -28,6 +28,7 @@ struct VirtualAddressDescriptor {
   VirtualAddress end;
   ProtectFlags flags;
   BackingType backing = BackingType::ANONYMOUS;
+  uint16_t lock_count = 0;
 
   adt::AvlNode<VirtualAddressDescriptor> node;
 

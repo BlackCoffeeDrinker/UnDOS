@@ -69,7 +69,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     uint64_t,
     KE_VFS_ReadFile,
-    kernel::KObjectPtr<kernel::KFileObject> file, kstd::span<uint8_t> &buffer);
+    kernel::KObjectPtr<kernel::KFileObject> file, const kstd::span<uint8_t> &readInto);
 
 /**
  * @ingroup VFS
@@ -79,7 +79,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     uint64_t,
     KE_VFS_WriteFile,
-    kernel::KObjectPtr<kernel::KFileObject> file, const kstd::span<uint8_t> &buffer);
+    kernel::KObjectPtr<kernel::KFileObject> file, const kstd::span<const uint8_t> &buffer);
 
 /**
  * @ingroup VFS

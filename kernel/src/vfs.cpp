@@ -267,18 +267,18 @@ UNDOS_KERNEL_API_DEF void KE_VFS_CloseFile(kernel::KObjectPtr<kernel::KFileObjec
   KE_OB_RemoveObject(KE_OB_GetFileRoot(), file);
 }
 
-UNDOS_KERNEL_API_DEF uint64_t KE_VFS_ReadFile(kernel::KObjectPtr<kernel::KFileObject> file, kstd::span<uint8_t> &buffer) noexcept {
+UNDOS_KERNEL_API_DEF uint64_t KE_VFS_ReadFile(kernel::KObjectPtr<kernel::KFileObject> file, const kstd::span<uint8_t> &readInto) noexcept {
   if (!file) [[unlikely]] { return 0; }
   if (!file->FileSystem()) [[unlikely]] { return 0; }
   if (!file->FileSystem()->ReadHandle) [[unlikely]] { return 0; }
 
-  const auto read = file->FileSystem()->ReadHandle(file->mountPoint, *file->vfsNode, file->offset, buffer);
+  const auto read = file->FileSystem()->ReadHandle(file->mountPoint, *file->vfsNode, file->offset, readInto);
   file->offset += read;
 
   return read;
 }
 
-UNDOS_KERNEL_API_DEF uint64_t KE_VFS_WriteFile(kernel::KObjectPtr<kernel::KFileObject> file, const kstd::span<uint8_t> &buffer) noexcept {
+UNDOS_KERNEL_API_DEF uint64_t KE_VFS_WriteFile(kernel::KObjectPtr<kernel::KFileObject> file, const kstd::span<const uint8_t> &buffer) noexcept {
   if (!file) [[unlikely]] { return 0; }
   if (!file->FileSystem()) [[unlikely]] { return 0; }
   if (!file->FileSystem()->WriteHandle) [[unlikely]] { return 0; }

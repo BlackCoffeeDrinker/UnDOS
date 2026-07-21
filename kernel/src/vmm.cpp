@@ -219,11 +219,17 @@ UNDOS_KERNEL_API_DEF void KE_VMM_FreeRegion(kernel::vmm::AddressSpace &as, void 
 }
 
 UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept {
-  return kernel::vmm::allocate_memory(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+  // Demand-paged: reserve the VAD (defaulting to BackingType::ANONYMOUS)
+  // without eagerly allocating/mapping any physical frames. The pages are
+  // populated lazily by KE_VMM_HandlePagefault on first touch.
+  return KE_VMM_AllocateRegion(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE | kernel::vmm::ProtectFlags::USER);
 }
 
 UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateUserProcess(kernel::vmm::AddressSpace &as, size_t size) noexcept {
-  return kernel::vmm::allocate_memory(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE);
+  // Demand-paged: reserve the VAD (defaulting to BackingType::ANONYMOUS)
+  // without eagerly allocating/mapping any physical frames. The pages are
+  // populated lazily by KE_VMM_HandlePagefault on first touch.
+  return KE_VMM_AllocateRegion(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE | kernel::vmm::ProtectFlags::USER);
 }
 
 UNDOS_KERNEL_API_DEF kernel::vmm::AddressSpace &KE_VMM_GetKernelAddressSpace() noexcept {
