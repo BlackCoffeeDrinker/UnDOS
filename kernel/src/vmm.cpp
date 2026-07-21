@@ -32,8 +32,8 @@ void init() noexcept {
   g_kernel_address_space.asid = 0;
   g_kernel_address_space.current_base = nullptr;
   g_kernel_address_space.limit = nullptr;
-  g_kernel_address_space.current_base = (heap_start + 0x10000000).align_up(0x1000000);
-  g_kernel_address_space.limit = 0xFF000000;
+  g_kernel_address_space.current_base = heap_start;
+  g_kernel_address_space.limit = VirtualAddress(VirtualAddress::Invalid);
 
   memory::set_heap_start(heap_start);
   for (size_t i = 0; i < g_malloc_caches.size(); ++i) {
@@ -94,7 +94,7 @@ void destroy_user_address_space(AddressSpace &as) noexcept {
   as.translation_root = PhysicalAddress(0);
 }
 
-void *allocate_user_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept {
+void *allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept {
   const size_t count = (size + g_page_size - 1) / g_page_size;
   const PhysicalAddress phys = HAL_PMM_AllocateFrames(count);
   if (!phys) return nullptr;
@@ -122,8 +122,9 @@ void *allocate_user_memory(AddressSpace &as, size_t size, ProtectFlags flags) no
 
   bool ok = true;
   const VirtualAddress v_addr = VirtualAddress::from_ptr(virt);
+  const ProtectFlags map_flags = (&as != &g_kernel_address_space) ? (flags | ProtectFlags::USER) : flags;
   for (size_t i = 0; i < count; ++i) {
-    if (!HAL_VMM_MapPage(v_addr + i * g_page_size, phys + i * g_page_size, flags | ProtectFlags::USER)) {
+    if (!HAL_VMM_MapPage(v_addr + i * g_page_size, phys + i * g_page_size, map_flags)) {
       ok = false;
       break;
     }
@@ -188,9 +189,7 @@ UNDOS_KERNEL_API_DEF void KE_Free(void *ptr) noexcept {
 
 UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateRegion(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
   if (as.current_base == 0) {
-    // Default to user heap range if not initialized
-    as.current_base = 0x10000000;
-    as.limit = 0xC0000000;
+    HAL_PLATFORM_Panic("VMM: Address space not initialized", __FILE__, __LINE__);
   }
 
   const kernel::VirtualAddress addr = as.current_base;
@@ -213,19 +212,18 @@ UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateRegion(kernel::vmm::AddressSpace &as, 
 }
 
 UNDOS_KERNEL_API_DEF void KE_VMM_FreeRegion(kernel::vmm::AddressSpace &as, void *addr) noexcept {
-  auto *vad = as.vads.find(kernel::VirtualAddress::from_ptr(addr));
-  if (vad) {
+  if (auto *vad = as.vads.find(kernel::VirtualAddress::from_ptr(addr))) {
     as.vads.remove(vad);
     KE_Free(vad);
   }
 }
 
 UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept {
-  return kernel::vmm::allocate_user_memory(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+  return kernel::vmm::allocate_memory(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
 }
 
 UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateUserProcess(kernel::vmm::AddressSpace &as, size_t size) noexcept {
-  return kernel::vmm::allocate_user_memory(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE);
+  return kernel::vmm::allocate_memory(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE);
 }
 
 UNDOS_KERNEL_API_DEF kernel::vmm::AddressSpace &KE_VMM_GetKernelAddressSpace() noexcept {
@@ -327,6 +325,80 @@ UNDOS_KERNEL_API_DEF void KE_VMM_UnmapBorrowed(void *addr, size_t size, kernel::
   KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), page_start.as_ptr());
 }
 
+UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &info) noexcept {
+  // Generic, architecture-agnostic page-fault dispatcher. The HAL has
+  // already decoded the fault registers (faulting address, error code,
+  // privilege level, faulting IP) into `info`; this is the single place
+  // where all platforms funnel into for demand paging / copy-on-write /
+  // pagefile handling.
+  early_print_fmt(
+      "Page Fault: addr={} ip={} present={} write={} user={} exec={}\r\n",
+      info.fault_addr.as_ptr<>(), info.ip.as_ptr<>(),
+      info.present, info.write, info.user, info.exec);
+
+  // 1. Identify the address space the fault occurred in: a user-mode fault
+  // belongs to the currently running thread's owning process, while a
+  // kernel-mode fault (or a user fault with no owning process, which should
+  // never happen) is resolved against the kernel address space.
+  const kernel::vmm::AddressSpace *as = &KE_VMM_GetKernelAddressSpace();
+  if (info.user) {
+    if (const auto current_thread = KE_SCHED_GetCurrentThread(); current_thread && current_thread->owner_process) {
+      as = &current_thread->owner_process->address_space;
+    } else {
+      HAL_PLATFORM_Panic("Page Fault: user-mode fault with no owning process", __FILE__, __LINE__);
+    }
+  }
+
+  // 2. Look up the VAD covering the faulting address in that address space.
+  // No VAD means the access targets memory that was never reserved for this
+  // address space -- an invalid access that must be fatal.
+  const auto *vad = as->vads.find(info.fault_addr);
+  if (!vad) {
+    HAL_PLATFORM_Panic("Page Fault: access to unmapped/invalid address", __FILE__, __LINE__);
+  }
+
+  // 3. Protection checks: reject accesses that violate the VAD's declared
+  // permissions before doing any mapping work. These are fatal, since they
+  // indicate either a user-mode bug (illegal access) or a kernel bug
+  // (accessing user memory incorrectly).
+  if (info.write && !kernel::vmm::has_flag(vad->flags, kernel::vmm::ProtectFlags::WRITE)) {
+    HAL_PLATFORM_Panic("Page Fault: write fault on non-writable region", __FILE__, __LINE__);
+  }
+  if (info.exec && !kernel::vmm::has_flag(vad->flags, kernel::vmm::ProtectFlags::EXECUTE)) {
+    HAL_PLATFORM_Panic("Page Fault: exec fault on non-executable region", __FILE__, __LINE__);
+  }
+  if (info.user && !kernel::vmm::has_flag(vad->flags, kernel::vmm::ProtectFlags::USER)) {
+    HAL_PLATFORM_Panic("Page Fault: user-mode fault on kernel-only region", __FILE__, __LINE__);
+  }
+
+  // 4. A VAD exists for the faulting address and the access is permitted by
+  // its protection flags; decide how to satisfy the fault based on what
+  // backs the region.
+  switch (vad->backing) {
+    case kernel::vmm::BackingType::ANONYMOUS: {
+      // Demand-paged memory: allocate a fresh physical frame to back the
+      // faulting page.
+      const kernel::PhysicalAddress phys = HAL_PMM_AllocateFrames(1);
+      if (!phys) {
+        HAL_PLATFORM_Panic("Page Fault: out of physical memory", __FILE__, __LINE__);
+      }
+      if (const auto page_base = info.fault_addr.align_down(g_page_size);
+        !HAL_VMM_MapPage(page_base, phys, vad->flags)) {
+        HAL_PLATFORM_Panic("Page Fault: HAL_VMM_MapPage failed", __FILE__, __LINE__);
+      }
+      break;
+    }
+    case kernel::vmm::BackingType::SWAPPED:
+      // TODO: read the page's contents back from the pagefile once it
+      // exists. For now there is no pagefile, so this is just a stub.
+      HAL_PLATFORM_Panic("Page Fault: pagefile read not implemented", __FILE__, __LINE__);
+      break;
+    case kernel::vmm::BackingType::PINNED:
+      // Pinned regions must never fault; this indicates a kernel bug.
+      HAL_PLATFORM_Panic("Page Fault: fault on pinned region", __FILE__, __LINE__);
+      break;
+  }
+}
 
 // On a hosted build (e.g. the host test binary), the C++ runtime/standard
 // library already provides its own global operator new/delete backed by the

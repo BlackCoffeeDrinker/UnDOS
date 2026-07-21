@@ -63,7 +63,7 @@ UNDOS_KERNEL_API_DEF void KE_USER_CreateProcess(const kstd::string_view &exec_pa
                   process->subsystem->loader_entry.as_ptr<>());
 
   // A dedicated user-mode stack region, mapped USER|READ|WRITE.
-  const void *user_stack = kernel::vmm::allocate_user_memory(
+  const void *user_stack = kernel::vmm::allocate_memory(
       process->address_space, USER_STACK_SIZE,
       kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
   if (!user_stack) {

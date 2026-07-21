@@ -9,10 +9,25 @@
 
 namespace kernel::vmm {
 
+// Describes what physically backs the pages covered by a VAD once they are
+// (or need to be) faulted in.
+enum class BackingType : uint8_t {
+  // Ordinary, demand-zeroed/demand-paged memory backed by physical frames
+  // allocated on first touch (e.g. heap, user data/stack).
+  ANONYMOUS,
+  // Backed by the pagefile: the page's contents live on disk and must be
+  // read back in on fault.
+  SWAPPED,
+  // Never allowed to fault (e.g. permanently resident kernel structures);
+  // any page fault against such a region is a bug and must be fatal.
+  PINNED,
+};
+
 struct VirtualAddressDescriptor {
   VirtualAddress start;
   VirtualAddress end;
   ProtectFlags flags;
+  BackingType backing = BackingType::ANONYMOUS;
 
   adt::AvlNode<VirtualAddressDescriptor> node;
 

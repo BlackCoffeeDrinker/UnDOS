@@ -54,6 +54,8 @@ add_executable(kernel
         src/initial/boot_modules_vfs.hpp
         src/elf_loader.cpp
         src/elf_loader.hpp
+        src/syscalls/DEBUG_Print.cpp
+        src/syscalls/CreateProcess.cpp
 )
 
 target_compile_definitions(kernel PRIVATE UNDOS_KERNEL_COMPILE)

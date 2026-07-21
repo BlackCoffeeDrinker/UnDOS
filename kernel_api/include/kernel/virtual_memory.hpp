@@ -3,6 +3,7 @@
 #include <kernel/__core.hpp>
 #include <kernel/memory/protect.hpp>
 #include <kernel/memory/vad.hpp>
+#include <kernel/memory/page_fault.hpp>
 #include <utility.hpp>
 
 namespace kernel::vmm {
@@ -124,3 +125,9 @@ UNDOS_KERNEL_PUBLIC_V1API(
     void,
     KE_VMM_UnmapBorrowed,
     void *addr, size_t size, kernel::vmm::AddressSpace &as);
+
+UNDOS_KERNEL_PUBLIC_V1API(
+  void,
+  KE_VMM_HandlePagefault,
+  const kernel::PageFaultInfo& info
+  );

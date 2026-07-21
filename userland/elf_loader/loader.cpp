@@ -1,8 +1,6 @@
 #include "../userspace.h"
 #include <undos/syscalls.h>
 
-int 
-
 // The kernel hands control to `_start` with ESP pointing straight at the
 // pushed exec_path pointer (see KE_USER_CreateProcess). A normal C++
 // function's prologue (push ebp / sub esp, N for locals) would move ESP
@@ -21,12 +19,12 @@ asm(
     ".size _start, . - _start\n\t");
 
 extern "C" [[noreturn]] void loader_main(const char *exec_path) {
-  sys_write("USER SPACE: NativeElfLoader (C++): exec_path = ");
-  sys_write(exec_path);
-  sys_write("\n");
+  UD_SYS_PrintV1("USER SPACE: NativeElfLoader (C++): exec_path = ");
+  UD_SYS_PrintV1(exec_path);
+  UD_SYS_PrintV1("\n");
 
   // Later: open ELF, read ELF, mmap segments, jump to entry
-  sys_write("USER SPACE: NativeElfLoader: ELF loading not implemented yet, exitting\n");
+  UD_SYS_PrintV1("USER SPACE: NativeElfLoader: ELF loading not implemented yet, exitting\n");
   UD_SYS_ExitV1(0);
   __builtin_unreachable();
 }

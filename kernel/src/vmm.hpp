@@ -8,7 +8,7 @@ namespace kernel::vmm {
 void init() noexcept;
 void late_init() noexcept;
 
-void *allocate_user_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept;
+void *allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept;
 
 // Creates a fully-initialized, isolated user address space backed by a fresh
 // HAL translation root (kernel higher-half cloned, user half empty).

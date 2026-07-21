@@ -25,7 +25,7 @@ KObjectPtr<KThreadObject> g_idle;
 uint32_t g_next_id = 0;
 
 // Allocate a fresh, page-backed kernel stack. Returns the allocation base, or a
-// null VirtualAddress on failure. Mirrors kernel::vmm::allocate_user_memory but
+// null VirtualAddress on failure. Mirrors kernel::vmm::allocate_memory but
 // keeps the pages kernel-only (no USER flag).
 VirtualAddress alloc_kernel_stack(size_t size) noexcept {
   const size_t ps = g_page_size;

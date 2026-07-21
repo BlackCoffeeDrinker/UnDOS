@@ -22,6 +22,11 @@ T *KE_CreateObject(Args &&...args) {
   return new (p) T(kstd::forward<Args>(args)...);
 }
 
+UNDOS_KERNEL_PUBLIC_V1API(
+    uint32_t,
+    KE_SYSCALL_Dispatch,
+    uint32_t number, uint32_t size, void *data, uint32_t flags);
+
 namespace kernel {
 using ::KE_CreateObject;
 

@@ -8,6 +8,7 @@
 #include "stdkrn.hpp"
 #include "__kernel_types.h"
 
+uint32_t handle_Print_V1(__KRN_DEBUG_PRINT_V1&& args, uint32_t flags);
 /** Creates a new process from the executable at `path`. */
 uint32_t handle_CreateProcess_V1(__KRN_PROC_CREATEPROCESS_V1&& args, uint32_t flags);
 /** Retrieves information about a running or exited process. */

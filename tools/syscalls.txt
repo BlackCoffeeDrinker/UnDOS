@@ -8,6 +8,10 @@ enum ProcessFlags {
     InheritEnv  = 2,
 };
 
+syscall V1 DEBUG Print [100] {
+    message: IN string;
+};
+
 /**
  * Creates a new process from the executable at `path`.
  */

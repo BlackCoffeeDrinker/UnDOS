@@ -9,6 +9,10 @@
 #include <undos/syscalls/__enum_MemoryProtectFlags.h>
 
 
+struct __KRN_DEBUG_PRINT_V1 {
+    kstd::string_view message {};
+};
+
 /** Creates a new process from the executable at `path`. */
 struct __KRN_PROC_CREATEPROCESS_V1 {
     /** Path to the executable to load. */

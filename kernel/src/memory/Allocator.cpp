@@ -1,6 +1,7 @@
 
 #include "Allocator.hpp"
 #include "Cache.hpp"
+#include "../vmm.hpp"
 #include <kernel/hal_interface.hpp>
 #include <new.hpp>
 
@@ -35,8 +36,9 @@ Slab *Allocator::allocate_slab(Cache &cache) noexcept {
     return nullptr;
   }
 
-  const VirtualAddress virt = g_kernel_heap_current + layout_.page_size;
-  g_kernel_heap_current = virt + layout_.slab_size;
+  auto &as = KE_VMM_GetKernelAddressSpace();
+  const VirtualAddress virt = as.current_base + layout_.page_size;
+  as.current_base = virt + layout_.slab_size;
 
   for (size_t i = 0; i < pages; ++i) {
     HAL_VMM_MapPage(
@@ -58,29 +60,21 @@ Slab *Allocator::allocate_slab(Cache &cache) noexcept {
 
 void *allocate_large(size_t size) noexcept {
   const size_t total = size + sizeof(LargeAllocHeader);
-  const size_t pages = (total + g_page_size - 1) / g_page_size;
+  
+  void *virt_ptr = vmm::allocate_memory(
+      KE_VMM_GetKernelAddressSpace(), total,
+      vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
 
-  const PhysicalAddress phys = HAL_PMM_AllocateFrames(pages);
-  if (!phys) {
-    early_print_fmt("Failed to allocate physical frames for large allocation!\n\r");
+  if (!virt_ptr) {
+    early_print_fmt("Failed to allocate large allocation!\n\r");
     return nullptr;
   }
 
-  const VirtualAddress virt = g_kernel_heap_current + g_page_size;
-  g_kernel_heap_current = virt + pages * g_page_size;
-
-  for (size_t i = 0; i < pages; ++i) {
-    HAL_VMM_MapPage(
-        virt + i * g_page_size,
-        phys + i * g_page_size,
-        vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
-  }
-
-  auto *header = virt.as_ptr<LargeAllocHeader>();
+  auto *header = static_cast<LargeAllocHeader *>(virt_ptr);
   header->magic = kLargeAllocMagic;
-  header->pages = pages;
+  header->pages = (total + g_page_size - 1) / g_page_size;
 
-  return virt.as_ptr<uint8_t>() + sizeof(LargeAllocHeader);
+  return static_cast<uint8_t *>(virt_ptr) + sizeof(LargeAllocHeader);
 }
 
 void free_large(void *ptr) noexcept {
@@ -99,6 +93,7 @@ void free_large(void *ptr) noexcept {
   }
 
   HAL_PMM_FreeFrames(phys, pages);
+  KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), virt.as_ptr());
 }
 
 void Allocator::free_slab(Slab &slab) noexcept {

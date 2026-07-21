@@ -13,6 +13,8 @@ struct Address {
   using tag = Tag;
   type value = 0;
 
+  static constexpr type Invalid = ~static_cast<type>(0);
+
   constexpr Address(type _value) : value(_value) {}
   constexpr Address() : value(0) {}
   constexpr Address(const Address &other) = default;
@@ -45,7 +47,7 @@ struct Address {
     value = 0;
     return *this;
   }
-  
+
   constexpr bool operator==(const Address &other) const { return value == other.value; }
   constexpr bool operator!=(const Address &other) const { return value != other.value; }
   constexpr bool operator<(const Address &other) const { return value < other.value; }

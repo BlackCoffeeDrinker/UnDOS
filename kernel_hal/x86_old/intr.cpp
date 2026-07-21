@@ -5,6 +5,7 @@
 #include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
 #include <kernel/syscall.hpp>
 #include <kernel/time.hpp>
+#include <kernel/virtual_memory.hpp>
 
 #include "__tuple/ignore.hpp"
 #include "strfmt.hpp"
@@ -110,18 +111,27 @@ void remap_pic() noexcept {
 }
 
 [[gnu::interrupt]] void page_fault_handler(stack_frame *frame, uword_t error_code) {
-  __asm__ volatile("cli");
-
+  // Decode CR2 (faulting virtual address) and the error code pushed by the
+  // CPU, then immediately hand off to the generic, architecture-agnostic
+  // kernel page-fault dispatcher. Bit layout of the i386 page-fault error
+  // code:
+  //   bit 0 - Present (0 = non-present page, 1 = protection violation)
+  //   bit 1 - Write (0 = read, 1 = write)
+  //   bit 2 - User (0 = supervisor mode, 1 = user mode)
+  //   bit 4 - Instruction fetch (requires NX support)
   uint32_t faulting_address;
   __asm__ volatile("mov %%cr2, %0" : "=r"(faulting_address));
 
-  early_print_fmt("Page Fault - Stack Frame:\r\n");
-  early_print_fmt("  EIP:    0x{:x}\r\n", frame->eip);
-  early_print_fmt("  CS:     0x{:x}\r\n", frame->cs);
-  early_print_fmt("  EFLAGS: 0x{:x}\r\n", frame->eflags);
-  early_print_fmt("Faulting address: 0x{:x}, error_code: 0x{:x}\r\n", faulting_address, static_cast<uint32_t>(error_code));
+  const kernel::PageFaultInfo info{
+      .fault_addr = kernel::VirtualAddress(static_cast<VirtualAddressT>(faulting_address)),
+      .present = (error_code & 0x1) != 0,
+      .write = (error_code & 0x2) != 0,
+      .user = (error_code & 0x4) != 0,
+      .exec = (error_code & 0x10) != 0,
+      .ip = kernel::VirtualAddress(static_cast<VirtualAddressT>(frame->eip)),
+  };
 
-  HAL_PLATFORM_Panic("Unhandled Page Fault", __FILE__, __LINE__);
+  KE_VMM_HandlePagefault(info);
 }
 
 // Vector 0x80: int 0x80 syscall gate (DPL3, callable from ring 3).

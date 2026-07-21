@@ -11,6 +11,7 @@
 #include <undos/syscalls/__enum_MemoryProtectFlags.h>
 
 
+#include <undos/syscalls/__syscall_Print_V1.h>
 #include <undos/syscalls/__syscall_CreateProcess_V1.h>
 #include <undos/syscalls/__syscall_GetInfo_V1.h>
 #include <undos/syscalls/__syscall_Exit_V1.h>
@@ -33,6 +34,53 @@ static void KE_VMM_CopyToUserspace(kernel::vmm::AddressSpace &as, void *userPtr,
   if (mapped == nullptr) [[unlikely]] return;
   kstd::memcpy(mapped, kernelPtr, length);
   KE_VMM_UnmapBorrowed(mapped, length, as);
+}
+
+static uint32_t Dispatch_Print_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_DEBUG_PRINT_V1)) return SYSCALL_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_DEBUG_PRINT_V1 headerCopy {};
+  {
+    auto *mapped = static_cast<__SYS_DEBUG_PRINT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_DEBUG_PRINT_V1), address_space));
+    if (mapped == nullptr) return SYSCALL_INVALID_SIZE;
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_DEBUG_PRINT_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_DEBUG_PRINT_V1), address_space);
+  }
+
+  if (headerCopy.message != nullptr && headerCopy.messageLength > UNDOS_MAX_COPY_SIZE) return SYSCALL_INVALID_SIZE;
+
+  const size_t total = sizeof(__SYS_DEBUG_PRINT_V1) + (headerCopy.message != nullptr ? static_cast<size_t>(headerCopy.messageLength) + 1 : 0);
+  auto *kbuf = static_cast<uint8_t *>(KE_Malloc(total));
+  if (kbuf == nullptr) return SYSCALL_OUT_OF_MEMORY;
+  auto *kstruct = reinterpret_cast<__SYS_DEBUG_PRINT_V1 *>(kbuf);
+  kstd::memcpy(kbuf, &headerCopy, sizeof(__SYS_DEBUG_PRINT_V1));
+  size_t offset = sizeof(__SYS_DEBUG_PRINT_V1);
+
+  if (headerCopy.message != nullptr) {
+    if (auto *src = static_cast<const char *>(KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.message), headerCopy.messageLength, address_space))) {
+      kstd::memcpy(kbuf + offset, src, headerCopy.messageLength);
+      kbuf[offset + headerCopy.messageLength] = 0;
+      KE_VMM_UnmapBorrowed(const_cast<char *>(src), headerCopy.messageLength, address_space);
+      kstruct->message = reinterpret_cast<const char *>(kbuf + offset);
+      kstruct->messageLength = headerCopy.messageLength;
+      offset += headerCopy.messageLength + 1;
+    } else {
+      KE_Free(kbuf);
+      return SYSCALL_INVALID_SIZE;
+    }
+  }
+
+  __KRN_DEBUG_PRINT_V1 args {};
+  if (kstruct->message != nullptr) args.message = kstd::string_view(kstruct->message, kstruct->messageLength);
+
+  const uint32_t ret = handle_Print_V1(kstd::move(args), flags);
+
+
+  KE_Free(kbuf);
+  return ret;
 }
 
 static uint32_t Dispatch_CreateProcess_V1(void *userData, size_t size, uint32_t flags) {
@@ -339,6 +387,7 @@ static uint32_t Dispatch_Write_V1(void *userData, size_t size, uint32_t flags) {
 
 UNDOS_KERNEL_API_DEF uint32_t KE_SYSCALL_Dispatch(uint32_t number, uint32_t size, void *data, uint32_t flags) noexcept {
   switch (number) {
+    case 100: return Dispatch_Print_V1(data, size, flags);
     case 200: return Dispatch_CreateProcess_V1(data, size, flags);
     case 201: return Dispatch_GetInfo_V1(data, size, flags);
     case 202: return Dispatch_Exit_V1(data, size, flags);

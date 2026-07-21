@@ -4,6 +4,7 @@
 #include "__enum_MemoryProtectFlags.h"
 
 
+#include "__syscall_Print_V1.h"
 #include "__syscall_CreateProcess_V1.h"
 #include "__syscall_GetInfo_V1.h"
 #include "__syscall_Exit_V1.h"
