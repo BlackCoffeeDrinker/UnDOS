@@ -37,6 +37,19 @@ UNDOS_HAL_API_DEF kernel::VirtualAddress HAL_VMM_GetHighestVirtualAddress() noex
   return kernel::VirtualAddress::from_ptr(FakeRamBase()) - g_page_size;
 }
 
+// On real hardware, HAL_PLATFORM_Init() (ia32.cpp) seeds the kernel address
+// space's current_base/limit from boot_info.mapped_memory before anything
+// else runs. Hosted tests never call HAL_PLATFORM_Init, so test support code
+// (ob_test_support.hpp) calls this instead to seed the kernel AddressSpace
+// with the bounds of the fake RAM buffer.
+kernel::VirtualAddress HAL_TEST_GetFakeRamBase() noexcept {
+  return kernel::VirtualAddress::from_ptr(FakeRamBase());
+}
+
+size_t HAL_TEST_GetFakeRamSize() noexcept {
+  return kFakeRamSize;
+}
+
 UNDOS_HAL_API_DEF void HAL_VMM_FinalizeInit() noexcept {}
 
 UNDOS_HAL_API_DEF kernel::PhysicalAddress HAL_VMM_GetCurrentTranslationRoot() noexcept {

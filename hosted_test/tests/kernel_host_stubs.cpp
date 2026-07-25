@@ -43,10 +43,35 @@ UNDOS_KERNEL_API_DEF void KE_PNP_RegisterDeviceInterest(kernel::DeviceType type,
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KThreadObject> KE_SCHED_GetCurrentThread() noexcept {
   return nullptr;
 }
+
+// Hosted tests run single-threaded (there is no real scheduler/HAL backing
+// kernel::Mutex), so KE_SCHED_Yield is a no-op and the atomics below are
+// implemented with plain (non-atomic) loads/stores/compare-exchange. This is
+// sufficient for the single-threaded test harness while still satisfying the
+// symbols kernel::Mutex (mutex.hpp) needs to link.
+UNDOS_KERNEL_API_DEF void KE_SCHED_Yield() noexcept {
+}
+
+UNDOS_HAL_API_DEF void HAL_ATOMIC_Store32(kernel::VirtualAddress addr, uint32_t value, PlatformMemoryOrder order) noexcept {
+  (void) order;
+  *addr.as_ptr<uint32_t>() = value;
+}
+
+UNDOS_HAL_API_DEF bool HAL_ATOMIC_CompareExchange32(kernel::VirtualAddress addr, uint32_t &expected_out, uint32_t desired, PlatformMemoryOrder order) noexcept {
+  (void) order;
+  auto *ptr = addr.as_ptr<uint32_t>();
+  if (*ptr == expected_out) {
+    *ptr = desired;
+    return true;
+  }
+  expected_out = *ptr;
+  return false;
+}
 #include <stdexcept>
-void HAL_PLATFORM_Panic(const char *message, const char *file, int line) noexcept { 
-  (void)file; (void)line;
-  printf("PANIC: %s\n", message);
+void HAL_PLATFORM_Panic(const kstd::string_view &message, const char *file, int line) noexcept {
+  (void) file;
+  (void) line;
+  printf("PANIC: %s\n", message.data());
   abort();
 }
 
@@ -54,11 +79,13 @@ void HAL_PLATFORM_Panic(const char *message, const char *file, int line) noexcep
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
 #include <catch2/reporters/catch_reporter_registrars.hpp>
 
-namespace kernel::vmm { void init() noexcept; }
+namespace kernel::vmm {
+void init() noexcept;
+}
 struct VmmInitListener : Catch::EventListenerBase {
-    using EventListenerBase::EventListenerBase;
-    void testRunStarting(Catch::TestRunInfo const&) override {
-        kernel::vmm::init();
-    }
+  using EventListenerBase::EventListenerBase;
+  void testRunStarting(Catch::TestRunInfo const &) override {
+    kernel::vmm::init();
+  }
 };
 CATCH_REGISTER_LISTENER(VmmInitListener)

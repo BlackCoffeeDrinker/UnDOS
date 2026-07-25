@@ -1,10 +1,15 @@
 #pragma once
 
 #include <kernel/__core.hpp>
+#include <kernel/fwd/KObjectPtr.hpp>
+#include <kernel/memory/page_fault.hpp>
 #include <kernel/memory/protect.hpp>
 #include <kernel/memory/vad.hpp>
-#include <kernel/memory/page_fault.hpp>
 #include <utility.hpp>
+
+namespace kernel {
+struct KMemoryBackingObject;
+}// namespace kernel
 
 namespace kernel::vmm {
 /**
@@ -19,10 +24,10 @@ namespace kernel::vmm {
  */
 struct AddressSpace {
   VadTree vads;
-  PhysicalAddress translation_root;// Architecture-specific root (e.g., CR3, TTBR, satp)
-  uint32_t asid;                   // Address Space Identifier (if supported by arch)
-  VirtualAddress current_base;
-  VirtualAddress limit;
+  PhysicalAddress translation_root = PhysicalAddress::Invalid;// Architecture-specific root (e.g., CR3, TTBR, satp)
+  uint32_t asid = 0;                                          // Address Space Identifier (if supported by arch)
+  VirtualAddress current_base = VirtualAddress::Invalid;
+  VirtualAddress limit = VirtualAddress::Invalid;
 };
 }// namespace kernel::vmm
 
@@ -59,6 +64,20 @@ UNDOS_KERNEL_PUBLIC_V1API(
     void,
     KE_VMM_FreeRegion,
     kernel::vmm::AddressSpace &as, void *addr);
+
+/**
+ * @ingroup VMM
+ * @brief Method KE_VMM_MapBackingObject
+ *
+ * Reserves a range of address space in `as` and creates a VAD mapping the
+ * given backing object into it. Returns the created VAD, or nullptr if the
+ * address space is exhausted.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kernel::vmm::VirtualAddressDescriptor *,
+    KE_VMM_MapBackingObject,
+    kernel::vmm::AddressSpace &as, const kernel::KObjectPtr<kernel::KMemoryBackingObject> &backing,
+    size_t size, kernel::vmm::ProtectFlags flags);
 
 /**
  * @ingroup VMM
@@ -127,7 +146,6 @@ UNDOS_KERNEL_PUBLIC_V1API(
     void *addr, size_t size, kernel::vmm::AddressSpace &as);
 
 UNDOS_KERNEL_PUBLIC_V1API(
-  void,
-  KE_VMM_HandlePagefault,
-  const kernel::PageFaultInfo& info
-  );
+    void,
+    KE_VMM_HandlePagefault,
+    const kernel::PageFaultInfo &info);

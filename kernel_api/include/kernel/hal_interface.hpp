@@ -10,12 +10,16 @@
 #include <kernel/memory/address.hpp>
 #include <kernel/virtual_memory.hpp>
 
+// region Platform API
 /**
  * @ingroup PLATFORM
  * @brief Method KE_PLATFORM_Init
  *
  */
-UNDOS_HAL_PUBLIC_V1API(void, HAL_PLATFORM_Init, const kernel::BootInfoT &boot_info);
+UNDOS_HAL_PUBLIC_V1API(void,
+                       HAL_PLATFORM_Init,
+                       const kernel::BootInfoT &boot_info,
+                       kernel::vmm::AddressSpace &kernel_address_space);
 
 /**
  * @ingroup PLATFORM
@@ -44,7 +48,7 @@ UNDOS_HAL_PUBLIC_V1API(void, HAL_CPU_Halt);
  * @brief Method KE_PLATFORM_Panic
  *
  */
-UNDOS_HAL_PUBLIC_V1API([[noreturn]] void, HAL_PLATFORM_Panic, const char *message, const char *file, int line);
+UNDOS_HAL_PUBLIC_V1API([[noreturn]] void, HAL_PLATFORM_Panic, const kstd::string_view &message, const char *file, int line);
 
 /**
  * @ingroup PLATFORM
@@ -52,6 +56,7 @@ UNDOS_HAL_PUBLIC_V1API([[noreturn]] void, HAL_PLATFORM_Panic, const char *messag
  *
  */
 UNDOS_HAL_PUBLIC_V1API([[noreturn]] void, HAL_PLATFORM_Shutdown);
+// endregion
 
 // region Port I/O API
 /**
@@ -176,7 +181,7 @@ UNDOS_HAL_PUBLIC_V1API(void, HAL_CPU_SetKernelStack, kernel::VirtualAddress kern
 // endregion
 
 // region Debug
-UNDOS_HAL_PUBLIC_V1API(void, early_print, const char *);
+UNDOS_HAL_PUBLIC_V1API(void, early_print, const char *);//< Leave as const char* - EXCEPTION TO NO RAW POINTER RULE
 UNDOS_HAL_PUBLIC_V1API(void, early_print_char, char);
 
 template<typename... Args>
@@ -216,13 +221,6 @@ UNDOS_HAL_PUBLIC_V1API(void, HAL_PMM_ReserveRegion, kernel::PhysicalAddress base
 // endregion
 
 // region Virtual Memory Manager API
-/**
- * @ingroup VMM
- * @brief Method KE_VMM_GetHighestVirtualAddress
- *
- */
-UNDOS_HAL_PUBLIC_V1API(kernel::VirtualAddress, HAL_VMM_GetHighestVirtualAddress);
-
 /**
  * @ingroup VMM
  * @brief Method KE_VMM_FinalizeInit
@@ -296,6 +294,10 @@ UNDOS_HAL_PUBLIC_V1API(void, HAL_VMM_Flush, kernel::VirtualAddress virt);
 // endregion
 
 // region Atomic Operations
+/**
+ * @ingroup ATOMIC
+ * @brief C++20-style memory order for atomic operations and fences
+ */
 enum class PlatformMemoryOrder : uint8_t {
   Relaxed,
   Consume,
@@ -305,4 +307,134 @@ enum class PlatformMemoryOrder : uint8_t {
   SequentiallyConsistent
 };
 
+/**
+ * @ingroup ATOMIC
+ * @brief Method HAL_ATOMIC_ThreadFence
+ *
+ * Implements std::atomic_thread_fence(order) semantics.
+ */
+UNDOS_HAL_PUBLIC_V1API(void, HAL_ATOMIC_ThreadFence, PlatformMemoryOrder order);
+
+/**
+ * @ingroup ATOMIC
+ * @brief Method HAL_ATOMIC_Load32
+ *
+ * Atomically loads a 32-bit value with the given memory order.
+ */
+UNDOS_HAL_PUBLIC_V1API(
+    uint32_t,
+    HAL_ATOMIC_Load32,
+    kernel::VirtualAddress addr,
+    PlatformMemoryOrder order);
+
+/**
+ * @ingroup ATOMIC
+ * @brief Method HAL_ATOMIC_Store32
+ *
+ * Atomically stores a 32-bit value with the given memory order.
+ */
+UNDOS_HAL_PUBLIC_V1API(
+    void,
+    HAL_ATOMIC_Store32,
+    kernel::VirtualAddress addr,
+    uint32_t value,
+    PlatformMemoryOrder order);
+
+/**
+ * @ingroup ATOMIC
+ * @brief Method HAL_ATOMIC_Exchange32
+ *
+ * Atomically exchanges a 32-bit value with the given memory order.
+ */
+UNDOS_HAL_PUBLIC_V1API(
+    uint32_t,
+    HAL_ATOMIC_Exchange32,
+    kernel::VirtualAddress addr,
+    uint32_t value,
+    PlatformMemoryOrder order);
+
+/**
+ * @ingroup ATOMIC
+ * @brief Method HAL_ATOMIC_CompareExchange32
+ *
+ * Atomically compares and exchanges a 32-bit value with the given memory order.
+ * Returns true on success, false on failure; on failure, *expected_out is updated
+ * with the current value.
+ */
+UNDOS_HAL_PUBLIC_V1API(
+    bool,
+    HAL_ATOMIC_CompareExchange32,
+    kernel::VirtualAddress addr,
+    uint32_t &expected_out,
+    uint32_t desired,
+    PlatformMemoryOrder order);
+
+/**
+ * @ingroup ATOMIC
+ * @brief Method HAL_ATOMIC_FetchAdd32
+ *
+ * Atomically adds delta to a 32-bit value with the given memory order.
+ * Returns the previous value.
+ */
+UNDOS_HAL_PUBLIC_V1API(
+    uint32_t,
+    HAL_ATOMIC_FetchAdd32,
+    kernel::VirtualAddress addr,
+    uint32_t delta,
+    PlatformMemoryOrder order);
+
+/**
+ * @ingroup ATOMIC
+ * @brief Method HAL_ATOMIC_Load64
+ *
+ * Atomically loads a 64-bit value with the given memory order.
+ * May be emulated on CPUs without native 64-bit atomics.
+ */
+UNDOS_HAL_PUBLIC_V1API(
+    uint64_t,
+    HAL_ATOMIC_Load64,
+    kernel::VirtualAddress addr,
+    PlatformMemoryOrder order);
+
+/**
+ * @ingroup ATOMIC
+ * @brief Method HAL_ATOMIC_Store64
+ *
+ * Atomically stores a 64-bit value with the given memory order.
+ */
+UNDOS_HAL_PUBLIC_V1API(
+    void,
+    HAL_ATOMIC_Store64,
+    kernel::VirtualAddress addr,
+    uint64_t value,
+    PlatformMemoryOrder order);
+
+/**
+ * @ingroup ATOMIC
+ * @brief Method HAL_ATOMIC_Exchange64
+ *
+ * Atomically exchanges a 64-bit value with the given memory order.
+ */
+UNDOS_HAL_PUBLIC_V1API(
+    uint64_t,
+    HAL_ATOMIC_Exchange64,
+    kernel::VirtualAddress addr,
+    uint64_t value,
+    PlatformMemoryOrder order);
+
+/**
+ * @ingroup ATOMIC
+ * @brief Method HAL_ATOMIC_CompareExchange64
+ *
+ * Atomically compares and exchanges a 64-bit value with the given memory order.
+ * Returns true on success, false on failure; on failure, *expected_out is updated
+ * with the current value.
+ */
+UNDOS_HAL_PUBLIC_V1API(
+    bool,
+    HAL_ATOMIC_CompareExchange64,
+    kernel::VirtualAddress addr,
+    uint64_t &expected_out,
+    uint64_t desired,
+    PlatformMemoryOrder order);
 // endregion

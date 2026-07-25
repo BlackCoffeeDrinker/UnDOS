@@ -13,7 +13,9 @@ add_library(libkcpp INTERFACE
         include/functional.hpp
         include/initializer_list.hpp
         include/limits.hpp
+        include/list.hpp
         include/memory.hpp
+        include/mutex.hpp
         include/new.hpp
         include/nomm_string.hpp
         include/optional.hpp
@@ -29,6 +31,7 @@ add_library(libkcpp INTERFACE
         include/tuple.hpp
         include/type_traits.hpp
         include/utility.hpp
+        include/vector.hpp
 )
 
 target_include_directories(libkcpp INTERFACE include/)

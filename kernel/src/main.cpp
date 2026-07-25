@@ -211,7 +211,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   const CommandLineParser parser(boot_info.command_line);
   g_page_size = boot_info.page_size;
 
-  HAL_PLATFORM_Init(boot_info);
+  HAL_PLATFORM_Init(boot_info, KE_VMM_GetKernelAddressSpace());
   kernel::vmm::init();
   kernel::objectmanager::init();
   kernel::vmm::late_init();
@@ -219,6 +219,12 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   kernel::sched::init();
   HAL_PLATFORM_InitializeSystemTimer();
   HAL_CPU_EnableInterrupts();
+
+  early_print_fmt("Scheduler is running\r\n");
+
+  // Drivers require configuration manager to be up, but we don't have a file system yet
+  // TODO: We're going to fake a root config
+
   kernel::pnp::init();
   kernel::resource::init();
   kernel::vfs::init();
@@ -267,6 +273,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   }
 
   // Try and find the init
+  // TODO: wait_for_root();
   early_print_fmt("Loading init\r\n");
   KE_USER_CreateProcess("/System/init.elf");
 

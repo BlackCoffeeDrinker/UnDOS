@@ -2,6 +2,7 @@
 
 #include "fake_disk.hpp"
 #include "fake_disk_file_backend.hpp"
+#include "ob_test_support.hpp"
 
 #include <array.hpp>
 #include <static_string.hpp>
@@ -41,6 +42,8 @@ TEST_CASE("disk_fake file backend basic read/write", "[disk_fake]") {
 }
 
 TEST_CASE("disk_fake Read/Write dispatch functions honor bounds", "[disk_fake]") {
+  EnsureObjectManagerInitialized();
+
   const auto path = MakeTempImagePath("dispatch");
   const kstd::string_view pathView(path);
   diskfake::FileBackingStore backing(pathView);

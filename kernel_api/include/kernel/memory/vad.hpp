@@ -2,32 +2,31 @@
 
 #include <kernel/__core.hpp>
 #include <kernel/adt/avl_tree.hpp>
+#include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/memory/address.hpp>
 #include <kernel/memory/protect.hpp>
 
 #include <stdint.h>
 
-namespace kernel::vmm {
+namespace kernel {
+// Forward-declared to avoid pulling in the full KObject/KObjectT include
+// chain here: vad.hpp is transitively included from kernel/kobject/KObject.hpp
+// (via virtual_memory.hpp), so a full include here would create a cycle.
+struct KMemoryBackingObject;
+}// namespace kernel
 
-// Describes what physically backs the pages covered by a VAD once they are
-// (or need to be) faulted in.
-enum class BackingType : uint8_t {
-  // Ordinary, demand-zeroed/demand-paged memory backed by physical frames
-  // allocated on first touch (e.g. heap, user data/stack).
-  ANONYMOUS,
-  // Backed by the pagefile: the page's contents live on disk and must be
-  // read back in on fault.
-  SWAPPED,
-  // Never allowed to fault (e.g. permanently resident kernel structures);
-  // any page fault against such a region is a bug and must be fatal.
-  PINNED,
-};
+namespace kernel::vmm {
 
 struct VirtualAddressDescriptor {
   VirtualAddress start;
   VirtualAddress end;
   ProtectFlags flags;
-  BackingType backing = BackingType::ANONYMOUS;
+  // The backing object describing what physically backs the pages covered
+  // by this VAD once they are (or need to be) faulted in. Kept alive for as
+  // long as this VAD references it. May be null for
+  // lightweight/kernel-internal VADs that don't have a distinct backing
+  // object (e.g. scratch mappings) -- such VADs are treated as anonymous.
+  KObjectPtr<KMemoryBackingObject> backing;
   uint16_t lock_count = 0;
 
   adt::AvlNode<VirtualAddressDescriptor> node;

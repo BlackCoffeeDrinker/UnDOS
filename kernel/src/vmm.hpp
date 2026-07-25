@@ -19,4 +19,13 @@ bool create_user_address_space(AddressSpace &out_as) noexcept;
 // frees any physical frames still tracked by its VADs, then destroys the
 // underlying HAL translation root.
 void destroy_user_address_space(AddressSpace &as) noexcept;
+
+// Test/diagnostic helper: returns the number of bytes currently outstanding
+// (allocated but not yet freed) in the fixed-size KE_Malloc/KE_Free slab
+// cache that would service a `KE_Malloc(size)` request, i.e. the same cache
+// selection logic used by KE_Malloc itself. Used by host tests to prove that
+// object creation helpers (KE_CreateObject, KE_CreateKPtrObject,
+// kernel::CreateKObject) return their memory to the allocator instead of
+// leaking it.
+size_t debug_slab_cache_allocated_bytes(size_t size) noexcept;
 }// namespace kernel::vmm

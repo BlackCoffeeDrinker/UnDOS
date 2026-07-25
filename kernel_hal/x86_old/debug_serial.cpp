@@ -25,7 +25,13 @@ void init_serial() {
   outb(COM1 + 2, 0xC7);// Enable FIFO, clear them, with 14-byte threshold
 }
 
-void write_char(char c) {
+}// namespace
+
+UNDOS_HAL_API_DEF void early_print(const char *str) noexcept {
+  while (*str) early_print_char(*str++);
+}
+
+UNDOS_HAL_API_DEF void early_print_char(char c) noexcept {
   if (!debug_serial_initialized) {
     debug_serial_initialized = true;
     init_serial();
@@ -34,13 +40,4 @@ void write_char(char c) {
   // Wait for transmit buffer empty
   while ((inb(COM1 + 5) & 0x20) == 0) {}
   outb(COM1, static_cast<uint8_t>(c));
-}
-}// namespace
-
-UNDOS_HAL_API_DEF void early_print(const char *str) noexcept {
-  while (*str) write_char(*str++);
-}
-
-UNDOS_HAL_API_DEF void early_print_char(char c) noexcept {
-  write_char(c);
 }

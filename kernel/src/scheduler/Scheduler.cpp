@@ -32,14 +32,26 @@ VirtualAddress alloc_kernel_stack(size_t size) noexcept {
   const size_t pages = (size + ps - 1) / ps;
   const size_t bytes = pages * ps;
 
+  // One dedicated BackingObject (+ VAD) per stack, registered under \Memory
+  // so it is inspectable via the Object Manager.
+  static uint32_t g_next_stack_id = 0;
+  kstd::static_string<64> name;
+  kstd::format(name, "KernelStack{}", g_next_stack_id++);
+
+  auto backing = kernel::CreateKObject<kernel::KMemoryBackingObject>(name);
+  if (!backing) return {0};
+  backing->kind = kernel::KMemoryBackingObject::Kind::Anonymous;
+  backing->size = bytes;
+  KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), backing);
+
   auto &kas = KE_VMM_GetKernelAddressSpace();
-  const void *region = KE_VMM_AllocateRegion(kas, bytes, vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
-  if (!region) return {0};
+  auto *vad = KE_VMM_MapBackingObject(kas, backing, bytes, vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
+  if (!vad) return {0};
 
   const PhysicalAddress phys = HAL_PMM_AllocateFrames(pages);
   if (!phys) return {0};
 
-  const VirtualAddress base = VirtualAddress::from_ptr(region);
+  const VirtualAddress base = vad->start;
   for (size_t i = 0; i < pages; ++i) {
     if (!HAL_VMM_MapPage(base + i * ps, phys + i * ps, vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE)) {
       return {0};

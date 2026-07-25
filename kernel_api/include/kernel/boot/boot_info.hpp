@@ -10,7 +10,7 @@
 namespace kernel {
 enum class MemoryRegionType : uint8_t {
   None = 0,
-  Available = 1,// Raw usable RAM for the PMM bitmap to manage
+  Available = 1,// Raw usable RAM for the PMM to manage
   Reserved,     // Motherboard MMIO, ACPI NVS, ROMs, or bad blocks
   ACPI_Reclaim, // Safe to reclaim ONLY after ACPI parsing is done
 };

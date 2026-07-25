@@ -29,9 +29,16 @@ struct array {
 
   // Accessors
   T &operator[](size_t i) { return elements[i]; }
+  T &operator[](int i) { return elements[i]; }
   const T &operator[](size_t i) const { return elements[i]; }
+  const T &operator[](int i) const { return elements[i]; }
 
-  // Iterators
+  bool operator==(const array &array) const {
+    for (const auto &i: elements)
+      if (i != array.elements[i])
+        return false;
+    return true;
+  }
 
   // iterators:
   [[nodiscard]] constexpr iterator begin() noexcept {

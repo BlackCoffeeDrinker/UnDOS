@@ -10,43 +10,21 @@ extern uint32_t g_page_size;
 //#define KALLOC_DEBUG 1
 
 namespace {
-struct KVmmObject final : kernel::KObject {
-  KVmmObject() : KObject(kernel::TYPE_VMM, "VMM") {}
-};
 
 constexpr size_t g_cache_sizes[] = {16, 32, 64, 128, 256, 512, 1024, 2048};
 
-kernel::vmm::AddressSpace g_kernel_address_space;
+kernel::vmm::AddressSpace g_kernel_address_space{};
 kstd::array<kernel::memory::Cache, 8> g_malloc_caches;
 }// namespace
 
 namespace kernel::vmm {
 void init() noexcept {
-  // Start heap after the last mapped region + one guard page
-  const VirtualAddress heap_start = (HAL_VMM_GetHighestVirtualAddress() + g_page_size - 1)
-                                        .align_down(g_page_size) +
-                                    g_page_size;
-
-  // Initialize kernel address space
-  g_kernel_address_space.translation_root = HAL_VMM_GetCurrentTranslationRoot();
-  g_kernel_address_space.asid = 0;
-  g_kernel_address_space.current_base = nullptr;
-  g_kernel_address_space.limit = nullptr;
-  g_kernel_address_space.current_base = heap_start;
-  g_kernel_address_space.limit = VirtualAddress(VirtualAddress::Invalid);
-
-  memory::set_heap_start(heap_start);
   for (size_t i = 0; i < g_malloc_caches.size(); ++i) {
     new (&g_malloc_caches[i]) memory::Cache(g_cache_sizes[i], g_cache_sizes[i], g_page_size);
   }
-
-  early_print_fmt("UnDOS Heap initialized at {}\r\n", heap_start.as_ptr<>());
 }
 
 void late_init() noexcept {
-  // Register VMM
-  KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), kernel::CreateKObject<KVmmObject>("VMM"));
-
   early_print_fmt("VMM: Registered with OM\r\n");
 }
 
@@ -84,6 +62,9 @@ void destroy_user_address_space(AddressSpace &as) noexcept {
         HAL_PMM_FreeFrames(phys, 1);
       }
     }
+    // Explicitly run the destructor to release the VAD's KObjectPtr<KMemoryBackingObject>
+    // reference before returning the raw storage to the allocator.
+    vad->~VirtualAddressDescriptor();
     KE_Free(vad);
   });
 
@@ -173,6 +154,17 @@ UNDOS_KERNEL_API_DEF void *KE_Malloc(size_t size) noexcept {
   return nullptr;
 }
 
+namespace kernel::vmm {
+size_t debug_slab_cache_allocated_bytes(size_t size) noexcept {
+  for (auto &g_malloc_cache: g_malloc_caches) {
+    if (size <= g_malloc_cache.object_size()) {
+      return g_malloc_cache.allocated_bytes();
+    }
+  }
+  return 0;
+}
+}// namespace kernel::vmm
+
 UNDOS_KERNEL_API_DEF void KE_Free(void *ptr) noexcept {
   if (!ptr) [[unlikely]] { return; }
 
@@ -187,7 +179,12 @@ UNDOS_KERNEL_API_DEF void KE_Free(void *ptr) noexcept {
   kernel::memory::free_large(ptr);
 }
 
-UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateRegion(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
+namespace {
+// Shared address-bump/limit-check logic used by every VAD-reserving
+// allocator. Bumps `as.current_base` by the page-aligned size and creates a
+// bare VAD spanning the reserved range, or returns nullptr on address-space
+// exhaustion. Callers are responsible for setting `vad->backing` (if any).
+kernel::vmm::VirtualAddressDescriptor *reserve_vad(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
   if (as.current_base == 0) {
     HAL_PLATFORM_Panic("VMM: Address space not initialized", __FILE__, __LINE__);
   }
@@ -201,35 +198,87 @@ UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateRegion(kernel::vmm::AddressSpace &as, 
 
   as.current_base += aligned_size;
 
-  if (auto *vad = KE_CreateObject<kernel::vmm::VirtualAddressDescriptor>()) {
+  if (auto vad = KE_CreateObject<kernel::vmm::VirtualAddressDescriptor>()) {
     vad->start = addr;
     vad->end = addr + size;
     vad->flags = flags;
-    as.vads.insert(*vad);
+
+    auto *rawvad = vad.release();
+    as.vads.insert(*rawvad);
+    return rawvad;
   }
 
-  return addr.as_ptr();
+  return nullptr;
+}
+}// namespace
+
+UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateRegion(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
+  auto *vad = reserve_vad(as, size, flags);
+  if (!vad) {
+    return nullptr;
+  }
+  return vad->start.as_ptr();
+}
+
+UNDOS_KERNEL_API_DEF kernel::vmm::VirtualAddressDescriptor *KE_VMM_MapBackingObject(kernel::vmm::AddressSpace &as, const kernel::KObjectPtr<kernel::KMemoryBackingObject> &backing, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
+  auto *vad = reserve_vad(as, size, flags);
+  if (!vad) {
+    return nullptr;
+  }
+  vad->backing = backing;
+  return vad;
 }
 
 UNDOS_KERNEL_API_DEF void KE_VMM_FreeRegion(kernel::vmm::AddressSpace &as, void *addr) noexcept {
   if (auto *vad = as.vads.find(kernel::VirtualAddress::from_ptr(addr))) {
     as.vads.remove(vad);
+    // Explicitly run the destructor to release the VAD's KObjectPtr<KMemoryBackingObject>
+    // reference before returning the raw storage to the allocator.
+    vad->~VirtualAddressDescriptor();
     KE_Free(vad);
   }
 }
 
+namespace {
+// Creates and registers a fresh anonymous BackingObject sized to `size`
+// under \Memory, giving each segment a uniquely named, inspectable object.
+kernel::KObjectPtr<kernel::KMemoryBackingObject> create_anonymous_backing(size_t size, const char *prefix) noexcept {
+  static uint32_t next_id = 0;
+  kstd::static_string<64> name;
+  kstd::format(name, "{}{}", prefix, next_id++);
+
+  auto backing = kernel::CreateKObject<kernel::KMemoryBackingObject>(name);
+  if (!backing) return nullptr;
+
+  backing->kind = kernel::KMemoryBackingObject::Kind::Anonymous;
+  backing->size = size;
+  KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), backing);
+  return backing;
+}
+}// namespace
+
 UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept {
-  // Demand-paged: reserve the VAD (defaulting to BackingType::ANONYMOUS)
-  // without eagerly allocating/mapping any physical frames. The pages are
-  // populated lazily by KE_VMM_HandlePagefault on first touch.
-  return KE_VMM_AllocateRegion(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE | kernel::vmm::ProtectFlags::USER);
+  // Demand-paged: reserve the VAD (backed by a fresh Anonymous
+  // BackingObject) without eagerly allocating/mapping any physical frames.
+  // The pages are populated lazily by KE_VMM_HandlePagefault on first touch.
+  auto backing = create_anonymous_backing(size, "UserData");
+  if (!backing) return nullptr;
+
+  auto *vad = KE_VMM_MapBackingObject(as, backing, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE | kernel::vmm::ProtectFlags::USER);
+  if (!vad) return nullptr;
+  return vad->start.as_ptr();
 }
 
 UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateUserProcess(kernel::vmm::AddressSpace &as, size_t size) noexcept {
-  // Demand-paged: reserve the VAD (defaulting to BackingType::ANONYMOUS)
-  // without eagerly allocating/mapping any physical frames. The pages are
-  // populated lazily by KE_VMM_HandlePagefault on first touch.
-  return KE_VMM_AllocateRegion(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE | kernel::vmm::ProtectFlags::USER);
+  // Demand-paged: reserve the VAD (backed by a fresh Anonymous
+  // BackingObject) without eagerly allocating/mapping any physical frames.
+  // The pages are populated lazily by KE_VMM_HandlePagefault on first touch.
+  auto backing = create_anonymous_backing(size, "UserProcess");
+  if (!backing) return nullptr;
+
+  auto *vad = KE_VMM_MapBackingObject(as, backing, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE | kernel::vmm::ProtectFlags::USER);
+  if (!vad) return nullptr;
+  return vad->start.as_ptr();
 }
 
 UNDOS_KERNEL_API_DEF kernel::vmm::AddressSpace &KE_VMM_GetKernelAddressSpace() noexcept {
@@ -379,9 +428,13 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
 
   // 4. A VAD exists for the faulting address and the access is permitted by
   // its protection flags; decide how to satisfy the fault based on what
-  // backs the region.
-  switch (vad->backing) {
-    case kernel::vmm::BackingType::ANONYMOUS: {
+  // backs the region. VADs without a distinct BackingObject (e.g.
+  // lightweight kernel-internal scratch mappings created via the thin
+  // KE_VMM_AllocateRegion wrapper) are treated as anonymous.
+  const kernel::KMemoryBackingObject::Kind kind =
+      vad->backing ? vad->backing->kind : kernel::KMemoryBackingObject::Kind::Anonymous;
+  switch (kind) {
+    case kernel::KMemoryBackingObject::Kind::Anonymous: {
       // Demand-paged memory: allocate a fresh physical frame to back the
       // faulting page.
       const kernel::PhysicalAddress phys = HAL_PMM_AllocateFrames(1);
@@ -389,19 +442,25 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
         HAL_PLATFORM_Panic("Page Fault: out of physical memory", __FILE__, __LINE__);
       }
       if (const auto page_base = info.fault_addr.align_down(g_page_size);
-        !HAL_VMM_MapPage(page_base, phys, vad->flags)) {
+          !HAL_VMM_MapPage(page_base, phys, vad->flags)) {
         HAL_PLATFORM_Panic("Page Fault: HAL_VMM_MapPage failed", __FILE__, __LINE__);
       }
       break;
     }
-    case kernel::vmm::BackingType::SWAPPED:
-      // TODO: read the page's contents back from the pagefile once it
-      // exists. For now there is no pagefile, so this is just a stub.
-      HAL_PLATFORM_Panic("Page Fault: pagefile read not implemented", __FILE__, __LINE__);
+    case kernel::KMemoryBackingObject::Kind::File:
+      // TODO: read the page's contents from backing->file at
+      // backing->file_offset + page_index * PAGE_SIZE once VFS read
+      // integration is wired up here. For now, this is just a stub.
+      HAL_PLATFORM_Panic("Page Fault: file-backed read not implemented", __FILE__, __LINE__);
       break;
-    case kernel::vmm::BackingType::PINNED:
-      // Pinned regions must never fault; this indicates a kernel bug.
-      HAL_PLATFORM_Panic("Page Fault: fault on pinned region", __FILE__, __LINE__);
+    case kernel::KMemoryBackingObject::Kind::Shared:
+      // TODO: shared-memory semantics (mirrors Anonymous/File depending on
+      // design) are not implemented yet.
+      HAL_PLATFORM_Panic("Page Fault: shared-memory fault not implemented", __FILE__, __LINE__);
+      break;
+    case kernel::KMemoryBackingObject::Kind::KernelModule:
+      // TODO: file-backed kernel module page-in not implemented yet.
+      HAL_PLATFORM_Panic("Page Fault: kernel-module-backed fault not implemented", __FILE__, __LINE__);
       break;
   }
 }

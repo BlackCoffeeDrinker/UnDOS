@@ -56,6 +56,7 @@ add_executable(kernel
         src/elf_loader.hpp
         src/syscalls/DEBUG_Print.cpp
         src/syscalls/CreateProcess.cpp
+        src/configuration_manager.cpp
 )
 
 target_compile_definitions(kernel PRIVATE UNDOS_KERNEL_COMPILE)

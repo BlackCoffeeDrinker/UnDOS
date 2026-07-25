@@ -1,4 +1,6 @@
 #include "pnp_manager.hpp"
+
+#include "list.hpp"
 #include "object_manager.hpp"
 
 #include "stdkrn.hpp"
@@ -6,8 +8,7 @@
 #include <kernel/resource.hpp>
 #include <new.hpp>
 
-static kstd::array<kernel::KObjectPtr<kernel::KDriverObject>, 32> s_registeredDrivers;
-static size_t s_registeredDriverCount = 0;
+static kstd::list<kernel::KObjectPtr<kernel::KDriverObject>> s_registeredDrivers;
 static kernel::KDevicePtr<kernel::KDeviceBus> s_rootDevice;
 
 // Device-interest (class-trigger) registry: drivers that want to be attached as
@@ -16,13 +17,13 @@ struct DeviceInterest {
   kernel::DeviceType type{kernel::device_type::Unknown};
   kernel::KObjectPtr<kernel::KDriverObject> driver;
 };
-static kstd::array<DeviceInterest, 32> s_deviceInterests;
-static size_t s_deviceInterestCount = 0;
+
+static kstd::list<DeviceInterest> s_deviceInterests;
 
 static kernel::KObjectPtr<kernel::KDriverObject> FindDriverForHardwareId(const kstd::string_view &hwid) {
-  for (size_t i = 0; i < s_registeredDriverCount; i++) {
-    if (s_registeredDrivers[i]->name == hwid) {
-      return s_registeredDrivers[i];
+  for (const auto &driver: s_registeredDrivers) {
+    if (driver->name == hwid) {
+      return driver;
     }
   }
 
@@ -30,11 +31,16 @@ static kernel::KObjectPtr<kernel::KDriverObject> FindDriverForHardwareId(const k
 }
 
 namespace kernel::pnp {
+void PnPThread(void *) {
+}
+
 void init() {
   // Create the kernel-owned root enumerator (\Device\Root). It has no driver
   // object; its child PDOs are tracked in the PnpRootContext extension.
   s_rootDevice = KE_IO_CreateBus(nullptr, 0, "System");
   early_print_fmt("PNP Manager initialized as {}.\r\n", s_rootDevice->Name());
+
+  KE_SCHED_CreateThread(&PnPThread, nullptr, 0);
 }
 }// namespace kernel::pnp
 
@@ -51,6 +57,7 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDevice> KE_PNP_ReportRootDevice
       kernel::device_type::Unknown);
   if (!pdo) return nullptr;
   pdo->hardwareId = hardwareId;
+  pdo->pnpState = kernel::KPnpState::Started;
 
   KE_PNP_ReportNewDevice(s_rootDevice, pdo);
 
@@ -58,20 +65,17 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDevice> KE_PNP_ReportRootDevice
 }
 
 void KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
-  if (s_registeredDriverCount < s_registeredDrivers.size()) {
-    s_registeredDrivers[s_registeredDriverCount++] = driver;
-  }
+  s_registeredDrivers.push_back(driver);
 }
 
 UNDOS_KERNEL_API_DEF void KE_PNP_RegisterDeviceInterest(
     kernel::DeviceType type,
     const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
   if (!driver || type == kernel::device_type::Unknown) return;
-  if (s_deviceInterestCount < s_deviceInterests.size()) {
-    s_deviceInterests[s_deviceInterestCount].type = type;
-    s_deviceInterests[s_deviceInterestCount].driver = driver;
-    s_deviceInterestCount++;
-  }
+  DeviceInterest interest;
+  interest.type = type;
+  interest.driver = driver;
+  s_deviceInterests.push_back(kstd::move(interest));
 }
 
 // Attaches every driver that registered interest in the given FDO's device type
@@ -80,9 +84,9 @@ UNDOS_KERNEL_API_DEF void KE_PNP_RegisterDeviceInterest(
 static void TriggerDeviceInterest(const kernel::KDevicePtr<kernel::KDevice> &fdo) {
   if (!fdo) return;
 
-  for (size_t i = 0; i < s_deviceInterestCount; i++) {
-    if (s_deviceInterests[i].type != fdo->deviceType) continue;
-    const auto &driver = s_deviceInterests[i].driver;
+  for (const auto &interest: s_deviceInterests) {
+    if (interest.type != fdo->deviceType) continue;
+    const auto &driver = interest.driver;
     if (!driver || !driver->AddDevice) continue;
     if (driver->AddDevice(driver, fdo)) {
       early_print_fmt("PnP: Attached interest driver {} to device (type hash 0x{x})\n\r", driver->name, fdo->deviceType.value);

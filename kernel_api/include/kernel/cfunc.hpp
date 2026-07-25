@@ -19,7 +19,7 @@ struct cfunc {
   pointer fn = nullptr;
 
   constexpr cfunc() = default;
-  constexpr explicit cfunc(pointer p) : fn(p) {}
+  constexpr cfunc(pointer p) : fn(p) {}
   constexpr R operator()(Args... args) const { return fn(args...); }
   explicit constexpr operator bool() const { return fn != nullptr; }
   constexpr bool operator==(pointer p) const { return fn == p; }

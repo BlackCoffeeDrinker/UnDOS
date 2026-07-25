@@ -28,8 +28,18 @@ struct basic_string_view {
 
   constexpr basic_string_view() noexcept : _data{nullptr} {}
   constexpr basic_string_view(const basic_string_view &other) noexcept : _data{other._data}, _len{other._len} {}
-  constexpr basic_string_view(const CharT *str) noexcept
-      : _data{const_cast<pointer>(str)}, _len{str ? traits_type::length(str) : 0} {}
+
+  // Pointer overload for real, dynamically-sized C strings (not fixed-size arrays). This takes
+  // the argument via a forwarding reference (`T&&`) rather than a plain pointer parameter, and
+  // is SFINAE-constrained (via `is_pointer_v`) to only participate when the argument's
+  // un-decayed type is an actual pointer, not an array. A plain `const CharT*` parameter would
+  // be an equally-exact match for an array argument (array-to-pointer decay is an "exact match"
+  // Lvalue Transformation, not a Conversion) and, being a non-template overload, would win the
+  // tie-break against the array overload below -- silently treating fixed-size, non-terminated
+  // fields (e.g. raw on-disk records) as NUL-terminated strings and reading past their bound.
+  template<class T, class _RT = remove_reference_t<T>, class = enable_if_t<is_pointer_v<_RT>>>
+  constexpr basic_string_view(T &&str) noexcept
+      : _data{const_cast<pointer>(static_cast<const_pointer>(str))}, _len{str ? traits_type::length(str) : 0} {}
   constexpr basic_string_view(const CharT *str, size_type len) noexcept
       : _data{const_cast<pointer>(str)}, _len{len} {}
   constexpr basic_string_view(pointer str, size_type len) noexcept : _data{str}, _len{len} {}
@@ -183,6 +193,36 @@ struct basic_string_view {
 
   [[nodiscard]] bool starts_with(const basic_string_view &rhs) const noexcept {
     return this->_len >= rhs._len && traits_type::compare(_data, rhs._data, rhs._len) == 0;
+  }
+
+  [[nodiscard]] constexpr int compare(basic_string_view v) const noexcept {
+    const size_type n = _len < v._len ? _len : v._len;
+    int result = n ? traits_type::compare(_data, v._data, n) : 0;
+    if (result == 0) {
+      if (_len < v._len) result = -1;
+      else if (_len > v._len) result = 1;
+    }
+    return result;
+  }
+
+  [[nodiscard]] constexpr int compare(size_type pos1, size_type count1, basic_string_view v) const noexcept {
+    return substr(pos1, count1).compare(v);
+  }
+
+  [[nodiscard]] constexpr int compare(size_type pos1, size_type count1, basic_string_view v, size_type pos2, size_type count2) const noexcept {
+    return substr(pos1, count1).compare(v.substr(pos2, count2));
+  }
+
+  [[nodiscard]] constexpr int compare(const CharT *s) const noexcept {
+    return compare(basic_string_view(s));
+  }
+
+  [[nodiscard]] constexpr int compare(size_type pos1, size_type count1, const CharT *s) const noexcept {
+    return substr(pos1, count1).compare(basic_string_view(s));
+  }
+
+  [[nodiscard]] constexpr int compare(size_type pos1, size_type count1, const CharT *s, size_type count2) const noexcept {
+    return substr(pos1, count1).compare(basic_string_view(s, count2));
   }
 
   [[nodiscard]] constexpr size_type find(CharT c, size_type pos = 0) const noexcept {

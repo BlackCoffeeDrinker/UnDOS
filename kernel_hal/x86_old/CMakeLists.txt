@@ -23,9 +23,9 @@ add_hal(hal_x86_old
         pit.cpp
         pit.hpp
         pmm.hpp
-
-        atomic_op/atomic_fetch_add_4.cpp
-        atomic_op/atomic_fetch_sub_4.cpp
-        atomic_op/MemModelToPlatformEnum.hpp
+        atomics.cpp
+        atomics.hpp
+        cpuid.cpp
+        cpuid.hpp
 )
 

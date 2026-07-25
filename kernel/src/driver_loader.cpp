@@ -55,7 +55,8 @@ void init(const BootInfoT &boot_info) {
   const auto base = KE_OB_LookupObjectOfType<KDirectoryObject>("/System/Initial/BootModules");
   for (const auto &driver: boot_info.boot_modules) {
     if (driver.name.empty() || driver.base_physical == 0 || driver.length == 0) continue;
-    auto module = CreateKObject<kernel::KModuleObject>(driver.name);
+    
+    auto module = CreateKObject<KModuleObject>(driver.name);
     module->base_physical = driver.base_physical;
     module->length = driver.length;
     KE_OB_InsertObject(base, module);

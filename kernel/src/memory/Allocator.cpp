@@ -10,7 +10,6 @@ extern uint32_t g_page_size;
 namespace kernel::memory {
 namespace {
 adt::AvlTree<Slab, &Slab::avl_node> g_global_registry;
-VirtualAddress g_kernel_heap_current = 0;
 
 constexpr uint32_t kLargeAllocMagic = 0x4C524745;// 'LRGE'
 
@@ -20,9 +19,6 @@ struct LargeAllocHeader {
 };
 }// namespace
 
-void set_heap_start(VirtualAddress start) noexcept {
-  g_kernel_heap_current = start;
-}
 
 Slab *find_slab(void *ptr) noexcept {
   return g_global_registry.find(reinterpret_cast<uintptr_t>(ptr));

@@ -229,7 +229,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
   early_print_fmt("  Machine type: 0x{:x}\r\n", header.e_machine);
 
   // Step 2: read only the program header table.
-  kstd::array<hal::Elf32_Phdr, MAX_PROGRAM_HEADERS> phdrs;
+  kstd::array<hal::Elf32_Phdr, MAX_PROGRAM_HEADERS> phdrs{};
   const size_t phdrs_size = static_cast<size_t>(header.e_phnum) * sizeof(hal::Elf32_Phdr);
   if (!ReadExact(file, header.e_phoff, kstd::span(reinterpret_cast<uint8_t *>(phdrs.data()), phdrs_size))) {
     KE_VFS_CloseFile(kstd::move(file));
@@ -241,7 +241,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
   // Step 3 (relocatable path only): read the section header table, then
   // let the caller capture any named sections it cares about (e.g. a
   // driver's ".driver_name") before relocations are applied.
-  kstd::array<hal::Elf32_Shdr, MAX_SECTION_HEADERS> shdrs;
+  kstd::array<hal::Elf32_Shdr, MAX_SECTION_HEADERS> shdrs{};
   if (policy.relocatable) {
     if (header.e_shnum > MAX_SECTION_HEADERS || header.e_shentsize != sizeof(hal::Elf32_Shdr) ||
         !ReadExact(file, header.e_shoff, kstd::span(reinterpret_cast<uint8_t *>(shdrs.data()), static_cast<size_t>(header.e_shnum) * sizeof(hal::Elf32_Shdr)))) {
@@ -281,15 +281,35 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     }
 
     region_size = max_vaddr - min_vaddr;
+
+    // One BackingObject (Kind::KernelModule, since it's a file-backed
+    // image) + one VAD represents this loaded module's entire address
+    // range, registered under \Memory for inspection via the Object
+    // Manager.
+    static uint32_t g_next_module_id = 0;
+    kstd::static_string<64> backing_name;
+    kstd::format(backing_name, "KernelModule{}", g_next_module_id++);
+
+    const auto backing = kernel::CreateKObject<KMemoryBackingObject>(backing_name);
+    if (!backing) {
+      KE_VFS_CloseFile(kstd::move(file));
+      early_print_fmt("LoadElfFromVfs: Failed to create backing object\r\n");
+      return result;
+    }
+    backing->kind = KMemoryBackingObject::Kind::KernelModule;
+    backing->file = file;
+    backing->size = region_size;
+    KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), backing);
+
     auto &kas = KE_VMM_GetKernelAddressSpace();
-    void *assigned_ptr = KE_VMM_AllocateRegion(kas, region_size, vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
-    if (!assigned_ptr) {
+    const auto *vad = KE_VMM_MapBackingObject(kas, backing, region_size, vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
+    if (!vad) {
       KE_VFS_CloseFile(kstd::move(file));
       early_print_fmt("LoadElfFromVfs: Failed to allocate region\r\n");
       return result;
     }
 
-    region_base = reinterpret_cast<uintptr_t>(assigned_ptr);
+    region_base = vad->start.value;
     load_delta = region_base - min_vaddr;
   }
 

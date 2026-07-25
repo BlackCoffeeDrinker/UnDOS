@@ -26,4 +26,14 @@ struct KDevicePtrTraits {
 template<typename T>
 using KDevicePtr = detail::KPtr<T, detail::KDevicePtrTraits>;
 
+template<>
+struct detail::KPtrTypeOf<KDevice> {
+  using type = KDevicePtr<KDevice>;
+};
+template<typename T>
+  requires(kstd::is_base_of_v<KDevice, T> && !kstd::is_same_v<KDevice, T>)
+struct detail::KPtrTypeOf<T> {
+  using type = KDevicePtr<T>;
+};
+
 }// namespace kernel

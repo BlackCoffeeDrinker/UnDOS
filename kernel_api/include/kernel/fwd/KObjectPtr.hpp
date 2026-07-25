@@ -31,4 +31,14 @@ struct KObjectPtrTraits {
 template<typename T>
 using KObjectPtr = detail::KPtr<T, detail::KObjectPtrTraits>;
 
+template<>
+struct detail::KPtrTypeOf<KObject> {
+  using type = KObjectPtr<KObject>;
+};
+
+template<typename T>
+  requires(kstd::is_base_of_v<KObject, T> && !kstd::is_same_v<KObject, T>)
+struct detail::KPtrTypeOf<T> {
+  using type = KObjectPtr<T>;
+};
 }// namespace kernel

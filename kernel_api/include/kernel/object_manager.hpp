@@ -151,6 +151,15 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KObjectPtr<kernel::KDirectoryObject>,
     KE_OB_GetSubsystemDirectory);
+
+/**
+ * @ingroup OB
+ * @brief Method KE_OB_GetConfigRoot
+ * 
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kernel::KObjectPtr<kernel::KDirectoryObject>,
+    KE_OB_GetConfigRoot);
 // endregion
 
 // region Helpers

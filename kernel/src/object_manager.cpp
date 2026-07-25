@@ -15,6 +15,7 @@ kernel::KObjectPtr<kernel::KDirectoryObject> g_process;
 kernel::KObjectPtr<kernel::KDirectoryObject> g_vfs;
 kernel::KObjectPtr<kernel::KDirectoryObject> g_file;
 kernel::KObjectPtr<kernel::KDirectoryObject> g_subsystem;
+kernel::KObjectPtr<kernel::KDirectoryObject> g_configroots;
 
 kernel::KObjectPtr<kernel::KObject> LookupChild(
     const kernel::KObjectPtr<kernel::KDirectoryObject> &parent,
@@ -82,6 +83,7 @@ void init() {
   g_vfs = kernel::CreateKObject<KDirectoryObject>("VFS");
   g_file = kernel::CreateKObject<KDirectoryObject>("File");
   g_subsystem = kernel::CreateKObject<KDirectoryObject>("Subsystems");
+  g_configroots = kernel::CreateKObject<KDirectoryObject>("Hive");
 
   KE_OB_InsertObject(g_root, g_device);
   KE_OB_InsertObject(g_root, g_driver);
@@ -92,6 +94,7 @@ void init() {
   KE_OB_InsertObject(g_root, g_vfs);
   KE_OB_InsertObject(g_root, g_file);
   KE_OB_InsertObject(g_root, g_subsystem);
+  KE_OB_InsertObject(g_root, g_configroots);
 
   const auto system = kernel::CreateKObject<KDirectoryObject>("System");
   const auto initial = kernel::CreateKObject<KDirectoryObject>("Initial");
@@ -197,42 +200,14 @@ UNDOS_KERNEL_API_DEF void KE_OB_Release(kernel::KObject *obj) noexcept {
   }
 }
 
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetRootDirectory() noexcept {
-  return g_root;
-}
-
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetThreadsDirectory() noexcept {
-  return g_thread;
-}
-
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetProcessDirectory() noexcept {
-  return g_process;
-}
-
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetDriverDirectory() noexcept {
-  return g_driver;
-}
-
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetDeviceDirectory() noexcept {
-  return g_device;
-}
-
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetMemoryDirectory() noexcept {
-  return g_memory;
-}
-
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetVFSDirectory() noexcept {
-  return g_vfs;
-}
-
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetFilesystemRoot() noexcept {
-  return g_filesystem;
-}
-
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetFileRoot() noexcept {
-  return g_file;
-}
-
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetSubsystemDirectory() noexcept {
-  return g_subsystem;
-}
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetRootDirectory() noexcept { return g_root; }
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetThreadsDirectory() noexcept { return g_thread; }
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetProcessDirectory() noexcept { return g_process; }
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetDriverDirectory() noexcept { return g_driver; }
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetDeviceDirectory() noexcept { return g_device; }
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetMemoryDirectory() noexcept { return g_memory; }
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetVFSDirectory() noexcept { return g_vfs; }
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetFilesystemRoot() noexcept { return g_filesystem; }
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetFileRoot() noexcept { return g_file; }
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetSubsystemDirectory() noexcept { return g_subsystem; }
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetConfigRoot() noexcept { return g_configroots; }

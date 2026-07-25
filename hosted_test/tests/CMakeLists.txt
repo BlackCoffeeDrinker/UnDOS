@@ -1,8 +1,11 @@
 add_executable(KernelTests
         str_test.cpp
         array_test.cpp
+        vector_test.cpp
+        list_test.cpp
         expected_test.cpp
         unique_ptr_test.cpp
+        unique_lock_test.cpp
         static_identifier_test.cpp
         device_type_test.cpp
         format_test.cpp
@@ -10,6 +13,7 @@ add_executable(KernelTests
         panic.cpp
         volume_manager_test.cpp
         fat_short_name_test.cpp
+        scheduler_test.cpp
 
         kernel_host_stubs.cpp
         kernel_host_vmm_stubs.cpp
@@ -22,10 +26,12 @@ add_executable(KernelTests
         ../../kernel/src/memory/Layout.cpp
         ../../kernel/src/memory/Slab.cpp
         ../../kernel/src/memory/Storage.cpp
+        ../../kernel/src/configuration_manager.cpp
 
         object_manager_test.cpp
         subsystem_object_test.cpp
         vmm_test.cpp
+        object_creation_leak_test.cpp
 
         ../../drivers/disk_fake/fake_disk_file_backend.cpp
         disk_fake_test.cpp

@@ -36,7 +36,6 @@ bool setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice> &device,
 
   return true;
 }
-
 }// namespace
 
 UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDevice> KE_IO_CreateDevice(
@@ -45,7 +44,7 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDevice> KE_IO_CreateDevice(
     const kstd::string_view &deviceName,
     kernel::DeviceType deviceType) noexcept {
 
-  if (const auto device = KE_CreateObject<kernel::KDevice>(driver)) {
+  if (auto device = KE_CreateKPtrObject<kernel::KDevice>(driver)) {
     setupCommonKDevice(device, driver, deviceExtensionSize, deviceName);
     device->deviceType = deviceType;
     return device;
@@ -59,7 +58,7 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDeviceBus> KE_IO_CreateBus(
     size_t deviceExtensionSize,
     const kstd::string_view &busName) noexcept {
 
-  if (const auto device = KE_CreateObject<kernel::KDeviceBus>(driver)) {
+  if (auto device = KE_CreateKPtrObject<kernel::KDeviceBus>(driver)) {
     setupCommonKDevice(device, driver, deviceExtensionSize, busName);
     device->deviceType = kernel::device_type::Bus;
     device->childCount = 0;

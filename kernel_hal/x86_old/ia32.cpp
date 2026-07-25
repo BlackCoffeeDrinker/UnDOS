@@ -1,5 +1,8 @@
 
 #include "ia32.hpp"
+
+#include "atomics.hpp"
+#include "cpuid.hpp"
 #include "gdt.hpp"
 #include "intr.hpp"
 #include "pmm.hpp"
@@ -8,17 +11,10 @@
 #include <Kernel.hpp>
 
 namespace {
-kernel::VirtualAddress highest_addr{};
-}
+hal::x86::CPUID cpu_id{};
+}// namespace
 
-hal::x86::regs cpu_cpuid(int code) {
-  hal::x86::regs r{};
-  asm volatile("cpuid" : "=a"(r.eax), "=b"(r.ebx),
-                         "=c"(r.ecx), "=d"(r.edx) : "0"(code));
-  return r;
-}
-
-UNDOS_HAL_API_DEF void HAL_PLATFORM_Init(const kernel::BootInfoT &boot_info) noexcept {
+UNDOS_HAL_API_DEF void HAL_PLATFORM_Init(const kernel::BootInfoT &boot_info, kernel::vmm::AddressSpace &kernel_address_space) noexcept {
   // Stage 1.5 currently sets the page size to be 4096 bytes
   // Double check
   if (boot_info.page_size != 4096) {
@@ -26,24 +22,49 @@ UNDOS_HAL_API_DEF void HAL_PLATFORM_Init(const kernel::BootInfoT &boot_info) noe
     HAL_PLATFORM_Panic("Stage 1.5 did not set the page size to 4096 bytes", __FILE__, __LINE__);
   }
 
+  auto atomic_platform = hal::x86::AtomicPlatorm::X86_386;
+  cpu_id = hal::x86::get_cpuid();
+
+  // CPUID.1:EDX bit 8 (CX8) indicates native CMPXCHG8B support (Pentium+).
+  if (cpu_id.has_CMPXCHG8B) {
+    atomic_platform = hal::x86::AtomicPlatorm::X86_CMPXCHG8B;
+  } else if (cpu_id.family >= 4) {
+    atomic_platform = hal::x86::AtomicPlatorm::X86_XADD;
+  }
+
+  early_print_fmt("CPU Family: {}, Model: {}\r\n", cpu_id.family, cpu_id.model);
+
+  hal::x86::init_atomic_ops(atomic_platform);
   hal::x86::init_gdt();
   hal::x86::init_idt();
   hal::x86::init_pmm(boot_info);
   hal::x86::init_vmm();
 
-  // Find the highest virtual address
-  for (const auto &region: boot_info.mapped_memory) {
-    if (region.type == kernel::MappedMemoryRegionType::None) continue;
-    if (kernel::VirtualAddress end = region.virtual_base + region.length;
-        end > highest_addr) {
-      highest_addr = end;
+  // Initialize kernel address space
+  kernel_address_space.translation_root = HAL_VMM_GetCurrentTranslationRoot();
+  kernel_address_space.asid = 0;
+
+  {
+    kernel::VirtualAddress highest_addr = 0;
+
+    // Find the highest virtual address
+    for (const auto &region: boot_info.mapped_memory) {
+      if (region.type == kernel::MappedMemoryRegionType::None) continue;
+      if (kernel::VirtualAddress end = region.virtual_base + region.length;
+          end > highest_addr) {
+        highest_addr = end;
+      }
     }
+
+    // Start heap after the last mapped region + one guard page
+    kernel_address_space.current_base = (highest_addr + boot_info.page_size - 1)
+                                            .align_down(boot_info.page_size) +
+                                        boot_info.page_size;
   }
+
+  kernel_address_space.limit = kernel::VirtualAddress(kernel::VirtualAddress::Invalid);
 }
 
-UNDOS_HAL_API_DEF kernel::VirtualAddress HAL_VMM_GetHighestVirtualAddress() noexcept {
-  return highest_addr;
-}
 
 UNDOS_HAL_API_DEF uint32_t HAL_PLATFORM_GetCpuCount() noexcept {
   return 1;
@@ -87,7 +108,7 @@ UNDOS_HAL_API_DEF void HAL_IO_Delay() noexcept {
   HAL_IO_Out8(0x80, 0);
 }
 
-UNDOS_HAL_API_DEF [[noreturn]] void HAL_PLATFORM_Panic(const char *message, const char *file, int line) noexcept {
+UNDOS_HAL_API_DEF [[noreturn]] void HAL_PLATFORM_Panic(const kstd::string_view &message, const char *file, int line) noexcept {
   // Once the scheduler is running, interrupts are globally enabled, so a
   // timer/keyboard IRQ could otherwise fire mid-print and preempt into
   // another thread while we're panicking, corrupting the output and never

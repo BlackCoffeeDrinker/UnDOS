@@ -7,7 +7,6 @@
 namespace kernel::memory {
 class Cache;
 
-void set_heap_start(VirtualAddress start) noexcept;
 Slab *find_slab(void *ptr) noexcept;
 
 // Fallback allocator for objects that don't fit any fixed-size Cache. Backed

@@ -152,6 +152,30 @@ struct basic_nomm_string {
     return basic_string_view<CharT, Traits>{_data + pos, rlen};
   }
 
+  [[nodiscard]] constexpr int compare(basic_string_view<CharT, Traits> v) const noexcept {
+    return basic_string_view<CharT, Traits>(*this).compare(v);
+  }
+
+  [[nodiscard]] constexpr int compare(size_type pos1, size_type count1, basic_string_view<CharT, Traits> v) const noexcept {
+    return basic_string_view<CharT, Traits>(*this).compare(pos1, count1, v);
+  }
+
+  [[nodiscard]] constexpr int compare(size_type pos1, size_type count1, basic_string_view<CharT, Traits> v, size_type pos2, size_type count2) const noexcept {
+    return basic_string_view<CharT, Traits>(*this).compare(pos1, count1, v, pos2, count2);
+  }
+
+  [[nodiscard]] constexpr int compare(const CharT *s) const noexcept {
+    return basic_string_view<CharT, Traits>(*this).compare(s);
+  }
+
+  [[nodiscard]] constexpr int compare(size_type pos1, size_type count1, const CharT *s) const noexcept {
+    return basic_string_view<CharT, Traits>(*this).compare(pos1, count1, s);
+  }
+
+  [[nodiscard]] constexpr int compare(size_type pos1, size_type count1, const CharT *s, size_type count2) const noexcept {
+    return basic_string_view<CharT, Traits>(*this).compare(pos1, count1, s, count2);
+  }
+
   // Comparison operators
   friend constexpr bool operator==(const basic_nomm_string &lhs, const basic_nomm_string &rhs) noexcept {
     return static_cast<basic_string_view<CharT, Traits>>(lhs) == static_cast<basic_string_view<CharT, Traits>>(rhs);

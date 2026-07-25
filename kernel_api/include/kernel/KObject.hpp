@@ -14,4 +14,6 @@
 #include <kernel/kobject/KSubsystemObject.hpp>
 #include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/kobject/KVolumeMountObject.hpp>
+#include <kernel/kobject/KMemoryBackingObject.hpp>
+#include <kernel/kobject/KConfigurationRoot.hpp>
 #include <kernel/kobject/ObjectType.hpp>

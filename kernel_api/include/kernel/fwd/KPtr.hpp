@@ -4,6 +4,9 @@
 #include <type_traits.hpp>
 
 namespace kernel::detail {
+template<typename T>
+struct KPtrTypeOf {};
+
 template<typename T, typename Traits>
 class KPtr {
   using pointer = T *;

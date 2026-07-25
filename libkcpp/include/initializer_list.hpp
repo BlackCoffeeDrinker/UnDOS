@@ -3,7 +3,19 @@
 
 #include <__config.hpp>
 
-namespace kstd {
+// The compiler recognizes brace-enclosed initializer lists ({a, b, c}) only
+// when bound to a type literally named `std::initializer_list`; this is a
+// hard-wired compiler requirement, not something a differently-named type can
+// opt into. On hosted builds (e.g. the test suite) the toolchain already
+// ships a `<initializer_list>`, so we simply reuse it. On the freestanding
+// kernel build there is no hosted standard library, so we provide the
+// required definition ourselves (matching libc++'s layout) purely as that
+// compiler hook. Either way, the rest of the codebase only ever spells this
+// as `kstd::initializer_list`, never `std::`.
+#if __STDC_HOSTED__ == 1
+#include <initializer_list>
+#else
+namespace std {
 
 template<class _Ep>
 class initializer_list {
@@ -37,6 +49,13 @@ class initializer_list {
     return __begin_ + __size_;
   }
 };
+
+}// namespace std
+#endif
+
+namespace kstd {
+
+using std::initializer_list;
 
 template<class _Ep>
 inline _KSTD_API constexpr const _Ep *begin(initializer_list<_Ep> __il) noexcept {

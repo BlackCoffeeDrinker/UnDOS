@@ -8,12 +8,14 @@
 
 #include <kernel/KObject.hpp>
 #include <kernel/cfunc.hpp>
+#include <kernel/configuration_manager.hpp>
 #include <kernel/data_buffer.hpp>
 #include <kernel/device.hpp>
 #include <kernel/dma.hpp>
 #include <kernel/driver.hpp>
 #include <kernel/entry.hpp>
 #include <kernel/hal_interface.hpp>
+#include <kernel/mutex.hpp>
 #include <kernel/object_manager.hpp>
 #include <kernel/pnp.hpp>
 #include <kernel/resource.hpp>
@@ -23,9 +25,8 @@
 #include <kernel/user_process.hpp>
 #include <kernel/vfs.hpp>
 #include <kernel/virtual_memory.hpp>
-#include <kernel/contiguous_container.hpp>
 
 #include <kernel/memory/address.hpp>
+#include <kernel/memory/borrowed_ptr.hpp>
 #include <kernel/memory/protect.hpp>
 #include <kernel/memory/vad.hpp>
-#include <kernel/memory/borrowed_ptr.hpp>

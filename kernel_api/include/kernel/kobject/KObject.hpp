@@ -14,12 +14,17 @@ namespace kernel {
 struct KObject;
 }
 
-
 namespace kernel {
 // A base structural type for unified C++ tracking
 struct KObject {
   const ObjectType type;
-  kstd::atomic<uint32_t> reference_count{1};
+  // Starts at 0 rather than 1: ownership is only actually granted once the
+  // freshly-constructed object is adopted by a KObjectPtr (its constructor
+  // from a raw pointer always calls KObjectPtrTraits::inc_ref), so seeding
+  // this at 1 here would double-count that first reference and the object
+  // would never reach 0 (and thus never be freed) via a single KObjectPtr's
+  // normal construction/destruction lifecycle.
+  kstd::atomic<uint32_t> reference_count{0};
   uint32_t flags{0};
 
   kstd::static_string<64> name;
