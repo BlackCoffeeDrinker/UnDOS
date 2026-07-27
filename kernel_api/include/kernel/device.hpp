@@ -1,8 +1,10 @@
 
 #pragma once
 
-#include <kernel/__core.hpp>
+#include <list.hpp>
+
 #include <kernel/StaticIdentifier.hpp>
+#include <kernel/__core.hpp>
 #include <kernel/data_buffer.hpp>
 #include <kernel/kobject/KDeviceObject.hpp>
 #include <kernel/kobject/KDriverObject.hpp>
@@ -67,8 +69,7 @@ struct KDevice : Versioned<KDevice, 1> {
 };
 
 struct KDeviceBus : KDevice {
-  kstd::array<KDevicePtr<KDevice>, 64> children{};
-  uint8_t childCount{0};
+  kstd::list<KDevicePtr<KDevice>> children{};
 };
 
 }// namespace kernel

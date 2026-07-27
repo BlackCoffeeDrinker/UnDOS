@@ -14,6 +14,7 @@ add_executable(KernelTests
         volume_manager_test.cpp
         fat_short_name_test.cpp
         scheduler_test.cpp
+        percpu_test.cpp
 
         kernel_host_stubs.cpp
         kernel_host_vmm_stubs.cpp
@@ -21,6 +22,7 @@ add_executable(KernelTests
         ../../kernel/src/io.cpp
         ../../kernel/src/vfs.cpp
         ../../kernel/src/vmm.cpp
+        ../../kernel/src/percpu.cpp
         ../../kernel/src/memory/Allocator.cpp
         ../../kernel/src/memory/Cache.cpp
         ../../kernel/src/memory/Layout.cpp
@@ -32,6 +34,7 @@ add_executable(KernelTests
         subsystem_object_test.cpp
         vmm_test.cpp
         object_creation_leak_test.cpp
+        configuration_manager_test.cpp
 
         ../../drivers/disk_fake/fake_disk_file_backend.cpp
         disk_fake_test.cpp

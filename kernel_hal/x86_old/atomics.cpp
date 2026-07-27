@@ -4,7 +4,7 @@
 
 using atomic_add_fn = unsigned int (*)(volatile void *ptr, unsigned int val, PlatformMemoryOrder memmodel);
 using atomic_sub_fn = unsigned int (*)(volatile void *ptr, unsigned int val, PlatformMemoryOrder memmodel);
-using atomic_cmpxchg32_fn = bool (*)(volatile void *ptr, uint32_t expected, uint32_t desired, PlatformMemoryOrder memmodel);
+using atomic_cmpxchg32_fn = bool (*)(volatile void *ptr, uint32_t &expected, uint32_t desired, PlatformMemoryOrder memmodel);
 using atomic_load64_fn = uint64_t (*)(volatile uint64_t *p);
 using atomic_store64_fn = void (*)(volatile uint64_t *p, uint64_t val);
 using atomic_exchange64_fn = uint64_t (*)(volatile uint64_t *p, uint64_t val);
@@ -178,7 +178,7 @@ unsigned int atomic_fetch_sub_cmpxchg(volatile void *ptr,
 }
 
 bool atomic_compare_exchange_32_386(volatile void *ptr,
-                                    uint32_t expected,
+                                    uint32_t &expected,
                                     uint32_t desired,
                                     PlatformMemoryOrder order) noexcept {
   // CMPXCHG isn't guaranteed on plain 386, fall back to the spinlock.
@@ -191,8 +191,11 @@ bool atomic_compare_exchange_32_386(volatile void *ptr,
   atomic_lock_386();
 
   bool success = (*p == expected);
-  if (success)
+  if (success) {
     *p = desired;
+  } else {
+    expected = *p;
+  }
 
   atomic_unlock_386();
 
@@ -209,7 +212,7 @@ bool atomic_compare_exchange_32_386(volatile void *ptr,
 }
 
 bool atomic_compare_exchange_32_cmpxchg(volatile void *ptr,
-                                        uint32_t expected,
+                                        uint32_t &expected,
                                         uint32_t desired,
                                         PlatformMemoryOrder order) noexcept {
   volatile auto *p = static_cast<volatile uint32_t *>(ptr);
@@ -221,7 +224,11 @@ bool atomic_compare_exchange_32_cmpxchg(volatile void *ptr,
       : "r"(desired)
       : "memory");
   atomic_memory_order(order);
-  return old == expected;
+  const bool success = old == expected;
+  if (!success) {
+    expected = old;
+  }
+  return success;
 }
 
 uint64_t atomic_load_64_386(volatile uint64_t *p) noexcept {
@@ -386,8 +393,8 @@ UNDOS_HAL_API_DEF uint32_t HAL_ATOMIC_Exchange32(kernel::VirtualAddress addr, ui
   return val;// xchg returns old value in the register
 }
 
-UNDOS_HAL_API_DEF bool HAL_ATOMIC_CompareExchange32(kernel::VirtualAddress addr, uint32_t expected, uint32_t desired, PlatformMemoryOrder order) noexcept {
-  return atomic_compare_exchange_32_impl(addr.as_ptr<void>(), expected, desired, order);
+UNDOS_HAL_API_DEF bool HAL_ATOMIC_CompareExchange32(kernel::VirtualAddress addr, uint32_t &expected_out, uint32_t desired, PlatformMemoryOrder order) noexcept {
+  return atomic_compare_exchange_32_impl(addr.as_ptr<void>(), expected_out, desired, order);
 }
 
 UNDOS_HAL_API_DEF uint32_t HAL_ATOMIC_FetchAdd32(kernel::VirtualAddress addr, uint32_t delta, PlatformMemoryOrder order) noexcept {

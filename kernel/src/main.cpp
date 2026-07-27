@@ -1,3 +1,4 @@
+#include "configuration_manager.hpp"
 #include "stdkrn.hpp"
 
 #include "driver_loader.hpp"
@@ -237,6 +238,11 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   // cascades through the PnP manager: bind bus_isa -> create IsaBusFdo ->
   // StartDevice -> auto-enumerate children -> bind disk_ata.
   HAL_PLATFORM_AfterObjectManager();
+
+  // Device processing (bind/start/enumerate/class-trigger) now happens
+  // asynchronously on the PnP worker thread; wait for the queue to fully
+  // drain so the root-fs lookup below still sees a fully-started tree.
+  KE_PNP_WaitForQuiescence();
   //MemoryReclaim_BootStructures(boot_info);
 
   // TODO: Bring extra CPUs online
@@ -260,6 +266,9 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   } else {
     HAL_PLATFORM_Panic("No root filesystem specified\r\n", __FILE__, __LINE__);
   }
+  
+  // TODO: Wait for root filesystem to be ready
+  kernel::configuration_manager::init();
 
   // Register the native ELF loader subsystem, a long-lived singleton used to
   // bootstrap user processes (see KE_USER_CreateProcess).
@@ -273,11 +282,11 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   }
 
   // Try and find the init
-  // TODO: wait_for_root();
   early_print_fmt("Loading init\r\n");
   KE_USER_CreateProcess("/System/init.elf");
 
   DumpObjectTree(KE_OB_GetRootDirectory());
+  KE_PNP_WaitForQuiescence();
   DumpDeviceTree();
   early_print("Done\r\n");
 

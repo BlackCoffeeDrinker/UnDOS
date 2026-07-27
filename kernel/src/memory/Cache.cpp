@@ -8,6 +8,13 @@ Cache::Cache(size_t object_size, size_t alignment, size_t page_size) noexcept
 }
 
 void *Cache::allocate() noexcept {
+  lock_.lock();
+  void *ptr = allocate_locked();
+  lock_.unlock();
+  return ptr;
+}
+
+void *Cache::allocate_locked() noexcept {
   Slab *slab = get_available_slab();
   if (!slab) return nullptr;
 
@@ -35,12 +42,19 @@ void *Cache::allocate() noexcept {
 }
 
 void Cache::free(void *ptr) noexcept {
+  lock_.lock();
   Slab *slab = find_slab(ptr);
-  if (!slab) return;
-  free(ptr, *slab);
+  if (slab) free_locked(ptr, *slab);
+  lock_.unlock();
 }
 
 void Cache::free(void *ptr, Slab &slab) noexcept {
+  lock_.lock();
+  free_locked(ptr, slab);
+  lock_.unlock();
+}
+
+void Cache::free_locked(void *ptr, Slab &slab) noexcept {
   const bool was_full = slab.full();
   slab.free(ptr);
   allocated_ -= layout_.object_size;
@@ -70,6 +84,7 @@ Slab *Cache::get_available_slab() noexcept {
 }
 
 size_t Cache::reclaim() noexcept {
+  lock_.lock();
   size_t count = 0;
   while (!free_slabs_.empty()) {
     Slab *slab = &free_slabs_.front();
@@ -77,6 +92,7 @@ size_t Cache::reclaim() noexcept {
     allocator_.free_slab(*slab);
     count++;
   }
+  lock_.unlock();
   return count;
 }
 

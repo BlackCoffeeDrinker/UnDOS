@@ -8,19 +8,24 @@ namespace kernel::driver {
 
 SymbolTable::~SymbolTable() {
   symbols.clear([](SymbolEntry *entry) {
-    delete entry;
+    entry->~SymbolEntry();
+    KE_Free(entry);
   });
 }
 
 bool SymbolTable::Register(kstd::string_view name, uintptr_t address) {
-  if (const auto entry = KE_CreateObject<SymbolEntry>()) {
-    entry->name = name;
-    entry->address = address;
-    symbols.insert(*entry);
-    return true;
-  }
-  
-  return false;
+  auto entry = KE_CreateObject<SymbolEntry>();
+  if (!entry) return false;
+
+  entry->name = name;
+  entry->address = address;
+  symbols.insert(*entry);
+
+  // The AVL tree now owns this memory (linked in by address); release the
+  // unique_ptr so it isn't freed here out from under the tree. It is freed
+  // later via KE_Free in the destructor's clear() callback above.
+  entry.release();
+  return true;
 }
 
 uintptr_t SymbolTable::Resolve(kstd::string_view name) const {

@@ -1,16 +1,11 @@
 #include "pnp_manager.hpp"
-
-#include "list.hpp"
-#include "object_manager.hpp"
-
 #include "stdkrn.hpp"
-#include <Kernel.hpp>
-#include <kernel/resource.hpp>
-#include <new.hpp>
 
-static kstd::list<kernel::KObjectPtr<kernel::KDriverObject>> s_registeredDrivers;
-static kernel::KDevicePtr<kernel::KDeviceBus> s_rootDevice;
+#include <kernel/mutex.hpp>
+#include <list.hpp>
+#include <mutex.hpp>
 
+namespace {
 // Device-interest (class-trigger) registry: drivers that want to be attached as
 // an upper filter whenever a device of a given type is started.
 struct DeviceInterest {
@@ -18,9 +13,30 @@ struct DeviceInterest {
   kernel::KObjectPtr<kernel::KDriverObject> driver;
 };
 
-static kstd::list<DeviceInterest> s_deviceInterests;
+// Guards s_deviceInterests/s_registeredDrivers, which are now read from the
+// PnP worker thread while potentially still mutated from the boot thread as
+// drivers load.
+kernel::Mutex s_registryLock;
+kstd::list<DeviceInterest> s_deviceInterests;
+kstd::list<kernel::KObjectPtr<kernel::KDriverObject>> s_registeredDrivers;
+kernel::KDevicePtr<kernel::KDeviceBus> s_rootDevice;
+
+// Background work queue: KE_PNP_ReportNewDevice only attaches the PDO to the
+// tree and pushes a work item here; PnPThread does the actual bind/start/
+// enumerate/trigger work so the reporting driver returns immediately.
+struct PnpWorkItem {
+  kernel::KDevicePtr<kernel::KDeviceBus> parent;
+  kernel::KDevicePtr<kernel::KDevice> pdo;
+};
+
+kernel::Mutex s_queueLock;
+kstd::list<PnpWorkItem> s_workQueue;
+bool s_workerBusy = false;
+kernel::KObjectPtr<kernel::KThreadObject> s_pnpThread;
+}// namespace
 
 static kernel::KObjectPtr<kernel::KDriverObject> FindDriverForHardwareId(const kstd::string_view &hwid) {
+  kstd::unique_lock guard(s_registryLock);
   for (const auto &driver: s_registeredDrivers) {
     if (driver->name == hwid) {
       return driver;
@@ -30,8 +46,41 @@ static kernel::KObjectPtr<kernel::KDriverObject> FindDriverForHardwareId(const k
   return nullptr;
 }
 
+static void ProcessDevice(
+    const kernel::KDevicePtr<kernel::KDeviceBus> &parent,
+    const kernel::KDevicePtr<kernel::KDevice> &pdo);
+static void TriggerDeviceInterest(const kernel::KDevicePtr<kernel::KDevice> &fdo);
+
 namespace kernel::pnp {
+
 void PnPThread(void *) {
+  while (true) {
+    PnpWorkItem item;
+    bool hasItem = false;
+
+    {
+      kstd::unique_lock guard(s_queueLock);
+      if (s_workQueue.empty()) {
+        s_workerBusy = false;
+      } else {
+        item = s_workQueue.front();
+        s_workQueue.pop_front();
+        s_workerBusy = true;
+        hasItem = true;
+      }
+    }
+
+    if (hasItem) {
+      ProcessDevice(item.parent, item.pdo);
+
+      kstd::unique_lock guard(s_queueLock);
+      if (s_workQueue.empty()) {
+        s_workerBusy = false;
+      }
+    } else {
+      KE_SCHED_Block();
+    }
+  }
 }
 
 void init() {
@@ -40,7 +89,7 @@ void init() {
   s_rootDevice = KE_IO_CreateBus(nullptr, 0, "System");
   early_print_fmt("PNP Manager initialized as {}.\r\n", s_rootDevice->Name());
 
-  KE_SCHED_CreateThread(&PnPThread, nullptr, 0);
+  s_pnpThread = KE_SCHED_CreateThread(&PnPThread, nullptr, 0);
 }
 }// namespace kernel::pnp
 
@@ -57,7 +106,6 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDevice> KE_PNP_ReportRootDevice
       kernel::device_type::Unknown);
   if (!pdo) return nullptr;
   pdo->hardwareId = hardwareId;
-  pdo->pnpState = kernel::KPnpState::Started;
 
   KE_PNP_ReportNewDevice(s_rootDevice, pdo);
 
@@ -65,6 +113,7 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDevice> KE_PNP_ReportRootDevice
 }
 
 void KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
+  kstd::unique_lock guard(s_registryLock);
   s_registeredDrivers.push_back(driver);
 }
 
@@ -72,10 +121,13 @@ UNDOS_KERNEL_API_DEF void KE_PNP_RegisterDeviceInterest(
     kernel::DeviceType type,
     const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
   if (!driver || type == kernel::device_type::Unknown) return;
-  DeviceInterest interest;
-  interest.type = type;
-  interest.driver = driver;
-  s_deviceInterests.push_back(kstd::move(interest));
+  if (!driver->AddDevice) {
+    early_print_fmt("KE_PNP_RegisterDeviceInterest: ERROR Driver {} does not implement AddDevice, cannot register interest\n\r", driver->name);
+    return;
+  }
+
+  kstd::unique_lock guard(s_registryLock);
+  s_deviceInterests.emplace_back(type, driver);
 }
 
 // Attaches every driver that registered interest in the given FDO's device type
@@ -84,10 +136,21 @@ UNDOS_KERNEL_API_DEF void KE_PNP_RegisterDeviceInterest(
 static void TriggerDeviceInterest(const kernel::KDevicePtr<kernel::KDevice> &fdo) {
   if (!fdo) return;
 
+  if (fdo->pnpState != kernel::KPnpState::Started) {
+    early_print_fmt("WARN: Device {} is not started: future versions will discard trigger\n\r", fdo->Name());
+  }
+
+  kstd::unique_lock guard(s_registryLock);
   for (const auto &interest: s_deviceInterests) {
-    if (interest.type != fdo->deviceType) continue;
+    if (interest.type != fdo->deviceType) {
+      continue;
+    }
     const auto &driver = interest.driver;
-    if (!driver || !driver->AddDevice) continue;
+    if (!driver || !driver->AddDevice) [[unlikely]] {
+      // This shouldn't happen as checks in KE_PNP_RegisterDeviceInterest prevent this
+      continue;
+    }
+
     if (driver->AddDevice(driver, fdo)) {
       early_print_fmt("PnP: Attached interest driver {} to device (type hash 0x{x})\n\r", driver->name, fdo->deviceType.value);
       if (driver->StartDevice) {
@@ -107,10 +170,39 @@ void KE_PNP_ReportNewDevice(
 
   early_print_fmt("KE_PNP_ReportNewDevice: PDO {} (type hash 0x{x})\n\r", pdo->Name(), pdo->deviceType.value);
 
-  // Parent tracking
+  // Parent tracking: the tree shape must be visible immediately, so this part
+  // stays synchronous. Everything else (identify, bind, resources, start,
+  // recursive enumerate, class-trigger) is deferred to the PnP worker thread.
   if (parent) {
     KE_IO_AttachChildDevice(parent, pdo);
   }
+
+  {
+    kstd::unique_lock guard(s_queueLock);
+    s_workQueue.emplace_back(PnpWorkItem{parent, pdo});
+  }
+
+  if (s_pnpThread) {
+    KE_SCHED_Unblock(s_pnpThread);
+  }
+}
+
+UNDOS_KERNEL_API_DEF void KE_PNP_WaitForQuiescence() noexcept {
+  while (true) {
+    {
+      kstd::unique_lock guard(s_queueLock);
+      if (s_workQueue.empty() && !s_workerBusy) {
+        return;
+      }
+    }
+    KE_SCHED_Yield();
+  }
+}
+
+static void ProcessDevice(
+    const kernel::KDevicePtr<kernel::KDeviceBus> &parent,
+    const kernel::KDevicePtr<kernel::KDevice> &pdo) {
+  (void) parent;
 
   // Identification: prefer the explicit hardwareId field (set on root/legacy
   // PDOs that have no driver), otherwise fall back to the enumerating driver's
@@ -147,12 +239,15 @@ void KE_PNP_ReportNewDevice(
         // device un-started.
         if (!KE_RES_AssignResources(pdo, req)) {
           early_print_fmt("PnP: resource conflict for {}; not starting\n\r", hwid);
+          pdo->pnpState = kernel::KPnpState::Stopped;
         } else {
           // Start Device. The event/dispatch layer was removed in favour of raw
           // method calls (see note in pnp.hpp); StartDevice is invoked directly.
           if (pdo->driverObject && pdo->driverObject->StartDevice) {
             pdo->driverObject->StartDevice(pdo);
           }
+
+          pdo->pnpState = kernel::KPnpState::Started;
 
           // If the driver attached a Bus-type FDO, auto-enumerate its children.
           if (pdo->attachedDevice && pdo->attachedDevice->deviceType == kernel::device_type::Bus) {
@@ -171,6 +266,7 @@ void KE_PNP_ReportNewDevice(
     KE_RES_FreeRequirementsList(req);
   } else {
     early_print_fmt("PnP: No driver for {}; continuing with class triggers\n\r", hwid);
+    pdo->pnpState = kernel::KPnpState::Started;
     TriggerDeviceInterest(pdo);
   }
 }

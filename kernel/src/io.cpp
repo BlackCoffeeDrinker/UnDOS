@@ -61,7 +61,6 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDeviceBus> KE_IO_CreateBus(
   if (auto device = KE_CreateKPtrObject<kernel::KDeviceBus>(driver)) {
     setupCommonKDevice(device, driver, deviceExtensionSize, busName);
     device->deviceType = kernel::device_type::Bus;
-    device->childCount = 0;
     return device;
   }
 
@@ -98,17 +97,10 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDevice> KE_IO_AttachChildDevice
   early_print_fmt("KE_IO_AttachChildDevice: Bus = {} Child = {}\r\n",
                   bus->Name(), child->Name());
 
-  // Find first free slot
-  for (auto &dev: bus->children) {
-    if (!dev) {
-      dev = child;
-      child->parentBus = bus;
-      bus->childCount++;
-      return child;
-    }
-  }
+  bus->children.push_back(child);
+  child->parentBus = bus;
 
-  return nullptr;
+  return child;
 }
 
 UNDOS_KERNEL_API_DEF kernel::IoStatus KE_IO_ReadDevice(

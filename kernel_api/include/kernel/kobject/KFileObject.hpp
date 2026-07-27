@@ -25,12 +25,15 @@ struct KFileObject : KObjectT<KFileObject, 1, TYPE_FILE> {
   kstd::static_string<255> actualPath;
   KObjectPtr<KVolumeMountObject> mountPoint;
   kstd::unique_ptr<KVFSNode> vfsNode;
+  
+  ~KFileObject() override; // Implemented in vfs.cpp
 
   const KObjectPtr<KFilesystemObject> &FileSystem() const noexcept { return mountPoint->fileSystem; }
 
   OpenMode mode;
   uint64_t offset;
   uint32_t flags;
+  bool isClosed = false; //< File is in the process of being closed
 };
 
 template<>

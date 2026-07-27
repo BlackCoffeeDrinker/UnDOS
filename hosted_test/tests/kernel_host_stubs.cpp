@@ -30,6 +30,13 @@ UNDOS_KERNEL_API_DEF void KE_PNP_ReportNewDevice(const kernel::KDevicePtr<kernel
   g_lastReportedPdo = pdo;
 }
 
+// The background PnP work queue/worker thread live in pnp_manager.cpp, which
+// is out of scope for hosted tests (see comment above). Since
+// KE_PNP_ReportNewDevice above is already a synchronous no-op stub here,
+// there is never any queued work to wait for.
+UNDOS_KERNEL_API_DEF void KE_PNP_WaitForQuiescence() noexcept {
+}
+
 UNDOS_KERNEL_API_DEF void KE_PNP_RegisterDeviceInterest(kernel::DeviceType type, const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
   (void) type;
   (void) driver;

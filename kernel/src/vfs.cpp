@@ -4,14 +4,19 @@
 #include "stdkrn.hpp"
 
 namespace {
-uint64_t opened;
 }
 
-namespace kernel::vfs {
-void init() {
-  opened = 0;
+namespace kernel {
+KFileObject::~KFileObject() {
+  // Make sure the handle is closed
+  if (!isClosed) KE_VFS_CloseFile(this);
 }
-}// namespace kernel::vfs
+
+namespace vfs {
+void init() {
+}
+}// namespace vfs
+}// namespace kernel
 
 namespace {
 kernel::KObjectPtr<kernel::KVolumeMountObject> findMountPoint(const kstd::string_view &path) {
@@ -121,10 +126,11 @@ UNDOS_KERNEL_API_DEF void KE_VFS_UnregisterFilesystemDriver(kernel::KObjectPtr<k
 
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFileObject> KE_VFS_OpenFile(const kstd::string_view &path, kernel::KFileObject::OpenMode mode) noexcept {
   // Create file object
+  
+  auto file = KE_CreateKPtrObject<kernel::KFileObject>();
   kstd::static_string<64> fileObjectName;
-  kstd::format(fileObjectName, "{}", opened++);
+  kstd::format(fileObjectName, "{:x}", file.get());
 
-  auto file = kernel::CreateKObject<kernel::KFileObject>(fileObjectName);
   file->mode = mode;
   file->offset = 0;
   file->flags = 0;
@@ -258,10 +264,14 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFileObject> KE_VFS_OpenFile(con
 
 UNDOS_KERNEL_API_DEF void KE_VFS_CloseFile(kernel::KObjectPtr<kernel::KFileObject> &&file) noexcept {
   if (!file) [[unlikely]] { return; }
+  if (file->isClosed) [[unlikely]] { return; }
   if (!file->FileSystem()) [[unlikely]] { return; }
   if (file->FileSystem()->CloseHandle) {
     file->FileSystem()->CloseHandle(file);
   }
+
+  file->isClosed = true;// The destructor checks this and if it's not false, calls this method
+  file->vfsNode = nullptr;
 
   // Remove file from the OB
   KE_OB_RemoveObject(KE_OB_GetFileRoot(), file);

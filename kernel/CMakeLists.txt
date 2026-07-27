@@ -9,6 +9,7 @@ add_executable(kernel
         src/vmm.cpp
         src/vmm.hpp
         src/time.cpp
+        src/percpu.cpp
 
         src/scheduler/ReadyQueue.hpp
         src/scheduler/Scheduler.hpp

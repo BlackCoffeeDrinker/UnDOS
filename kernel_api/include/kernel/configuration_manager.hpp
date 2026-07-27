@@ -3,65 +3,55 @@
 
 #include <atomic.hpp>
 #include <chrono.hpp>
+#include <kernel/configuration_manager/configuration_key.hpp>
+#include <kernel/configuration_manager/configuration_key_access.hpp>
+#include <kernel/configuration_manager/configuration_key_info.hpp>
+#include <kernel/configuration_manager/configuration_value_type.hpp>
 #include <kernel/fwd/KConfigurationKey.hpp>
 
-namespace kernel {
-enum class ConfigurationValueType {
-  Invalid,
-  Boolean,
-  UInt32,
-  UInt64,
-  SInt32,
-  SInt64,
-  String,
-};
-
-enum class KConfigurationKeyAccess : uint16_t {
-  READ = 1,
-  WRITE = 2,
-  RW = READ | WRITE,
-};
-
-struct KConfigurationKeyInfo {
-  kstd::chrono::system_time lastModified;
-  kstd::static_string<64> name;
-  bool isFolder;
-  ConfigurationValueType typeIfNotFolder;
-};
-
-struct KConfigurationKey {
-  KObjectPtr<KConfigurationRoot> configRoot;
-  KConfigurationKeyAccess access;
-
-  // Own lifetime reference count for this handle object itself (distinct
-  // from configRoot->configptr_references, which tracks how many open keys
-  // reference the shared root). Managed by KConfigurationKeyPtrTraits; starts
-  // at 0 since ownership is only granted once a KConfigurationKeyPtr adopts
-  // the freshly-created object.
-  kstd::atomic<uint32_t> handle_references{0};
-};
-}// namespace kernel
-
 // Refcount methods are in include/kernel/fwd/KConfigurationKey.hpp
+
+/**
+ * @brief Registers a new configuration hive (e.g. "LocalMachine") so it can
+ * later be opened with KE_CM_OpenRoot()/KE_CM_OpenKey(). The backing file
+ * doesn't need to exist yet: it is created and formatted lazily the first
+ * time the hive is opened.
+ * @param hiveName The unique name of the hive to register.
+ * @param filePath The VFS path of the hive's backing file.
+ * @return The newly registered hive, or nullptr if a hive with that name
+ * already exists or registration otherwise failed.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kernel::KObjectPtr<kernel::KConfigurationRoot>,
+    KE_CM_RegisterHive,
+    const kstd::string_view &hiveName,
+    const kstd::string_view &filePath);
 
 UNDOS_HAL_PUBLIC_V1API(
     kernel::KConfigurationKeyPtr,
     KE_CM_OpenRoot,
     const kstd::string_view &rootName);
 
+/**
+ * 
+ * @param parentKey Optional handle to the root object directory for the path name specified by the subKeyName member. If parentKey is NULL, subKeyName must point to a fully qualified object name that includes the full path to the target object. If parentKey is non-NULL, subKeyName specifies an object name relative to the parentKey directory.
+ * @param subKeyName This must either be a fully qualified object name, or a relative path name to the directory specified by the parentKey member.
+ * @param desiredAccess 
+ * @return 
+ */
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KConfigurationKeyPtr,
     KE_CM_OpenKey,
     const kernel::KConfigurationKeyPtr &parentKey,
     const kstd::string_view &subKeyName,
-    kernel::KConfigurationKeyAccess desiredAccess = kernel::KConfigurationKeyAccess::READ);
+    kernel::KConfigurationKeyAccess desiredAccess = kernel::KConfigurationKeyAccess::Read);
 
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KConfigurationKeyPtr,
     KE_CM_CreateKey,
     const kernel::KConfigurationKeyPtr &parentKey,
     const kstd::string_view &subKeyName,
-    kernel::KConfigurationKeyAccess desiredAccess = kernel::KConfigurationKeyAccess::RW);
+    kernel::KConfigurationKeyAccess desiredAccess = kernel::KConfigurationKeyAccess::ReadWrite);
 
 UNDOS_KERNEL_PUBLIC_V1API(
     bool,

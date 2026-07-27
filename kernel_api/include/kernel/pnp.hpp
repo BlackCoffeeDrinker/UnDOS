@@ -65,3 +65,16 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KDevicePtr<kernel::KDeviceBus>,
     KE_PNP_GetRootDevice);
+
+/**
+ * @ingroup PNP
+ * @brief Method KE_PNP_WaitForQuiescence
+ *
+ * Blocks the calling thread until the PnP work queue is empty and the PnP
+ * worker thread is not mid-processing an item. Used at boot, right after the
+ * device tree enumeration is kicked off, to preserve the guarantee that the
+ * root device tree is fully started before the root filesystem is looked up.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    void,
+    KE_PNP_WaitForQuiescence);
