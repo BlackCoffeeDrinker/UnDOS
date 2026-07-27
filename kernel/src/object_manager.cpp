@@ -84,6 +84,7 @@ void init() {
   g_file = kernel::CreateKObject<KDirectoryObject>("File");
   g_subsystem = kernel::CreateKObject<KDirectoryObject>("Subsystems");
   g_configroots = kernel::CreateKObject<KDirectoryObject>("Hive");
+  const auto system = kernel::CreateKObject<KDirectoryObject>("System");
 
   KE_OB_InsertObject(g_root, g_device);
   KE_OB_InsertObject(g_root, g_driver);
@@ -95,12 +96,11 @@ void init() {
   KE_OB_InsertObject(g_root, g_file);
   KE_OB_InsertObject(g_root, g_subsystem);
   KE_OB_InsertObject(g_root, g_configroots);
+  KE_OB_InsertObject(g_root, system);
 
-  const auto system = kernel::CreateKObject<KDirectoryObject>("System");
   const auto initial = kernel::CreateKObject<KDirectoryObject>("Initial");
   const auto boot_modules = kernel::CreateKObject<KDirectoryObject>("BootModules");
 
-  KE_OB_InsertObject(g_root, system);
   KE_OB_InsertObject(system, initial);
   KE_OB_InsertObject(initial, boot_modules);
 

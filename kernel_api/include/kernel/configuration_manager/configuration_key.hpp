@@ -22,6 +22,11 @@ struct KConfigurationKey {
   // and this handle's own lifetime is a convenient place to keep it.
   kstd::static_string<128> stringValueScratch;
 
+  // Scratch storage backing the kstd::string_view returned by
+  // KE_CM_EnumKey()/KE_CM_EnumValue(): same rationale as stringValueScratch
+  // above, sized to match KConfigurationRoot::Root::name's capacity.
+  kstd::static_string<32> enumNameScratch;
+
   // Own lifetime reference count for this handle object itself (distinct
   // from configRoot->configptr_references, which tracks how many open keys
   // reference the shared root). Managed by KConfigurationKeyPtrTraits; starts

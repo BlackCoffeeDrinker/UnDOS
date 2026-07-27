@@ -34,8 +34,8 @@ struct array {
   const T &operator[](int i) const { return elements[i]; }
 
   bool operator==(const array &rhs) const {
-    for (const auto &i: elements)
-      if (i != rhs.elements[i])
+    for (size_t i = 0; i < N; i++)
+      if (elements[i] != rhs.elements[i])
         return false;
     return true;
   }

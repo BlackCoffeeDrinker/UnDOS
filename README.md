@@ -11,7 +11,7 @@ in modern C++, with a focus on simplicity, efficiency, and a familiar graphical 
 
 ## Goals
 
-- **Retro Modernity:** Provide a modern modular OS architecture for retro x86 hardware.
+- **Retro Modernity:** Provide a modern modular OS architecture for retro x86 hardware; 386 and up.
 - **Developer Experience:** Offer a clean and simple developer experience using modern C++.
 - **Legacy Preservation:** Support classic DOS‑era software through compatibility layers.
 - **Classic UI:** Deliver a lightweight GUI inspired by early Windows environments.
@@ -45,8 +45,7 @@ The boot execution sequence shifts through four distinct environments before lau
 2. **Stage 1.5 (Trampoline):** Executes identity-mapped at physical `0x00100000` (1MB). It parses the raw Multiboot modules, maps sections to target physical frames,
    cross-stitches undefined references across binary barriers, sets up high-half tables, and enables the CPU MMU paging bit.
 3. **HAL (`hal_x86_old`):** Executes in high-half space immediately following the Kernel Core. Handles ISA bus configurations, static non-PnP devices via `CONFIG.REG`,
-   legacy PIC/APIC
-   wiring, and basic interrupt context delivery.
+   legacy PIC wiring, and basic interrupt context delivery.
 4. **Kernel Core (`kernel`):** Executes in high-half space starting at `0xC0000000`. Architecture-agnostic payload containing the VFS, scheduler, Object Manager, NT-style
    personality subsystems, and high-level process execution engines.
 
@@ -140,9 +139,10 @@ The GUI is heavily inspired by GDI and the classic Windows 3.1 / Workgroups envi
 3. Run `cmake` in a compatible environment to generate the build system.
 4. Build `BootIso` target using the generated build system; this builds everything with the x86-old hal
 5. Debug!
-    1. Debug with
+    1. Prefer the `run-qemu.sh` script, there's also `debug-and-run-for-15-seconds.sh` that builds and runs the OS for 15 seconds.
+    2. Debug with
        `qemu-system-i386 -machine isapc -cpu 486 -m 32 -S -gdb tcp::1234 -no-reboot -no-shutdown -nodefaults -chardev stdio,id=ser0 -device isa-serial,chardev=ser0 -drive file=os.iso,media=cdrom,readonly=on`
-    2. Or with (no display)
+    3. Or with (no display)
        `qemu-system-i386 -machine isapc -cpu 486 -m 32 -nodefaults -no-reboot -no-shutdown -display none -S -gdb tcp::1234  -chardev stdio,id=ser0,signal=off -device isa-serial,chardev=ser0 -drive file=os.iso,media=cdrom,readonly=on`
 
 ### Adding a New Cross-Binary Function
@@ -221,11 +221,11 @@ sequenceDiagram
     PDO ->> Driver: invokeRemove
 ```
 
-* [ ] Implement initial GDT reload structure inside x86 HAL initialization sequence
-* [ ] Implement Object Manager
-* [ ] Implement scheduler
-* [ ] Implement VFS
-* [ ] Implement Driver Runtime (loading & executing)
+* [X] Implement initial GDT reload structure inside x86 HAL initialization sequence
+* [X] Implement Object Manager
+* [X] Implement scheduler
+* [X] Implement VFS
+* [X] Implement Driver Runtime (loading & executing)
 * [ ] Complete early device tree parsing from `CONFIG.REG` file node arrays
 * [ ] Make a HAL for ACPI x86
 * [ ] Make a HAL for SMP devices

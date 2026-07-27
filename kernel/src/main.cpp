@@ -223,14 +223,14 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
 
   early_print_fmt("Scheduler is running\r\n");
 
-  // Drivers require configuration manager to be up, but we don't have a file system yet
-  // TODO: We're going to fake a root config
-
   kernel::pnp::init();
   kernel::resource::init();
   kernel::vfs::init();
   kernel::driver::init(boot_info);
   kernel::initial::init();
+
+  // Drivers require configuration manager to be up, but we don't have a file system yet
+  // TODO: We're going to fake a root config
 
   // Tell the HAL the Object Manager is ready.
   // HAL can now safely allocate object handles for PCI/PCIe buses and drivers.
@@ -266,7 +266,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   } else {
     HAL_PLATFORM_Panic("No root filesystem specified\r\n", __FILE__, __LINE__);
   }
-  
+
   // TODO: Wait for root filesystem to be ready
   kernel::configuration_manager::init();
 
@@ -285,8 +285,8 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   early_print_fmt("Loading init\r\n");
   KE_USER_CreateProcess("/System/init.elf");
 
-  DumpObjectTree(KE_OB_GetRootDirectory());
   KE_PNP_WaitForQuiescence();
+  DumpObjectTree(KE_OB_GetRootDirectory());
   DumpDeviceTree();
   early_print("Done\r\n");
 

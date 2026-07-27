@@ -88,6 +88,10 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(co
     early_print_fmt("KE_DRIVER_Load: Failed to load driver from path {}\r\n", path);
     return nullptr;
   }
+  
+  // Make a HIVE key
+  // /LocalMachine/Drivers/<tmpname>
+  KM_CM
 
   driver_object->load_base = result.load_base;
   driver_object->total_size = result.total_size;
@@ -95,8 +99,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(co
   driver_object->entry_point(driver_object);
 
   // TODO: Remove the entry point from memory once it's done executing
-
-
+  
   KE_OB_InsertObject(KE_OB_GetDriverDirectory(), driver_object);
   KE_PNP_RegisterDriver(driver_object);
   return driver_object;

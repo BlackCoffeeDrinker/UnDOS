@@ -76,7 +76,7 @@ uint64_t TestFs_WriteHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject>
 // KE_VFS_OpenFile("/whatever", ...) resolves against a private, isolated
 // backing store for each test case.
 struct TestFsFixture {
-  explicit TestFsFixture(const char *imageName, size_t imageSize = 16384)
+  explicit TestFsFixture(const char *imageName, size_t imageSize = 32768)
       : imagePath(MakeTempImagePath(imageName)),
         backing(kstd::string_view(imagePath)) {
     kstd::format(fsName, "CMTestFs_{}", imageName);
@@ -123,39 +123,67 @@ struct TestFsFixture {
   kernel::KObjectPtr<kernel::KFilesystemObject> filesystem;
 };
 
-// Writes a HEADER + a single fully-reserved INDEX TABLE group (170 entries
-// + 16-byte next-group pointer, populated only at slot 0) + the payload
-// bytes, mirroring configuration_manager.cpp's private on-disk layout, and
-// mirrors the same entry into `hive->roots` in memory. Used to seed a value
-// for the hive root itself (keyHash 0) so KE_CM_GetKeyValue*/KE_CM_SetKeyValue*
-// can be exercised without needing KE_CM_CreateKey (still unimplemented).
+// Byte sizes of the current on-disk layout, mirroring the private constants
+// in configuration_manager.cpp:
+//  - HEADER: 32 bytes.
+//  - INDEX BLOCK: 4096 bytes, page-aligned (170 x 24-byte entries + a
+//    4-byte next-block offset, reserved bytes, and padding).
+//  - NAME BLOCK: 4096 bytes, page-aligned, immediately following its
+//    paired INDEX BLOCK.
+//  - DATA REGION: right after the INDEX BLOCK + NAME BLOCK pair.
+constexpr uint32_t HEADER_BYTES = 32;
+constexpr uint32_t INDEX_BLOCK_BYTES = 4096;
+constexpr uint32_t NAME_BLOCK_BYTES = 4096;
+constexpr uint32_t BLOCK_PAIR_BYTES = INDEX_BLOCK_BYTES + NAME_BLOCK_BYTES;
+// Offset, within an INDEX BLOCK, of its `entries` array (right after the
+// 4-byte next-block offset and 4-byte reserved field).
+constexpr uint32_t INDEX_BLOCK_ENTRIES_OFFSET = 8;
+
+// Writes a HEADER + a single fully-reserved INDEX BLOCK/NAME BLOCK pair
+// (populated only at index slot 0) + the payload bytes, mirroring
+// configuration_manager.cpp's private on-disk layout, and mirrors the same
+// entry into `hive->roots` in memory. Used to seed a value for the hive
+// root itself (keyHash 0) so KE_CM_GetKeyValue*/KE_CM_SetKeyValue* can be
+// exercised without needing KE_CM_CreateKey.
 void SeedRootValueEntry(const kernel::KObjectPtr<kernel::KConfigurationRoot> &hive,
                         kernel::ConfigurationValueType valueType,
                         const kstd::span<const uint8_t> &data) {
-  constexpr uint32_t groupOffset = 8;         // right after the 8-byte header
-  constexpr uint32_t indexEntryOffset = groupOffset;// slot 0 of the group
-  constexpr uint32_t dataOffset = groupOffset + 4096;// header + one full index group (170*24 + 16)
-  const auto length = static_cast<uint16_t>(data.size());
+  constexpr uint32_t indexBlockOffset = HEADER_BYTES;// right after the header
+  constexpr uint32_t indexEntryOffset = indexBlockOffset + INDEX_BLOCK_ENTRIES_OFFSET;// slot 0
+  constexpr uint32_t dataOffset = indexBlockOffset + BLOCK_PAIR_BYTES;
+  const auto length = static_cast<uint32_t>(data.size());
 
-  uint8_t header[8] = {'C', 'F', 'G', '1', 1, 0, 1, 0};// version=1, keyCount=1 (LE)
+  uint8_t header[HEADER_BYTES] = {};
+  header[0] = 'C';
+  header[1] = 'F';
+  header[2] = 'G';
+  header[3] = '1';
+  header[4] = 1;// version (LE)
+  header[6] = 1;// indexEntryCount (LE)
+  header[16] = static_cast<uint8_t>(indexBlockOffset & 0xFF);// offsetToFirstIndexBlock (LE)
+  header[20] = static_cast<uint8_t>((indexBlockOffset + INDEX_BLOCK_BYTES) & 0xFF);// offsetToFirstNameBlock (LE)
+  header[24] = static_cast<uint8_t>(dataOffset & 0xFF);// offsetToDataRegion (LE)
+  header[25] = static_cast<uint8_t>((dataOffset >> 8) & 0xFF);
   KE_VFS_SeekFile(hive->file, 0);
   KE_VFS_WriteFile(hive->file, kstd::span<const uint8_t>(header, sizeof(header)));
 
-  // Zero out the whole reserved index group first (170 empty entries plus a
-  // next-group pointer of 0, i.e. no further groups), then overwrite slot 0
-  // with our single populated entry.
-  uint8_t zeroGroup[4096] = {};
-  KE_VFS_SeekFile(hive->file, groupOffset);
-  KE_VFS_WriteFile(hive->file, kstd::span<const uint8_t>(zeroGroup, sizeof(zeroGroup)));
+  // Zero out the whole reserved INDEX BLOCK + NAME BLOCK pair first (all
+  // entries empty, next-block offsets of 0, i.e. no further blocks), then
+  // overwrite index slot 0 with our single populated entry.
+  uint8_t zeroPair[BLOCK_PAIR_BYTES] = {};
+  KE_VFS_SeekFile(hive->file, indexBlockOffset);
+  KE_VFS_WriteFile(hive->file, kstd::span<const uint8_t>(zeroPair, sizeof(zeroPair)));
 
-  uint8_t entry[24] = {};// keyHash=0 (the hive root itself)
-  entry[8] = static_cast<uint8_t>(valueType);
+  uint8_t entry[24] = {};// keyHash=0 (the hive root itself), nameEntryIndex=0
+  entry[10] = static_cast<uint8_t>(valueType);
   entry[12] = static_cast<uint8_t>(dataOffset & 0xFF);
   entry[13] = static_cast<uint8_t>((dataOffset >> 8) & 0xFF);
   entry[14] = static_cast<uint8_t>((dataOffset >> 16) & 0xFF);
   entry[15] = static_cast<uint8_t>((dataOffset >> 24) & 0xFF);
   entry[16] = static_cast<uint8_t>(length & 0xFF);
   entry[17] = static_cast<uint8_t>((length >> 8) & 0xFF);
+  entry[18] = static_cast<uint8_t>((length >> 16) & 0xFF);
+  entry[19] = static_cast<uint8_t>((length >> 24) & 0xFF);
   KE_VFS_SeekFile(hive->file, indexEntryOffset);
   KE_VFS_WriteFile(hive->file, kstd::span<const uint8_t>(entry, sizeof(entry)));
 
@@ -169,7 +197,7 @@ void SeedRootValueEntry(const kernel::KObjectPtr<kernel::KConfigurationRoot> &hi
       .offset = dataOffset,
       .length = length,
       .indexEntryOffset = indexEntryOffset,
-      .groupOffset = groupOffset});
+      .indexBlockOffset = indexBlockOffset});
   hive->numRoots = 1;
 }
 
@@ -478,7 +506,7 @@ TEST_CASE("KE_CM_SetKeyValue* overwrites an existing same-size value in place", 
                       kstd::span<const uint8_t>(reinterpret_cast<const uint8_t *>(&initial), sizeof(initial)));
 
   REQUIRE(KE_CM_SetKeyValueUInt32(root, 99u));
-  REQUIRE(hive->roots.front().offset == 8 + 4096);// no relocation: same size
+  REQUIRE(hive->roots.front().offset == HEADER_BYTES + BLOCK_PAIR_BYTES);// no relocation: same size
 
   uint32_t readBack = 0;
   REQUIRE(KE_CM_GetKeyValueUInt32(root, readBack));
@@ -501,11 +529,11 @@ TEST_CASE("KE_CM_SetKeyValueString relocates the value when it grows", "[cm]") {
   const kstd::string_view shortValue = "Hi!";
   SeedRootValueEntry(hive, kernel::ConfigurationValueType::String,
                       kstd::span<const uint8_t>(reinterpret_cast<const uint8_t *>(shortValue.data()), shortValue.size()));
-  REQUIRE(hive->roots.front().offset == 8 + 4096);
+  REQUIRE(hive->roots.front().offset == HEADER_BYTES + BLOCK_PAIR_BYTES);
 
   const kstd::string_view longerValue = "This is a much longer string than before";
   REQUIRE(KE_CM_SetKeyValueString(root, longerValue));
-  REQUIRE(hive->roots.front().offset != 8 + 4096);// relocated to the end of the data region
+  REQUIRE(hive->roots.front().offset != HEADER_BYTES + BLOCK_PAIR_BYTES);// relocated to the end of the data region
   REQUIRE(hive->roots.front().length == longerValue.size());
 
   kstd::string_view readBack;
@@ -634,19 +662,19 @@ TEST_CASE("KE_CM_CreateKey allocates a new index group once the current one is f
   const auto root = KE_CM_OpenRoot("ConfigTest_CreateKeyNewGroup");
   REQUIRE(root != nullptr);
 
-  const uint32_t firstGroupOffset = 8;// right after the 8-byte header
+  const uint32_t firstIndexBlockOffset = HEADER_BYTES;// right after the header
   kstd::static_string<32> name;
   for (int i = 0; i < 170; i++) {
     kstd::format(name, "Key{}", i);
     REQUIRE(KE_CM_CreateKey(root, kstd::string_view(name), kernel::KConfigurationKeyAccess::ReadWrite) != nullptr);
   }
   REQUIRE(hive->numRoots == 170);
-  REQUIRE(hive->roots.back().groupOffset == firstGroupOffset);// first group is now completely full
+  REQUIRE(hive->roots.back().indexBlockOffset == firstIndexBlockOffset);// first block is now completely full
 
   const auto extraKey = KE_CM_CreateKey(root, "OneMoreKey", kernel::KConfigurationKeyAccess::ReadWrite);
   REQUIRE(extraKey != nullptr);
   REQUIRE(hive->numRoots == 171);
-  REQUIRE(hive->roots.back().groupOffset != firstGroupOffset);// landed in a brand-new, chained-in second group
+  REQUIRE(hive->roots.back().indexBlockOffset != firstIndexBlockOffset);// landed in a brand-new, chained-in second block pair
 
   REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigRoot(), hive));
 }
@@ -770,6 +798,245 @@ TEST_CASE("KE_CM_DeleteValue fails when there is no value to delete", "[cm]") {
 
   // A value name that doesn't correspond to any entry at all also fails.
   REQUIRE_FALSE(KE_CM_DeleteValue(root, "NoSuchValue"));
+
+  REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigRoot(), hive));
+}
+
+TEST_CASE("KE_CM_EnumKey enumerates only the folder-like direct children of a key", "[cm]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("enum_key_basic");
+  REQUIRE(fixture.mounted);
+
+  const auto hive = KE_CM_RegisterHive("ConfigTest_EnumKeyBasic", "/enumkeybasic.reg");
+  REQUIRE(hive != nullptr);
+
+  const auto root = KE_CM_OpenRoot("ConfigTest_EnumKeyBasic");
+  REQUIRE(root != nullptr);
+
+  REQUIRE(KE_CM_CreateKey(root, "FolderA", kernel::KConfigurationKeyAccess::ReadWrite) != nullptr);
+  REQUIRE(KE_CM_CreateKey(root, "FolderB", kernel::KConfigurationKeyAccess::ReadWrite) != nullptr);
+
+  // A value-holding entry directly under root must not show up as a key.
+  const auto valueEntry = KE_CM_CreateKey(root, "SomeValue", kernel::KConfigurationKeyAccess::ReadWrite);
+  REQUIRE(valueEntry != nullptr);
+  REQUIRE(KE_CM_SetKeyValueUInt32(valueEntry, 1u));
+
+  kstd::string_view name0;
+  REQUIRE(KE_CM_EnumKey(root, 0, name0));
+  REQUIRE(name0 == "FolderA");
+
+  kstd::string_view name1;
+  REQUIRE(KE_CM_EnumKey(root, 1, name1));
+  REQUIRE(name1 == "FolderB");
+
+  // Only 2 folder-like keys exist directly under root.
+  kstd::string_view name2;
+  REQUIRE_FALSE(KE_CM_EnumKey(root, 2, name2));
+
+  REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigRoot(), hive));
+}
+
+TEST_CASE("KE_CM_EnumKey only enumerates a key's own direct children", "[cm]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("enum_key_nested");
+  REQUIRE(fixture.mounted);
+
+  const auto hive = KE_CM_RegisterHive("ConfigTest_EnumKeyNested", "/enumkeynested.reg");
+  REQUIRE(hive != nullptr);
+
+  const auto root = KE_CM_OpenRoot("ConfigTest_EnumKeyNested");
+  REQUIRE(root != nullptr);
+
+  const auto parent = KE_CM_CreateKey(root, "Parent", kernel::KConfigurationKeyAccess::ReadWrite);
+  REQUIRE(parent != nullptr);
+  REQUIRE(KE_CM_CreateKey(parent, "Child", kernel::KConfigurationKeyAccess::ReadWrite) != nullptr);
+
+  // "Child" belongs to "Parent", not to the hive root: it must not be
+  // enumerated as one of root's own direct children.
+  kstd::string_view rootChildName;
+  REQUIRE(KE_CM_EnumKey(root, 0, rootChildName));
+  REQUIRE(rootChildName == "Parent");
+  kstd::string_view noMore;
+  REQUIRE_FALSE(KE_CM_EnumKey(root, 1, noMore));
+
+  kstd::string_view parentChildName;
+  REQUIRE(KE_CM_EnumKey(parent, 0, parentChildName));
+  REQUIRE(parentChildName == "Child");
+
+  REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigRoot(), hive));
+}
+
+TEST_CASE("KE_CM_EnumKey fails on an empty key / out-of-range index", "[cm]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("enum_key_empty");
+  REQUIRE(fixture.mounted);
+
+  const auto hive = KE_CM_RegisterHive("ConfigTest_EnumKeyEmpty", "/enumkeyempty.reg");
+  REQUIRE(hive != nullptr);
+
+  const auto root = KE_CM_OpenRoot("ConfigTest_EnumKeyEmpty");
+  REQUIRE(root != nullptr);
+
+  kstd::string_view name;
+  REQUIRE_FALSE(KE_CM_EnumKey(root, 0, name));
+
+  REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigRoot(), hive));
+}
+
+TEST_CASE("KE_CM_EnumValue enumerates only the value-holding direct children of a key", "[cm]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("enum_value_basic");
+  REQUIRE(fixture.mounted);
+
+  const auto hive = KE_CM_RegisterHive("ConfigTest_EnumValueBasic", "/enumvaluebasic.reg");
+  REQUIRE(hive != nullptr);
+
+  const auto root = KE_CM_OpenRoot("ConfigTest_EnumValueBasic");
+  REQUIRE(root != nullptr);
+
+  // A folder-like key directly under root must not show up as a value.
+  REQUIRE(KE_CM_CreateKey(root, "SubFolder", kernel::KConfigurationKeyAccess::ReadWrite) != nullptr);
+
+  const auto boolValue = KE_CM_CreateKey(root, "Enabled", kernel::KConfigurationKeyAccess::ReadWrite);
+  REQUIRE(boolValue != nullptr);
+  REQUIRE(KE_CM_SetKeyValueBool(boolValue, true));
+
+  const auto strValue = KE_CM_CreateKey(root, "Label", kernel::KConfigurationKeyAccess::ReadWrite);
+  REQUIRE(strValue != nullptr);
+  REQUIRE(KE_CM_SetKeyValueString(strValue, "Hello"));
+
+  kstd::string_view name0;
+  kernel::ConfigurationValueType type0{};
+  REQUIRE(KE_CM_EnumValue(root, 0, name0, type0));
+  REQUIRE(name0 == "Enabled");
+  REQUIRE(type0 == kernel::ConfigurationValueType::Boolean);
+
+  kstd::string_view name1;
+  kernel::ConfigurationValueType type1{};
+  REQUIRE(KE_CM_EnumValue(root, 1, name1, type1));
+  REQUIRE(name1 == "Label");
+  REQUIRE(type1 == kernel::ConfigurationValueType::String);
+
+  // Only 2 value-holding entries exist directly under root.
+  kstd::string_view name2;
+  kernel::ConfigurationValueType type2{};
+  REQUIRE_FALSE(KE_CM_EnumValue(root, 2, name2, type2));
+
+  REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigRoot(), hive));
+}
+
+TEST_CASE("KE_CM_EnumValue no longer reports a value after KE_CM_DeleteValue clears it", "[cm]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("enum_value_after_delete");
+  REQUIRE(fixture.mounted);
+
+  const auto hive = KE_CM_RegisterHive("ConfigTest_EnumValueAfterDelete", "/enumvalueafterdelete.reg");
+  REQUIRE(hive != nullptr);
+
+  const auto root = KE_CM_OpenRoot("ConfigTest_EnumValueAfterDelete");
+  REQUIRE(root != nullptr);
+
+  const auto created = KE_CM_CreateKey(root, "ValueHolder", kernel::KConfigurationKeyAccess::ReadWrite);
+  REQUIRE(created != nullptr);
+  REQUIRE(KE_CM_SetKeyValueUInt32(created, 7u));
+
+  kstd::string_view name;
+  kernel::ConfigurationValueType type{};
+  REQUIRE(KE_CM_EnumValue(root, 0, name, type));
+
+  REQUIRE(KE_CM_DeleteValue(root, "ValueHolder"));
+
+  // The entry is now folder-like again: it must show up via KE_CM_EnumKey()
+  // instead of KE_CM_EnumValue().
+  REQUIRE_FALSE(KE_CM_EnumValue(root, 0, name, type));
+  REQUIRE(KE_CM_EnumKey(root, 0, name));
+  REQUIRE(name == "ValueHolder");
+
+  REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigRoot(), hive));
+}
+
+TEST_CASE("KM_CM_GetKeyInfo reports the hive root as an unnamed folder", "[cm]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("keyinfo_root");
+  REQUIRE(fixture.mounted);
+
+  const auto hive = KE_CM_RegisterHive("ConfigTest_KeyInfoRoot", "/keyinforoot.reg");
+  REQUIRE(hive != nullptr);
+
+  const auto root = KE_CM_OpenRoot("ConfigTest_KeyInfoRoot");
+  REQUIRE(root != nullptr);
+
+  kernel::KConfigurationKeyInfo info{};
+  REQUIRE(KM_CM_GetKeyInfo(root, info));
+  REQUIRE(info.isFolder);
+  REQUIRE(info.name.empty());
+
+  REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigRoot(), hive));
+}
+
+TEST_CASE("KM_CM_GetKeyInfo reports a folder-like key correctly", "[cm]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("keyinfo_folder");
+  REQUIRE(fixture.mounted);
+
+  const auto hive = KE_CM_RegisterHive("ConfigTest_KeyInfoFolder", "/keyinfofolder.reg");
+  REQUIRE(hive != nullptr);
+
+  const auto root = KE_CM_OpenRoot("ConfigTest_KeyInfoFolder");
+  REQUIRE(root != nullptr);
+
+  const auto folder = KE_CM_CreateKey(root, "SubFolder", kernel::KConfigurationKeyAccess::ReadWrite);
+  REQUIRE(folder != nullptr);
+
+  kernel::KConfigurationKeyInfo info{};
+  REQUIRE(KM_CM_GetKeyInfo(folder, info));
+  REQUIRE(info.isFolder);
+  REQUIRE(info.name == "SubFolder");
+
+  REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigRoot(), hive));
+}
+
+TEST_CASE("KM_CM_GetKeyInfo reports a value-holding key and its type", "[cm]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("keyinfo_value");
+  REQUIRE(fixture.mounted);
+
+  const auto hive = KE_CM_RegisterHive("ConfigTest_KeyInfoValue", "/keyinfovalue.reg");
+  REQUIRE(hive != nullptr);
+
+  const auto root = KE_CM_OpenRoot("ConfigTest_KeyInfoValue");
+  REQUIRE(root != nullptr);
+
+  const auto value = KE_CM_CreateKey(root, "Enabled", kernel::KConfigurationKeyAccess::ReadWrite);
+  REQUIRE(value != nullptr);
+  REQUIRE(KE_CM_SetKeyValueBool(value, true));
+
+  kernel::KConfigurationKeyInfo info{};
+  REQUIRE(KM_CM_GetKeyInfo(value, info));
+  REQUIRE_FALSE(info.isFolder);
+  REQUIRE(info.name == "Enabled");
+  REQUIRE(info.typeIfNotFolder == kernel::ConfigurationValueType::Boolean);
+
+  REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigRoot(), hive));
+}
+
+TEST_CASE("KM_CM_GetKeyInfo fails for a deleted key", "[cm]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("keyinfo_deleted");
+  REQUIRE(fixture.mounted);
+
+  const auto hive = KE_CM_RegisterHive("ConfigTest_KeyInfoDeleted", "/keyinfodeleted.reg");
+  REQUIRE(hive != nullptr);
+
+  const auto root = KE_CM_OpenRoot("ConfigTest_KeyInfoDeleted");
+  REQUIRE(root != nullptr);
+
+  const auto key = KE_CM_CreateKey(root, "Temp", kernel::KConfigurationKeyAccess::ReadWrite);
+  REQUIRE(key != nullptr);
+  REQUIRE(KE_CM_DeleteKey(root, "Temp"));
+
+  kernel::KConfigurationKeyInfo info{};
+  REQUIRE_FALSE(KM_CM_GetKeyInfo(key, info));
 
   REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigRoot(), hive));
 }

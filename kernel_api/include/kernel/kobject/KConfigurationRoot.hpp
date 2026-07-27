@@ -23,18 +23,23 @@ struct KConfigurationRoot : KObjectT<KConfigurationRoot, 1, TYPE_CONFIGROOT_SECT
     uint64_t parentHash{0};
     ConfigurationValueType valueType{ConfigurationValueType::Invalid};
     uint32_t offset{0};
-    uint16_t length{0};
+    uint32_t length{0};
     kstd::static_string<32> name;
 
-    // Bookkeeping needed to navigate the chained-groups on-disk layout: not
-    // part of the 24-byte on-disk index entry itself.
+    // Bookkeeping needed to navigate the chained INDEX BLOCK/NAME BLOCK
+    // pairs on-disk layout: not part of the 24-byte on-disk index entry
+    // itself.
     // `indexEntryOffset` is the absolute file offset of this entry's own
-    // 24-byte slot (so it can be persisted back in place), and `groupOffset`
-    // is the absolute file offset of the start of the INDEX TABLE group this
-    // entry belongs to (so the matching DATA REGION - right after that
-    // group's fixed-size index table and next-group pointer - can be found).
+    // 24-byte slot (so it can be persisted back in place), and
+    // `indexBlockOffset` is the absolute file offset of the start of the
+    // INDEX BLOCK this entry belongs to (its paired NAME BLOCK and DATA
+    // REGION - right after both fixed-size blocks - can be derived from it).
     uint32_t indexEntryOffset{0};
-    uint32_t groupOffset{0};
+    uint32_t indexBlockOffset{0};
+    // Slot index of this entry's `name` within its paired NAME BLOCK (so it
+    // can be persisted back in place), or 0xFFFF if this entry has no
+    // associated name entry on disk yet.
+    uint16_t nameEntryIndex{0xFFFF};
   };
 
   kstd::static_string<255> filePath;//< The path to the configroot file
