@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include <atomic.hpp>
 #include <kernel/fwd/KPtr.hpp>
 
 namespace kernel {
@@ -11,6 +12,12 @@ struct KConfigurationKey;
 UNDOS_KERNEL_PUBLIC_V1API(bool, KE_CM_IncrementConfigRootReferenceCount, const kernel::KConfigurationKey *key);
 UNDOS_KERNEL_PUBLIC_V1API(bool, KE_CM_DecrementConfigRootReferenceCount, const kernel::KConfigurationKey *key);
 // endregion
+
+// Forward declaration so KConfigurationKeyPtrTraits::dec_ref() below can call
+// it: the full declaration normally comes from kernel/virtual_memory.hpp, but
+// this header is now pulled in very early (via kernel/__core.hpp, for
+// UNDOS_DRIVER_ENTRY), before that header is otherwise reached.
+UNDOS_KERNEL_PUBLIC_V1API(void, KE_Free, void *ptr);
 
 namespace kernel {
 namespace detail {

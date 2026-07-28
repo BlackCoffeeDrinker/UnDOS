@@ -9,6 +9,7 @@
 #include "vmm.hpp"
 
 #include <Kernel.hpp>
+#include <kernel/configuration_manager.hpp>
 #include <kernel/elf.hpp>
 #include <memory.hpp>
 #include <new.hpp>
@@ -89,14 +90,29 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(co
     return nullptr;
   }
   
-  // Make a HIVE key
-  // /LocalMachine/Drivers/<tmpname>
-  KM_CM
+  // Give the driver its own configuration key, e.g. "/Boot/Drivers/<name>",
+  // scoped under the volatile "Boot" hive (see kernel::configuration_manager::init()).
+  // "Boot" is always registered by this point (configuration_manager::init()
+  // now runs before any driver is loaded), so this should never fail in
+  // practice. If "Boot" has already been promoted/dropped (see
+  // kernel::configuration_manager::PromoteBootHive()) - i.e. a driver is
+  // being (re)loaded at runtime, after boot - fall back to targeting
+  // "LocalMachine" directly instead.
+  kernel::KConfigurationKeyPtr driverConfig = nullptr;
+  auto driverConfigRoot = KE_CM_OpenRoot("Boot");
+  if (!driverConfigRoot) {
+    driverConfigRoot = KE_CM_OpenRoot("LocalMachine");
+  }
+  if (driverConfigRoot) {
+    if (const auto driversKey = KE_CM_CreateKey(driverConfigRoot, "Drivers", kernel::KConfigurationKeyAccess::ReadWrite)) {
+      driverConfig = KE_CM_CreateKey(driversKey, driver_object->name, kernel::KConfigurationKeyAccess::ReadWrite);
+    }
+  }
 
   driver_object->load_base = result.load_base;
   driver_object->total_size = result.total_size;
-  driver_object->entry_point = reinterpret_cast<void (*)(kernel::KObjectPtr<kernel::KDriverObject> &)>(result.entry_point.value);
-  driver_object->entry_point(driver_object);
+  driver_object->entry_point = reinterpret_cast<void (*)(kernel::KObjectPtr<kernel::KDriverObject> &, const kernel::KConfigurationKeyPtr &)>(result.entry_point.value);
+  driver_object->entry_point(driver_object, driverConfig);
 
   // TODO: Remove the entry point from memory once it's done executing
   

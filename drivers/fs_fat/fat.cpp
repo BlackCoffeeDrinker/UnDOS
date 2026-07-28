@@ -452,6 +452,8 @@ bool FAT_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount
 }// namespace
 
 UNDOS_DRIVER_ENTRY {
+  (void) driverConfig;
+
   g_driver = driver;
 
   if (const auto fs = KE_VFS_RegisterFilesystemDriver(g_driver, "FAT")) {

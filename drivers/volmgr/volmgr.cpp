@@ -190,6 +190,8 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
 }// namespace
 
 UNDOS_DRIVER_ENTRY {
+  (void) driverConfig;
+
   s_driver = driver;
 
   driver->AddDevice = VolMgr_AddDevice;

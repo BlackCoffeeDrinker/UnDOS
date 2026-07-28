@@ -499,6 +499,8 @@ bool IsaBus_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver,
 }// namespace
 
 UNDOS_DRIVER_ENTRY {
+  (void) driverConfig;
+
   driver->AddDevice = IsaBus_AddDevice;
   driver->EnumerateDevices = Isa_EnumerateDevices;
   driver->GetChildCount = Isa_GetChildCount;

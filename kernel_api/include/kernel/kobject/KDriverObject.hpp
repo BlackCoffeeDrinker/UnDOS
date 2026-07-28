@@ -2,6 +2,7 @@
 
 #include <kernel/__core.hpp>
 #include <kernel/cfunc.hpp>
+#include <kernel/fwd/KConfigurationKey.hpp>
 #include <kernel/fwd/KDevicePtr.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/kobject/KObjectT.hpp>
@@ -27,7 +28,7 @@ enum class IoStatus : uint8_t {
 struct KDriverObject : KObjectT<KDriverObject, 1, TYPE_DRIVER> {
   VirtualAddress load_base{0};
   size_t total_size{0};
-  cfunc<void(KObjectPtr<KDriverObject> &)> entry_point;
+  cfunc<void(KObjectPtr<KDriverObject> &, const KConfigurationKeyPtr &)> entry_point;
 
   // NOTE: The generic KEvent EventHandler was removed for now; drivers are
   // driven through the explicit PnP method pointers below (raw method calls).

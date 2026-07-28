@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <kernel/configuration_manager.hpp>
 #include <kernel/io.hpp>
 #include <kernel/vfs.hpp>
 
@@ -19,7 +20,7 @@
 
 namespace {
 
-using DriverEntryFn = void (*)(kernel::KObjectPtr<kernel::KDriverObject> &);
+using DriverEntryFn = void (*)(kernel::KObjectPtr<kernel::KDriverObject> &, const kernel::KConfigurationKeyPtr &);
 
 kstd::static_string<128> MakeTempImagePath(const char *name) {
   kstd::static_string<128> path;
@@ -79,6 +80,17 @@ kstd::array<uint8_t, kDiskSectors * kSectorSize> BuildFat12DiskImage() {
   return disk;
 }
 
+// Test-local volatile hive standing in for driver_loader.cpp's "Boot" hive,
+// so LoadDriver() below can hand each driver a per-driver configuration key
+// the same way KE_DRIVER_Load() does for a real boot driver.
+kernel::KConfigurationKeyPtr GetTestBootRoot() {
+  if (auto existing = KE_CM_OpenRoot("IntegrationTestBoot")) {
+    return existing;
+  }
+  KE_CM_RegisterVolatileHive("IntegrationTestBoot");
+  return KE_CM_OpenRoot("IntegrationTestBoot");
+}
+
 // Loads a driver module and calls its DriverEntry with a freshly created
 // KDriverObject, mirroring what driver_loader.cpp would do for a real ELF
 // driver image.
@@ -90,7 +102,13 @@ kernel::KObjectPtr<kernel::KDriverObject> LoadDriver(const char *path, const cha
   REQUIRE(entry != nullptr);
 
   auto driver = kernel::CreateKObject<kernel::KDriverObject>(driverName);
-  entry(driver);
+
+  kernel::KConfigurationKeyPtr driverConfig = nullptr;
+  if (const auto bootRoot = GetTestBootRoot()) {
+    driverConfig = KE_CM_CreateKey(bootRoot, driverName, kernel::KConfigurationKeyAccess::ReadWrite);
+  }
+
+  entry(driver, driverConfig);
   return driver;
 }
 

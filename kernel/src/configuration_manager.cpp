@@ -166,6 +166,14 @@ void ReadNameEntry(const kernel::KObjectPtr<kernel::KFileObject> &file, uint32_t
   outName = kstd::string_view(entry.name, kstd::char_traits<char>::length(entry.name));
 }
 
+// True once `root` is ready for use: either it already has an open backing
+// file, or it is a volatile (file-less) hive, which is always considered
+// "open" (its `roots` list simply lives in memory for as long as the root
+// object itself does).
+bool IsRootReady(const kernel::KConfigurationRoot &root) {
+  return root.file != nullptr || root.volatile_;
+}
+
 bool EnsureRootIsOpened(const kernel::KObjectPtr<kernel::KConfigurationRoot> &configRoot) {
   if (!configRoot) {
     // Key was misconfigured: doesn't have a valid root
@@ -173,6 +181,12 @@ bool EnsureRootIsOpened(const kernel::KObjectPtr<kernel::KConfigurationRoot> &co
   }
 
   kstd::unique_lock lock(configRoot->mtx);
+  if (configRoot->volatile_) {
+    // Nothing to open: keys created under a volatile hive live directly in
+    // `roots`, never persisted, so there is no header/index to read back.
+    return true;
+  }
+
   if (configRoot->file) {
     // Already opened and indexed by another key sharing the same root
     return true;
@@ -275,7 +289,8 @@ bool EnsureRootIsOpened(const kernel::KObjectPtr<kernel::KConfigurationRoot> &co
           .name = {},
           .indexEntryOffset = static_cast<uint32_t>(entryOffset),
           .indexBlockOffset = static_cast<uint32_t>(indexBlockOffset),
-          .nameEntryIndex = entry.nameEntryIndex};
+          .nameEntryIndex = entry.nameEntryIndex,
+          .volatileData = {}};
       ReadNameEntry(configRoot->file, static_cast<uint32_t>(indexBlockOffset), entry.nameEntryIndex, entry.keyHash, loadedEntry.name);
       configRoot->roots.emplace_back(loadedEntry);
       populatedCount++;
@@ -315,6 +330,16 @@ void ReleaseConfigRootReference(const kernel::KObjectPtr<kernel::KConfigurationR
   }
 
   if (root->configptr_references == 0) {
+    if (root->volatile_) {
+      // A volatile hive has no backing file to reload from later: unlike a
+      // disk-backed hive (whose in-memory index is just a cache that can be
+      // rebuilt from disk next time it's opened), dropping its `roots` here
+      // would permanently lose every key created under it. Keep them
+      // resident for as long as the hive object itself lives (see
+      // KE_CM_RegisterVolatileHive()).
+      return;
+    }
+
     // TODO: Save any non commited keys
 
     if (root->file) {
@@ -406,6 +431,14 @@ bool ReadKeyValue(const kernel::KConfigurationRoot &root, uint64_t keyHash, kern
       if (entry.valueType != expectedType || entry.length != outValue.size()) {
         return false;
       }
+
+      if (root.volatile_) {
+        // No backing file: the value bytes live directly in this entry.
+        if (entry.length > entry.volatileData.size()) return false;
+        kstd::char_traits<char>::copy(reinterpret_cast<char *>(outValue.data()), entry.volatileData.data(), entry.length);
+        return true;
+      }
+
       return ReadRawAt(root.file, entry.offset, outValue);
     }
   }
@@ -476,6 +509,15 @@ bool FindOrAllocateFreeSlot(kernel::KConfigurationRoot &root, uint32_t &outIndex
 bool WriteKeyValue(kernel::KConfigurationRoot &root, uint64_t keyHash, kernel::ConfigurationValueType type, kstd::span<const uint8_t> data) {
   for (auto &entry: root.roots) {
     if (entry.keyHash == keyHash) {
+      if (root.volatile_) {
+        // No backing file: stash the value bytes directly in this entry.
+        if (data.size() > entry.volatileData.capacity()) return false;
+        entry.volatileData = kstd::string_view(reinterpret_cast<const char *>(data.data()), data.size());
+        entry.length = static_cast<uint32_t>(static_cast<uint64_t>(data.size()));
+        entry.valueType = type;
+        return true;
+      }
+
       uint64_t targetOffset = entry.offset;
       if (data.size() > entry.length) {
         // Doesn't fit in the space it previously used: relocate to the end
@@ -504,7 +546,7 @@ bool GetFixedValue(const kernel::KConfigurationKeyPtr &key, kernel::Configuratio
   if (!key || !key->configRoot) return false;
 
   kstd::unique_lock lock(key->configRoot->mtx);
-  if (!key->configRoot->file) return false;
+  if (!IsRootReady(*key->configRoot)) return false;
 
   T value{};
   if (!ReadKeyValue(*key->configRoot, key->keyHash, type, kstd::span(reinterpret_cast<uint8_t *>(&value), sizeof(T)))) {
@@ -519,7 +561,7 @@ bool SetFixedValue(const kernel::KConfigurationKeyPtr &key, kernel::Configuratio
   if (!key || !key->configRoot) return false;
 
   kstd::unique_lock lock(key->configRoot->mtx);
-  if (!key->configRoot->file) return false;
+  if (!IsRootReady(*key->configRoot)) return false;
 
   return WriteKeyValue(*key->configRoot, key->keyHash, type, kstd::span(reinterpret_cast<const uint8_t *>(&value), sizeof(T)));
 }
@@ -676,6 +718,31 @@ UNDOS_KERNEL_API_DEF kernel::KConfigurationKeyPtr KE_CM_CreateKey(const kernel::
         KE_CM_IncrementConfigRootReferenceCount(obj.get());
         result = obj;
       }
+    } else if (root->volatile_) {
+      // No on-disk index for volatile hives: the key lives purely as an
+      // entry in `root->roots`, with no index/name block bookkeeping.
+      const kernel::KConfigurationRoot::Root newEntry{
+          .keyHash = realKeyHash,
+          .parentHash = parentKey ? parentKey->keyHash : 0,
+          .valueType = kernel::ConfigurationValueType::Invalid,
+          .offset = 0,
+          .length = 0,
+          .name = resolvedName,
+          .indexEntryOffset = 0,
+          .indexBlockOffset = 0,
+          .nameEntryIndex = NO_NAME_ENTRY,
+          .volatileData = {}};
+
+      root->roots.emplace_back(newEntry);
+      root->numRoots++;
+
+      if (auto obj = KE_CreateKPtrObject<kernel::KConfigurationKey>()) {
+        obj->configRoot = root;
+        obj->keyHash = newEntry.keyHash;
+        obj->access = desiredAccess;
+        KE_CM_IncrementConfigRootReferenceCount(obj.get());
+        result = obj;
+      }
     } else {
       uint32_t indexBlockOffset = 0;
       uint32_t indexEntryOffset = 0;
@@ -700,7 +767,8 @@ UNDOS_KERNEL_API_DEF kernel::KConfigurationKeyPtr KE_CM_CreateKey(const kernel::
             .name = resolvedName,
             .indexEntryOffset = indexEntryOffset,
             .indexBlockOffset = indexBlockOffset,
-            .nameEntryIndex = nameEntryIndex};
+            .nameEntryIndex = nameEntryIndex,
+            .volatileData = {}};
 
         if (PersistIndexEntry(root->file, newEntry)) {
           root->roots.emplace_back(newEntry);
@@ -761,6 +829,16 @@ UNDOS_KERNEL_API_DEF bool KE_CM_DeleteKey(const kernel::KConfigurationKeyPtr &pa
 
     for (auto it = root->roots.begin(); it != root->roots.end(); ++it) {
       if (it->keyHash == realKeyHash) {
+        if (root->volatile_) {
+          // No on-disk index to clear: just drop the in-memory entry.
+          root->roots.erase(it);
+          if (root->numRoots > 0) {
+            root->numRoots--;
+          }
+          deleted = true;
+          break;
+        }
+
         // Zero out the on-disk index entry so the slot reads back as
         // empty (keyHash == 0) the next time the hive is opened. The slot
         // itself is not reclaimed for reuse by FindOrAllocateFreeSlot()
@@ -801,7 +879,7 @@ UNDOS_KERNEL_API_DEF bool KM_CM_GetKeyInfo(const kernel::KConfigurationKeyPtr &k
 
   const auto &root = keyHandle->configRoot;
   kstd::unique_lock lock(root->mtx);
-  if (!root->file) return false;
+  if (!IsRootReady(*root)) return false;
 
   if (keyHandle->keyHash == 0) {
     // The hive root itself: it has no matching index entry (it isn't a
@@ -857,7 +935,7 @@ UNDOS_KERNEL_API_DEF bool KE_CM_GetKeyValueString(const kernel::KConfigurationKe
   if (!key || !key->configRoot) return false;
 
   kstd::unique_lock lock(key->configRoot->mtx);
-  if (!key->configRoot->file) return false;
+  if (!IsRootReady(*key->configRoot)) return false;
 
   for (const auto &entry: key->configRoot->roots) {
     if (entry.keyHash == key->keyHash) {
@@ -867,6 +945,14 @@ UNDOS_KERNEL_API_DEF bool KE_CM_GetKeyValueString(const kernel::KConfigurationKe
       if (entry.length > decltype(key->stringValueScratch)::capacity()) {
         // Too large to fit the scratch buffer backing the returned view
         return false;
+      }
+
+      if (key->configRoot->volatile_) {
+        // No backing file: the value bytes live directly in this entry.
+        if (entry.length > entry.volatileData.size()) return false;
+        key->stringValueScratch = kstd::string_view(entry.volatileData.data(), entry.length);
+        outValue = key->stringValueScratch;
+        return true;
       }
 
       char raw[decltype(key->stringValueScratch)::capacity()]{};
@@ -909,7 +995,7 @@ UNDOS_KERNEL_API_DEF bool KE_CM_SetKeyValueString(const kernel::KConfigurationKe
   if (!key || !key->configRoot) return false;
 
   kstd::unique_lock lock(key->configRoot->mtx);
-  if (!key->configRoot->file) return false;
+  if (!IsRootReady(*key->configRoot)) return false;
 
   return WriteKeyValue(*key->configRoot, key->keyHash, kernel::ConfigurationValueType::String,
                        kstd::span(reinterpret_cast<const uint8_t *>(outValue.data()), outValue.size()));
@@ -926,7 +1012,7 @@ UNDOS_KERNEL_API_DEF bool KE_CM_DeleteValue(const kernel::KConfigurationKeyPtr &
   const auto &root = keyHandle->configRoot;
 
   kstd::unique_lock lock(root->mtx);
-  if (!root->file) return false;
+  if (!IsRootReady(*root)) return false;
 
   for (auto &entry: root->roots) {
     if (entry.keyHash == realValueHash) {
@@ -941,6 +1027,13 @@ UNDOS_KERNEL_API_DEF bool KE_CM_DeleteValue(const kernel::KConfigurationKeyPtr &
       entry.valueType = kernel::ConfigurationValueType::Invalid;
       entry.offset = 0;
       entry.length = 0;
+      entry.volatileData.clear();
+
+      if (root->volatile_) {
+        // No on-disk index entry to persist.
+        return true;
+      }
+
       return PersistIndexEntry(root->file, entry);
     }
   }
@@ -952,7 +1045,7 @@ UNDOS_KERNEL_API_DEF bool KE_CM_EnumKey(const kernel::KConfigurationKeyPtr &keyH
 
   const auto &root = keyHandle->configRoot;
   kstd::unique_lock lock(root->mtx);
-  if (!root->file) return false;
+  if (!IsRootReady(*root)) return false;
 
   // Enumerate only the folder-like (Invalid-typed) entries that are direct
   // children of keyHandle, in the same stable order they appear in
@@ -977,7 +1070,7 @@ UNDOS_KERNEL_API_DEF bool KE_CM_EnumValue(const kernel::KConfigurationKeyPtr &ke
 
   const auto &root = keyHandle->configRoot;
   kstd::unique_lock lock(root->mtx);
-  if (!root->file) return false;
+  if (!IsRootReady(*root)) return false;
 
   // Same as KE_CM_EnumKey(), but for the value-holding (non-Invalid-typed)
   // direct children of keyHandle instead of the folder-like ones.
@@ -1019,9 +1112,123 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KConfigurationRoot> KE_CM_Regist
   return hive;
 }
 
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KConfigurationRoot> KE_CM_RegisterVolatileHive(const kstd::string_view &hiveName) noexcept {
+  if (KE_OB_FindDirectChildOfType<kernel::KConfigurationRoot>(KE_OB_GetConfigRoot(), hiveName)) {
+    // A hive with that name is already registered
+    return nullptr;
+  }
+
+  auto hive = kernel::CreateKObject<kernel::KConfigurationRoot>(hiveName);
+  if (!hive) {
+    return nullptr;
+  }
+  hive->volatile_ = true;
+
+  if (!KE_OB_InsertObject(KE_OB_GetConfigRoot(), hive)) {
+    return nullptr;
+  }
+
+  // Nothing else to do: a volatile hive has no backing file, so it is
+  // effectively already 'open' with an empty in-memory index (see
+  // EnsureRootIsOpened()).
+  return hive;
+}
+
 namespace kernel::configuration_manager {
 void init() {
   // Load known hives into the object manager
   KE_CM_RegisterHive("LocalMachine", "/System/Config/LocalMachine");
+
+  // The 'Boot' hive is a volatile, file-less hive used to hand boot drivers
+  // a per-driver configuration key before a real filesystem/root exists to
+  // back the 'LocalMachine' hive above.
+  KE_CM_RegisterVolatileHive("Boot");
+}
+
+namespace {
+// Copies every value directly under `src` (as reported by KE_CM_EnumValue())
+// into the matching value under `dst`, dispatching on each value's stored
+// type. Used by PromoteBootHive() to carry a driver's boot-time key over to
+// its LocalMachine counterpart.
+void CopyKeyValues(const kernel::KConfigurationKeyPtr &src, const kernel::KConfigurationKeyPtr &dst) {
+  kstd::string_view valueName;
+  kernel::ConfigurationValueType valueType;
+  for (uint32_t v = 0; KE_CM_EnumValue(src, v, valueName, valueType); v++) {
+    const auto srcValueKey = KE_CM_OpenKey(src, valueName);
+    const auto dstValueKey = srcValueKey ? KE_CM_CreateKey(dst, valueName, kernel::KConfigurationKeyAccess::ReadWrite) : nullptr;
+    if (!srcValueKey || !dstValueKey) continue;
+
+    switch (valueType) {
+      case kernel::ConfigurationValueType::Boolean: {
+        bool value = false;
+        if (KE_CM_GetKeyValueBool(srcValueKey, value)) KE_CM_SetKeyValueBool(dstValueKey, value);
+        break;
+      }
+      case kernel::ConfigurationValueType::UInt32: {
+        uint32_t value = 0;
+        if (KE_CM_GetKeyValueUInt32(srcValueKey, value)) KE_CM_SetKeyValueUInt32(dstValueKey, value);
+        break;
+      }
+      case kernel::ConfigurationValueType::UInt64: {
+        uint64_t value = 0;
+        if (KE_CM_GetKeyValueUInt64(srcValueKey, value)) KE_CM_SetKeyValueUInt64(dstValueKey, value);
+        break;
+      }
+      case kernel::ConfigurationValueType::SInt32: {
+        int32_t value = 0;
+        if (KE_CM_GetKeyValueSInt32(srcValueKey, value)) KE_CM_SetKeyValueSInt32(dstValueKey, value);
+        break;
+      }
+      case kernel::ConfigurationValueType::SInt64: {
+        int64_t value = 0;
+        if (KE_CM_GetKeyValueSInt64(srcValueKey, value)) KE_CM_SetKeyValueSInt64(dstValueKey, value);
+        break;
+      }
+      case kernel::ConfigurationValueType::String: {
+        kstd::string_view value;
+        if (KE_CM_GetKeyValueString(srcValueKey, value)) KE_CM_SetKeyValueString(dstValueKey, value);
+        break;
+      }
+      case kernel::ConfigurationValueType::Invalid:
+      default:
+        break;
+    }
+  }
+}
+}// namespace
+
+void PromoteBootHive() {
+  const auto bootRoot = KE_CM_OpenRoot("Boot");
+  if (!bootRoot) {
+    // Nothing to promote: the "Boot" hive doesn't exist (or was already
+    // promoted/dropped by an earlier call).
+    return;
+  }
+
+  const auto localMachineRoot = KE_CM_OpenRoot("LocalMachine");
+  if (!localMachineRoot) {
+    // "LocalMachine"'s backing file isn't reachable yet (e.g. the root fs
+    // isn't actually mounted): nothing safe to promote into.
+    return;
+  }
+
+  if (const auto bootDrivers = KE_CM_OpenKey(bootRoot, "Drivers")) {
+    if (const auto localMachineDrivers = KE_CM_CreateKey(localMachineRoot, "Drivers", kernel::KConfigurationKeyAccess::ReadWrite)) {
+      kstd::string_view driverName;
+      for (uint32_t i = 0; KE_CM_EnumKey(bootDrivers, i, driverName); i++) {
+        const auto bootDriverKey = KE_CM_OpenKey(bootDrivers, driverName);
+        const auto localMachineDriverKey = bootDriverKey ? KE_CM_CreateKey(localMachineDrivers, driverName, kernel::KConfigurationKeyAccess::ReadWrite) : nullptr;
+        if (!bootDriverKey || !localMachineDriverKey) continue;
+
+        CopyKeyValues(bootDriverKey, localMachineDriverKey);
+      }
+    }
+  }
+
+  // Nothing needs the volatile "Boot" hive once its keys have been
+  // promoted: drop the registered KConfigurationRoot object entirely.
+  if (const auto bootRootObject = KE_OB_FindDirectChildOfType<kernel::KConfigurationRoot>(KE_OB_GetConfigRoot(), "Boot")) {
+    KE_OB_RemoveObject(KE_OB_GetConfigRoot(), bootRootObject);
+  }
 }
 }// namespace kernel::configuration_manager

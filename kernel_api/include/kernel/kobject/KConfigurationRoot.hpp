@@ -10,6 +10,8 @@
 #include <static_string.hpp>
 
 namespace kernel {
+struct KFileObject;
+
 struct KConfigurationRoot : KObjectT<KConfigurationRoot, 1, TYPE_CONFIGROOT_SECTION> {
   // A single INDEX TABLE entry, kept resident in memory while the hive is
   // open. `keyHash` uniquely identifies this entry (it is derived from both
@@ -40,11 +42,18 @@ struct KConfigurationRoot : KObjectT<KConfigurationRoot, 1, TYPE_CONFIGROOT_SECT
     // can be persisted back in place), or 0xFFFF if this entry has no
     // associated name entry on disk yet.
     uint16_t nameEntryIndex{0xFFFF};
+
+    // Only used when the owning KConfigurationRoot is volatile_: holds this
+    // entry's value bytes directly in memory (there is no backing file to
+    // read/write through), so `offset`/`length` above index into this
+    // buffer instead of a DATA REGION.
+    kstd::static_string<128> volatileData;
   };
 
   kstd::static_string<255> filePath;//< The path to the configroot file
   KObjectPtr<KFileObject> file;     //< If the configroot is currently open, this is its backing file (only valid if references != 0)
   uint32_t configptr_references = 0;//< Number of KConfigurationKey opened, once it's 0, the configroot is closed
+  bool volatile_ = false;           //< If true, this hive is purely in-memory and never touches the VFS/a backing file
 
   Mutex mtx;             //< Lock for reading and writing to the configroot
   kstd::list<Root> roots;//< List of folders in this configroot, if references != 0, empty otherwise

@@ -226,11 +226,9 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   kernel::pnp::init();
   kernel::resource::init();
   kernel::vfs::init();
+  kernel::configuration_manager::init();
   kernel::driver::init(boot_info);
   kernel::initial::init();
-
-  // Drivers require configuration manager to be up, but we don't have a file system yet
-  // TODO: We're going to fake a root config
 
   // Tell the HAL the Object Manager is ready.
   // HAL can now safely allocate object handles for PCI/PCIe buses and drivers.
@@ -267,8 +265,10 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
     HAL_PLATFORM_Panic("No root filesystem specified\r\n", __FILE__, __LINE__);
   }
 
-  // TODO: Wait for root filesystem to be ready
-  kernel::configuration_manager::init();
+  // The root filesystem is mounted now, so "LocalMachine" can actually be
+  // opened/persisted: carry over every per-driver key created under the
+  // volatile "Boot" hive during the boot-driver phase, then drop it.
+  kernel::configuration_manager::PromoteBootHive();
 
   // Register the native ELF loader subsystem, a long-lived singleton used to
   // bootstrap user processes (see KE_USER_CreateProcess).

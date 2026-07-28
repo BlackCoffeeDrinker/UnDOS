@@ -8,8 +8,21 @@ namespace {
 
 namespace kernel {
 KFileObject::~KFileObject() {
-  // Make sure the handle is closed
-  if (!isClosed) KE_VFS_CloseFile(this);
+  // Make sure the handle is closed. KE_VFS_CloseFile() takes ownership via a
+  // KObjectPtr, so passing `this` implicitly constructs a temporary
+  // KObjectPtr<KFileObject> that retains `this` -- but we're already being
+  // torn down because our reference count JUST hit zero. Without the
+  // KE_OB_Retain() below, that temporary's own release (at the end of the
+  // full expression) would bring the count back to zero *again* while this
+  // destructor is still on the stack, recursively re-entering it and
+  // freeing `this` before the *original* caller (the one that got us here)
+  // gets a chance to -- a double free. Bumping the count first keeps it
+  // above zero for the temporary's release, so only the original caller
+  // ends up freeing the object once this destructor returns.
+  if (!isClosed) {
+    KE_OB_Retain(this);
+    KE_VFS_CloseFile(this);
+  }
 }
 
 namespace vfs {

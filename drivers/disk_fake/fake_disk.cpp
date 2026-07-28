@@ -38,6 +38,8 @@ void Fake_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
 }// namespace
 
 UNDOS_DRIVER_ENTRY {
+  (void) driverConfig;
+
   driver->AddDevice = Fake_AddDevice;
   driver->StartDevice = Fake_StartDevice;
   driver->Read = diskfake::Read;

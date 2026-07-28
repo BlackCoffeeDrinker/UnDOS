@@ -317,6 +317,8 @@ bool Ata_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, cons
 }// namespace
 
 UNDOS_DRIVER_ENTRY {
+  (void) driverConfig;
+
   driver->AddDevice = Ata_AddDevice;
   driver->StartDevice = Ata_StartDevice;
   driver->Read = Ata_Read;
