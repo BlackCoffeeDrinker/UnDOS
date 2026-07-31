@@ -1,0 +1,18 @@
+#pragma once
+
+// Generated from UnDOS IDL
+
+#include <stdint.h>
+#include <stddef.h>
+
+struct __SYS_GFX_RECTANGLE_V1 {
+    uint32_t dc;
+    int32_t left;
+    int32_t top;
+    int32_t right;
+    int32_t bottom;
+};
+
+constexpr size_t   __SYS_GFX_RECTANGLE_V1_SIZE = sizeof(struct __SYS_GFX_RECTANGLE_V1);
+constexpr uint32_t __SYS_GFX_RECTANGLE_V1_CALLNUMBER = 312;
+

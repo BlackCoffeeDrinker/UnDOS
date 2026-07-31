@@ -3,6 +3,7 @@
 from typing import List, Optional
 
 from .ast_nodes import (
+    AliasType,
     ArrayType,
     BufferType,
     CType,
@@ -12,11 +13,15 @@ from .ast_nodes import (
     EnumType,
     Field,
     FieldType,
+    FlagMember,
+    FlagsDecl,
+    FlagsType,
     IDLModule,
     StringType,
     StructDecl,
     StructType,
     Syscall,
+    UsingDecl,
 )
 from .tokenizer import Token, clean_doc_comment, tokenize
 
@@ -58,6 +63,19 @@ class Parser:
             return clean_doc_comment(tok.value)
         return ""
 
+    # Field/parameter names that happen to spell a keyword (most notably
+    # "flags", already widely used as a plain field name for enum<Name>
+    # bitmask fields before `flags`/`using` were introduced) must still be
+    # accepted as identifiers in name position.
+    _IDENT_LIKE_KEYWORDS = ("FLAGS", "USING")
+
+    def match_ident_like(self) -> Token:
+        tok = self.current()
+        if tok is not None and (tok.kind == "IDENT" or tok.kind in self._IDENT_LIKE_KEYWORDS):
+            self.pos += 1
+            return tok
+        raise ParserError(f"Expected IDENT, got {tok}")
+
     def parse_syscall(self, doc: str = "") -> Syscall:
         self.match("SYSCALL")
 
@@ -95,6 +113,10 @@ class Parser:
                 module.enums.append(self.parse_enum(doc))
             elif tok.kind == "STRUCT":
                 module.structs.append(self.parse_struct_decl(doc))
+            elif tok.kind == "FLAGS":
+                module.flags.append(self.parse_flags(doc))
+            elif tok.kind == "USING":
+                module.usings.append(self.parse_using(doc))
             else:
                 raise ParserError(f"Unexpected token at top level: {tok}")
         return module
@@ -107,7 +129,7 @@ class Parser:
             if tok is None or tok.kind == "RBRACE":
                 break
 
-            name_tok = self.match("IDENT")
+            name_tok = self.match_ident_like()
             self.match("COLON")
 
             direction = "IN"
@@ -186,6 +208,19 @@ class Parser:
             self.match("GT")
             return BufferType(elem_type)
 
+        # flags<...>
+        if tok.kind == "FLAGSKW":
+            raw = tok.value  # e.g. "flags<DCInitFlags>"
+            inner = raw[6:-1].strip()  # strip "flags<" and ">"
+            self.match("FLAGSKW")
+            return FlagsType(inner)
+
+        # Bare identifier: assume it's a `using`-declared alias name. Its
+        # validity is checked later by the alias-resolution pass, not here.
+        if tok.kind == "IDENT":
+            self.match("IDENT")
+            return AliasType(tok.value)
+
         raise ParserError(f"Unknown field type token: {tok}")
 
     def parse_field_type_inside_angle(self) -> FieldType:
@@ -238,8 +273,13 @@ class Parser:
                 break
             ident_tok = self.match("IDENT")
             self.match("EQ")
-            value_tok = self.match("NUMBER")
-            value = int(value_tok.value)
+            value = 0
+            hexnumber = self.try_match("HEXNUMBER")
+            if hexnumber:
+                value = int(hexnumber.value, 16)
+            else:
+                value_tok = self.match("NUMBER")
+                value = int(value_tok.value)
             members.append(EnumMember(ident_tok.value, value, member_doc))
             if self.try_match("COMMA"):
                 continue
@@ -261,6 +301,43 @@ class Parser:
         self.match("RBRACE")
         self.match("SEMICOLON")
         return StructDecl(name, fields, doc)
+
+    # ---- flags ----
+
+    def parse_flags(self, doc: str = "") -> FlagsDecl:
+        self.match("FLAGS")
+        name_tok = self.match("IDENT")
+        name = name_tok.value
+
+        self.match("COLON")
+        underlying_tok = self.match("IDENT")
+        underlying = underlying_tok.value
+
+        self.match("LBRACE")
+        members = []
+        while True:
+            member_doc = self.take_pending_doc()
+            tok = self.current()
+            if tok is None or tok.kind == "RBRACE":
+                break
+            ident_tok = self.match("IDENT")
+            self.match("SEMICOLON")
+            members.append(FlagMember(ident_tok.value, member_doc))
+        self.match("RBRACE")
+        self.match("SEMICOLON")
+        return FlagsDecl(name, underlying, members, doc)
+
+    # ---- using ----
+
+    def parse_using(self, doc: str = "") -> UsingDecl:
+        self.match("USING")
+        name_tok = self.match("IDENT")
+        name = name_tok.value
+
+        self.match("EQ")
+        aliased = self.parse_field_type()
+        self.match("SEMICOLON")
+        return UsingDecl(name, aliased, doc)
 
 
 # ---------- Convenience API ----------

@@ -6,7 +6,8 @@ import sys
 from .codegen_headers import generate_headers
 from .codegen_kernel import generate_kernel
 from .codegen_userspace import generate_userspace
-from .parser import parse_idl
+from .parser import ParserError, parse_idl
+from .resolver import ResolverError, resolve_aliases
 
 
 def main():
@@ -52,7 +53,18 @@ def main():
         idl_text = f.read()
 
     # Parse IDL
-    module = parse_idl(idl_text)
+    try:
+        module = parse_idl(idl_text)
+    except ParserError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+    # Resolve `using` aliases before any codegen runs
+    try:
+        resolve_aliases(module)
+    except ResolverError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
 
     # Generate .h files
     generate_headers(module, out_h_dir)

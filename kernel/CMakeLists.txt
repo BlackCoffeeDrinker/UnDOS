@@ -58,7 +58,10 @@ add_executable(kernel
         src/syscalls/DEBUG_Print.cpp
         src/syscalls/CreateProcess.cpp
         src/configuration_manager.cpp
+        src/syscalls/IO.cpp
 )
+
+add_dependencies(kernel undos-syscalls-gen)
 
 target_compile_definitions(kernel PRIVATE UNDOS_KERNEL_COMPILE)
 target_link_libraries(kernel PRIVATE undos_warnings undos_options)

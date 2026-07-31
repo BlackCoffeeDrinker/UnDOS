@@ -1,3 +1,13 @@
+enum SyscallReturnCode {
+    OKAY = 0,
+    UNKNOWN = 0xFFFFFFFF,
+    INVALID_SIZE = 0xFFFFFFFE,
+    OUT_OF_MEMORY = 0xFFFFFFFD,
+    INVALID_ADDRESS = 0xFFFFFFFC,
+    INVALID_ARGUMENT = 0xFFFFFFFB,
+
+};
+
 /** Flags controlling how a new process is created. */
 enum ProcessFlags {
     /** No special behavior. */
@@ -83,6 +93,29 @@ syscall V1 MEM Protect [212] {
 // Large, variable-length buffers (file I/O, draw command lists, IPC
 // messages, ...) use buffer<T>: the pointer+length is validated once and
 // then mapped directly, avoiding a copy and the RAM pressure it would cause.
+
+flags FileOpenMode : uint32_t {
+    Read;
+    Write;
+    Append;
+    Create;
+    Truncate;
+    Exclusive;
+};
+
+syscall V1 FS Open [220] {
+    /** Path to the file to open. */
+    path: IN string;
+    /** Open mode (read, write, append). */
+    mode: IN flags<FileOpenMode>;
+    /** File descriptor to receive the open file descriptor. */
+    fileDescriptor: OUT c<uint32_t>;
+};
+
+syscall V1 FS Close [221] {
+    /** Open file descriptor to close. */
+    fileDescriptor: IN c<uint32_t>;
+};
 
 /** Reads data from an open file descriptor into `data`. */
 syscall V1 FS Read [222] {

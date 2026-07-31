@@ -1,5 +1,8 @@
+from typing import IO
+
+
 class Template:
-    def __init__(self, f: file, type: str = ""):
+    def __init__(self, f: IO, type: str = ""):
         self.f = f
         self.type = type
         self.f.write("// Generated from UnDOS IDL\n\n")
@@ -54,7 +57,7 @@ class Template:
         self.write_kernel_field(f"kernel::borrowed_ptr<{type}>", name, default_value="nullptr")
 
     def write_kernel_copy_string(self, name: str):
-        self.write_kernel_field("kstd::string_view", name, extra="{}")
+        self.write_kernel_field("kstd::string", name, extra="{}")
 
     def write_kernel_mapped_array_type(self, type: str, name: str):
         self.write_kernel_borrowed_ptr(type, name)
@@ -70,4 +73,4 @@ class Template:
         self.write_kernel_field(f"kstd::array<{array_of_type}, {max_elements}>", array_name)
 
     def write_kernel_handle_def(self, name: str, version: int, struct_name: str):
-        self.__write(f"uint32_t handle_{name}_{version}({struct_name}&& args, uint32_t flags);\n")
+        self.__write(f"uint32_t handle_{name}_{version}({struct_name}&& args);\n")

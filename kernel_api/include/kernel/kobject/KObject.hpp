@@ -18,6 +18,7 @@ namespace kernel {
 // A base structural type for unified C++ tracking
 struct KObject {
   const ObjectType type;
+  
   // Starts at 0 rather than 1: ownership is only actually granted once the
   // freshly-constructed object is adopted by a KObjectPtr (its constructor
   // from a raw pointer always calls KObjectPtrTraits::inc_ref), so seeding

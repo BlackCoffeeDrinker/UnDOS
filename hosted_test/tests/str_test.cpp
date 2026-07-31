@@ -2,6 +2,7 @@
 #include "static_string.hpp"
 #include "nomm_string.hpp"
 #include "string_view.hpp"
+#include "string.hpp"
 
 #include <cstdint>
 
@@ -34,6 +35,54 @@ TEST_CASE("nomm_string basic usage") {
   REQUIRE(std::string(buf) == "Hello World");
 }
 
+TEST_CASE("string basic usage") {
+  kstd::string s = "Hello";
+  REQUIRE(s == "Hello");
+  s.append(' ');
+  s.append("World");
+  REQUIRE(s == "Hello World");
+  REQUIRE(s.length() == 11);
+}
+
+TEST_CASE("string grows past its initial capacity") {
+  kstd::string s;
+  for (int i = 0; i < 100; ++i) {
+    s.append('a');
+  }
+  REQUIRE(s.length() == 100);
+  REQUIRE(s.capacity() >= 100);
+  for (size_t i = 0; i < s.length(); ++i) {
+    REQUIRE(s[i] == 'a');
+  }
+}
+
+TEST_CASE("string resize") {
+  kstd::string s = "Hello";
+  s.resize(10, 'x');
+  REQUIRE(s.length() == 10);
+  REQUIRE(s == "Helloxxxxx");
+
+  s.resize(3);
+  REQUIRE(s.length() == 3);
+  REQUIRE(s == "Hel");
+
+  s.resize(5);
+  REQUIRE(s.length() == 5);
+  REQUIRE(s[3] == '\0');
+  REQUIRE(s[4] == '\0');
+}
+
+TEST_CASE("string copy and move") {
+  kstd::string a = "Hello";
+  kstd::string b = a;// copy
+  REQUIRE(b == "Hello");
+  REQUIRE(a == "Hello");
+
+  kstd::string c = kstd::move(a);// move
+  REQUIRE(c == "Hello");
+  REQUIRE(a.empty());
+}
+
 TEST_CASE("String inheritance") {
   kstd::static_string<32> a = "Hello";
   kstd::string_view sv = a.substr();
@@ -42,6 +91,13 @@ TEST_CASE("String inheritance") {
 
 TEST_CASE("Static_String == String_View") {
   kstd::static_string<32> a = "Hello";
+  kstd::string_view b = "Hello";
+  REQUIRE(a == b);
+  REQUIRE(b == a);
+}
+
+TEST_CASE("string == String_View") {
+  kstd::string a = "Hello";
   kstd::string_view b = "Hello";
   REQUIRE(a == b);
   REQUIRE(b == a);
@@ -65,6 +121,14 @@ TEST_CASE("Nomm_String == String_View") {
 }
 
 TEST_CASE("String push_back") {
+  SECTION("string") {
+    kstd::string s;
+    s.push_back('H');
+    s.push_back('i');
+    REQUIRE(s == "Hi");
+    REQUIRE(s.length() == 2);
+  }
+
   SECTION("static_string") {
     kstd::static_string<32> s;
     s.push_back('H');
@@ -85,6 +149,16 @@ TEST_CASE("String push_back") {
 }
 
 TEST_CASE("String rfind") {
+  SECTION("string") {
+    kstd::string s = "Hello World World";
+    REQUIRE(s.rfind('W') == 12);
+    REQUIRE(s.rfind('o') == 13);
+    REQUIRE(s.rfind("World") == 12);
+    REQUIRE(s.rfind("World", 10) == 6);
+    REQUIRE(s.rfind('z') == kstd::string_view::npos);
+    REQUIRE(s.rfind("Hello", 0) == 0);
+  }
+
   SECTION("string_view") {
     kstd::string_view sv = "Hello World World";
     REQUIRE(sv.rfind('W') == 12);
@@ -145,6 +219,14 @@ TEST_CASE("Comparisons against char[] use the array bound across all string type
   };
   RawField raw{{'S', 'Y', 'S', 'T', 'E', 'M', ' ', ' ', ' ', ' ', ' '}, 0x20};
 
+  SECTION("string") {
+    kstd::string s;
+    s.append(kstd::string_view("SYSTEM     ", 11));
+    REQUIRE(s == raw.name);
+    REQUIRE(raw.name == s);
+    REQUIRE_FALSE(s != raw.name);
+  }
+
   SECTION("string_view") {
     kstd::string_view sv("SYSTEM     ", 11);
     REQUIRE(sv == raw.name);
@@ -175,6 +257,18 @@ TEST_CASE("Comparisons against char[] use the array bound across all string type
 }
 
 TEST_CASE("String back and pop_back") {
+  SECTION("string") {
+    kstd::string s = "World";
+    REQUIRE(s.back() == 'd');
+    s.pop_back();
+    REQUIRE(s == "Worl");
+    s.pop_back();
+    s.pop_back();
+    s.pop_back();
+    s.pop_back();
+    REQUIRE(s.empty());
+  }
+
   SECTION("string_view") {
     kstd::string_view sv = "Hello";
     REQUIRE(sv.back() == 'o');

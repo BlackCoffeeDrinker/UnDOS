@@ -1,0 +1,290 @@
+
+// region GDI
+//
+// =====================================================
+//  Graphics Subsystem (GFX)
+//  Syscalls 300–399
+// =====================================================
+//
+
+// -----------------------------------------------------
+//  Type Aliases
+// -----------------------------------------------------
+
+using HANDLER = c<uint32_t>;
+using COLORREF = c<uint32_t>;
+using POINT = struct<Point>;
+using RECT  = struct<Rect>;
+
+
+// -----------------------------------------------------
+//  Flag Types
+// -----------------------------------------------------
+
+flags DCInitFlags : uint32 {
+    Primary;
+    Memory;
+    Offscreen;
+    NoAccel;
+};
+
+flags PenStyle : uint32 {
+    Solid;
+    Dash;
+    Dot;
+    DashDot;
+    DashDotDot;
+};
+
+flags BrushPattern : uint32 {
+    Solid;
+    Hatch;
+    Diagonal;
+    Cross;
+};
+
+flags RegionCombineMode : uint32 {
+    Union;
+    Intersect;
+    Subtract;
+    Xor;
+};
+
+flags Device3DFlags : uint32 {
+    Hardware;
+    Software;
+    VertexAccel;
+    TextureAccel;
+};
+
+
+// -----------------------------------------------------
+//  Struct Types
+// -----------------------------------------------------
+
+struct Point {
+    x: c<int32_t>;
+    y: c<int32_t>;
+};
+
+struct Rect {
+    left:   c<int32_t>;
+    top:    c<int32_t>;
+    right:  c<int32_t>;
+    bottom: c<int32_t>;
+};
+
+struct DeviceCaps {
+    width:      c<uint32_t>;
+    height:     c<uint32_t>;
+    colorDepth: c<uint32_t>;
+    accelFlags: c<uint32_t>;
+};
+
+
+// -----------------------------------------------------
+//  Pixel Formats & Raster Ops (Enums)
+// -----------------------------------------------------
+
+enum PixelFormat {
+    RGB24  = 0,
+    ARGB32 = 1,
+    INDEX8 = 2,
+};
+
+enum RasterOp {
+    SRCCOPY    = 0,
+    SRCAND     = 1,
+    SRCINVERT  = 2,
+    SRCERASE   = 3,
+    NOTSRCCOPY = 4,
+};
+
+
+// -----------------------------------------------------
+//  Device Context & Object Lifecycle
+// -----------------------------------------------------
+
+syscall V1 GFX CreateDC [300] {
+    driverName: IN string;
+    deviceName: IN string;
+    initFlags:  IN flags<DCInitFlags>;
+};
+
+syscall V1 GFX DeleteDC [301] {
+    dc: IN HANDLER;
+};
+
+syscall V1 GFX SelectObject [302] {
+    dc:     IN HANDLER;
+    object: IN HANDLER;
+};
+
+syscall V1 GFX CreatePen [303] {
+    style: IN flags<PenStyle>;
+    width: IN c<uint32_t>;
+    color: IN COLORREF;
+};
+
+syscall V1 GFX CreateBrush [304] {
+    pattern: IN flags<BrushPattern>;
+    color:   IN COLORREF;
+};
+
+syscall V1 GFX CreateFont [305] {
+    height:  IN c<int32_t>;
+    weight:  IN c<uint32_t>;
+    charset: IN c<uint32_t>;
+    name:    IN string;
+};
+
+syscall V1 GFX CreateBitmap [306] {
+    width:   IN c<uint32_t>;
+    height:  IN c<uint32_t>;
+    format:  IN enum<PixelFormat>;
+    pixels:  IN buffer<c<uint8_t>>;
+};
+
+syscall V1 GFX DeleteObject [307] {
+    object: IN HANDLER;
+};
+
+
+// -----------------------------------------------------
+//  Drawing Primitives
+// -----------------------------------------------------
+
+syscall V1 GFX MoveTo [310] {
+    dc: IN HANDLER;
+    x:  IN c<int32_t>;
+    y:  IN c<int32_t>;
+};
+
+syscall V1 GFX LineTo [311] {
+    dc: IN HANDLER;
+    x:  IN c<int32_t>;
+    y:  IN c<int32_t>;
+};
+
+syscall V1 GFX Rectangle [312] {
+    dc:     IN HANDLER;
+    left:   IN c<int32_t>;
+    top:    IN c<int32_t>;
+    right:  IN c<int32_t>;
+    bottom: IN c<int32_t>;
+};
+
+syscall V1 GFX Ellipse [313] {
+    dc:     IN HANDLER;
+    left:   IN c<int32_t>;
+    top:    IN c<int32_t>;
+    right:  IN c<int32_t>;
+    bottom: IN c<int32_t>;
+};
+
+syscall V1 GFX TextOut [314] {
+    dc:   IN HANDLER;
+    x:    IN c<int32_t>;
+    y:    IN c<int32_t>;
+    text: IN string;
+};
+
+
+// -----------------------------------------------------
+//  Blits & Raster Ops
+// -----------------------------------------------------
+
+syscall V1 GFX BitBlt [320] {
+    dstDC:   IN HANDLER;
+    x:       IN c<int32_t>;
+    y:       IN c<int32_t>;
+    width:   IN c<uint32_t>;
+    height:  IN c<uint32_t>;
+    srcDC:   IN HANDLER;
+    srcX:    IN c<int32_t>;
+    srcY:    IN c<int32_t>;
+    rop:     IN enum<RasterOp>;
+};
+
+syscall V1 GFX StretchBlt [321] {
+    dstDC:     IN HANDLER;
+    x:         IN c<int32_t>;
+    y:         IN c<int32_t>;
+    dstWidth:  IN c<uint32_t>;
+    dstHeight: IN c<uint32_t>;
+    srcDC:     IN HANDLER;
+    srcX:      IN c<int32_t>;
+    srcY:      IN c<int32_t>;
+    srcWidth:  IN c<uint32_t>;
+    srcHeight: IN c<uint32_t>;
+    rop:       IN enum<RasterOp>;
+};
+
+syscall V1 GFX AlphaBlend [322] {
+    dstDC:   IN HANDLER;
+    srcDC:   IN HANDLER;
+    dstRect: IN RECT;
+    srcRect: IN RECT;
+    alpha:   IN c<uint8_t>;
+};
+
+
+// -----------------------------------------------------
+//  Regions & State
+// -----------------------------------------------------
+
+syscall V1 GFX CreateRegion [330] {
+    rects: IN dynarray<RECT>;
+};
+
+syscall V1 GFX SelectClipRegion [331] {
+    dc:     IN HANDLER;
+    region: IN HANDLER;
+};
+
+syscall V1 GFX CombineRegion [332] {
+    dest: IN HANDLER;
+    src1: IN HANDLER;
+    src2: IN HANDLER;
+    mode: IN flags<RegionCombineMode>;
+};
+
+syscall V1 GFX SetViewportOrg [333] {
+    dc: IN HANDLER;
+    x:  IN c<int32_t>;
+    y:  IN c<int32_t>;
+};
+
+syscall V1 GFX SetWindowOrg [334] {
+    dc: IN HANDLER;
+    x:  IN c<int32_t>;
+    y:  IN c<int32_t>;
+};
+
+
+// -----------------------------------------------------
+//  Metrics & Queries
+// -----------------------------------------------------
+
+syscall V1 GFX GetTextMetrics [340] {
+    dc:      IN HANDLER;
+    metrics: OUT struct<DeviceCaps>;
+};
+
+syscall V1 GFX GetBitmapBits [341] {
+    bitmap: IN HANDLER;
+    buffer: OUT buffer<c<uint8_t>>;
+};
+
+syscall V1 GFX SetBitmapBits [342] {
+    bitmap: IN HANDLER;
+    buffer: IN buffer<c<uint8_t>>;
+};
+
+syscall V1 GFX GetDeviceCaps [343] {
+    dc:   IN HANDLER;
+    caps: OUT struct<DeviceCaps>;
+};
+
+// endregion
+

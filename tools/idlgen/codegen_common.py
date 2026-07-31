@@ -1,6 +1,21 @@
 """Shared helpers used by every code generator module."""
 
-from .ast_nodes import CType, EnumDecl, StringType, StructDecl, Syscall
+from .ast_nodes import CType, EnumDecl, EnumType, FlagsDecl, FlagsType, StringType, StructDecl, StructType, Syscall
+
+# Maps the short underlying-type names accepted in `flags NAME : uint32 { ... };`
+# to their concrete C storage type. Names that are already a raw C type (e.g.
+# an already-suffixed "uint32_t", resolved from a `using` alias) pass through
+# unchanged.
+_FLAGS_UNDERLYING_CTYPE_MAP = {
+    "uint8": "uint8_t",
+    "uint16": "uint16_t",
+    "uint32": "uint32_t",
+    "uint64": "uint64_t",
+}
+
+
+def flags_underlying_ctype(underlying: str) -> str:
+    return _FLAGS_UNDERLYING_CTYPE_MAP.get(underlying, underlying)
 
 
 def c_type_for(ftype):
@@ -8,12 +23,18 @@ def c_type_for(ftype):
         return ftype.ctype
     if isinstance(ftype, StringType):
         return "char"
+    if isinstance(ftype, StructType):
+        return f"struct {ftype.name}"
+    if isinstance(ftype, (EnumType, FlagsType)):
+        return f"enum {ftype.name}"
     raise Exception(f"Unsupported type for array/dynarray element: {ftype}")
 
 
 def make_filename(thing):
     if isinstance(thing, EnumDecl):
         return f"__enum_{thing.name}.h"
+    if isinstance(thing, FlagsDecl):
+        return f"__flags_{thing.name}.h"
     if isinstance(thing, StructDecl):
         return f"__struct_{thing.name}.h"
     if isinstance(thing, Syscall):

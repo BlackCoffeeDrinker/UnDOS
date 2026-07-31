@@ -275,7 +275,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFileObject> KE_VFS_OpenFile(con
   return file;
 }
 
-UNDOS_KERNEL_API_DEF void KE_VFS_CloseFile(kernel::KObjectPtr<kernel::KFileObject> &&file) noexcept {
+UNDOS_KERNEL_API_DEF void KE_VFS_CloseFile(kernel::KObjectPtr<kernel::KFileObject> file) noexcept {
   if (!file) [[unlikely]] { return; }
   if (file->isClosed) [[unlikely]] { return; }
   if (!file->FileSystem()) [[unlikely]] { return; }
@@ -294,6 +294,9 @@ UNDOS_KERNEL_API_DEF uint64_t KE_VFS_ReadFile(kernel::KObjectPtr<kernel::KFileOb
   if (!file) [[unlikely]] { return 0; }
   if (!file->FileSystem()) [[unlikely]] { return 0; }
   if (!file->FileSystem()->ReadHandle) [[unlikely]] { return 0; }
+  
+  // Make sure the mode includes read
+  if (!(file->mode & kernel::KFileObject::OpenMode::Read)) [[unlikely]] { return 0; }
 
   const auto read = file->FileSystem()->ReadHandle(file->mountPoint, *file->vfsNode, file->offset, readInto);
   file->offset += read;
@@ -306,6 +309,8 @@ UNDOS_KERNEL_API_DEF uint64_t KE_VFS_WriteFile(kernel::KObjectPtr<kernel::KFileO
   if (!file->FileSystem()) [[unlikely]] { return 0; }
   if (!file->FileSystem()->WriteHandle) [[unlikely]] { return 0; }
 
+  if (!(file->mode & kernel::KFileObject::OpenMode::Write)) [[unlikely]] { return 0; }
+  
   const auto written = file->FileSystem()->WriteHandle(file->mountPoint, *file->vfsNode, file->offset, buffer);
   file->offset += written;
 

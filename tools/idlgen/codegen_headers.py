@@ -9,12 +9,13 @@ from .ast_nodes import (
     CType,
     DynArrayType,
     EnumType,
+    FlagsType,
     IDLModule,
     StringType,
     StructType,
     Syscall,
 )
-from .codegen_common import c_type_for, generate_file_header, make_filename, write_doc_comment
+from .codegen_common import c_type_for, flags_underlying_ctype, generate_file_header, make_filename, write_doc_comment
 
 
 def generate_headers(module: IDLModule, out_h_dir: str):
@@ -28,6 +29,20 @@ def generate_headers(module: IDLModule, out_h_dir: str):
             for member in enum.members:
                 write_doc_comment(f, member.doc, indent="    ")
                 f.write(f"    {enum.name}_{member.name} = {member.value},\n")
+            f.write("};\n")
+
+    # ---- Flags ----
+    for flags in module.flags:
+        filename = os.path.join(out_h_dir, make_filename(flags))
+        with open(filename, "w", encoding="utf-8") as f:
+            generate_file_header(f)
+            write_doc_comment(f, flags.doc)
+            underlying_ctype = flags_underlying_ctype(flags.underlying)
+            f.write(f"enum {flags.name} : {underlying_ctype} {{\n")
+            for index, member in enumerate(flags.members):
+                write_doc_comment(f, member.doc, indent="    ")
+                value = 1 << index
+                f.write(f"    {flags.name}_{member.name} = 0x{value:08X},\n")
             f.write("};\n")
 
     # ---- Structs ----
@@ -55,6 +70,9 @@ def generate_headers(module: IDLModule, out_h_dir: str):
         for enum in module.enums:
             f.write(f"#include \"{make_filename(enum)}\"\n")
         f.write("\n")
+        for flags in module.flags:
+            f.write(f"#include \"{make_filename(flags)}\"\n")
+        f.write("\n")
         for struct in module.structs:
             f.write(f"#include \"{make_filename(struct)}\"\n")
         f.write("\n")
@@ -81,6 +99,8 @@ def write_syscall_struct_to_file(file, sc: Syscall):
         elif isinstance(field.ftype, StructType):
             file.write(f"    struct {field.ftype.name} {field.name};\n")
         elif isinstance(field.ftype, EnumType):
+            file.write(f"    enum {field.ftype.name} {field.name};\n")
+        elif isinstance(field.ftype, FlagsType):
             file.write(f"    enum {field.ftype.name} {field.name};\n")
         elif isinstance(field.ftype, ArrayType):
             file.write(f"    {c_type_for(field.ftype.elem_type)} {field.name}[{field.ftype.size}];\n")

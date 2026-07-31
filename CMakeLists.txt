@@ -98,6 +98,7 @@ find_program(PYTHON3_EXECUTABLE NAMES python3 REQUIRED)
 add_custom_target(undos-syscalls-gen
         COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/create-syscalls.py tools/syscalls.txt kernel_userland_shared/include/undos/syscalls userland/ kernel/src/syscalls
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        DEPENDS tools/syscalls.txt
         COMMENT "Generating syscalls from tools/syscalls.txt"
 )
 

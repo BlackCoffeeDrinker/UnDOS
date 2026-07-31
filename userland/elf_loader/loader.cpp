@@ -19,6 +19,8 @@ asm(
     ".size _start, . - _start\n\t");
 
 extern "C" [[noreturn]] void loader_main(const char *exec_path) {
+  
+  
   UD_SYS_PrintV1("USER SPACE: NativeElfLoader (C++): exec_path = ");
   UD_SYS_PrintV1(exec_path);
   UD_SYS_PrintV1("\n");

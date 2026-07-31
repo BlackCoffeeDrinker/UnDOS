@@ -8,6 +8,7 @@ from .ast_nodes import (
     CType,
     DynArrayType,
     EnumType,
+    FlagsType,
     IDLModule,
     StringType,
     StructType,
@@ -54,7 +55,7 @@ def generate_userspace(module: IDLModule, out_h_dir: str):
                         args.append(f"struct {field.ftype.name}* {field.name}")
                     else:
                         args.append(f"const struct {field.ftype.name}* {field.name}")
-                elif isinstance(field.ftype, EnumType):
+                elif isinstance(field.ftype, (EnumType, FlagsType)):
                     if is_out:
                         args.append(f"enum {field.ftype.name}* {field.name}")
                     else:
@@ -109,7 +110,7 @@ def generate_userspace(module: IDLModule, out_h_dir: str):
                     f.write(f"    __wire.{field.name} = {field.name};\n")
                 elif isinstance(field.ftype, StructType):
                     f.write(f"    __wire.{field.name} = *{field.name};\n")
-                elif isinstance(field.ftype, EnumType):
+                elif isinstance(field.ftype, (EnumType, FlagsType)):
                     f.write(f"    __wire.{field.name} = {field.name};\n")
                 elif isinstance(field.ftype, ArrayType):
                     f.write(f"    for (uint32_t __i = 0; __i < sizeof(__wire.{field.name}); __i++) ((uint8_t*)__wire.{field.name})[__i] = ((const uint8_t*){field.name})[__i];\n")
@@ -134,7 +135,7 @@ def generate_userspace(module: IDLModule, out_h_dir: str):
                     continue
                 if isinstance(field.ftype, StringType):
                     f.write(f"    if ({field.name}Length) *{field.name}Length = __wire.{field.name}Length;\n")
-                elif isinstance(field.ftype, (CType, StructType, EnumType)):
+                elif isinstance(field.ftype, (CType, StructType, EnumType, FlagsType)):
                     f.write(f"    *{field.name} = __wire.{field.name};\n")
                 elif isinstance(field.ftype, ArrayType):
                     f.write(f"    for (uint32_t __i = 0; __i < sizeof(__wire.{field.name}); __i++) ((uint8_t*){field.name})[__i] = ((const uint8_t*)__wire.{field.name})[__i];\n")

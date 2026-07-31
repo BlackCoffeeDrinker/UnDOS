@@ -135,6 +135,40 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_ProtectV1(uint32_t address, uint32_t size, enu
     return ret;
 }
 
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_OpenV1(const char* path, enum FileOpenMode mode, uint32_t* fileDescriptor)
+{
+    uint32_t ret = 0;
+    struct __SYS_FS_OPEN_V1 __wire;
+    __wire.path = path;
+    __wire.pathLength = 0;
+     while (path[__wire.pathLength]) __wire.pathLength++;
+    __wire.mode = mode;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(220), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *fileDescriptor = __wire.fileDescriptor;
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CloseV1(uint32_t fileDescriptor)
+{
+    uint32_t ret = 0;
+    struct __SYS_FS_CLOSE_V1 __wire;
+    __wire.fileDescriptor = fileDescriptor;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(221), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
 /** Reads data from an open file descriptor into `data`. */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_ReadV1(uint32_t fileDescriptor, uint8_t* data, uint32_t* dataLength)
 {

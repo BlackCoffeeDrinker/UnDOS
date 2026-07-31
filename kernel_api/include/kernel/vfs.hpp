@@ -59,7 +59,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     void,
     KE_VFS_CloseFile,
-    kernel::KObjectPtr<kernel::KFileObject> &&file);
+    kernel::KObjectPtr<kernel::KFileObject> file);
 
 /**
  * @ingroup VFS

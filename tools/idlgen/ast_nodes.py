@@ -68,6 +68,26 @@ class BufferType(FieldType):
         return f"BufferType({self.elem_type!r})"
 
 
+class FlagsType(FieldType):
+    def __init__(self, name: str):
+        self.name = name
+
+    def __repr__(self):
+        return f"FlagsType({self.name!r})"
+
+
+class AliasType(FieldType):
+    """An unresolved reference to a `using`-declared name. Replaced with the
+    concrete FieldType it refers to by resolver.resolve_aliases() before any
+    codegen pass runs."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def __repr__(self):
+        return f"AliasType({self.name!r})"
+
+
 # ---------- Declarations ----------
 
 class Field:
@@ -142,11 +162,44 @@ class StructDecl:
         return f"StructDecl({self.name!r}, {self.fields!r})"
 
 
+class FlagMember:
+    def __init__(self, name: str, doc: str = ""):
+        self.name = name
+        self.doc = doc
+
+    def __repr__(self):
+        return f"FlagMember({self.name!r})"
+
+
+class FlagsDecl:
+    def __init__(self, name: str, underlying: str, members: List[FlagMember], doc: str = ""):
+        self.name = name
+        self.underlying = underlying
+        self.members = members
+        self.doc = doc
+
+    def __repr__(self):
+        return f"FlagsDecl({self.name!r}, {self.underlying!r}, {self.members!r})"
+
+
+class UsingDecl:
+    def __init__(self, name: str, aliased: FieldType, doc: str = ""):
+        self.name = name
+        self.aliased = aliased
+        self.doc = doc
+
+    def __repr__(self):
+        return f"UsingDecl({self.name!r}, {self.aliased!r})"
+
+
 class IDLModule:
     def __init__(self):
         self.syscalls: List[Syscall] = []
         self.enums: List[EnumDecl] = []
         self.structs: List[StructDecl] = []
+        self.flags: List[FlagsDecl] = []
+        self.usings: List[UsingDecl] = []
 
     def __repr__(self):
-        return f"IDLModule(syscalls={self.syscalls!r}, enums={self.enums!r}, structs={self.structs!r})"
+        return (f"IDLModule(syscalls={self.syscalls!r}, enums={self.enums!r}, "
+                f"structs={self.structs!r}, flags={self.flags!r}, usings={self.usings!r})")

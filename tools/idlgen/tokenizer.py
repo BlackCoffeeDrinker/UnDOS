@@ -34,6 +34,7 @@ TOKEN_REGEX = [
     ("CKW", r"c<\s*[A-Za-z_][A-Za-z0-9_]*\s*>"),
     ("ENUMKW", r"enum<\s*[A-Za-z_][A-Za-z0-9_]*\s*>"),
     ("STRUCTKW", r"struct<\s*[A-Za-z_][A-Za-z0-9_]*\s*>"),
+    ("FLAGSKW", r"flags<\s*[A-Za-z_][A-Za-z0-9_]*\s*>"),
 
     ("ARRAYKW", r"\barray<"),
     ("DYNARRAYKW", r"\bdynarray<"),
@@ -42,7 +43,10 @@ TOKEN_REGEX = [
     # Base keywords and identifiers
     ("ENUM", r"\benum\b"),
     ("STRUCT", r"\bstruct\b"),
+    ("FLAGS", r"\bflags\b"),
+    ("USING", r"\busing\b"),
     ("STRINGKW", r"\bstring\b"),
+    ("HEXNUMBER", r"0x[0-9a-fA-F]+"),
     ("IDENT", r"[A-Za-z_][A-Za-z0-9_]*"),
     ("NUMBER", r"[0-9]+"),
 

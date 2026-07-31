@@ -1,0 +1,18 @@
+#pragma once
+
+// Generated from UnDOS IDL
+
+#include <stdint.h>
+#include <stddef.h>
+
+struct __SYS_GFX_ALPHABLEND_V1 {
+    uint32_t dstDC;
+    uint32_t srcDC;
+    struct Rect dstRect;
+    struct Rect srcRect;
+    uint8_t alpha;
+};
+
+constexpr size_t   __SYS_GFX_ALPHABLEND_V1_SIZE = sizeof(struct __SYS_GFX_ALPHABLEND_V1);
+constexpr uint32_t __SYS_GFX_ALPHABLEND_V1_CALLNUMBER = 322;
+

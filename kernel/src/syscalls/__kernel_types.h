@@ -5,20 +5,23 @@
 #include <stdint.h>
 #include <kernel/memory/borrowed_ptr.hpp>
 #include <string_view.hpp>
+#include <undos/syscalls/__enum_SyscallReturnCode.h>
 #include <undos/syscalls/__enum_ProcessFlags.h>
 #include <undos/syscalls/__enum_MemoryProtectFlags.h>
 
+#include <undos/syscalls/__flags_FileOpenMode.h>
+
 
 struct __KRN_DEBUG_PRINT_V1 {
-    kstd::string_view message {};
+    kstd::string message {};
 };
 
 /** Creates a new process from the executable at `path`. */
 struct __KRN_PROC_CREATEPROCESS_V1 {
     /** Path to the executable to load. */
-    kstd::string_view path {};
+    kstd::string path {};
     /** Command-line argument string passed to the new process. */
-    kstd::string_view argument {};
+    kstd::string argument {};
     /** Combination of ProcessFlags controlling the new process. */
     uint32_t flags;
 };
@@ -66,6 +69,20 @@ struct __KRN_MEM_PROTECT_V1 {
     uint32_t size;
     /** New protection to apply. */
     enum MemoryProtectFlags flags;
+};
+
+struct __KRN_FS_OPEN_V1 {
+    /** Path to the file to open. */
+    kstd::string path {};
+    /** Open mode (read, write, append). */
+    enum FileOpenMode mode;
+    /** File descriptor to receive the open file descriptor. */
+    uint32_t fileDescriptor;
+};
+
+struct __KRN_FS_CLOSE_V1 {
+    /** Open file descriptor to close. */
+    uint32_t fileDescriptor;
 };
 
 /** Reads data from an open file descriptor into `data`. */
