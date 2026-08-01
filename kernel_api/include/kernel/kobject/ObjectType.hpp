@@ -32,6 +32,9 @@ constexpr auto TYPE_FILE = "file"_type;
 constexpr auto TYPE_SUBSYSTEM = "subsystem"_type;
 constexpr auto TYPE_MEMORY_SECTION = "memory_section"_type;
 constexpr auto TYPE_CONFIGROOT_SECTION = "configroot"_type;
+constexpr auto TYPE_GRAPHICS_ADAPTER = "graphics_adapter"_type;
+constexpr auto TYPE_DISPLAY = "display"_type;
+constexpr auto TYPE_SURFACE = "surface"_type;
 
 template<ObjectType T>
 struct ObjectTypeOf {};

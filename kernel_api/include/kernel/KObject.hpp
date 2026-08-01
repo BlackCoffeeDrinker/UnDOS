@@ -6,6 +6,9 @@
 #include <kernel/kobject/KDriverObject.hpp>
 #include <kernel/kobject/KFileObject.hpp>
 #include <kernel/kobject/KFilesystemObject.hpp>
+#include <kernel/kobject/KGraphicsAdapter.hpp>
+#include <kernel/kobject/KDisplay.hpp>
+#include <kernel/kobject/KSurface.hpp>
 #include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
 #include <kernel/kobject/KModuleObject.hpp>
 #include <kernel/kobject/KObject.hpp>

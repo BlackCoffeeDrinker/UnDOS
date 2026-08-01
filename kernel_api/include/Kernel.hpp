@@ -25,6 +25,7 @@
 #include <kernel/user_process.hpp>
 #include <kernel/vfs.hpp>
 #include <kernel/virtual_memory.hpp>
+#include <kernel/gfx.hpp>
 
 #include <kernel/memory/address.hpp>
 #include <kernel/memory/borrowed_ptr.hpp>
