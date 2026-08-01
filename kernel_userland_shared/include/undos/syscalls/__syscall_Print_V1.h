@@ -7,7 +7,7 @@
 
 struct __SYS_DEBUG_PRINT_V1 {
     const char* message;
-    uint32_t messageLength;
+    size_t messageLength;
 };
 
 constexpr size_t   __SYS_DEBUG_PRINT_V1_SIZE = sizeof(struct __SYS_DEBUG_PRINT_V1);

@@ -8,7 +8,7 @@
 struct __SYS_FS_OPEN_V1 {
     /** Path to the file to open. */
     const char* path;
-    uint32_t pathLength;
+    size_t pathLength;
     /** Open mode (read, write, append). */
     enum FileOpenMode mode;
     /** File descriptor to receive the open file descriptor. */

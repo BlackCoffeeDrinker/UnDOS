@@ -28,7 +28,8 @@ This produces:
 
 ## Top-level declarations
 
-The IDL file is a sequence of `enum`, `struct`, and `syscall` declarations, in any order.
+The IDL file is a sequence of `enum`, `flags`, `struct`, `using`, and `syscall` declarations, in any
+order — declarations may reference each other regardless of the order they appear in the file.
 
 ### enum
 
@@ -42,6 +43,64 @@ enum ProcessFlags {
 
 Each member must have an explicit numeric value. Enums are emitted as plain C-style enums and can be
 referenced from fields via `enum<Name>`.
+
+### flags
+
+```
+flags DCInitFlags : uint32 {
+    Primary;
+    Memory;
+    Offscreen;
+    NoAccel;
+};
+```
+
+Like `enum`, but for bitmask values: members have **no explicit value** — the generator
+automatically assigns sequential bit positions in declaration order (1st member = `0x1`, 2nd =
+`0x2`, 3rd = `0x4`, ...). A required underlying integer type (`uint8`, `uint16`, `uint32`, `uint64`,
+a raw C type such as `uint32_t`, or a `using` alias that resolves to a `c<T>` type) follows the `:`
+and determines the emitted enum's storage type (`enum DCInitFlags : uint32_t { ... };`).
+
+`flags` declarations are emitted as plain C-style enums, exactly like `enum`, and are referenced
+from fields via `flags<Name>`. Since UnDOS already treats bitmask fields as ordinary enum values
+OR'd together (see `MemoryProtectFlags`), a `flags<Name>` field is compiled identically to an
+`enum<Name>` field — only the declaration itself differs (auto bit-values + mandatory underlying
+type, instead of explicit values).
+
+### using
+
+```
+using HANDLER = c<uint32_t>;
+```
+
+Declares `NAME` as an alias for an existing type expression (`c<T>`, `string`, `enum<Name>`,
+`struct<Name>`, `array<T,N>`, `dynarray<T>`, `buffer<T>`, or another alias). After a `using`
+declaration, `NAME` may be used as a bare field type anywhere a type is expected — as a field type
+inside `syscall`/`struct` bodies, as the element type inside `array<...>`/`dynarray<...>`/
+`buffer<...>`, or as the underlying type of a `flags` declaration:
+
+```
+using HANDLER = c<uint32_t>;
+
+flags Testing : HANDLER {
+    A;
+    B;
+};
+
+syscall V1 GFX CombineRegion [332] {
+    dest: IN HANDLER;
+};
+```
+
+Here `dest: IN HANDLER;` behaves exactly as if you had written `dest: IN c<uint32_t>;` directly, and
+`flags Testing : HANDLER { ... }` behaves exactly as if you had written `flags Testing : uint32_t
+{ ... }` directly — aliases are fully resolved before any code is generated, so generated output is
+byte-for-byte identical either way.
+
+Aliases may chain (`using A = B; using B = c<uint32_t>;`) and may be declared in any order relative
+to their use. A `using` that references an undefined name, forms a circular chain (`using A = B;
+using B = A;`), or is used as a `flags` underlying type but does not ultimately resolve to a `c<T>`
+type, is a compile-time error and aborts generation.
 
 ### struct
 
@@ -119,6 +178,7 @@ specific field genuinely needs the other behavior.
 | `string`       | A NUL-terminated, variable-length string. Never fixed-size.                                                                                           | `const char* <name>` (or `char*` for `OUT`) + `uint32_t <name>Length` |
 | `c<ctype>`     | A raw scalar C type, e.g. `c<uint32_t>`, `c<uint8_t>`.                                                                                                | `ctype <name>`                                                        |
 | `enum<Name>`   | A value of a previously declared `enum Name { ... }`.                                                                                                 | `enum Name <name>`                                                    |
+| `flags<Name>`  | A bitmask value of a previously declared `flags Name : <underlying> { ... }`. Same wire representation and OR-combining semantics as `enum<Name>`.    | `enum Name <name>`                                                    |
 | `struct<Name>` | A value of a previously declared `struct Name { ... }`.                                                                                               | `struct Name <name>`                                                  |
 | `array<T, N>`  | A fixed-size array of `N` elements of type `T`.                                                                                                       | `T <name>[N]`                                                         |
 | `dynarray<T>`  | A variable-length array of `T`, always mapped (pointer + length).                                                                                     | `T* <name>` + `uint32_t <name>Length`                                 |
@@ -128,6 +188,9 @@ specific field genuinely needs the other behavior.
 IDL — the kernel-side dispatcher validates the caller-supplied length against a generic size cap
 (`UNDOS_MAX_COPY_SIZE` for `COPY` fields, `UNDOS_MAX_MAPPED_BUFFER_SIZE` for `MAP` fields) instead of
 a per-field fixed size.
+
+Any name declared with `using NAME = <type-expr>;` (see [`using`](#using) above) may also be used
+as a bare field type wherever a type is expected, with the same meaning as the type it aliases.
 
 ## `string` OUT fields: query-length-then-fill
 
@@ -204,3 +267,40 @@ uint32_t handle_Read_V1(__KRN_FS_READ_V1&& args, uint32_t flags) {
     ...
 }
 ```
+
+### `flags`/`using` worked example
+
+```
+flags DCInitFlags : uint32 {
+    Primary;
+    Memory;
+    Offscreen;
+    NoAccel;
+};
+
+syscall V1 GFX CreateDC [300] {
+    driverName: IN string;
+    initFlags:  IN flags<DCInitFlags>;
+};
+```
+
+generates `enum DCInitFlags : uint32_t { DCInitFlags_Primary = 0x00000001, DCInitFlags_Memory =
+0x00000002, DCInitFlags_Offscreen = 0x00000004, DCInitFlags_NoAccel = 0x00000008, };` plus a
+userspace wrapper that takes `enum DCInitFlags initFlags` exactly like an `enum<Name>` field would —
+callers pass one or more values OR'd together (`DCInitFlags_Primary | DCInitFlags_Memory`).
+
+```
+using HANDLER = c<uint32_t>;
+
+flags Testing : HANDLER {
+    A;
+    B;
+};
+
+syscall V1 GFX CombineRegion [332] {
+    dest: IN HANDLER;
+};
+```
+
+is fully resolved before codegen runs, so it generates exactly the same output as writing
+`dest: IN c<uint32_t>;` and `flags Testing : uint32_t { A; B; };` directly.

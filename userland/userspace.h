@@ -12,7 +12,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_PrintV1(const char* message)
     uint32_t ret = 0;
     struct __SYS_DEBUG_PRINT_V1 __wire;
     __wire.message = message;
-    __wire.messageLength = 0;
+    __wire.messageLength = message ? 1 : 0;
      while (message[__wire.messageLength]) __wire.messageLength++;
 
     asm volatile(
@@ -30,10 +30,10 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateProcessV1(const char* path, const char* 
     uint32_t ret = 0;
     struct __SYS_PROC_CREATEPROCESS_V1 __wire;
     __wire.path = path;
-    __wire.pathLength = 0;
+    __wire.pathLength = path ? 1 : 0;
      while (path[__wire.pathLength]) __wire.pathLength++;
     __wire.argument = argument;
-    __wire.argumentLength = 0;
+    __wire.argumentLength = argument ? 1 : 0;
      while (argument[__wire.argumentLength]) __wire.argumentLength++;
     __wire.flags = flags;
 
@@ -140,7 +140,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_OpenV1(const char* path, enum FileOpenMode mod
     uint32_t ret = 0;
     struct __SYS_FS_OPEN_V1 __wire;
     __wire.path = path;
-    __wire.pathLength = 0;
+    __wire.pathLength = path ? 1 : 0;
      while (path[__wire.pathLength]) __wire.pathLength++;
     __wire.mode = mode;
 

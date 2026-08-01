@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+docker run --rm -v "${SCRIPT_DIR}:/src" -w /src gcc-standalone:i686-elf cmake --build build --target BootIso -j4
+
+qemu-system-i386 -machine isapc -cpu 486 -m 32 \
+  -device isa-serial,chardev=ser0 \
+  -hda "${SCRIPT_DIR}/bin/fat32.img" \
+  -chardev stdio,id=ser0,signal=off \
+  -nographic \
+  -nodefaults \
+  -drive file="${SCRIPT_DIR}/bin/os.iso",media=cdrom,readonly=on \
+  -boot d &
+
+QEMU_PID=$!
+(sleep 15 && kill $QEMU_PID 2>/dev/null) &
+
+wait $QEMU_PID

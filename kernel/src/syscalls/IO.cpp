@@ -1,15 +1,11 @@
 #include "stdkrn.hpp"
 #include "syscalls.hpp"
 
-uint32_t handle_Open_V1(__KRN_FS_OPEN_V1 &&args) {
+SyscallReturnCode handle_Open_V1(__KRN_FS_OPEN_V1 &&args) {
   const auto currentThread = KE_SCHED_GetCurrentThread();
-  if (currentThread == nullptr) {
-    return UINT32_MAX;
-  }
+  if (currentThread == nullptr) return SyscallReturnCode_INVALID_ARGUMENT;
   const auto proc = currentThread->owner_process;
-  if (!proc) {
-    return UINT32_MAX;
-  }
+  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
 
   kernel::KFileObject::OpenMode mode = {};
   kernel::ProcessHandleTable::HandleAccess access = {};
@@ -44,26 +40,21 @@ uint32_t handle_Open_V1(__KRN_FS_OPEN_V1 &&args) {
         kernel::ProcessHandleTable::HandleFlags::None);
 
     args.fileDescriptor = static_cast<uint32_t>(h);
-    return 0;
+    return SyscallReturnCode_OKAY;
   }
 
-  return UINT32_MAX;
+  return SyscallReturnCode_INVALID_ARGUMENT;
 }
 
-uint32_t handle_Close_V1(__KRN_FS_CLOSE_V1 &&args) {
+SyscallReturnCode handle_Close_V1(__KRN_FS_CLOSE_V1 &&args) {
   const auto currentThread = KE_SCHED_GetCurrentThread();
-  if (currentThread == nullptr) {
-    return UINT32_MAX;
-  }
+  if (currentThread == nullptr) return SyscallReturnCode_INVALID_ARGUMENT;
   const auto proc = currentThread->owner_process;
-  if (!proc) {
-    return UINT32_MAX;
-  }
+  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
 
   const auto h = static_cast<kernel::KHandle>(args.fileDescriptor);
   const auto entry = proc->handles.Lookup(h);
-  if (!entry)
-    return false;
+  if (!entry) return SyscallReturnCode_INVALID_ARGUMENT;
 
   if (auto file = entry->object.As<kernel::KFileObject>();
       file && !file->isClosed) {
@@ -72,36 +63,41 @@ uint32_t handle_Close_V1(__KRN_FS_CLOSE_V1 &&args) {
   }
 
   if (proc->handles.Close(h)) {
-    return 0;
+    return SyscallReturnCode_OKAY;
   }
 
-  return UINT32_MAX;
+  return SyscallReturnCode_INVALID_ARGUMENT;
 }
 
 /** Reads data from an open file descriptor into `data`. */
-uint32_t handle_Read_V1(__KRN_FS_READ_V1 &&args) {
+SyscallReturnCode handle_Read_V1(__KRN_FS_READ_V1 &&args) {
   const auto currentThread = KE_SCHED_GetCurrentThread();
-  if (currentThread == nullptr) {
-    return UINT32_MAX;
-  }
+  if (currentThread == nullptr) return SyscallReturnCode_INVALID_ARGUMENT;
   const auto proc = currentThread->owner_process;
-  if (!proc) {
-    return UINT32_MAX;
-  }
+  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
 
   const auto h = static_cast<kernel::KHandle>(args.fileDescriptor);
   const auto entry = proc->handles.Lookup(h);
-  if (!entry)
-    return false;
+  if (!entry) return SyscallReturnCode_INVALID_ARGUMENT;
 
-  if (auto file = entry->object.As<kernel::KFileObject>()) {
-    args.data_len = KE_VFS_ReadFile(file, args.data);
+  if (const auto file = entry->object.As<kernel::KFileObject>()) {
+    const auto originalOffset = KE_VFS_TellFile(file);
+    const auto size_read = KE_VFS_ReadFile(file, args.data);
+    if (size_read > kstd::numeric_limits<decltype(args.data.size())>::max()) {
+      // This should never happen (args.data.size() is 32bit)
+      KE_VFS_SeekFile(file, originalOffset);
+      return SyscallReturnCode_INVALID_SIZE;
+    }
+
+    args.data_len = static_cast<decltype(args.data_len)>(size_read);
+    return SyscallReturnCode_OKAY;
   }
 
-  return 0;
+  return SyscallReturnCode_INVALID_ARGUMENT;
 }
+
 /** Writes data from `data` to an open file descriptor. */
-uint32_t handle_Write_V1(__KRN_FS_WRITE_V1 &&args) {
+SyscallReturnCode handle_Write_V1(__KRN_FS_WRITE_V1 &&args) {
   (void) args;
-  return 0;
+  return SyscallReturnCode_INVALID_ARGUMENT;
 }

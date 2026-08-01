@@ -1,5 +1,6 @@
 // Generated from UnDOS IDL
 
+// See (tools/create-syscalls.py)
 #pragma once
 
 #include <stdint.h>

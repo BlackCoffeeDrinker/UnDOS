@@ -313,10 +313,31 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     load_delta = region_base - min_vaddr;
   }
 
+  // Step 1 — Read every PT_LOAD segment's file bytes from the VFS *before*
+  // switching to the target address space / disabling interrupts. Disk
+  // reads typically complete via an IRQ (e.g. the ATA driver), so doing
+  // them while interrupts are disabled -- as used to happen inside the
+  // mapping loop below -- means the completion interrupt can never fire and
+  // ReadBlob silently hands back stale/incomplete data instead of the real
+  // file content. Reading everything up-front, in the caller's own address
+  // space with interrupts still enabled, avoids that entirely.
+  kstd::array<uint8_t *, MAX_PROGRAM_HEADERS> segment_data{};
+  bool ok = true;
+  for (size_t i = 0; i < header.e_phnum && ok; ++i) {
+    const auto &ph = phdrs[i];
+    if (ph.p_type != hal::PT_LOAD || ph.p_filesz == 0) continue;
+
+    segment_data[i] = ReadBlob(file, ph.p_offset, ph.p_filesz);
+    if (!segment_data[i]) {
+      ok = false;
+      early_print_fmt("LoadElfFromVfs: Failed to read segment data\r\n");
+    }
+  }
+
   // Loading targets an address space that is not currently active, so
   // temporarily switch CR3 to it (drivers map into whichever AS is already
   // active -- the kernel AS -- so no switch is needed there).
-  const bool switch_as = policy.target_as != nullptr;
+  const bool switch_as = ok && policy.target_as != nullptr;
   PhysicalAddress caller_root;
   if (switch_as) {
     caller_root = HAL_VMM_GetCurrentTranslationRoot();
@@ -324,20 +345,9 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     HAL_VMM_SwitchAddressSpace(policy.target_as->translation_root);
   }
 
-  bool ok = true;
   for (size_t i = 0; i < header.e_phnum && ok; ++i) {
     const auto &ph = phdrs[i];
     if (ph.p_type != hal::PT_LOAD) continue;
-
-    uint8_t *segment_data = nullptr;
-    if (ph.p_filesz > 0) {
-      segment_data = ReadBlob(file, ph.p_offset, ph.p_filesz);
-      if (!segment_data) {
-        ok = false;
-        early_print_fmt("LoadElfFromVfs: Failed to read segment data\r\n");
-        break;
-      }
-    }
 
     vmm::ProtectFlags perms;
     if (policy.target_as == nullptr) {
@@ -352,12 +362,19 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     if (ph.p_flags & 0x1) perms = perms | vmm::ProtectFlags::EXECUTE;
 
     const uintptr_t segment_virt_start = ph.p_vaddr + load_delta;
-    if (!MapAndCopySegment(segment_virt_start, segment_data, ph.p_filesz, ph.p_memsz, perms)) {
+    if (!MapAndCopySegment(segment_virt_start, segment_data[i], ph.p_filesz, ph.p_memsz, perms)) {
       early_print_fmt("LoadElfFromVfs: Failed to map and copy segment\r\n");
       ok = false;
     }
+  }
 
-    if (segment_data) KE_Free(segment_data);
+  if (switch_as) {
+    HAL_VMM_SwitchAddressSpace(caller_root);
+    HAL_CPU_EnableInterrupts();
+  }
+
+  for (size_t i = 0; i < header.e_phnum; ++i) {
+    if (segment_data[i]) KE_Free(segment_data[i]);
   }
 
   if (ok && policy.relocatable) {
@@ -371,11 +388,6 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     result.ok = true;
   } else {
     early_print_fmt("LoadElfFromVfs: Failed\r\n");
-  }
-
-  if (switch_as) {
-    HAL_VMM_SwitchAddressSpace(caller_root);
-    HAL_CPU_EnableInterrupts();
   }
 
   KE_VFS_CloseFile(kstd::move(file));

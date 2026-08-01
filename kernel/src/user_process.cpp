@@ -18,7 +18,6 @@ UNDOS_KERNEL_API_DEF void KE_USER_CreateProcess(const kstd::string_view &exec_pa
     early_print_fmt("KE_USER_CreateProcess: failed to allocate KProcessObject\r\n");
     return;
   }
-  early_print_fmt("KE_USER_CreateProcess: created process object for {}\r\n", process->name);
 
   if (!kernel::vmm::create_user_address_space(process->address_space)) {
     early_print_fmt("KE_USER_CreateProcess: failed to create address space for {}\r\n", exec_path);

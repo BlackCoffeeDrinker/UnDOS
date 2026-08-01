@@ -213,35 +213,46 @@ kernel::IoStatus Ata_Read(const kernel::KDevicePtr<kernel::KDevice> &device, uin
   if (!bctx || !bctx->ioBase) return kernel::IoStatus::DeviceError;
 
   const uint16_t io = bctx->ioBase;
-  const auto lba = static_cast<uint32_t>(offset / kAtaSectorSize);
 
-  // LBA28 PIO
-  HAL_IO_Out8(AtaPort(io, kRegDrive), 0xE0 | ((lba >> 24) & 0x0F));
-  HAL_IO_Out8(AtaPort(io, kRegFeatures), 0);
-  HAL_IO_Out8(AtaPort(io, kRegSectorCount), 1);
-  HAL_IO_Out8(AtaPort(io, kRegLbaLow), lba & 0xFF);
-  HAL_IO_Out8(AtaPort(io, kRegLbaMid), (lba >> 8) & 0xFF);
-  HAL_IO_Out8(AtaPort(io, kRegLbaHigh), (lba >> 16) & 0xFF);
-  HAL_IO_Out8(AtaPort(io, kRegStatusCommand), 0x20);// READ SECTORS
+  const size_t sector_count = (buffer.size() + kAtaSectorSize - 1) / kAtaSectorSize;
 
-  // Wait
-  if (!AtaWait(io)) {
-    return kernel::IoStatus::DeviceError;
-  }
+  for (size_t s = 0; s < sector_count; ++s) {
+    const auto lba = static_cast<uint32_t>(offset / kAtaSectorSize) + static_cast<uint32_t>(s);
 
-  // Read 512 bytes (256 words)
-  for (uint32_t i = 0; i < 256; i++) {
-    const uint16_t data = HAL_IO_In16(AtaPort(io, kRegData));
-    if (i * 2 < buffer.size()) {
-      buffer[i * 2] = static_cast<uint8_t>(data & 0xFF);
+    // LBA28 PIO
+    HAL_IO_Out8(AtaPort(io, kRegDrive), 0xE0 | ((lba >> 24) & 0x0F));
+    HAL_IO_Out8(AtaPort(io, kRegFeatures), 0);
+    HAL_IO_Out8(AtaPort(io, kRegSectorCount), 1);
+    HAL_IO_Out8(AtaPort(io, kRegLbaLow), lba & 0xFF);
+    HAL_IO_Out8(AtaPort(io, kRegLbaMid), (lba >> 8) & 0xFF);
+    HAL_IO_Out8(AtaPort(io, kRegLbaHigh), (lba >> 16) & 0xFF);
+    HAL_IO_Out8(AtaPort(io, kRegStatusCommand), 0x20);// READ SECTORS
+
+    // Wait
+    if (!AtaWait(io)) {
+      return transferred > 0 ? kernel::IoStatus::Success : kernel::IoStatus::DeviceError;
     }
 
-    if (i * 2 + 1 < buffer.size()) {
-      buffer[i * 2 + 1] = static_cast<uint8_t>(data >> 8);
+    // Read 512 bytes (256 words) for this sector into the buffer at the
+    // correct offset.
+    const size_t sector_base = s * kAtaSectorSize;
+    for (uint32_t i = 0; i < 256; i++) {
+      const uint16_t data = HAL_IO_In16(AtaPort(io, kRegData));
+      const size_t byte0 = sector_base + i * 2;
+      const size_t byte1 = byte0 + 1;
+
+      if (byte0 < buffer.size()) {
+        buffer[byte0] = static_cast<uint8_t>(data & 0xFF);
+      }
+
+      if (byte1 < buffer.size()) {
+        buffer[byte1] = static_cast<uint8_t>(data >> 8);
+      }
     }
+
+    transferred += kstd::min(static_cast<size_t>(kAtaSectorSize), buffer.size() - sector_base);
   }
 
-  transferred = kstd::min(static_cast<size_t>(kAtaSectorSize), buffer.size());
   return kernel::IoStatus::Success;
 }
 

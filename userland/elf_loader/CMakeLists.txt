@@ -6,5 +6,7 @@ add_executable(native_elf_loader loader.cpp)
 
 target_link_libraries(native_elf_loader PRIVATE KernelUserlandShared)
 
-target_compile_options(native_elf_loader PRIVATE -ffreestanding -nostdlib -fno-exceptions -fno-rtti -m32)
-target_link_options(native_elf_loader PRIVATE -nostdlib -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker.ld)
+set_target_properties(native_elf_loader PROPERTIES POSITION_INDEPENDENT_CODE OFF)
+
+target_compile_options(native_elf_loader PRIVATE -ffreestanding -nostdlib -fno-exceptions -fno-rtti -fno-pic -fno-pie -m32)
+target_link_options(native_elf_loader PRIVATE -nostdlib -no-pie -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker.ld)

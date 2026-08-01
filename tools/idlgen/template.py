@@ -6,6 +6,8 @@ class Template:
         self.f = f
         self.type = type
         self.f.write("// Generated from UnDOS IDL\n\n")
+        self.f.write("// See (tools/create-syscalls.py)")
+        self.write_newline()
         if self.type == "header":
             self.f.write("#pragma once\n\n")
 
@@ -71,6 +73,11 @@ class Template:
 
     def write_kernel_array(self, array_of_type: str, array_name: str, max_elements: str):
         self.write_kernel_field(f"kstd::array<{array_of_type}, {max_elements}>", array_name)
-
-    def write_kernel_handle_def(self, name: str, version: int, struct_name: str):
-        self.__write(f"uint32_t handle_{name}_{version}({struct_name}&& args);\n")
+        
+    def write_method_def(self, name: str, return_type: str, args: list):
+        self.__write(f"{return_type} {name}(")
+        for i, arg in enumerate(args):
+            self.__write(f"{arg['type']} {arg['name']}")
+            if i < len(args) - 1:
+                self.__write(", ")
+        self.__write(");\n")

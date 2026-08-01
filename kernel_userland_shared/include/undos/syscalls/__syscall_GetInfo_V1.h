@@ -11,7 +11,7 @@ struct __SYS_PROC_GETINFO_V1 {
     uint32_t pid;
     /** Command line the process was started with (query-length-then-fill). */
     char* commandLine;
-    uint32_t commandLineLength;
+    size_t commandLineLength;
     /** Exit code of the process, if it has exited. */
     uint32_t exitCode;
 };

@@ -1,5 +1,6 @@
 // Generated from UnDOS IDL
 
+// See (tools/create-syscalls.py)
 #include "stdkrn.hpp"
 
 #include <memory.hpp>
@@ -69,7 +70,7 @@ static uint32_t Dispatch_Print_V1(void *userData, size_t size, uint32_t flags) {
   }
 
   (void)flags;
-  const uint32_t ret = handle_Print_V1(kstd::move(args));
+  const SyscallReturnCode ret = handle_Print_V1(kstd::move(args));
 
   return ret;
 }
@@ -122,7 +123,7 @@ static uint32_t Dispatch_CreateProcess_V1(void *userData, size_t size, uint32_t 
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const uint32_t ret = handle_CreateProcess_V1(kstd::move(args));
+  const SyscallReturnCode ret = handle_CreateProcess_V1(kstd::move(args));
 
   return ret;
 }
@@ -154,7 +155,7 @@ static uint32_t Dispatch_GetInfo_V1(void *userData, size_t size, uint32_t flags)
   }
 
   (void)flags;
-  const uint32_t ret = handle_GetInfo_V1(kstd::move(args));
+  const SyscallReturnCode ret = handle_GetInfo_V1(kstd::move(args));
 
   // content was written directly into the mapped user buffer; report the actual/required length.
   {
@@ -183,7 +184,7 @@ static uint32_t Dispatch_Exit_V1(void *userData, size_t size, uint32_t flags) {
   args.exitCode = headerCopy.exitCode;
 
   (void)flags;
-  const uint32_t ret = handle_Exit_V1(kstd::move(args));
+  const SyscallReturnCode ret = handle_Exit_V1(kstd::move(args));
 
   return ret;
 }
@@ -207,7 +208,7 @@ static uint32_t Dispatch_AllocatePages_V1(void *userData, size_t size, uint32_t 
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const uint32_t ret = handle_AllocatePages_V1(kstd::move(args));
+  const SyscallReturnCode ret = handle_AllocatePages_V1(kstd::move(args));
 
   KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_MEM_ALLOCATEPAGES_V1, address), &args.address, sizeof(args.address));
   return ret;
@@ -232,7 +233,7 @@ static uint32_t Dispatch_FreePages_V1(void *userData, size_t size, uint32_t flag
   args.size = headerCopy.size;
 
   (void)flags;
-  const uint32_t ret = handle_FreePages_V1(kstd::move(args));
+  const SyscallReturnCode ret = handle_FreePages_V1(kstd::move(args));
 
   return ret;
 }
@@ -257,7 +258,7 @@ static uint32_t Dispatch_Protect_V1(void *userData, size_t size, uint32_t flags)
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const uint32_t ret = handle_Protect_V1(kstd::move(args));
+  const SyscallReturnCode ret = handle_Protect_V1(kstd::move(args));
 
   return ret;
 }
@@ -295,7 +296,7 @@ static uint32_t Dispatch_Open_V1(void *userData, size_t size, uint32_t flags) {
   args.mode = headerCopy.mode;
 
   (void)flags;
-  const uint32_t ret = handle_Open_V1(kstd::move(args));
+  const SyscallReturnCode ret = handle_Open_V1(kstd::move(args));
 
   KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_FS_OPEN_V1, fileDescriptor), &args.fileDescriptor, sizeof(args.fileDescriptor));
   return ret;
@@ -319,7 +320,7 @@ static uint32_t Dispatch_Close_V1(void *userData, size_t size, uint32_t flags) {
   args.fileDescriptor = headerCopy.fileDescriptor;
 
   (void)flags;
-  const uint32_t ret = handle_Close_V1(kstd::move(args));
+  const SyscallReturnCode ret = handle_Close_V1(kstd::move(args));
 
   return ret;
 }
@@ -351,7 +352,7 @@ static uint32_t Dispatch_Read_V1(void *userData, size_t size, uint32_t flags) {
   }
 
   (void)flags;
-  const uint32_t ret = handle_Read_V1(kstd::move(args));
+  const SyscallReturnCode ret = handle_Read_V1(kstd::move(args));
 
   // buffer was mapped and filled by the kernel directly; report actual length written.
   {
@@ -391,7 +392,7 @@ static uint32_t Dispatch_Write_V1(void *userData, size_t size, uint32_t flags) {
   }
 
   (void)flags;
-  const uint32_t ret = handle_Write_V1(kstd::move(args));
+  const SyscallReturnCode ret = handle_Write_V1(kstd::move(args));
 
   return ret;
 }

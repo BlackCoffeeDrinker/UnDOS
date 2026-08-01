@@ -87,7 +87,9 @@ def generate_kernel_handle_definition(module: IDLModule, out_h_dir: str, out_h_s
 
         for sc in module.syscalls:
             template.write_doc(sc.doc)
-            template.write_kernel_handle_def(sc.name, sc.version, kernel_struct_name(sc))
+            template.write_method_def(name = f"handle_{sc.name}_{sc.version}", return_type = "SyscallReturnCode", args = [
+                {'name': "args", 'type': f"{kernel_struct_name(sc)} &&"}
+            ])
         template.write_newline()
 
 
@@ -98,6 +100,7 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
     filename = os.path.join(out_h_dir, "handler_syscall.cpp")
     with open(filename, "w", encoding="utf-8") as f:
         template = Template(f, type="source")
+        
 
         template.write_include_local("stdkrn.hpp")
         template.write_newline()
@@ -234,7 +237,7 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
                 f.write("  }\n")
 
             f.write("\n  (void)flags;\n")
-            f.write(f"  const uint32_t ret = handle_{sc.name}_{sc.version}(kstd::move(args));\n\n")
+            f.write(f"  const SyscallReturnCode ret = handle_{sc.name}_{sc.version}(kstd::move(args));\n\n")
 
             # Step 6: copy every OUT (non-buffer) field back to the original
             # user struct, one field at a time; buffer<T>/OUT-string content

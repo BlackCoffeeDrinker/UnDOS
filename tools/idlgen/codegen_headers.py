@@ -93,7 +93,7 @@ def write_syscall_struct_to_file(file, sc: Syscall):
                 file.write(f"    char* {field.name};\n")
             else:
                 file.write(f"    const char* {field.name};\n")
-            file.write(f"    uint32_t {field.name}Length;\n")
+            file.write(f"    size_t {field.name}Length;\n")
         elif isinstance(field.ftype, CType):
             file.write(f"    {field.ftype.ctype} {field.name};\n")
         elif isinstance(field.ftype, StructType):
@@ -106,7 +106,7 @@ def write_syscall_struct_to_file(file, sc: Syscall):
             file.write(f"    {c_type_for(field.ftype.elem_type)} {field.name}[{field.ftype.size}];\n")
         elif isinstance(field.ftype, DynArrayType):
             file.write(f"    const {c_type_for(field.ftype.elem_type)}* {field.name};\n")
-            file.write(f"    uint32_t {field.name}Length;\n")
+            file.write(f"    size_t {field.name}Length;\n")
         elif isinstance(field.ftype, BufferType):
             if field.direction == "OUT":
                 file.write(f"    {c_type_for(field.ftype.elem_type)}* {field.name};\n")
