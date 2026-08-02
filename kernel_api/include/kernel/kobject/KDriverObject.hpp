@@ -26,6 +26,7 @@ enum class IoStatus : uint8_t {
 };
 
 struct KDriverObject : KObjectT<KDriverObject, 1, TYPE_DRIVER> {
+  using KObjectT::KObjectT;
   VirtualAddress load_base{0};
   size_t total_size{0};
   cfunc<void(KObjectPtr<KDriverObject> &, const KConfigurationKeyPtr &)> entry_point;

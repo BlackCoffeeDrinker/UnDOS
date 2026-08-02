@@ -9,6 +9,7 @@
 #include <kernel/kobject/KGraphicsAdapter.hpp>
 #include <kernel/kobject/KDisplay.hpp>
 #include <kernel/kobject/KSurface.hpp>
+#include <kernel/kobject/KDeviceContext.hpp>
 #include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
 #include <kernel/kobject/KModuleObject.hpp>
 #include <kernel/kobject/KObject.hpp>

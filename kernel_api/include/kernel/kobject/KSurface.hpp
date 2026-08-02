@@ -39,6 +39,7 @@ struct KDisplayModeInfo {
 
 // Backing memory abstraction for a framebuffer or offscreen surface.
 struct KSurface : KObjectT<KSurface, 1, TYPE_SURFACE> {
+  using KObjectT::KObjectT;
   KObjectPtr<KMemoryBackingObject> backing;// Memory backing the surface's pixel data
 
   uint32_t width = 0;

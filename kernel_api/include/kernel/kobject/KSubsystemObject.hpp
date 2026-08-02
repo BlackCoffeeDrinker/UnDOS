@@ -8,6 +8,7 @@
 namespace kernel {
 
 struct KSubsystemObject : KObjectT<KSubsystemObject, 1, TYPE_SUBSYSTEM> {
+  using KObjectT::KObjectT;
   kstd::static_string<255> loader_path;// path to the user-mode loader image
   DataBuffer systemExtension;          // opaque subsystem-specific data
   VirtualAddress loader_entry{0};      // loader entry point (user-mode)

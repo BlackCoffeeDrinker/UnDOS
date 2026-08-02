@@ -1,7 +1,7 @@
 #pragma once
 
 #include <kernel/__core.hpp>
-#include <kernel/adt/avl_tree.hpp>
+#include <kernel/common/DoubleList.hpp>
 #include <kernel/kobject/KObject.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/ObjectType.hpp>
@@ -9,12 +9,16 @@
 namespace kernel {
 
 struct KDirectoryObject : KObjectT<KDirectoryObject, 1, TYPE_DIRECTORY> {
-  adt::AvlTree<KObject, &KObject::node> children;
+  using KObjectT::KObjectT;
+
+  common::DoubleList<KObject> child_list;
 
   ~KDirectoryObject() override {
-    children.clear([](KObject *obj) {
-      if (obj) KE_OB_Release(obj);
-    });
+    while (!child_list.empty()) {
+      KObject *obj = &child_list.front();
+      child_list.pop_front();
+      KE_OB_Release(obj);
+    }
   }
 };
 

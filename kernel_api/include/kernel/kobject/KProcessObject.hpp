@@ -92,6 +92,7 @@ struct ProcessHandleTable {
 // the thread(s) running inside it. Platform-agnostic: all HAL-specific state
 // lives inside vmm::AddressSpace / KThreadObject.
 struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
+  using KObjectT::KObjectT;
   enum class State : uint8_t { Running,
                                Terminated };
 

@@ -64,8 +64,18 @@ template<typename T, typename... Args>
   requires(kstd::is_base_of_v<KObject, T>)
 KObjectPtr<T> CreateKObject(const kstd::static_string<64> &name, Args &&...args) {
   if (void *p = KE_Malloc(sizeof(T))) {
+    KObjectPtr<T> res(new (p) T(name, kstd::forward<Args>(args)...));
+    return res;
+  }
+
+  return nullptr;
+}
+
+template<typename T, typename... Args>
+  requires(kstd::is_base_of_v<KObject, T>)
+KObjectPtr<T> CreateAnonymousKObject(Args &&...args) {
+  if (void *p = KE_Malloc(sizeof(T))) {
     KObjectPtr<T> res(new (p) T(kstd::forward<Args>(args)...));
-    res->name = name;
     return res;
   }
 

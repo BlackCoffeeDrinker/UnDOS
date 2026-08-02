@@ -144,9 +144,9 @@ void DumpObjectTree(const kernel::KObjectPtr<kernel::KObject> &obj, int depth = 
   early_print_fmt("|-- {} ({})\n\r", name, GetObjectTypeName(obj->type));
 
   if (const auto directory = obj.As<kernel::KDirectoryObject>()) {
-    directory->children.each([&](auto entry) {
-      DumpObjectTree(entry, depth + 1);
-    });
+    for (auto &entry : directory->child_list) {
+      DumpObjectTree(&entry, depth + 1);
+    }
   }
 }
 

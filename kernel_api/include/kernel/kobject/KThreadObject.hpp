@@ -13,6 +13,7 @@ struct KProcessObject;
 // register frame on the thread's own kernel stack and exchanges just the SP,
 // so this structure is identical across x86/MIPS/ARM/VAX/PPC.
 struct KThreadObject : KObjectT<KThreadObject, 1, TYPE_THREAD> {
+  using KObjectT::KObjectT;
   enum class State : uint8_t { Ready, Running, Blocked, Terminated };
 
   State state{State::Ready};

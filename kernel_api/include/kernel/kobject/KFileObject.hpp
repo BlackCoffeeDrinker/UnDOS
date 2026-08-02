@@ -11,6 +11,7 @@ struct KVFSNode;
 struct KFilesystemObject;
 
 struct KFileObject : KObjectT<KFileObject, 1, TYPE_FILE> {
+  using KObjectT::KObjectT;
   enum class OpenMode : uint32_t {
     Read = 0x01,
     Write = 0x02,

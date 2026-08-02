@@ -25,7 +25,7 @@ kernel::KObjectPtr<kernel::KObject> LookupChild(
   if (path == ".") return parent;
   if (path == "..") return parent->parent;
 
-  return parent->children.find(path);
+  return parent->child_list.find(path);
 }
 
 kernel::KObjectPtr<kernel::KObject> LookupPathFrom(
@@ -121,14 +121,14 @@ UNDOS_KERNEL_API_DEF bool KE_OB_InsertObject(const kernel::KObjectPtr<kernel::KD
   }
 
   // Check if name already exists
-  if (parent->children.find(kstd::string_view(child->name))) {
+  if (parent->child_list.find(kstd::string_view(child->name))) {
     early_print_fmt("KE_OB_InsertObject failed for object {}\r\n", child->name);
     return false;
   }
 
   child->parent = parent.get();
   KE_OB_Retain(child.get());
-  parent->children.insert(*child.get());
+  parent->child_list.push_back(child.get());
 
   return true;
 }
@@ -142,7 +142,7 @@ UNDOS_KERNEL_API_DEF bool KE_OB_RemoveObject(const kernel::KObjectPtr<kernel::KD
     return false;
   }
 
-  parent->children.remove(child.get());
+  parent->child_list.remove(child.get());
   child->parent = nullptr;
 
   // Undo the retain KE_OB_InsertObject performed on insertion.

@@ -7,6 +7,7 @@
 namespace kernel {
 
 struct KModuleObject : KObjectT<KModuleObject, 1, TYPE_MODULE> {
+  using KObjectT::KObjectT;
   PhysicalAddress base_physical;
   size_t length;
 };

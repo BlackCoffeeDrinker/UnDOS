@@ -12,6 +12,7 @@ struct KVolumeMountObject;
 struct KVFSNode;
 
 struct KFilesystemObject : KObjectT<KFilesystemObject, 1, TYPE_FILE_SYSTEM> {
+  using KObjectT::KObjectT;
   KObjectPtr<KDriverObject> driver;
 
   cfunc<bool(const KObjectPtr<KVolumeMountObject> &partial, const kstd::string_view &options)> MountVolume;// < Populates the volume mount object with opaque options

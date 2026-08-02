@@ -59,6 +59,8 @@ add_executable(kernel
         src/syscalls/CreateProcess.cpp
         src/configuration_manager.cpp
         src/syscalls/IO.cpp
+        src/gfx/gfx_management.cpp
+        src/gfx/gfx_software_fallback.cpp
 )
 
 add_dependencies(kernel undos-syscalls-gen)

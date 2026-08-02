@@ -12,6 +12,7 @@ struct KGraphicsAdapter;
 
 // Display object representing a mode/connector/framebuffer
 struct KDisplay : KObjectT<KDisplay, 1, TYPE_DISPLAY> {
+  using KObjectT::KObjectT;
   KObjectPtr<KGraphicsAdapter> adapter;
 
   // Surface backing this display

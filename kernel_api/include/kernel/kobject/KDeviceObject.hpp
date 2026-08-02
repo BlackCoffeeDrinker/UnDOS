@@ -11,6 +11,7 @@ namespace kernel {
  * @brief Represents a device object (PDO, FDO, etc.)
  */
 struct KDeviceObject : KObjectT<KDeviceObject, 1, TYPE_DEVICE> {
+  using KObjectT::KObjectT;
   KDevicePtr<KDevice> device;
 };
 

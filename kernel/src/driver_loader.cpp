@@ -32,13 +32,14 @@ uintptr_t ResolveSymbol(kstd::string_view name) {
   return g_SymbolTable.Resolve(name);
 }
 
-// Copies a matched ".driver_name" section's bytes into the KDriverObject
+// Copies a matched ".driver_name" section's bytes into the static_string
 // pointed to by `context`, before elf_loader frees its temporary read
-// buffer.
+// buffer. The name is captured separately since KObject::name is const and
+// can only be set once the KDriverObject is actually constructed.
 void CaptureDriverName(void *context, kstd::string_view name, const uint8_t *data, size_t) {
   if (name != ".driver_name") return;
-  const auto *driver_object = static_cast<kernel::KObjectPtr<kernel::KDriverObject> *>(context);
-  (*driver_object)->name = reinterpret_cast<const char *>(data);
+  auto *name_out = static_cast<kstd::static_string<64> *>(context);
+  *name_out = reinterpret_cast<const char *>(data);
 }
 
 }// namespace
@@ -72,21 +73,23 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(co
     return nullptr;
   }
 
-  auto driver_object = kernel::CreateKObject<kernel::KDriverObject>("<tmpname>");
-  if (!driver_object) {
-    early_print_fmt("KE_DRIVER_Load: Failed to create driver object\r\n");
-    return nullptr;
-  }
+  kstd::static_string<64> captured_name = "";
 
   kernel::elf::LoadPolicy policy;
   policy.relocatable = true;
-  policy.context = &driver_object;
+  policy.context = &captured_name;
   policy.resolve_symbol = kernel::cfunc<uintptr_t(kstd::string_view)>(ResolveSymbol);
   policy.capture_section = kernel::cfunc<void(void *, kstd::string_view, const uint8_t *, size_t)>(CaptureDriverName);
 
   const auto result = kernel::elf::LoadElfFromVfs(path, policy);
   if (!result.ok) {
     early_print_fmt("KE_DRIVER_Load: Failed to load driver from path {}\r\n", path);
+    return nullptr;
+  }
+
+  auto driver_object = kernel::CreateKObject<kernel::KDriverObject>(captured_name);
+  if (!driver_object) {
+    early_print_fmt("KE_DRIVER_Load: Failed to create driver object\r\n");
     return nullptr;
   }
   

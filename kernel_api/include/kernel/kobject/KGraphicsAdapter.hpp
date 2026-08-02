@@ -13,6 +13,7 @@ struct KDisplay;
 
 // Adapter representing the driver in charge of a piece of graphics hardware (e.g. "VGA16")
 struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
+  using KObjectT::KObjectT;
   KObjectPtr<KDriverObject> driver; // optional driver binary object
   KDevicePtr<KDevice> device; // optional device object
 

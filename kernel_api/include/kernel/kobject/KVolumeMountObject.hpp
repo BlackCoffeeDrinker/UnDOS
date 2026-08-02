@@ -9,6 +9,7 @@ struct KVFSNode;
 struct KFilesystemObject;
 
 struct KVolumeMountObject : KObjectT<KVolumeMountObject, 1, TYPE_VOLUME_MOUNT> {
+  using KObjectT::KObjectT;
   KDevicePtr<KDevice> volume;              //< Partition
   KObjectPtr<KFilesystemObject> fileSystem;//< Filesystem driver used
 

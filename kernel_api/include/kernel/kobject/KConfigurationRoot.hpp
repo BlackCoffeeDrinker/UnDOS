@@ -13,6 +13,7 @@ namespace kernel {
 struct KFileObject;
 
 struct KConfigurationRoot : KObjectT<KConfigurationRoot, 1, TYPE_CONFIGROOT_SECTION> {
+  using KObjectT::KObjectT;
   // A single INDEX TABLE entry, kept resident in memory while the hive is
   // open. `keyHash` uniquely identifies this entry (it is derived from both
   // the entry's own short `name` and its `parentHash`, so it doubles as a

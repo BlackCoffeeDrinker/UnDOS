@@ -7,6 +7,7 @@ namespace kernel {
 struct KFileObject;
 
 struct KMemoryBackingObject : KObjectT<KMemoryBackingObject, 1, TYPE_MEMORY_SECTION> {
+  using KObjectT::KObjectT;
   enum class Kind {
     Anonymous,  //< anonymous memory (heap/stack)
     File,       //< file-backed mapping (mmap / module image)
