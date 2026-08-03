@@ -1,5 +1,8 @@
 
 #include "vmm.hpp"
+
+#include "v86.hpp"
+
 #include <kernel/hal_interface.hpp>
 
 using kernel::PhysicalAddress;
@@ -56,6 +59,12 @@ void init_vmm() noexcept {
 
 
 UNDOS_HAL_API_DEF void HAL_VMM_FinalizeInit() noexcept {
+  // The kernel has the virtual memory manager up and running
+
+  // Registers/reserves any v86 monitor state that must exist before the
+  // first HAL_x86_ExecBiosInt call (the vector-13 stub above is already
+  // installed at this point).
+  hal::x86::init_v86_monitor();
 }
 
 UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_GetCurrentTranslationRoot() noexcept {
@@ -250,3 +259,44 @@ UNDOS_HAL_API_DEF void HAL_VMM_UnmapPage(VirtualAddress virtual_addr) noexcept {
 UNDOS_HAL_API_DEF void HAL_VMM_Flush(VirtualAddress virtual_addr) noexcept {
   asm volatile("invlpg (%0)" ::"r"(static_cast<uintptr_t>(virtual_addr)) : "memory");
 }
+
+namespace hal::x86 {
+void ensure_page_user_writable(kernel::VirtualAddress virtual_addr, kernel::PhysicalAddress physical_addr) noexcept {
+  const uintptr_t pd_index = virtual_addr.value >> 22;
+  const uintptr_t pt_index = (virtual_addr.value >> 12) & 0x3FF;
+
+  auto *directory = get_page_directory();
+  constexpr auto user_writable = PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER;
+
+  if (!directory[pd_index].is_present()) {
+    const PhysicalAddress new_table_phys = HAL_PMM_AllocateFrames(1);
+    if (!new_table_phys) {
+      return;
+    }
+
+    directory[pd_index].set_page_table(static_cast<uintptr_t>(new_table_phys), user_writable);
+    HAL_VMM_Flush(VirtualAddress(RECURSIVE_PT_WINDOW + (pd_index * 4096)));
+
+    auto *page_table = get_page_table(virtual_addr);
+    for (size_t i = 0; i < 1024; ++i) {
+      page_table[i].clear();
+    }
+    HAL_VMM_Flush(virtual_addr);
+  } else if (!has_flag(PageFlags(directory[pd_index].value), PageFlags::USER)) {
+    // Upgrade a pre-existing supervisor-only page table (e.g. a transitional
+    // identity map left behind by the Stage 1.5 boot loader) so pages within
+    // it *can* be marked user-accessible; individual page table entries below
+    // still control their own USER bit.
+    directory[pd_index].set_page_table(directory[pd_index].get_page_table(), user_writable);
+    HAL_VMM_Flush(VirtualAddress(RECURSIVE_PT_WINDOW + (pd_index * 4096)));
+  }
+
+  auto *page_table = get_page_table(virtual_addr);
+  if (!page_table[pt_index].is_present() ||
+      !has_flag(PageFlags(page_table[pt_index].value), PageFlags::USER) ||
+      !has_flag(PageFlags(page_table[pt_index].value), PageFlags::WRITABLE)) {
+    page_table[pt_index].set_frame(static_cast<uintptr_t>(physical_addr), user_writable);
+    HAL_VMM_Flush(virtual_addr);
+  }
+}
+}// namespace hal::x86

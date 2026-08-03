@@ -3,7 +3,7 @@
 
 namespace kernel {
 enum class ConfigurationValueType {
-  Invalid,
+  Invalid = 0,
   Boolean,
   UInt32,
   UInt64,

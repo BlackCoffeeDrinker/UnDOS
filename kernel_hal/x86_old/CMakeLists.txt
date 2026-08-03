@@ -27,5 +27,7 @@ add_hal(hal_x86_old
         atomics.hpp
         cpuid.cpp
         cpuid.hpp
+        v86.cpp
+        v86.hpp
 )
 

@@ -144,7 +144,7 @@ void DumpObjectTree(const kernel::KObjectPtr<kernel::KObject> &obj, int depth = 
   early_print_fmt("|-- {} ({})\n\r", name, GetObjectTypeName(obj->type));
 
   if (const auto directory = obj.As<kernel::KDirectoryObject>()) {
-    for (auto &entry : directory->child_list) {
+    for (auto &entry: directory->child_list) {
       DumpObjectTree(&entry, depth + 1);
     }
   }
@@ -217,6 +217,10 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   kernel::objectmanager::init();
   kernel::vmm::late_init();
   HAL_VMM_FinalizeInit();
+
+  // Memory management is now fully functional
+  early_print_fmt("Memory management is now fully functional\r\n");
+
   kernel::sched::init();
   HAL_PLATFORM_InitializeSystemTimer();
   HAL_CPU_EnableInterrupts();

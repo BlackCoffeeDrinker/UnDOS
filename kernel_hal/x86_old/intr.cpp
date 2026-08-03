@@ -10,6 +10,7 @@
 #include "__tuple/ignore.hpp"
 #include "strfmt.hpp"
 #include "structs.hpp"
+#include "v86.hpp"
 
 namespace hal::x86 {
 using uword_t = unsigned int;
@@ -134,6 +135,49 @@ void remap_pic() noexcept {
   KE_VMM_HandlePagefault(info);
 }
 
+// Vector 13: #GP entry stub.
+//
+// A #GP raised while EFLAGS.VM==1 (virtual-8086 mode, used by the v86
+// monitor -- see v86.cpp/v86.hpp) pushes 4 *extra* segment registers
+// (ES, DS, FS, GS) beyond the usual privilege-change exception frame
+// (error code, EIP, CS, EFLAGS, ESP, SS). [[gnu::interrupt]]-generated
+// prologues/epilogues have no notion of this extended v86 frame shape (they
+// would neither read nor restore ES/DS/FS/GS, and the compiler-emitted
+// `iret` would consume the wrong number of stack words), so vector 13 is a
+// hand-written assembly stub, styled like syscall_handler above.
+//
+// EFLAGS is always at a fixed offset (12 bytes) above the incoming ESP
+// regardless of whether SS/ESP/segment registers were also pushed, so its
+// VM bit (0x20000) can be tested immediately to pick a path:
+//   - VM==0: today's panic behavior, preserved via v86_non_v86_gp_panic.
+//   - VM==1: `pushad` (its layout exactly matches hal::x86::v86_context_t)
+//     then dispatch to v86_gp_dispatch, which either emulates the trapped
+//     instruction in place (so `popad` + `iret` resumes v86), or -- on the
+//     stub page's HLT -- completes the in-flight HAL_x86_ExecBiosInt call
+//     and never returns here at all.
+extern "C" void v86_gp_stub();
+__asm__(
+    ".text\n\t"
+    ".global v86_gp_stub\n\t"
+    ".type v86_gp_stub, @function\n\t"
+    "v86_gp_stub:\n\t"
+    "    testl $0x20000, 12(%esp)\n\t"
+    "    jz    1f\n\t"
+    "    pushal\n\t"
+    "    pushl %esp\n\t"
+    "    call  v86_gp_dispatch\n\t"
+    "    addl  $4, %esp\n\t"
+    "    popal\n\t"
+    "    addl  $4, %esp\n\t"// skip the error code, leaving ESP at EIP
+    "    iret\n\t"
+    "1:\n\t"
+    "    movl  (%esp), %eax\n\t"// error_code
+    "    movl  4(%esp), %edx\n\t"// eip
+    "    pushl %edx\n\t"
+    "    pushl %eax\n\t"
+    "    call  v86_non_v86_gp_panic\n\t"
+    ".size v86_gp_stub, . - v86_gp_stub\n\t");
+
 // Vector 0x80: int 0x80 syscall gate (DPL3, callable from ring 3).
 //
 // gnu::interrupt handlers don't expose general-purpose registers, but the
@@ -186,7 +230,6 @@ void init_idt() {
   idt.set(10, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
   idt.set(11, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
   idt.set(12, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(13, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
   idt.set(14, KERNEL_GDT_SELECTOR, &page_fault_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
   idt.set(17, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
   idt.set(30, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
@@ -194,6 +237,15 @@ void init_idt() {
   // 2. Register Remapped Hardware Vectors (32+)
   idt.set(32, KERNEL_GDT_SELECTOR, &pit_irq_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
   idt.set(33, KERNEL_GDT_SELECTOR, &generic_irq1_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+
+  // Vector 13: #GP. Raw-assembly stub (see above) so v86-mode faults with
+  // their extended (ES/DS/FS/GS) frame can be handled by the v86 monitor;
+  // non-v86 #GPs still panic exactly as before.
+  idt.idt[13] = idt_entry_t(
+      reinterpret_cast<uintptr_t>(&v86_gp_stub),
+      KERNEL_GDT_SELECTOR,
+      GateType::INTERRUPT_32,
+      IDTFlags::PRESENT);
 
   // Vector 0x80: syscall gate. DPL3 so ring-3 user code may trigger it directly.
   idt.idt[0x80] = idt_entry_t(
@@ -203,6 +255,8 @@ void init_idt() {
       IDTFlags::PRESENT | IDTFlags::DPL3);
 
   idt.set();// Load IDTR
+
+
 
   // Turn interrupts on globally now that the safety net is built!
   //asm volatile("sti");

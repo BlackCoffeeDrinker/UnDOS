@@ -118,6 +118,10 @@ void tss_set_esp0(uint32_t esp0) noexcept {
   kernel_tss.esp0 = esp0;
 }
 
+uint32_t tss_get_esp0() noexcept {
+  return kernel_tss.esp0;
+}
+
 void reload_gdt() {
   kernel_gdt.install();
 }

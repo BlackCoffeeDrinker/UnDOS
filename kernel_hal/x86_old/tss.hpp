@@ -42,4 +42,10 @@ constexpr uint16_t GDT_SELECTOR_TSS = 0x28;
 // The TSS descriptor itself is installed as part of init_gdt() (see gdt.cpp),
 // since it lives in the same GDT.
 void tss_set_esp0(uint32_t esp0) noexcept;
+
+// Reads back the currently configured esp0. Used by the v86 monitor to save
+// the calling thread's normal kernel stack before pointing esp0 at a small
+// nested trap stack for the duration of a HAL_x86_ExecBiosInt call, and to
+// restore it afterward so scheduling (HAL_CPU_SetKernelStack) is unaffected.
+uint32_t tss_get_esp0() noexcept;
 }// namespace hal::x86

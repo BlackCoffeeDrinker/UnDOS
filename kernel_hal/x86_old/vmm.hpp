@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include <kernel/memory/address.hpp>
+
 namespace hal::x86 {
 enum class PageFlags : uint32_t {
   NONE = 0,
@@ -60,5 +62,14 @@ static_assert(sizeof(page_table_t) == 4096);
 static_assert(sizeof(page_directory_t) == 4096);
 
 void init_vmm() noexcept;
+
+// Ensures `virtual_addr` is present, identity-mapped to `physical_addr`, and
+// accessible from CPL3 (USER bit set) and writable -- unlike HAL_VMM_MapPage,
+// this *upgrades* the permissions of an already-present page instead of
+// leaving it untouched. Needed because low memory (0x0-0x100000) is
+// typically already mapped supervisor-only by the Stage 1.5 boot loader's
+// own transitional identity map, which would otherwise silently block the
+// v86 monitor's low-memory pages from being reachable at CPL3 (see v86.cpp).
+void ensure_page_user_writable(kernel::VirtualAddress virtual_addr, kernel::PhysicalAddress physical_addr) noexcept;
 
 }// namespace hal::x86
