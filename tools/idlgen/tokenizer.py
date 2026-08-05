@@ -20,6 +20,15 @@ TOKEN_REGEX = [
     ("SYSCALL", r"\bsyscall\b"),
     ("V", r"\bV[0-9]+\b"),
 
+    # include "path/to/file.txt"; pulls another IDL file's declarations in
+    # at this point, as if they had been written here directly. Must come
+    # before IDENT.
+    ("INCLUDE", r"\binclude\b"),
+
+    # Double-quoted string literal, currently only used as the operand of
+    # `include`.
+    ("STRING", r'"[^"]*"'),
+
     # Field direction tokens (must come before IDENT)
     ("IN", r"\bIN\b"),
     ("OUT", r"\bOUT\b"),

@@ -51,9 +51,14 @@ struct basic_static_string {
     append(sv);
   }
 
-  constexpr basic_static_string(const basic_static_string &other) noexcept
+  constexpr basic_static_string(const basic_static_string &other) noexcept = default;
+  constexpr basic_static_string(basic_static_string &&other) noexcept = default;
+
+  template<size_t N2>
+  requires (N2 <= N && N > 0)
+  constexpr basic_static_string(const basic_static_string<N2> &other) noexcept
       : _len(other._len), _buffer{} {
-    if constexpr (N > 0) {
+    if constexpr (N > 0 && N2 <= N) {
       for (size_type i = 0; i <= other._len; ++i) {
         _buffer[i] = other._buffer[i];
       }
@@ -67,6 +72,20 @@ struct basic_static_string {
         for (size_type i = 0; i <= other._len; ++i) {
           _buffer[i] = other._buffer[i];
         }
+      }
+    }
+    return *this;
+  }
+
+  constexpr basic_static_string &operator=(basic_static_string &&other) noexcept = default;
+
+  template<size_t N2>
+  requires (N2 <= N && N > 0)
+  constexpr basic_static_string &operator=(const basic_static_string<N2> &other) noexcept {
+    this->_len = other._len;
+    if constexpr (N > 0 && N2 <= N) {
+      for (size_type i = 0; i <= other._len; ++i) {
+        _buffer[i] = other._buffer[i];
       }
     }
     return *this;
@@ -377,9 +396,69 @@ struct basic_static_string {
   }
 
   private:
+  template<size_t N2, class CharT2, class Traits2>
+  friend struct basic_static_string;
   size_type _len = 0;
   CharT _buffer[N];
 };
+
+// Deduction guide: lets `basic_static_string` (and, through alias-template CTAD, `static_string`)
+// deduce its capacity directly from a string literal's array bound, e.g. `static_string s = "hi";`.
+// Without this, `N` could never be deduced since it doesn't appear in the `const CharT*`
+// constructor's parameter type.
+template<size_t M, typename CharT, typename Traits = char_traits<CharT>>
+basic_static_string(const CharT (&)[M]) -> basic_static_string<M, CharT, Traits>;
+
+// Concatenation operators. Each combination yields a `basic_static_string` sized to exactly fit
+// the combined content (no wasted or missing capacity), which is what makes chained
+// concatenation of well-known object-manager-style paths usable in `constexpr` contexts.
+template<size_t N1, size_t N2, typename CharT, typename Traits>
+constexpr basic_static_string<N1 + N2 - 1, CharT, Traits> operator+(
+    const basic_static_string<N1, CharT, Traits> &lhs,
+    const basic_static_string<N2, CharT, Traits> &rhs) noexcept {
+  basic_static_string<N1 + N2 - 1, CharT, Traits> result;
+  result.append(static_cast<basic_string_view<CharT, Traits>>(lhs));
+  result.append(static_cast<basic_string_view<CharT, Traits>>(rhs));
+  return result;
+}
+
+template<size_t N1, size_t M, typename CharT, typename Traits>
+constexpr basic_static_string<N1 + M - 1, CharT, Traits> operator+(
+    const basic_static_string<N1, CharT, Traits> &lhs,
+    const CharT (&rhs)[M]) noexcept {
+  basic_static_string<N1 + M - 1, CharT, Traits> result;
+  result.append(static_cast<basic_string_view<CharT, Traits>>(lhs));
+  result.append(basic_string_view<CharT, Traits>(rhs));
+  return result;
+}
+
+template<size_t M, size_t N2, typename CharT, typename Traits>
+constexpr basic_static_string<M + N2 - 1, CharT, Traits> operator+(
+    const CharT (&lhs)[M],
+    const basic_static_string<N2, CharT, Traits> &rhs) noexcept {
+  basic_static_string<M + N2 - 1, CharT, Traits> result;
+  result.append(basic_string_view<CharT, Traits>(lhs));
+  result.append(static_cast<basic_string_view<CharT, Traits>>(rhs));
+  return result;
+}
+
+template<size_t N1, typename CharT, typename Traits>
+constexpr basic_static_string<N1 + 1, CharT, Traits> operator+(
+    const basic_static_string<N1, CharT, Traits> &lhs, CharT rhs) noexcept {
+  basic_static_string<N1 + 1, CharT, Traits> result;
+  result.append(static_cast<basic_string_view<CharT, Traits>>(lhs));
+  result.append(rhs);
+  return result;
+}
+
+template<size_t N2, typename CharT, typename Traits>
+constexpr basic_static_string<N2 + 1, CharT, Traits> operator+(
+    CharT lhs, const basic_static_string<N2, CharT, Traits> &rhs) noexcept {
+  basic_static_string<N2 + 1, CharT, Traits> result;
+  result.append(lhs);
+  result.append(static_cast<basic_string_view<CharT, Traits>>(rhs));
+  return result;
+}
 
 template<size_t N>
 using static_string = basic_static_string<N, char, char_traits<char>>;

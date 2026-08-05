@@ -2,6 +2,7 @@
 #include "stdkrn.hpp"
 
 #include "driver_loader.hpp"
+#include "initial/boot_device_vfs.hpp"
 #include "initial/boot_modules_vfs.hpp"
 #include "object_manager.hpp"
 #include "pnp_manager.hpp"
@@ -230,6 +231,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   kernel::pnp::init();
   kernel::resource::init();
   kernel::vfs::init();
+  kernel::initial::init_boot_device_volume();
   kernel::configuration_manager::init();
   kernel::driver::init(boot_info);
   kernel::initial::init();
@@ -269,10 +271,15 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
     HAL_PLATFORM_Panic("No root filesystem specified\r\n", __FILE__, __LINE__);
   }
 
-  // The root filesystem is mounted now, so "LocalMachine" can actually be
-  // opened/persisted: carry over every per-driver key created under the
-  // volatile "Boot" hive during the boot-driver phase, then drop it.
+  // The root filesystem is mounted now: rebind LocalMachine from the
+  // early-boot BootDeviceVolume path onto the writable root-mount path so
+  // subsequent registry writes persist through the real disk stack.
   kernel::configuration_manager::PromoteBootHive();
+
+  // Now that LocalMachine is rebound onto the writable root mount, load
+  // drivers that don't need to be present to mount the root fs (e.g. the
+  // VGA driver): declared with Start=Automatic instead of Start=Boot.
+  kernel::driver::LoadAutomaticStartDrivers();
 
   // Register the native ELF loader subsystem, a long-lived singleton used to
   // bootstrap user processes (see KE_USER_CreateProcess).

@@ -53,14 +53,21 @@ add_executable(kernel
         src/user_process.cpp
         src/initial/boot_modules_vfs.cpp
         src/initial/boot_modules_vfs.hpp
+        src/initial/boot_device_vfs.cpp
+        src/initial/boot_device_vfs.hpp
+        src/initial/mini_fat16.cpp
+        src/initial/mini_fat16.hpp
         src/elf_loader.cpp
         src/elf_loader.hpp
         src/syscalls/DEBUG_Print.cpp
         src/syscalls/CreateProcess.cpp
         src/configuration_manager.cpp
+        src/configuration_manager_io.cpp
         src/syscalls/IO.cpp
+        src/syscalls/GFX.cpp
         src/gfx/gfx_management.cpp
         src/gfx/gfx_software_fallback.cpp
+        src/gfx/gfx_dc_table.cpp
 )
 
 add_dependencies(kernel undos-syscalls-gen)
@@ -68,7 +75,7 @@ add_dependencies(kernel undos-syscalls-gen)
 target_compile_definitions(kernel PRIVATE UNDOS_KERNEL_COMPILE)
 target_link_libraries(kernel PRIVATE undos_warnings undos_options)
 target_link_libraries(kernel PUBLIC libkcpp KernelHeaders KernelUserlandShared)
-target_include_directories(kernel PRIVATE src)
+target_include_directories(kernel PRIVATE src ${CMAKE_SOURCE_DIR}/drivers/volmgr)
 
 target_compile_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)
 target_link_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)

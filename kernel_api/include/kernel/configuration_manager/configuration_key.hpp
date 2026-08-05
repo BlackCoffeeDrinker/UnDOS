@@ -13,6 +13,12 @@ namespace kernel {
 struct KConfigurationKey {
   KObjectPtr<KConfigurationRoot> configRoot;
   uint64_t keyHash{0};// This entry's own key hash; 0 means the hive root itself
+  // This entry's parent's key hash (0 for a top-level entry or the hive
+  // root itself). keyHash alone is derived from the short name only (see
+  // StaticIdentifier) and can therefore collide across different parents
+  // (e.g. two drivers each having a "Start" child) - parentHash is what
+  // actually disambiguates which entry this handle refers to.
+  uint64_t parentHash{0};
   kstd::static_string<32> name;// This entry's own short name ("" for the hive root)
   ConfigurationValueType valueType{ConfigurationValueType::Invalid};// Invalid means this is a folder-like Key, not a value
   KConfigurationKeyAccess access;

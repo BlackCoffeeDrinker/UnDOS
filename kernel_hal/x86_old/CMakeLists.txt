@@ -29,5 +29,6 @@ add_hal(hal_x86_old
         cpuid.hpp
         v86.cpp
         v86.hpp
+        bootdev.cpp
 )
 

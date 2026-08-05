@@ -27,20 +27,6 @@ UNDOS_KERNEL_PUBLIC_V1API(
     const kstd::string_view &hiveName,
     const kstd::string_view &filePath);
 
-/**
- * @brief Registers a new volatile (file-less, in-memory-only) configuration
- * hive. Unlike KE_CM_RegisterHive(), this never touches the VFS: the hive's
- * keys live purely in memory for as long as the hive object itself does, so
- * it can be used before any disk/filesystem driver exists (e.g. during the
- * boot-driver phase).
- * @param hiveName The unique name of the hive to register.
- * @return The newly registered hive, or nullptr if a hive with that name
- * already exists or registration otherwise failed.
- */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KConfigurationRoot>,
-    KE_CM_RegisterVolatileHive,
-    const kstd::string_view &hiveName);
 
 UNDOS_HAL_PUBLIC_V1API(
     kernel::KConfigurationKeyPtr,

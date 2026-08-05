@@ -18,8 +18,8 @@ TEST_CASE("Object Manager well-known directories are non-null and distinct", "[o
   const auto thread = KE_OB_GetThreadsDirectory();
   const auto process = KE_OB_GetProcessDirectory();
   const auto vfs = KE_OB_GetVFSDirectory();
-  const auto file = KE_OB_GetFileRoot();
-  const auto filesystem = KE_OB_GetFilesystemRoot();
+  const auto file = KE_OB_GetFileDirectory();
+  const auto filesystem = KE_OB_GetFilesystemDirectory();
 
   REQUIRE(root != nullptr);
   REQUIRE(device != nullptr);

@@ -38,57 +38,91 @@ struct basic_string {
 
   static constexpr size_type npos = static_cast<size_type>(-1);
 
-  constexpr basic_string() noexcept : _data(nullptr), _len(0), _capacity(0) {}
+  // Number of characters (excluding the NUL terminator) that can be stored inline,
+  // without any heap allocation. This is what makes short strings (such as the ones
+  // used for well-known object-manager paths) usable in `constexpr` contexts: no
+  // dynamic allocation ever happens, so the resulting value can be a core constant
+  // expression.
+  static constexpr size_type _sso_capacity = 22;
 
-  basic_string(const CharT *str) : _data(nullptr), _len(0), _capacity(0) {
+  constexpr basic_string() noexcept
+      : _inline_buf{}, _data(_inline_buf), _len(0), _capacity(_sso_capacity + 1) {}
+
+  constexpr basic_string(const CharT *str)
+      : _inline_buf{}, _data(_inline_buf), _len(0), _capacity(_sso_capacity + 1) {
     append(basic_string_view<CharT, Traits>(str));
   }
 
-  basic_string(const basic_string_view<CharT, Traits> &sv) : _data(nullptr), _len(0), _capacity(0) {
+  constexpr basic_string(const basic_string_view<CharT, Traits> &sv)
+      : _inline_buf{}, _data(_inline_buf), _len(0), _capacity(_sso_capacity + 1) {
     append(sv);
   }
 
-  basic_string(const basic_string &other) : _data(nullptr), _len(0), _capacity(0) {
+  constexpr basic_string(const basic_string &other)
+      : _inline_buf{}, _data(_inline_buf), _len(0), _capacity(_sso_capacity + 1) {
     append(basic_string_view<CharT, Traits>(other._data, other._len));
   }
 
-  basic_string(basic_string &&other) noexcept
-      : _data(other._data), _len(other._len), _capacity(other._capacity) {
-    other._data = nullptr;
+  constexpr basic_string(basic_string &&other) noexcept
+      : _inline_buf{}, _data(_inline_buf), _len(0), _capacity(_sso_capacity + 1) {
+    if (other._data == other._inline_buf) {
+      if (other._len > 0) Traits::copy(this->_data, other._data, other._len);
+      this->_len = other._len;
+      null_terminate();
+    } else {
+      this->_data = other._data;
+      this->_len = other._len;
+      this->_capacity = other._capacity;
+    }
+    other._data = other._inline_buf;
     other._len = 0;
-    other._capacity = 0;
+    other._capacity = _sso_capacity + 1;
+    other.null_terminate();
   }
 
-  ~basic_string() {
-    ::operator delete(_data);
+  constexpr ~basic_string() {
+    if (_data != _inline_buf) {
+      ::operator delete(_data);
+    }
   }
 
-  basic_string &operator=(const basic_string &other) {
+  constexpr basic_string &operator=(const basic_string &other) {
     if (this == &other) return *this;
     this->_len = 0;
     append(basic_string_view<CharT, Traits>(other._data, other._len));
     return *this;
   }
 
-  basic_string &operator=(basic_string &&other) noexcept {
+  constexpr basic_string &operator=(basic_string &&other) noexcept {
     if (this == &other) return *this;
-    ::operator delete(_data);
-    this->_data = other._data;
-    this->_len = other._len;
-    this->_capacity = other._capacity;
-    other._data = nullptr;
+    if (_data != _inline_buf) {
+      ::operator delete(_data);
+    }
+    if (other._data == other._inline_buf) {
+      this->_data = _inline_buf;
+      this->_capacity = _sso_capacity + 1;
+      if (other._len > 0) Traits::copy(this->_data, other._data, other._len);
+      this->_len = other._len;
+      null_terminate();
+    } else {
+      this->_data = other._data;
+      this->_len = other._len;
+      this->_capacity = other._capacity;
+    }
+    other._data = other._inline_buf;
     other._len = 0;
-    other._capacity = 0;
+    other._capacity = _sso_capacity + 1;
+    other.null_terminate();
     return *this;
   }
 
-  basic_string &operator=(const basic_string_view<CharT, Traits> &sv) {
+  constexpr basic_string &operator=(const basic_string_view<CharT, Traits> &sv) {
     this->_len = 0;
     append(sv);
     return *this;
   }
 
-  basic_string &operator=(const_pointer s) {
+  constexpr basic_string &operator=(const_pointer s) {
     this->_len = 0;
     append(basic_string_view<CharT, Traits>(s));
     return *this;
@@ -177,17 +211,11 @@ struct basic_string {
   }
 
   void swap(basic_string &other) noexcept {
-    pointer tmp_data = this->_data;
-    size_type tmp_len = this->_len;
-    size_type tmp_capacity = this->_capacity;
-
-    this->_data = other._data;
-    this->_len = other._len;
-    this->_capacity = other._capacity;
-
-    other._data = tmp_data;
-    other._len = tmp_len;
-    other._capacity = tmp_capacity;
+    // Note: a naive pointer swap would break the small-string-optimization case, where
+    // `_data` may point into the object's own inline buffer.
+    basic_string tmp(kstd::move(*this));
+    *this = kstd::move(other);
+    other = kstd::move(tmp);
   }
 
   [[nodiscard]] constexpr size_type find(CharT c, size_type pos = 0) const noexcept {
@@ -422,7 +450,7 @@ struct basic_string {
     }
   }
 
-  void __ensure_capacity_for(size_type extra) {
+  constexpr void __ensure_capacity_for(size_type extra) {
     const size_type needed = this->_len + extra + 1;
     if (needed <= this->_capacity) return;
     size_type new_capacity = this->_capacity == 0 ? 8 : this->_capacity * 2;
@@ -430,10 +458,12 @@ struct basic_string {
     __grow_to(new_capacity);
   }
 
-  void __grow_to(size_type new_capacity) {
+  constexpr void __grow_to(size_type new_capacity) {
     auto *new_data = static_cast<pointer>(::operator new(new_capacity * sizeof(CharT)));
-    if (this->_data) {
+    if (this->_len > 0) {
       Traits::copy(new_data, this->_data, this->_len);
+    }
+    if (this->_data != _inline_buf) {
       ::operator delete(this->_data);
     }
     this->_data = new_data;
@@ -441,10 +471,47 @@ struct basic_string {
     null_terminate();
   }
 
+  CharT _inline_buf[_sso_capacity + 1];
   pointer _data;
   size_type _len;
   size_type _capacity;
 };
+
+template<typename CharT, class Traits>
+constexpr basic_string<CharT, Traits> operator+(const basic_string<CharT, Traits> &lhs, const basic_string<CharT, Traits> &rhs) {
+  basic_string<CharT, Traits> result(lhs);
+  result.append(static_cast<basic_string_view<CharT, Traits>>(rhs));
+  return result;
+}
+
+template<typename CharT, class Traits>
+constexpr basic_string<CharT, Traits> operator+(const basic_string<CharT, Traits> &lhs, const CharT *rhs) {
+  basic_string<CharT, Traits> result(lhs);
+  result.append(rhs);
+  return result;
+}
+
+template<typename CharT, class Traits>
+constexpr basic_string<CharT, Traits> operator+(const CharT *lhs, const basic_string<CharT, Traits> &rhs) {
+  basic_string<CharT, Traits> result(lhs);
+  result.append(static_cast<basic_string_view<CharT, Traits>>(rhs));
+  return result;
+}
+
+template<typename CharT, class Traits>
+constexpr basic_string<CharT, Traits> operator+(const basic_string<CharT, Traits> &lhs, CharT rhs) {
+  basic_string<CharT, Traits> result(lhs);
+  result.append(rhs);
+  return result;
+}
+
+template<typename CharT, class Traits>
+constexpr basic_string<CharT, Traits> operator+(CharT lhs, const basic_string<CharT, Traits> &rhs) {
+  basic_string<CharT, Traits> result;
+  result.append(lhs);
+  result.append(static_cast<basic_string_view<CharT, Traits>>(rhs));
+  return result;
+}
 
 using string = basic_string<char, char_traits<char>>;
 

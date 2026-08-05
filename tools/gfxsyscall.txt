@@ -109,6 +109,7 @@ syscall V1 GFX CreateDC [300] {
     driverName: IN string;
     deviceName: IN string;
     initFlags:  IN flags<DCInitFlags>;
+    handle:     OUT c<uint32_t>;
 };
 
 syscall V1 GFX DeleteDC [301] {
@@ -143,6 +144,7 @@ syscall V1 GFX CreateBitmap [306] {
     height:  IN c<uint32_t>;
     format:  IN enum<PixelFormat>;
     pixels:  IN buffer<c<uint8_t>>;
+    handle:  OUT c<uint32_t>;
 };
 
 syscall V1 GFX DeleteObject [307] {

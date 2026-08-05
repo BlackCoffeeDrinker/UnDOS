@@ -9,6 +9,31 @@
 #include "stdkrn.hpp"
 #include "__kernel_types.h"
 
+SyscallReturnCode handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 && args);
+SyscallReturnCode handle_DeleteDC_V1(__KRN_GFX_DELETEDC_V1 && args);
+SyscallReturnCode handle_SelectObject_V1(__KRN_GFX_SELECTOBJECT_V1 && args);
+SyscallReturnCode handle_CreatePen_V1(__KRN_GFX_CREATEPEN_V1 && args);
+SyscallReturnCode handle_CreateBrush_V1(__KRN_GFX_CREATEBRUSH_V1 && args);
+SyscallReturnCode handle_CreateFont_V1(__KRN_GFX_CREATEFONT_V1 && args);
+SyscallReturnCode handle_CreateBitmap_V1(__KRN_GFX_CREATEBITMAP_V1 && args);
+SyscallReturnCode handle_DeleteObject_V1(__KRN_GFX_DELETEOBJECT_V1 && args);
+SyscallReturnCode handle_MoveTo_V1(__KRN_GFX_MOVETO_V1 && args);
+SyscallReturnCode handle_LineTo_V1(__KRN_GFX_LINETO_V1 && args);
+SyscallReturnCode handle_Rectangle_V1(__KRN_GFX_RECTANGLE_V1 && args);
+SyscallReturnCode handle_Ellipse_V1(__KRN_GFX_ELLIPSE_V1 && args);
+SyscallReturnCode handle_TextOut_V1(__KRN_GFX_TEXTOUT_V1 && args);
+SyscallReturnCode handle_BitBlt_V1(__KRN_GFX_BITBLT_V1 && args);
+SyscallReturnCode handle_StretchBlt_V1(__KRN_GFX_STRETCHBLT_V1 && args);
+SyscallReturnCode handle_AlphaBlend_V1(__KRN_GFX_ALPHABLEND_V1 && args);
+SyscallReturnCode handle_CreateRegion_V1(__KRN_GFX_CREATEREGION_V1 && args);
+SyscallReturnCode handle_SelectClipRegion_V1(__KRN_GFX_SELECTCLIPREGION_V1 && args);
+SyscallReturnCode handle_CombineRegion_V1(__KRN_GFX_COMBINEREGION_V1 && args);
+SyscallReturnCode handle_SetViewportOrg_V1(__KRN_GFX_SETVIEWPORTORG_V1 && args);
+SyscallReturnCode handle_SetWindowOrg_V1(__KRN_GFX_SETWINDOWORG_V1 && args);
+SyscallReturnCode handle_GetTextMetrics_V1(__KRN_GFX_GETTEXTMETRICS_V1 && args);
+SyscallReturnCode handle_GetBitmapBits_V1(__KRN_GFX_GETBITMAPBITS_V1 && args);
+SyscallReturnCode handle_SetBitmapBits_V1(__KRN_GFX_SETBITMAPBITS_V1 && args);
+SyscallReturnCode handle_GetDeviceCaps_V1(__KRN_GFX_GETDEVICECAPS_V1 && args);
 SyscallReturnCode handle_Print_V1(__KRN_DEBUG_PRINT_V1 && args);
 /** Creates a new process from the executable at `path`. */
 SyscallReturnCode handle_CreateProcess_V1(__KRN_PROC_CREATEPROCESS_V1 && args);

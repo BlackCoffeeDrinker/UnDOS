@@ -2,13 +2,28 @@
 #pragma once
 #include <kernel/__core.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
-#include <kernel/kobject/ObjectType.hpp>
 
+#include <static_string.hpp>
 #include <string_view.hpp>
 
 namespace kernel {
 struct KObject;
 struct KDirectoryObject;
+
+constexpr kstd::static_string kOBRootPath = "/";
+constexpr kstd::static_string kOBDevicesPath = "Device";
+constexpr kstd::static_string kOBDriversPath = "Driver";
+constexpr kstd::static_string kOBMemoryPath = "Memory";
+constexpr kstd::static_string kOBThreadPath = "Threads";
+constexpr kstd::static_string kOBProcessesPath = "Processes";
+constexpr kstd::static_string kOBFileSystemPath = "FileSystem";
+constexpr kstd::static_string kOBVFSPath = "VFS";
+constexpr kstd::static_string kOBFilePath = "File";
+constexpr kstd::static_string kOBSubsystemsPath = "Subsystems";
+constexpr kstd::static_string kOBHivePath = "Hive";
+constexpr kstd::static_string kOBSystemPath = "System";
+constexpr kstd::static_string kOBGfxPath = "Gfx";
+
 }// namespace kernel
 
 /**
@@ -20,6 +35,20 @@ UNDOS_KERNEL_PUBLIC_V1API(
     bool,
     KE_OB_InsertObject,
     const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child);
+
+
+/**
+ * @ingroup OB
+ * @brief Method KE_OB_InsertObject
+ * 
+ * Returns the number to append to `baseName` for a unique name.
+ * Example, for baseName `Display`, if parent has Display0, Display1: returns 2
+ *
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    uint32_t,
+    KE_OB_MakeUniqueName,
+    const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kstd::string_view &baseName);
 
 /**
  * @ingroup OB
@@ -67,99 +96,84 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @brief Method KE_OB_GetRootDirectory
  *
  */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDirectoryObject>,
-    KE_OB_GetRootDirectory);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetRootDirectory);
 
 /**
  * @ingroup OB
  * @brief Method KE_OB_GetThreadsDirectory
  *
  */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDirectoryObject>,
-    KE_OB_GetThreadsDirectory);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetThreadsDirectory);
 
 /**
  * @ingroup OB
  * @brief Method KE_OB_GetDriverDirectory
  *
  */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDirectoryObject>,
-    KE_OB_GetDriverDirectory);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetDriverDirectory);
 
 /**
  * @ingroup OB
  * @brief Method KE_OB_GetProcessDirectory
  *
  */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDirectoryObject>,
-    KE_OB_GetProcessDirectory);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetProcessDirectory);
 
 /**
  * @ingroup OB
  * @brief Method KE_OB_GetDeviceDirectory
  *
  */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDirectoryObject>,
-    KE_OB_GetDeviceDirectory);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetDeviceDirectory);
 
 /**
  * @ingroup OB
  * @brief Method KE_OB_GetMemoryDirectory
  *
  */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDirectoryObject>,
-    KE_OB_GetMemoryDirectory);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetMemoryDirectory);
 
 /**
  * @ingroup OB
  * @brief Method KE_OB_GetVFSDirectory
  *
  */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDirectoryObject>,
-    KE_OB_GetVFSDirectory);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetVFSDirectory);
 
 /**
  * @ingroup OB
  * @brief Method KE_OB_GetFileRoot
  *
  */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDirectoryObject>,
-    KE_OB_GetFileRoot);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetFileDirectory);
 
 /**
  * @ingroup OB
  * @brief Method KE_OB_GetFilesystemRoot
  *  
  */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDirectoryObject>,
-    KE_OB_GetFilesystemRoot);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetFilesystemDirectory);
 
 /**
  * @ingroup OB
  * @brief Method KE_OB_GetSubsystemDirectory
  *
  */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDirectoryObject>,
-    KE_OB_GetSubsystemDirectory);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetSubsystemDirectory);
 
 /**
  * @ingroup OB
  * @brief Method KE_OB_GetConfigRoot
  * 
  */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDirectoryObject>,
-    KE_OB_GetConfigRoot);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetConfigDirectory);
+
+/**
+ * @ingroup OB
+ * @brief Method KE_OB_GetGfxRoot
+ * 
+ */
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetGfxDirectory);
 // endregion
 
 // region Helpers

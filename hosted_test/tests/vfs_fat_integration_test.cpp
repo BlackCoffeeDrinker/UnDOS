@@ -87,7 +87,6 @@ kernel::KConfigurationKeyPtr GetTestBootRoot() {
   if (auto existing = KE_CM_OpenRoot("IntegrationTestBoot")) {
     return existing;
   }
-  KE_CM_RegisterVolatileHive("IntegrationTestBoot");
   return KE_CM_OpenRoot("IntegrationTestBoot");
 }
 

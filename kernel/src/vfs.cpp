@@ -91,7 +91,7 @@ UNDOS_KERNEL_API_DEF bool KE_VFS_Mount(const kernel::KDevicePtr<kernel::KDevice>
   }
 
   // Find file system
-  if (auto fs = KE_OB_FindDirectChildOfType<kernel::KFilesystemObject>(KE_OB_GetFilesystemRoot(), filesystem)) {
+  if (auto fs = KE_OB_FindDirectChildOfType<kernel::KFilesystemObject>(KE_OB_GetFilesystemDirectory(), filesystem)) {
     early_print_fmt("KE_VFS_Mount: Found filesystem driver with name '{}'\r\n", filesystem);
     const auto volumemount = kernel::CreateKObject<kernel::KVolumeMountObject>(mountPoint);
     volumemount->fileSystem = kstd::move(fs);
@@ -118,14 +118,14 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFilesystemObject> KE_VFS_Regist
     const kstd::string_view &name) noexcept {
 
   // Make sure the name is unique
-  if (auto fsko = KE_OB_FindDirectChildOfType<kernel::KFilesystemObject>(KE_OB_GetFilesystemRoot(), name)) {
+  if (auto fsko = KE_OB_FindDirectChildOfType<kernel::KFilesystemObject>(KE_OB_GetFilesystemDirectory(), name)) {
     early_print_fmt("KE_VFS_RegisterFilesystemDriver: Filesystem driver with name '{}' already exists\r\n", name);
     return {};
   }
 
   if (auto fsko = kernel::CreateKObject<kernel::KFilesystemObject>(name)) {
     fsko->driver = kstd::move(driver);
-    KE_OB_InsertObject(KE_OB_GetFilesystemRoot(), fsko);
+    KE_OB_InsertObject(KE_OB_GetFilesystemDirectory(), fsko);
     early_print_fmt("KE_VFS_RegisterFilesystemDriver: Registered filesystem driver '{}'\r\n", name);
     return fsko;
   }
@@ -138,11 +138,18 @@ UNDOS_KERNEL_API_DEF void KE_VFS_UnregisterFilesystemDriver(kernel::KObjectPtr<k
 }
 
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFileObject> KE_VFS_OpenFile(const kstd::string_view &path, kernel::KFileObject::OpenMode mode) noexcept {
-  // Create file object
-  
-  auto file = KE_CreateKPtrObject<kernel::KFileObject>();
+  // Create a uniquely-named file object. Name is const on KObject, so it must
+  // be chosen before construction: allocate, format the storage address as
+  // hex (the previous intent of the unused fileObjectName local), then
+  // placement-new. An empty name collides on the second open under FileRoot.
+  void *storage = KE_Malloc(sizeof(kernel::KFileObject));
+  if (!storage) {
+    early_print_fmt("KE_VFS_OpenFile: Failed to allocate file object for '{}'\r\n", path);
+    return {};
+  }
   kstd::static_string<64> fileObjectName;
-  kstd::format(fileObjectName, "{:x}", file.get());
+  kstd::format(fileObjectName, "{:x}", storage);
+  auto file = kernel::KObjectPtr<kernel::KFileObject>(new (storage) kernel::KFileObject(fileObjectName));
 
   file->mode = mode;
   file->offset = 0;
@@ -267,7 +274,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFileObject> KE_VFS_OpenFile(con
   // ------------------------------------------------------------------
   // Insert into Object Manager
   // ------------------------------------------------------------------
-  if (!KE_OB_InsertObject(KE_OB_GetFileRoot(), file)) {
+  if (!KE_OB_InsertObject(KE_OB_GetFileDirectory(), file)) {
     early_print_fmt("KE_VFS_OpenFile: Failed to insert file object for '{}'\r\n", path);
     return {};
   }
@@ -278,6 +285,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFileObject> KE_VFS_OpenFile(con
 UNDOS_KERNEL_API_DEF void KE_VFS_CloseFile(kernel::KObjectPtr<kernel::KFileObject> file) noexcept {
   if (!file) [[unlikely]] { return; }
   if (file->isClosed) [[unlikely]] { return; }
+  if (!file->mountPoint) [[unlikely]] { return; }
   if (!file->FileSystem()) [[unlikely]] { return; }
   if (file->FileSystem()->CloseHandle) {
     file->FileSystem()->CloseHandle(file);
@@ -287,7 +295,7 @@ UNDOS_KERNEL_API_DEF void KE_VFS_CloseFile(kernel::KObjectPtr<kernel::KFileObjec
   file->vfsNode = nullptr;
 
   // Remove file from the OB
-  KE_OB_RemoveObject(KE_OB_GetFileRoot(), file);
+  KE_OB_RemoveObject(KE_OB_GetFileDirectory(), file);
 }
 
 UNDOS_KERNEL_API_DEF uint64_t KE_VFS_ReadFile(kernel::KObjectPtr<kernel::KFileObject> file, const kstd::span<uint8_t> &readInto) noexcept {

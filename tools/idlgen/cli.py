@@ -52,9 +52,10 @@ def main():
     with open(idl_path, "r", encoding="utf-8") as f:
         idl_text = f.read()
 
-    # Parse IDL
+    # Parse IDL (relative `include "...";` directives are resolved against
+    # the root file's own directory)
     try:
-        module = parse_idl(idl_text)
+        module = parse_idl(idl_text, base_dir=os.path.dirname(os.path.abspath(idl_path)))
     except ParserError as e:
         print(f"ERROR: {e}")
         sys.exit(1)

@@ -31,6 +31,13 @@ struct KMemoryBackingObject : KObjectT<KMemoryBackingObject, 1, TYPE_MEMORY_SECT
   // Total size (in bytes) of the backing object. Used for bounds checks,
   // partial-page handling at EOF, and for reporting/inspection via the Object Manager.
   size_t size = 0;
+
+  // For backings that are already resident in the kernel address space
+  // (e.g. a fixed hardware MMIO window like the VGA framebuffer, mapped via
+  // KE_VMM_MapPhysical) rather than demand-paged, this holds the already
+  // mapped, non-owning virtual address. Zero/invalid for regular
+  // Anonymous/File/Shared backings that are populated lazily on page fault.
+  VirtualAddress directAddress;
 };
 
 template<>

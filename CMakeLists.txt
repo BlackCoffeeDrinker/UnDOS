@@ -98,8 +98,8 @@ find_program(PYTHON3_EXECUTABLE NAMES python3 REQUIRED)
 add_custom_target(undos-syscalls-gen
         COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/create-syscalls.py tools/syscalls.txt kernel_userland_shared/include/undos/syscalls userland/ kernel/src/syscalls
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        DEPENDS tools/syscalls.txt
-        COMMENT "Generating syscalls from tools/syscalls.txt"
+        DEPENDS tools/syscalls.txt tools/gfxsyscall.txt
+        COMMENT "Generating syscalls from tools/syscalls.txt (includes tools/gfxsyscall.txt)"
 )
 
 #######################################################################################################################
@@ -127,28 +127,43 @@ if (NOT TESTING_ONLY)
 
     add_custom_target(Bin
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/grub
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:bus_isa> ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/bus_isa.elf
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:fs_fat> ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/fs_fat.elf
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:disk_ata> ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/disk_ata.elf
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:volmgr> ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/volmgr.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:kernel> ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/kernel.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:hal_x86_old> ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/hal_x86_old.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:boot_x86_old> ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/undos-boot
 
-            DEPENDS kernel hal_x86_old boot_x86_old bus_isa disk_ata volmgr fs_fat
+            DEPENDS kernel hal_x86_old boot_x86_old
             $<TARGET_FILE:kernel> $<TARGET_FILE:hal_x86_old> $<TARGET_FILE:boot_x86_old>
-            $<TARGET_FILE:bus_isa> $<TARGET_FILE:disk_ata> $<TARGET_FILE:volmgr> $<TARGET_FILE:fs_fat>
 
             BYPRODUCTS ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/grub ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/undos-boot
     )
 
     add_custom_target(make-initial-disk
             COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/bin
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Config
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:native_elf_loader> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/ELoader.elf
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:bus_isa> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/bus_isa.elf
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:disk_ata> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/disk_ata.elf
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:volmgr> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/volmgr.elf
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:fs_fat> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/fs_fat.elf
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:gfx_vga> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/gfx_vga.elf
+            COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/configuration_editor/config.py
+                    ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Config/MACHI
+                    author-localmachine
             COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py ${PROJECT_SOURCE_DIR}/bin/fat32.img ${PROJECT_SOURCE_DIR}/bin/filesystem
 
-            DEPENDS native_elf_loader $<TARGET_FILE:native_elf_loader>
+            DEPENDS native_elf_loader bus_isa disk_ata volmgr fs_fat gfx_vga
+            $<TARGET_FILE:native_elf_loader>
+            $<TARGET_FILE:bus_isa> $<TARGET_FILE:disk_ata> $<TARGET_FILE:volmgr> $<TARGET_FILE:fs_fat> $<TARGET_FILE:gfx_vga>
+            ${PROJECT_SOURCE_DIR}/tools/configuration_editor/config.py
+            ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py
             BYPRODUCTS ${PROJECT_SOURCE_DIR}/bin/fat32.img
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Config/MACHI
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/bus_isa.elf
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/disk_ata.elf
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/volmgr.elf
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/fs_fat.elf
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/gfx_vga.elf
 
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
             COMMENT "Generating initial disk image"

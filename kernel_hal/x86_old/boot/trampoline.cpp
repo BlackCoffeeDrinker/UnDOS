@@ -568,6 +568,7 @@ kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_
   }
 
   // populate boot modules
+  /*
   size_t boot_modules_count = 0;
   for (uint32_t i = 0; i < mbi->mods_count; i++) {
     const auto *module = reinterpret_cast<multiboot_module_t *>(mbi->mods_addr + i * sizeof(multiboot_module_t));
@@ -586,7 +587,8 @@ kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_
   if (boot_modules_count >= boot_info_ptr->boot_modules.size()) {
     panic("Not enough space in boot info to store all modules");
   }
-
+  */
+  
   // Copy symbols into the boot info
   for (size_t i = 0; i < g_symbol_count; i++) {
     if (i < boot_info_ptr->boot_symbols.size()) {

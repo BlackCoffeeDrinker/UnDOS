@@ -10,7 +10,7 @@ struct __SYS_GFX_CREATEFONT_V1 {
     uint32_t weight;
     uint32_t charset;
     const char* name;
-    uint32_t nameLength;
+    size_t nameLength;
 };
 
 constexpr size_t   __SYS_GFX_CREATEFONT_V1_SIZE = sizeof(struct __SYS_GFX_CREATEFONT_V1);

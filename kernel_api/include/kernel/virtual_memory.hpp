@@ -120,6 +120,20 @@ UNDOS_KERNEL_PUBLIC_V1API(
 
 /**
  * @ingroup VMM
+ * @brief Method KE_VMM_CreateDirectBacking
+ *
+ * Creates a KMemoryBackingObject for memory that is already mapped and
+ * resident at a fixed virtual address (e.g. a hardware MMIO window mapped
+ * via KE_VMM_MapPhysical), rather than demand-paged. Used by drivers (e.g.
+ * gfx_vga) that need to expose such memory through a KSurface.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kernel::KObjectPtr<kernel::KMemoryBackingObject>,
+    KE_VMM_CreateDirectBacking,
+    kernel::VirtualAddress directAddress, size_t size);
+
+/**
+ * @ingroup VMM
  * @brief Method KE_VMM_MapBorrowed
  *
  * Maps `size` bytes starting at `addr` (as seen from `as`) into the kernel's

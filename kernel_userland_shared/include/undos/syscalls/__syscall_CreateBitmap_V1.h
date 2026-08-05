@@ -11,6 +11,7 @@ struct __SYS_GFX_CREATEBITMAP_V1 {
     enum PixelFormat format;
     const uint8_t* pixels;
     uint32_t pixelsLength;
+    uint32_t handle;
 };
 
 constexpr size_t   __SYS_GFX_CREATEBITMAP_V1_SIZE = sizeof(struct __SYS_GFX_CREATEBITMAP_V1);

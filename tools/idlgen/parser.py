@@ -1,6 +1,7 @@
 """Recursive-descent parser for the UnDOS syscall/struct IDL."""
 
-from typing import List, Optional
+import os
+from typing import List, Optional, Set
 
 from .ast_nodes import (
     AliasType,
@@ -31,9 +32,16 @@ class ParserError(Exception):
 
 
 class Parser:
-    def __init__(self, tokens: List[Token]):
+    def __init__(self, tokens: List[Token], base_dir: str = ".", visited: Optional[Set[str]] = None):
         self.tokens = tokens
         self.pos = 0
+        # Directory used to resolve relative `include "...";` paths
+        # (the directory of the file currently being parsed).
+        self.base_dir = base_dir
+        # Absolute paths of every file already included anywhere in this
+        # parse, shared across nested includes so a file can't be pulled in
+        # twice (and diamond/cyclic includes don't recurse forever).
+        self.visited = visited if visited is not None else set()
 
     def current(self) -> Optional[Token]:
         if self.pos < len(self.tokens):
@@ -117,9 +125,47 @@ class Parser:
                 module.flags.append(self.parse_flags(doc))
             elif tok.kind == "USING":
                 module.usings.append(self.parse_using(doc))
+            elif tok.kind == "INCLUDE":
+                included = self.parse_include()
+                module.syscalls.extend(included.syscalls)
+                module.enums.extend(included.enums)
+                module.structs.extend(included.structs)
+                module.flags.extend(included.flags)
+                module.usings.extend(included.usings)
             else:
                 raise ParserError(f"Unexpected token at top level: {tok}")
         return module
+
+    # ---- include ----
+
+    def parse_include(self) -> "IDLModule":
+        """Parses `include "path";`, resolves `path` relative to the
+        directory of the file currently being parsed, and recursively
+        parses it, returning its declarations as an IDLModule to be merged
+        into the including module. Already-included files (tracked in
+        `self.visited`, shared across the whole include tree) are skipped
+        and yield an empty module, so a file can be included more than once
+        (e.g. via two different includers) without duplicating anything."""
+        self.match("INCLUDE")
+        path_tok = self.match("STRING")
+        self.match("SEMICOLON")
+
+        raw_path = path_tok.value[1:-1]  # strip surrounding quotes
+        resolved_path = os.path.normpath(os.path.join(self.base_dir, raw_path))
+
+        if resolved_path in self.visited:
+            return IDLModule()
+        self.visited.add(resolved_path)
+
+        if not os.path.isfile(resolved_path):
+            raise ParserError(f"Included file not found: {resolved_path}")
+
+        with open(resolved_path, "r", encoding="utf-8") as f:
+            included_text = f.read()
+
+        included_tokens = tokenize(included_text)
+        included_parser = Parser(included_tokens, base_dir=os.path.dirname(resolved_path), visited=self.visited)
+        return included_parser.parse_module()
 
     def parse_field_list(self):
         fields = []
@@ -342,7 +388,7 @@ class Parser:
 
 # ---------- Convenience API ----------
 
-def parse_idl(text: str) -> IDLModule:
+def parse_idl(text: str, base_dir: str = ".") -> IDLModule:
     tokens = tokenize(text)
-    parser = Parser(tokens)
+    parser = Parser(tokens, base_dir=base_dir)
     return parser.parse_module()

@@ -29,12 +29,17 @@ add_executable(KernelTests
         ../../kernel/src/memory/Slab.cpp
         ../../kernel/src/memory/Storage.cpp
         ../../kernel/src/configuration_manager.cpp
+        ../../kernel/src/configuration_manager_io.cpp
+        ../../kernel/src/gfx/gfx_management.cpp
+        ../../kernel/src/gfx/gfx_software_fallback.cpp
+        ../../kernel/src/gfx/gfx_dc_table.cpp
 
         object_manager_test.cpp
         subsystem_object_test.cpp
         vmm_test.cpp
         object_creation_leak_test.cpp
         configuration_manager_test.cpp
+        gfx_test.cpp
 
         ../../drivers/disk_fake/fake_disk_file_backend.cpp
         disk_fake_test.cpp

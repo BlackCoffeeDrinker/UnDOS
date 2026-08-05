@@ -257,6 +257,21 @@ kernel::KObjectPtr<kernel::KMemoryBackingObject> create_anonymous_backing(size_t
 }
 }// namespace
 
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KMemoryBackingObject> KE_VMM_CreateDirectBacking(kernel::VirtualAddress directAddress, size_t size) noexcept {
+  static uint32_t next_id = 0;
+  kstd::static_string<64> name;
+  kstd::format(name, "DirectBacking{}", next_id++);
+
+  auto backing = kernel::CreateKObject<kernel::KMemoryBackingObject>(name);
+  if (!backing) return nullptr;
+
+  backing->kind = kernel::KMemoryBackingObject::Kind::Anonymous;
+  backing->size = size;
+  backing->directAddress = directAddress;
+  KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), backing);
+  return backing;
+}
+
 UNDOS_KERNEL_API_DEF void *KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept {
   // Demand-paged: reserve the VAD (backed by a fresh Anonymous
   // BackingObject) without eagerly allocating/mapping any physical frames.

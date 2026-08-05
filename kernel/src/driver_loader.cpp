@@ -42,6 +42,68 @@ void CaptureDriverName(void *context, kstd::string_view name, const uint8_t *dat
   *name_out = reinterpret_cast<const char *>(data);
 }
 
+// Enumerates every child under LocalMachine's "/Drivers" key and calls
+// KE_DRIVER_Load(ImagePath) for each one whose "Start" value matches
+// `startFilter` exactly. Shared between the pre-root-mount "Boot" pass
+// (kernel::driver::init()) and the post-root-mount "Automatic" pass
+// (kernel::driver::LoadAutomaticStartDrivers()).
+void LoadDriversWithStart(const kstd::string_view &startFilter, const kstd::string_view &logLabel) {
+  early_print_fmt("Loading {} drivers...\r\n", logLabel);
+
+  const auto localMachine = KE_CM_OpenRoot("LocalMachine");
+  if (!localMachine) {
+    early_print_fmt("Loading {} drivers: failed to open LocalMachine\r\n", logLabel);
+    early_print_fmt("Loading {} drivers complete.\r\n", logLabel);
+    return;
+  }
+
+  const auto driversKey = KE_CM_OpenKey(localMachine, "Drivers");
+  if (!driversKey) {
+    early_print_fmt("Loading {} drivers: no Drivers key under LocalMachine\r\n", logLabel);
+    early_print_fmt("Loading {} drivers complete.\r\n", logLabel);
+    return;
+  }
+
+  for (uint32_t index = 0;; ++index) {
+    kstd::string_view childName;
+    if (!KE_CM_EnumKey(driversKey, index, childName)) {
+      break;
+    }
+
+    const auto driverKey = KE_CM_OpenKey(driversKey, childName);
+    if (!driverKey) {
+      continue;
+    }
+
+    const auto startKey = KE_CM_OpenKey(driverKey, "Start");
+    if (!startKey) {
+      continue;
+    }
+
+    kstd::string_view startValue;
+    if (!KE_CM_GetKeyValueString(startKey, startValue) || startValue != startFilter) {
+      continue;
+    }
+
+    const auto imagePathKey = KE_CM_OpenKey(driverKey, "ImagePath");
+    if (!imagePathKey) {
+      early_print_fmt("{}-start driver '{}' has no ImagePath, skipping\r\n", logLabel, childName);
+      continue;
+    }
+
+    kstd::string_view imagePath;
+    if (!KE_CM_GetKeyValueString(imagePathKey, imagePath) || imagePath.empty()) {
+      early_print_fmt("{}-start driver '{}' has empty/invalid ImagePath, skipping\r\n", logLabel, childName);
+      continue;
+    }
+
+    early_print_fmt("Loading {}-start driver '{}' from '{}'\r\n", logLabel, childName, imagePath);
+    KE_DRIVER_Load(imagePath);
+  }
+
+  early_print_fmt("Loading {} drivers complete.\r\n", logLabel);
+}
+
 }// namespace
 
 namespace kernel::driver {
@@ -52,19 +114,17 @@ void init(const BootInfoT &boot_info) {
     g_SymbolTable.Register(sym.name, static_cast<uintptr_t>(sym.address));
   }
 
-  // Load all boot drivers
-  early_print_fmt("Loading boot drivers...\r\n");
-  const auto base = KE_OB_LookupObjectOfType<KDirectoryObject>("/System/Initial/BootModules");
-  for (const auto &driver: boot_info.boot_modules) {
-    if (driver.name.empty() || driver.base_physical == 0 || driver.length == 0) continue;
-    
-    auto module = CreateKObject<KModuleObject>(driver.name);
-    module->base_physical = driver.base_physical;
-    module->length = driver.length;
-    KE_OB_InsertObject(base, module);
-  }
+  // Load boot-start drivers declared under LocalMachine's /Drivers key
+  // (Start == "Boot", ImagePath = VFS path to the driver ELF). These are
+  // needed to bring up the real disk stack and mount the root filesystem.
+  LoadDriversWithStart("Boot", "boot");
+}
 
-  early_print_fmt("Loading boot drivers complete.\r\n");
+void LoadAutomaticStartDrivers() {
+  // Drivers that aren't needed to mount the root filesystem (e.g. gfx_vga)
+  // are deferred until the real root fs is mounted and LocalMachine has been
+  // rebound onto it, so their ImagePath resolves through the writable mount.
+  LoadDriversWithStart("Automatic", "automatic");
 }
 }// namespace kernel::driver
 
@@ -93,20 +153,12 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(co
     return nullptr;
   }
   
-  // Give the driver its own configuration key, e.g. "/Boot/Drivers/<name>",
-  // scoped under the volatile "Boot" hive (see kernel::configuration_manager::init()).
-  // "Boot" is always registered by this point (configuration_manager::init()
-  // now runs before any driver is loaded), so this should never fail in
-  // practice. If "Boot" has already been promoted/dropped (see
-  // kernel::configuration_manager::PromoteBootHive()) - i.e. a driver is
-  // being (re)loaded at runtime, after boot - fall back to targeting
-  // "LocalMachine" directly instead.
+  // Give the driver its own configuration key under LocalMachine, e.g.
+  // "/LocalMachine/Drivers/<name>". LocalMachine is disk-backed from the
+  // start of boot (first via BootDeviceVolume, then rebound onto the real
+  // root mount), so there is no separate volatile "Boot" hive to target.
   kernel::KConfigurationKeyPtr driverConfig = nullptr;
-  auto driverConfigRoot = KE_CM_OpenRoot("Boot");
-  if (!driverConfigRoot) {
-    driverConfigRoot = KE_CM_OpenRoot("LocalMachine");
-  }
-  if (driverConfigRoot) {
+  if (const auto driverConfigRoot = KE_CM_OpenRoot("LocalMachine")) {
     if (const auto driversKey = KE_CM_CreateKey(driverConfigRoot, "Drivers", kernel::KConfigurationKeyAccess::ReadWrite)) {
       driverConfig = KE_CM_CreateKey(driversKey, driver_object->name, kernel::KConfigurationKeyAccess::ReadWrite);
     }

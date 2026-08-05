@@ -34,3 +34,55 @@ UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KObjectPtr<kernel::KSurface>,
     KE_GFX_CreateSurface,
     const kernel::KObjectPtr<kernel::KDisplay> &display, size_t mode);
+
+/**
+ * @ingroup GFX
+ * @brief Returns the first KDisplay ever registered via
+ * KE_GFX_RegisterDisplay (module-level singleton), i.e. the display GDI-style
+ * syscalls (CreateDC et al.) target when no specific device is requested.
+ * Returns null if no display has been registered yet.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kernel::KObjectPtr<kernel::KDisplay>,
+    KE_GFX_GetPrimaryDisplay);
+
+/**
+ * @ingroup GFX
+ * @brief Software (kernel-provided) fallback for KGraphicsAdapter::FillRect.
+ * Used when a driver either doesn't implement FillRect or returns false for
+ * a particular request. Writes directly into `dst`'s backing memory, so
+ * `dst->backing` must already be resident (KMemoryBackingObject::directAddress
+ * set).
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    bool,
+    KE_GFX_SoftwareFillRect,
+    const kernel::KObjectPtr<kernel::KSurface> &dst,
+    int x, int y, int w, int h,
+    uint32_t colorIndex);
+
+/**
+ * @ingroup GFX
+ * @brief Software (kernel-provided) fallback for KGraphicsAdapter::DrawLine.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    bool,
+    KE_GFX_SoftwareDrawLine,
+    const kernel::KObjectPtr<kernel::KSurface> &dst,
+    int x0, int y0, int x1, int y1,
+    uint32_t colorIndex);
+
+/**
+ * @ingroup GFX
+ * @brief Software (kernel-provided) fallback for KGraphicsAdapter::BitBlt.
+ * Only RasterOp::SRCCOPY is supported; anything else fails.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    bool,
+    KE_GFX_SoftwareBitBlt,
+    const kernel::KObjectPtr<kernel::KSurface> &dst,
+    int dstX, int dstY,
+    const kernel::KObjectPtr<kernel::KSurface> &src,
+    int srcX, int srcY,
+    uint32_t width, uint32_t height,
+    kernel::RasterOp rop);

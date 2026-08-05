@@ -149,7 +149,7 @@ TEST_CASE("KE_VFS_RegisterFilesystemDriver / UnregisterFilesystemDriver", "[vfs]
   SECTION("Registration succeeds and is findable") {
     TestFsFixture fixture("register_ok");
     REQUIRE(fixture.filesystem != nullptr);
-    REQUIRE(KE_OB_FindDirectChildOfType<kernel::KFilesystemObject>(KE_OB_GetFilesystemRoot(), fixture.fsName).get() == fixture.filesystem.get());
+    REQUIRE(KE_OB_FindDirectChildOfType<kernel::KFilesystemObject>(KE_OB_GetFilesystemDirectory(), fixture.fsName).get() == fixture.filesystem.get());
   }
 
   SECTION("Duplicate filesystem name is rejected") {

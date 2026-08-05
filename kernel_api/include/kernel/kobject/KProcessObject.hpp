@@ -3,6 +3,7 @@
 #include <list.hpp>
 
 #include <kernel/__core.hpp>
+#include <kernel/gfx/KDeviceContextTable.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/kobject/ObjectType.hpp>
@@ -103,6 +104,7 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
   State state{State::Running};
 
   ProcessHandleTable handles;
+  DeviceContextTable dcTable;
 };
 
 template<>

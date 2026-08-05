@@ -1,3 +1,8 @@
+// The GFX (GDI-style) syscall group (300-399) lives in its own IDL file and
+// is pulled in here so both groups end up in a single generated dispatch
+// table (see kernel/src/gfx/gfx_management.cpp and kernel/src/syscalls/GFX.cpp).
+include "gfxsyscall.txt";
+
 enum SyscallReturnCode {
     OKAY = 0,
     UNKNOWN = 0xFFFFFFFF,

@@ -153,6 +153,9 @@ struct char_traits<char> {
       return __s1;
 #if __cplusplus >= 202002L
     if (is_constant_evaluated()) {
+      for (size_t __i = 0; __i < __n; ++__i)
+        assign(__s1[__i], __s2[__i]);
+      return __s1;
     }
 #endif
     return static_cast<char_type *>(__builtin_memcpy(__s1, __s2, __n));

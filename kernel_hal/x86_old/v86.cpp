@@ -186,16 +186,103 @@ void init_v86_monitor() noexcept {
 
 // Decodes and emulates exactly the fixed opcode set a real-mode BIOS routine
 // running in v86 mode issues that trap with #GP: CLI, STI, PUSHF, POPF,
-// IN/OUT (8/16/32-bit forms, with an optional 0x66 operand-size prefix),
-// INT n, IRET, and HLT (session completion). Any other opcode is fatal.
+// IN/OUT (8/16/32-bit forms), REP INS/OUTS string I/O, INT n, IRET, and HLT.
+// Optional prefixes: 0x66 (operand-size), 0x67 (address-size), 0xF3 (REP).
+// SeaBIOS INT 13h uses e.g. `67 F3 6D` (rep insw with 32-bit EDI/ECX).
 extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noexcept {
   const auto cs = static_cast<uint16_t>(ctx->cs);
   const auto ip = static_cast<uint16_t>(ctx->eip);
-  const bool has_prefix = *hal::x86::v86_byte_ptr(cs, ip) == 0x66;
-  const auto opcode_off = static_cast<uint16_t>(ip + (has_prefix ? 1 : 0));
+
+  // Consume a run of prefixes (order and count may vary).
+  uint16_t prefix_len = 0;
+  bool has_operand_size_prefix = false;
+  bool has_address_size_prefix = false;
+  bool has_rep_prefix = false;
+  for (uint16_t i = 0; i < 6; ++i) {
+    const uint8_t b = *hal::x86::v86_byte_ptr(cs, static_cast<uint16_t>(ip + prefix_len));
+    if (b == 0x66) {
+      has_operand_size_prefix = true;
+      prefix_len++;
+      continue;
+    }
+    if (b == 0x67) {
+      has_address_size_prefix = true;
+      prefix_len++;
+      continue;
+    }
+    if (b == 0xF3) {// REP / REPE
+      has_rep_prefix = true;
+      prefix_len++;
+      continue;
+    }
+    if (b == 0xF2) {// REPNE — treat like REP for string I/O count
+      has_rep_prefix = true;
+      prefix_len++;
+      continue;
+    }
+    break;
+  }
+
+  const auto opcode_off = static_cast<uint16_t>(ip + prefix_len);
   const uint8_t opcode = *hal::x86::v86_byte_ptr(cs, opcode_off);
-  const uint16_t prefix_len = has_prefix ? 1 : 0;
+  const bool has_prefix = has_operand_size_prefix;// kept name for existing IN/OUT cases
   auto set_ip = [&](uint16_t new_ip) { ctx->eip = new_ip; };
+
+  // Direction flag: DF=1 means decrement pointer after string ops.
+  const bool decrement = (ctx->eflags & (1u << 10)) != 0;
+  const auto es = static_cast<uint16_t>(ctx->es);
+  const auto ds = static_cast<uint16_t>(ctx->ds);
+  const auto dx_port = static_cast<uint16_t>(ctx->edx);
+
+  auto string_count = [&]() -> uint32_t {
+    if (!has_rep_prefix) {
+      return 1;
+    }
+    // In 16-bit v86 default address size, count is CX; 0x67 selects ECX.
+    return has_address_size_prefix ? ctx->ecx : (ctx->ecx & 0xFFFFu);
+  };
+
+  auto advance_di = [&](uint32_t step) {
+    if (has_address_size_prefix) {
+      ctx->edi = decrement ? (ctx->edi - step) : (ctx->edi + step);
+    } else {
+      const auto di = static_cast<uint16_t>(ctx->edi);
+      ctx->edi = (ctx->edi & 0xFFFF0000u) |
+                 (decrement ? static_cast<uint16_t>(di - static_cast<uint16_t>(step))
+                            : static_cast<uint16_t>(di + static_cast<uint16_t>(step)));
+    }
+  };
+
+  auto advance_si = [&](uint32_t step) {
+    if (has_address_size_prefix) {
+      ctx->esi = decrement ? (ctx->esi - step) : (ctx->esi + step);
+    } else {
+      const auto si = static_cast<uint16_t>(ctx->esi);
+      ctx->esi = (ctx->esi & 0xFFFF0000u) |
+                 (decrement ? static_cast<uint16_t>(si - static_cast<uint16_t>(step))
+                            : static_cast<uint16_t>(si + static_cast<uint16_t>(step)));
+    }
+  };
+
+  auto finish_rep_count = [&](uint32_t done) {
+    if (!has_rep_prefix) {
+      return;
+    }
+    if (has_address_size_prefix) {
+      ctx->ecx = ctx->ecx - done;
+    } else {
+      const auto cx = static_cast<uint16_t>(ctx->ecx);
+      ctx->ecx = (ctx->ecx & 0xFFFF0000u) | static_cast<uint16_t>(cx - static_cast<uint16_t>(done));
+    }
+  };
+
+  auto di_offset = [&]() -> uint32_t {
+    return has_address_size_prefix ? ctx->edi : (ctx->edi & 0xFFFFu);
+  };
+  auto si_offset = [&]() -> uint32_t {
+    return has_address_size_prefix ? ctx->esi : (ctx->esi & 0xFFFFu);
+  };
+
   switch (opcode) {
     case 0xFA:// CLI
       g_v86_virtual_if = 0;
@@ -330,12 +417,79 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
       return;
     }
     case 0xEF: {// OUT DX, AX/EAX
-      const auto port = static_cast<uint16_t>(ctx->edx);
+      const auto out_port = static_cast<uint16_t>(ctx->edx);
       if (has_prefix) {
-        HAL_IO_Out32(port, ctx->eax);
+        HAL_IO_Out32(out_port, ctx->eax);
       } else {
-        HAL_IO_Out16(port, static_cast<uint16_t>(ctx->eax));
+        HAL_IO_Out16(out_port, static_cast<uint16_t>(ctx->eax));
       }
+      set_ip(static_cast<uint16_t>(ip + prefix_len + 1));
+      return;
+    }
+
+    // String I/O — SeaBIOS disk transfers use `rep insw` heavily.
+    case 0x6C: {// INSB
+      const uint32_t n = string_count();
+      for (uint32_t i = 0; i < n; ++i) {
+        const uint8_t val = HAL_IO_In8(dx_port);
+        *hal::x86::v86_byte_ptr(es, static_cast<uint16_t>(di_offset())) = val;
+        advance_di(1);
+      }
+      finish_rep_count(n);
+      set_ip(static_cast<uint16_t>(ip + prefix_len + 1));
+      return;
+    }
+    case 0x6D: {// INSW / INSD
+      const uint32_t width = has_operand_size_prefix ? 4u : 2u;
+      const uint32_t n = string_count();
+      for (uint32_t i = 0; i < n; ++i) {
+        if (width == 4) {
+          const uint32_t val = HAL_IO_In32(dx_port);
+          const auto off = static_cast<uint16_t>(di_offset());
+          *hal::x86::v86_byte_ptr(es, off) = static_cast<uint8_t>(val);
+          *hal::x86::v86_byte_ptr(es, static_cast<uint16_t>(off + 1)) = static_cast<uint8_t>(val >> 8);
+          *hal::x86::v86_byte_ptr(es, static_cast<uint16_t>(off + 2)) = static_cast<uint8_t>(val >> 16);
+          *hal::x86::v86_byte_ptr(es, static_cast<uint16_t>(off + 3)) = static_cast<uint8_t>(val >> 24);
+        } else {
+          const uint16_t val = HAL_IO_In16(dx_port);
+          *hal::x86::v86_word_ptr(es, static_cast<uint16_t>(di_offset())) = val;
+        }
+        advance_di(width);
+      }
+      finish_rep_count(n);
+      set_ip(static_cast<uint16_t>(ip + prefix_len + 1));
+      return;
+    }
+    case 0x6E: {// OUTSB
+      const uint32_t n = string_count();
+      for (uint32_t i = 0; i < n; ++i) {
+        const uint8_t val = *hal::x86::v86_byte_ptr(ds, static_cast<uint16_t>(si_offset()));
+        HAL_IO_Out8(dx_port, val);
+        advance_si(1);
+      }
+      finish_rep_count(n);
+      set_ip(static_cast<uint16_t>(ip + prefix_len + 1));
+      return;
+    }
+    case 0x6F: {// OUTSW / OUTSD
+      const uint32_t width = has_operand_size_prefix ? 4u : 2u;
+      const uint32_t n = string_count();
+      for (uint32_t i = 0; i < n; ++i) {
+        if (width == 4) {
+          const auto off = static_cast<uint16_t>(si_offset());
+          const uint32_t val =
+              static_cast<uint32_t>(*hal::x86::v86_byte_ptr(ds, off)) |
+              (static_cast<uint32_t>(*hal::x86::v86_byte_ptr(ds, static_cast<uint16_t>(off + 1))) << 8) |
+              (static_cast<uint32_t>(*hal::x86::v86_byte_ptr(ds, static_cast<uint16_t>(off + 2))) << 16) |
+              (static_cast<uint32_t>(*hal::x86::v86_byte_ptr(ds, static_cast<uint16_t>(off + 3))) << 24);
+          HAL_IO_Out32(dx_port, val);
+        } else {
+          const uint16_t val = *hal::x86::v86_word_ptr(ds, static_cast<uint16_t>(si_offset()));
+          HAL_IO_Out16(dx_port, val);
+        }
+        advance_si(width);
+      }
+      finish_rep_count(n);
       set_ip(static_cast<uint16_t>(ip + prefix_len + 1));
       return;
     }

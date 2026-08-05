@@ -10,7 +10,7 @@ struct __SYS_GFX_TEXTOUT_V1 {
     int32_t x;
     int32_t y;
     const char* text;
-    uint32_t textLength;
+    size_t textLength;
 };
 
 constexpr size_t   __SYS_GFX_TEXTOUT_V1_SIZE = sizeof(struct __SYS_GFX_TEXTOUT_V1);

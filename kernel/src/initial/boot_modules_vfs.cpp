@@ -122,15 +122,6 @@ void init() {
   early_print_fmt("Mounting InitialVFS\r\n");
 
   KE_VFS_Mount(volume, "InitialVFS", "//!/InitialVFSVolume", {});
-
-  // Load them all
-  if (const auto initial = KE_OB_LookupObjectOfType<KDirectoryObject>("/System/Initial/BootModules")) {
-    for (const auto &child : initial->child_list) {
-      kstd::static_string<255> name;
-      kstd::format(name, "//!/InitialVFSVolume/{}", child.name);
-      KE_DRIVER_Load(name);
-    }
-  }
 }
 
 }// namespace kernel::initial
