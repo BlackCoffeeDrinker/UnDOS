@@ -2,7 +2,6 @@
 #include "stdkrn.hpp"
 
 namespace {
-
 size_t BytesPerPixel(kernel::PixelFormat format) {
   switch (format) {
     case kernel::PixelFormat::RGB24:
@@ -50,22 +49,6 @@ void WritePixel(const kernel::KObjectPtr<kernel::KSurface> &surface, int x, int 
       *reinterpret_cast<uint32_t *>(pixel) = colorIndex;
       break;
   }
-}
-
-uint32_t ReadPixel(const kernel::KObjectPtr<kernel::KSurface> &surface, int x, int y) {
-  uint8_t *pixel = PixelAddress(surface, x, y);
-  if (!pixel) {
-    return 0;
-  }
-  switch (surface->pixelFormat) {
-    case kernel::PixelFormat::INDEX8:
-      return pixel[0];
-    case kernel::PixelFormat::RGB24:
-      return static_cast<uint32_t>(pixel[0]) | (static_cast<uint32_t>(pixel[1]) << 8) | (static_cast<uint32_t>(pixel[2]) << 16);
-    case kernel::PixelFormat::ARGB32:
-      return *reinterpret_cast<uint32_t *>(pixel);
-  }
-  return 0;
 }
 
 int Abs(int value) {
@@ -131,19 +114,102 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
     uint32_t width, uint32_t height,
     kernel::RasterOp rop) noexcept {
   if (rop != kernel::RasterOp::SRCCOPY) {
-    // Only a straight copy is implemented in the software fallback.
+    // Only straight copy is implemented in the software fallback.
     return false;
   }
 
-  if (!SurfaceBase(dst) || !SurfaceBase(src)) {
+  if (width == 0 || height == 0) {
+    return true;
+  }
+
+  // 1. Resolve raw surface memory base pointers once
+  uint8_t *dstBase = SurfaceBase(dst);
+  const uint8_t *srcBase = SurfaceBase(src);
+
+  if (!dstBase || !srcBase) {
     return false;
   }
 
-  for (uint32_t row = 0; row < height; ++row) {
-    for (uint32_t col = 0; col < width; ++col) {
-      const uint32_t pixel = ReadPixel(src, srcX + static_cast<int>(col), srcY + static_cast<int>(row));
-      WritePixel(dst, dstX + static_cast<int>(col), dstY + static_cast<int>(row), pixel);
+  // 2. Cache invariant parameters locally
+  const uint32_t dstPitch = dst->pitch;
+  const uint32_t srcPitch = src->pitch;
+  const kernel::PixelFormat dstFmt = dst->pixelFormat;
+  const kernel::PixelFormat srcFmt = src->pixelFormat;
+  const uint32_t dstBpp = BytesPerPixel(dstFmt);
+  const uint32_t srcBpp = BytesPerPixel(srcFmt);
+
+  // Calculate starting byte offsets for the top-left of the blit region
+  uint8_t *dstRow = dstBase + static_cast<size_t>(dstY) * dstPitch + static_cast<size_t>(dstX) * dstBpp;
+  const uint8_t *srcRow = srcBase + static_cast<size_t>(srcY) * srcPitch + static_cast<size_t>(srcX) * srcBpp;
+
+  // --------------------------------------------------------------------------
+  // FAST PATH: Matching Pixel Formats (Direct Memory Copy)
+  // --------------------------------------------------------------------------
+  if (dstFmt == srcFmt) {
+    const size_t bytesPerRow = width * dstBpp;
+
+    // Check if both source and destination rows are completely contiguous in memory
+    if (bytesPerRow == dstPitch && bytesPerRow == srcPitch) {
+      // Single bulk transfer for the entire region
+      kstd::memmove(dstRow, srcRow, bytesPerRow * height);
+      return true;
     }
+
+    // Row-by-row memory copy
+    for (uint32_t row = 0; row < height; ++row) {
+      kstd::memmove(dstRow, srcRow, bytesPerRow);
+      dstRow += dstPitch;
+      srcRow += srcPitch;
+    }
+    return true;
   }
+
+  // --------------------------------------------------------------------------
+  // SLOW PATH: Format Conversion (Hoisted Branches)
+  // --------------------------------------------------------------------------
+  for (uint32_t row = 0; row < height; ++row) {
+    const uint8_t *srcPixel = srcRow;
+    uint8_t *dstPixel = dstRow;
+
+    for (uint32_t col = 0; col < width; ++col) {
+      // Inline pixel read based on srcFmt
+      uint32_t pixelValue = 0;
+      switch (srcFmt) {
+        case kernel::PixelFormat::INDEX8:
+          pixelValue = srcPixel[0];
+          break;
+        case kernel::PixelFormat::RGB24:
+          pixelValue = static_cast<uint32_t>(srcPixel[0]) |
+                       (static_cast<uint32_t>(srcPixel[1]) << 8) |
+                       (static_cast<uint32_t>(srcPixel[2]) << 16);
+          break;
+        case kernel::PixelFormat::ARGB32:
+          pixelValue = *reinterpret_cast<const uint32_t *>(srcPixel);
+          break;
+      }
+
+      // Inline pixel write based on dstFmt
+      switch (dstFmt) {
+        case kernel::PixelFormat::INDEX8:
+          dstPixel[0] = static_cast<uint8_t>(pixelValue);
+          break;
+        case kernel::PixelFormat::RGB24:
+          dstPixel[0] = static_cast<uint8_t>(pixelValue & 0xFF);
+          dstPixel[1] = static_cast<uint8_t>((pixelValue >> 8) & 0xFF);
+          dstPixel[2] = static_cast<uint8_t>((pixelValue >> 16) & 0xFF);
+          break;
+        case kernel::PixelFormat::ARGB32:
+          *reinterpret_cast<uint32_t *>(dstPixel) = pixelValue;
+          break;
+      }
+
+      srcPixel += srcBpp;
+      dstPixel += dstBpp;
+    }
+
+    dstRow += dstPitch;
+    srcRow += srcPitch;
+  }
+
   return true;
 }

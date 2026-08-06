@@ -16,6 +16,8 @@ add_executable(kernel
         src/scheduler/Scheduler.cpp
         src/driver_loader.cpp
         src/driver_loader.hpp
+        src/legacy_isa_enum.cpp
+        src/legacy_isa_enum.hpp
         src/elf_loader.hpp
         src/elf_loader.cpp
         src/elf_segment_loader.hpp

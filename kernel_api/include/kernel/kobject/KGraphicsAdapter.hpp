@@ -22,7 +22,7 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
   cfunc<bool()> EnumerateDisplays;// populates child KDisplay objects
 
   // Mode and surface management
-  cfunc<bool(const KObjectPtr<KDisplay> &display, KObjectPtr<KSurface>, size_t modeIndex)> SetMode;
+  cfunc<bool(const KObjectPtr<KDisplay> &display, const KObjectPtr<KSurface>&, size_t modeIndex)> SetMode;
   cfunc<void(const KObjectPtr<KDisplay> &display)> UnsetMode;
 
   // Basic 2D operations (driver may return false to indicate kernel fallback)

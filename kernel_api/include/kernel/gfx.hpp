@@ -32,7 +32,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  */
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KObjectPtr<kernel::KSurface>,
-    KE_GFX_CreateSurface,
+    KE_GFX_CreateSurfaceForMode,
     const kernel::KObjectPtr<kernel::KDisplay> &display, size_t mode);
 
 /**

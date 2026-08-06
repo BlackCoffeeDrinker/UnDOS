@@ -5,7 +5,6 @@
 
 namespace {
 
-constexpr PhysicalAddressT kVgaFramebufferPhysAddress = 0xA0000;
 constexpr size_t kVgaFramebufferSize = 0x10000;// 64 KiB (4 planes x 16 KiB window)
 constexpr size_t kPageSize = 4096;
 
@@ -86,7 +85,7 @@ void Vga_PlotPixel(uint8_t *base, int x, int y, uint32_t colorIndex) {
 // Reads a single pixel's color index back by cycling the Read Map Select
 // register across the 4 planes.
 uint32_t Vga_ReadPixel(uint8_t *base, int x, int y) {
-  const uint8_t bit = static_cast<uint8_t>(0x80 >> (x % 8));
+  const auto bit = static_cast<uint8_t>(0x80 >> (x % 8));
   const uint8_t *addr = base + static_cast<size_t>(y) * kModePitch + static_cast<size_t>(x) / 8;
 
   uint32_t colorIndex = 0;
@@ -133,7 +132,7 @@ bool Vga_GetModeInfo(size_t modeIndex, kernel::KDisplayModeInfo &outInfo) {
   return true;
 }
 
-bool Vga_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display, kernel::KObjectPtr<kernel::KSurface> outSurface, size_t modeIndex) {
+bool Vga_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display, const kernel::KObjectPtr<kernel::KSurface>& outSurface, size_t modeIndex) {
   (void) display;
   if (modeIndex != 0 || !outSurface || !g_vga.framebuffer) {
     return false;
@@ -269,33 +268,49 @@ void Vga_Present(const kernel::KObjectPtr<kernel::KSurface> &surface) {
 }
 // endregion
 
-}// namespace
+bool Vga_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
+  const auto fdo = KE_IO_CreateDevice(driver, 0, "VGA16", kernel::device_type::Video);
+  if (!fdo) {
+    early_print("gfx_vga: Failed to create VGA16 device\r\n");
+    return false;
+  }
 
-UNDOS_DRIVER_ENTRY {
-  (void) driverConfig;
+  KE_IO_AttachFilterDevice(fdo, pdo);
+  return true;
+}
 
-  // Map the fixed, legacy VGA framebuffer window directly: this driver has
-  // no PDO/resource requirements list to arbitrate through since VGA's I/O 
-  // ports and MMIO window are fixed by decades-old industry convention.
+void Vga_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
+  const auto driver = pdo->driverObject;
+
+  // The framebuffer's physical address/length come from whatever the PnP
+  // manager actually granted (via the Legacy VGA Enumerator's resource
+  // requirements list), not from a hardcoded constant, mirroring
+  // Ata_StartDevice's KE_RES_FindAssigned pattern.
+  const auto *fbRes = KE_RES_FindAssigned(pdo, kernel::ResourceType::Memory, 0);
+  if (!fbRes) {
+    early_print("gfx_vga: no framebuffer memory resource assigned\r\n");
+    return;
+  }
+
   auto &as = KE_VMM_GetKernelAddressSpace();
-  void *region = KE_VMM_AllocateRegion(as, kVgaFramebufferSize, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+  void *region = KE_VMM_AllocateRegion(as, fbRes->length, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
   if (!region) {
     early_print("gfx_vga: Failed to reserve virtual address space for the framebuffer\r\n");
     return;
   }
 
   const auto virt = kernel::VirtualAddress::from_ptr(region);
-  const size_t pageCount = kVgaFramebufferSize / kPageSize;
+  const size_t pageCount = fbRes->length / kPageSize;
   for (size_t i = 0; i < pageCount; ++i) {
     KE_VMM_MapPhysical(
         as,
         virt + (i * kPageSize),
-        kernel::PhysicalAddress(kVgaFramebufferPhysAddress) + (i * kPageSize),
+        kernel::PhysicalAddress(fbRes->start) + (i * kPageSize),
         kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
   }
   g_vga.framebuffer = virt;
 
-  g_vga.adapter = KE_GFX_RegisterGraphicsAdapter(driver, nullptr, "VGA16");
+  g_vga.adapter = KE_GFX_RegisterGraphicsAdapter(driver, pdo->attachedDevice, "VGA16");
   if (!g_vga.adapter) {
     early_print("gfx_vga: Failed to register graphics adapter\r\n");
     return;
@@ -310,7 +325,7 @@ UNDOS_DRIVER_ENTRY {
   g_vga.adapter->BitBlt = Vga_BitBlt;
   g_vga.adapter->Present = Vga_Present;
 
-  g_vga.display = KE_GFX_RegisterDisplay(g_vga.adapter, "Display0");
+  g_vga.display = KE_GFX_RegisterDisplay(g_vga.adapter, "Display");
   if (!g_vga.display) {
     early_print("gfx_vga: Failed to register display\r\n");
     return;
@@ -320,4 +335,13 @@ UNDOS_DRIVER_ENTRY {
   g_vga.display->GetModeInfo = Vga_GetModeInfo;
 
   early_print("gfx_vga: VGA16 (640x480x16) adapter registered\r\n");
+}
+
+}// namespace
+
+UNDOS_DRIVER_ENTRY {
+  (void) driverConfig;
+
+  driver->AddDevice = Vga_AddDevice;
+  driver->StartDevice = Vga_StartDevice;
 }

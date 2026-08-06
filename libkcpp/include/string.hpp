@@ -18,6 +18,29 @@ _KSTD_API inline void *memcpy(void *dst, const void *src, size_t n) {
   return __builtin_memcpy(dst, src, n);
 }
 
+_KSTD_API inline void *memmove(void *dest, const void *src, size_t count) noexcept {
+  auto *d = static_cast<unsigned char *>(dest);
+  const auto *s = static_cast<const unsigned char *>(src);
+
+  if (d == s || count == 0) {
+    return dest;
+  }
+
+  if (d > s && d < s + count) {
+    // Overlapping case: Copy backwards
+    d += count;
+    s += count;
+    while (count--) {
+      *(--d) = *(--s);
+    }
+  } else {
+    // Non-overlapping or d < s: Copy forwards (can defer to memcpy)
+    memcpy(dest, src, count);
+  }
+
+  return dest;
+}
+
 /**
  * A dynamically-sized, heap-owning string.
  *
@@ -237,11 +260,11 @@ struct basic_string {
     return basic_string_view<CharT, Traits>(*this).rfind(c, pos);
   }
 
-  [[nodiscard]] constexpr size_type rfind(const CharT* s, size_type pos, size_type count) const noexcept {
+  [[nodiscard]] constexpr size_type rfind(const CharT *s, size_type pos, size_type count) const noexcept {
     return basic_string_view<CharT, Traits>(*this).rfind(s, pos, count);
   }
 
-  [[nodiscard]] constexpr size_type rfind(const CharT* s, size_type pos = npos) const noexcept {
+  [[nodiscard]] constexpr size_type rfind(const CharT *s, size_type pos = npos) const noexcept {
     return basic_string_view<CharT, Traits>(*this).rfind(s, pos);
   }
 

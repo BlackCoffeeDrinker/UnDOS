@@ -156,6 +156,14 @@ static void TriggerDeviceInterest(const kernel::KDevicePtr<kernel::KDevice> &fdo
       if (driver->StartDevice) {
         driver->StartDevice(fdo);
       }
+
+      // AddDevice may have stacked its own filter FDO on top of fdo; that
+      // top-of-stack device is the one actually started above, so mark it
+      // (and fdo itself) as Started to keep pnpState accurate.
+      fdo->pnpState = kernel::KPnpState::Started;
+      if (fdo->attachedDevice) {
+        fdo->attachedDevice->pnpState = kernel::KPnpState::Started;
+      }
     }
   }
 }
@@ -249,6 +257,13 @@ static void ProcessDevice(
 
           pdo->pnpState = kernel::KPnpState::Started;
 
+          // AddDevice may have stacked a function device object (FDO) on top
+          // of the PDO; StartDevice actually starts that top-of-stack device,
+          // so its own pnpState must be marked Started too (otherwise it is
+          // never flagged as started and the class-trigger warns spuriously).
+          const auto &fdo = pdo->attachedDevice ? pdo->attachedDevice : pdo;
+          fdo->pnpState = kernel::KPnpState::Started;
+
           // If the driver attached a Bus-type FDO, auto-enumerate its children.
           if (pdo->attachedDevice && pdo->attachedDevice->deviceType == kernel::device_type::Bus) {
             KE_PNP_EnumerateBus(pdo->attachedDevice.As<kernel::KDeviceBus>());
@@ -256,7 +271,7 @@ static void ProcessDevice(
 
           // Class-trigger: attach any driver that registered interest in the
           // (just-started) function device object's type as an upper filter.
-          TriggerDeviceInterest(pdo->attachedDevice ? pdo->attachedDevice : pdo);
+          TriggerDeviceInterest(fdo);
         }
       }
     }

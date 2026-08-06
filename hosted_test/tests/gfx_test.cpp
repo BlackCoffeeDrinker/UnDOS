@@ -128,7 +128,7 @@ TEST_CASE("KE_GFX_CreateSurface populates surface shape from mode info on succes
   EnsureObjectManagerInitialized();
 
   const auto display = MakeFakeDisplay();
-  const auto surface = KE_GFX_CreateSurface(display, 0);
+  const auto surface = KE_GFX_CreateSurfaceForMode(display, 0);
 
   REQUIRE(surface);
   REQUIRE(surface->width == 640);
@@ -142,7 +142,7 @@ TEST_CASE("KE_GFX_CreateSurface rejects an out-of-range modeIndex without callin
   EnsureObjectManagerInitialized();
 
   const auto display = MakeFakeDisplay();
-  const auto surface = KE_GFX_CreateSurface(display, 1);
+  const auto surface = KE_GFX_CreateSurfaceForMode(display, 1);
 
   REQUIRE_FALSE(surface);
   // SetMode was never invoked: lastSetModeIndex stays at its reset value.
@@ -161,7 +161,7 @@ TEST_CASE("KE_GFX_CreateSurface returns null instead of crashing when no driver 
   display->GetModeCount = FakeGetModeCount;
   display->GetModeInfo = FakeGetModeInfo;
 
-  const auto surface = KE_GFX_CreateSurface(display, 0);
+  const auto surface = KE_GFX_CreateSurfaceForMode(display, 0);
   REQUIRE_FALSE(surface);
 }
 
@@ -171,7 +171,7 @@ TEST_CASE("KE_GFX_CreateSurface returns null when the driver's SetMode fails", "
   const auto display = MakeFakeDisplay();
   g_fakeAdapterState.setModeShouldSucceed = false;
 
-  const auto surface = KE_GFX_CreateSurface(display, 0);
+  const auto surface = KE_GFX_CreateSurfaceForMode(display, 0);
   REQUIRE_FALSE(surface);
 }
 
@@ -245,7 +245,7 @@ TEST_CASE("KGraphicsAdapter FillRect/DrawLine/BitBlt forward to the fake driver"
   EnsureObjectManagerInitialized();
 
   const auto display = MakeFakeDisplay();
-  const auto surface = KE_GFX_CreateSurface(display, 0);
+  const auto surface = KE_GFX_CreateSurfaceForMode(display, 0);
   REQUIRE(surface);
 
   REQUIRE(display->adapter->FillRect(surface, 1, 2, 3, 4, 9));
@@ -334,7 +334,7 @@ TEST_CASE("DeviceContextTable slot fields round-trip through the SpinLock-guarde
 
   slot->lock.lock();
   slot->display = display;
-  slot->target = KE_GFX_CreateSurface(display, 0);
+  slot->target = KE_GFX_CreateSurfaceForMode(display, 0);
   slot->penColor = 7;
   slot->currentX = 10;
   slot->currentY = 20;

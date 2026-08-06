@@ -56,7 +56,7 @@ SyscallReturnCode handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
   if (!display) return SyscallReturnCode_INVALID_ARGUMENT;
 
   if (!display->surface) {
-    display->surface = KE_GFX_CreateSurface(display, 0);
+    display->surface = KE_GFX_CreateSurfaceForMode(display, 0);
     if (!display->surface) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 

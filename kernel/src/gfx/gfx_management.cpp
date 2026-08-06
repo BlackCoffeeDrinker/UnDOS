@@ -52,7 +52,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDisplay> KE_GFX_GetPrimaryDispl
   return g_primary_display;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KSurface> KE_GFX_CreateSurface(
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KSurface> KE_GFX_CreateSurfaceForMode(
     const kernel::KObjectPtr<kernel::KDisplay> &display,
     size_t mode) noexcept {
   if (!display || !display->adapter) {

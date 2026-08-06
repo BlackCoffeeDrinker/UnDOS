@@ -8,6 +8,7 @@ qemu-system-i386 -machine isapc -cpu 486 -m 32 \
   -chardev stdio,id=ser0,signal=off \
   -nographic \
   -nodefaults \
+  -vga std \
   -drive file="${SCRIPT_DIR}/bin/os.iso",media=cdrom,readonly=on \
   -boot d &
 

@@ -3,6 +3,7 @@
 
 #include "elf_loader.hpp"
 #include "elf_segment_loader.hpp"
+#include "legacy_isa_enum.hpp"
 #include "module/symbol_table.hpp"
 #include "pnp_manager.hpp"
 #include "stdkrn.hpp"
@@ -125,6 +126,14 @@ void LoadAutomaticStartDrivers() {
   // are deferred until the real root fs is mounted and LocalMachine has been
   // rebound onto it, so their ImagePath resolves through the writable mount.
   LoadDriversWithStart("Automatic", "automatic");
+
+  // Fixed, always-present legacy ISA hardware (e.g. gfx_vga) isn't discovered
+  // by any real bus, so the generic Legacy ISA Reservations enumerator reads
+  // LocalMachine\LegacyISAReservations, probes each configured device, and
+  // reports it (with resources built straight from the registry) to the PnP
+  // manager, which then creates the PDO and binds the matching driver via
+  // AddDevice/StartDevice, matching how bus_isa reports its ATA-channel PDOs.
+  EnumerateLegacyISADevices();
 }
 }// namespace kernel::driver
 
