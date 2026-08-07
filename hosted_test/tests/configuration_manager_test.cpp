@@ -492,8 +492,9 @@ TEST_CASE("KE_CM_GetKeyValueString reads back a previously stored value", "[cm]"
   SeedRootValueEntry(hive, kernel::ConfigurationValueType::String,
                       kstd::span<const uint8_t>(reinterpret_cast<const uint8_t *>(expected.data()), expected.size()));
 
-  kstd::string_view value;
-  REQUIRE(KE_CM_GetKeyValueString(root, value));
+  kstd::string value;
+  value.resize(KE_CM_GetKeyValueStringSize(root));
+  REQUIRE(KE_CM_GetKeyValueString(root, kstd::span(value.data(), value.size())));
   REQUIRE(value == expected);
 
   REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigDirectory(), hive));
@@ -590,8 +591,9 @@ TEST_CASE("KE_CM_SetKeyValueString relocates the value when it grows", "[cm]") {
   REQUIRE(hive->roots.front().offset != HEADER_BYTES + BLOCK_PAIR_BYTES);// relocated to the end of the data region
   REQUIRE(hive->roots.front().length == longerValue.size());
 
-  kstd::string_view readBack;
-  REQUIRE(KE_CM_GetKeyValueString(root, readBack));
+  kstd::string readBack;
+  readBack.resize(KE_CM_GetKeyValueStringSize(root));
+  REQUIRE(KE_CM_GetKeyValueString(root, kstd::span(readBack.data(), readBack.size())));
   REQUIRE(readBack == longerValue);
 
   REQUIRE(KE_OB_RemoveObject(KE_OB_GetConfigDirectory(), hive));

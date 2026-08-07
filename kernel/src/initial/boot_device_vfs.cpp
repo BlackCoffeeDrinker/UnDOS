@@ -24,6 +24,12 @@ bool BootDeviceVFS_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObje
   return true;
 }
 
+bool BootDeviceVFS_UnmountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &) {
+  // No per-volume state to tear down: minifat::ReadFile is fully
+  // self-contained per call, so unmounting is always trivially successful.
+  return true;
+}
+
 bool BootDeviceVFS_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, kernel::KVFSNode &rootOut) {
   (void) mountPoint;
 
@@ -128,6 +134,7 @@ void init_boot_device_volume() {
     }
 
     filesystem->MountVolume = BootDeviceVFS_MountVolume;
+    filesystem->UnmountVolume = BootDeviceVFS_UnmountVolume;
     filesystem->GetRootNode = BootDeviceVFS_GetRootNode;
     filesystem->Lookup = BootDeviceVFS_Lookup;
     filesystem->CreateHandle = BootDeviceVFS_CreateHandle;
@@ -136,7 +143,7 @@ void init_boot_device_volume() {
 
   early_print_fmt("Mounting BootDeviceVolume\r\n");
 
-  KE_VFS_Mount(volume, "BootDeviceVolume", "//!/BootDeviceVolume", {});
+  KE_VFS_Mount(volume, "BootDeviceVolume", "/", {});
 }
 
 }// namespace kernel::initial

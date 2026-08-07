@@ -70,18 +70,15 @@ bool ParseRange(const kstd::string_view &text, uint32_t &start, uint32_t &end) {
 
 // Reads the named value subkey (e.g. "IoPorts") under deviceKey, matching the
 // "open a subkey named after the value, then read its default value" pattern
-// LoadDriversWithStart() already uses for "Start"/"ImagePath". Copies the
-// value into `out` (rather than handing back a string_view straight from
-// KE_CM_GetKeyValueString) since that view aliases valueKey's own scratch
-// buffer, which is freed the moment the local `valueKey` handle below goes
-// out of scope.
+// LoadDriversWithStart() already uses for "Start"/"ImagePath". Sizes `out`
+// via KE_CM_GetKeyValueStringSize() and has KE_CM_GetKeyValueString() write
+// straight into it, rather than aliasing any scratch storage owned by
+// valueKey.
 bool ReadStringValue(const kernel::KConfigurationKeyPtr &deviceKey, const kstd::string_view &valueName, kstd::string &out) {
   const auto valueKey = KE_CM_OpenKey(deviceKey, valueName);
   if (!valueKey) return false;
-  kstd::string_view raw;
-  if (!KE_CM_GetKeyValueString(valueKey, raw)) return false;
-  out = raw;
-  return true;
+  out.resize(KE_CM_GetKeyValueStringSize(valueKey));
+  return KE_CM_GetKeyValueString(valueKey, kstd::span(out.data(), out.size()));
 }
 
 // Best-effort generic ISA presence probe: reads back the device's first

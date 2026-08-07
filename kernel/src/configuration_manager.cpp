@@ -17,7 +17,6 @@ using namespace kernel::configuration_manager_io;
 
 namespace {
 constexpr kstd::string_view kConfigurationLocalMachine = "/System/Config/MACHI";
-constexpr kstd::string_view kConfigurationBootLocalMachine = "//!/BootDeviceVolume/System/Config/MACHI";
 
 struct ConfigurationKeyTag {
   [[maybe_unused]] static constexpr uint64_t seed = 18366205674763934000ull;
@@ -463,35 +462,55 @@ UNDOS_KERNEL_API_DEF bool KE_CM_GetKeyValueSInt32(const kernel::KConfigurationKe
 UNDOS_KERNEL_API_DEF bool KE_CM_GetKeyValueSInt64(const kernel::KConfigurationKeyPtr &key, int64_t &outValue) noexcept {
   return GetFixedValue(key, kernel::ConfigurationValueType::SInt64, outValue);
 }
-
-UNDOS_KERNEL_API_DEF bool KE_CM_GetKeyValueString(const kernel::KConfigurationKeyPtr &key, kstd::string_view &outValue) noexcept {
-  if (!key || !key->configRoot) return false;
+UNDOS_KERNEL_API_DEF bool KE_CM_GetKeyValueString(const kernel::KConfigurationKeyPtr &key, kstd::span<char> outValue) noexcept {
+  if (!key || !key->configRoot) [[unlikely]]
+    return false;
 
   kstd::unique_lock lock(key->configRoot->mtx);
-  if (!IsRootReady(*key->configRoot)) return false;
+  if (!IsRootReady(*key->configRoot)) [[unlikely]]
+    return false;
 
   for (const auto &entry: key->configRoot->roots) {
     if (entry.keyHash == key->keyHash && entry.parentHash == key->parentHash) {
       if (entry.valueType != kernel::ConfigurationValueType::String) {
         return false;
       }
-      if (entry.length > decltype(key->stringValueScratch)::capacity()) {
-        // Too large to fit the scratch buffer backing the returned view
+      if (entry.length > outValue.size()) {
+        return false;
+      }
+      if (!ReadRawAt(key->configRoot->file,
+                     entry.offset,
+                     kstd::span(reinterpret_cast<uint8_t *>(outValue.data()), outValue.size()))) {
         return false;
       }
 
-      char raw[decltype(key->stringValueScratch)::capacity()]{};
-      if (!ReadRawAt(key->configRoot->file, entry.offset, kstd::span(reinterpret_cast<uint8_t *>(raw), entry.length))) {
-        return false;
-      }
-
-      key->stringValueScratch = kstd::string_view(raw, entry.length);
-      outValue = key->stringValueScratch;
       return true;
     }
   }
   return false;
 }
+
+UNDOS_KERNEL_API_DEF size_t KE_CM_GetKeyValueStringSize(const kernel::KConfigurationKeyPtr &key) noexcept {
+  if (!key || !key->configRoot) [[unlikely]]
+    return false;
+
+  kstd::unique_lock lock(key->configRoot->mtx);
+  if (!IsRootReady(*key->configRoot)) [[unlikely]]
+    return 0;
+
+  for (const auto &entry: key->configRoot->roots) {
+    if (entry.keyHash == key->keyHash && entry.parentHash == key->parentHash) {
+      if (entry.valueType != kernel::ConfigurationValueType::String) {
+        return false;
+      }
+      
+      return entry.length;
+    }
+  }
+  
+  return 0;
+}
+
 // endregion
 
 // region Configuration Set Value
@@ -625,13 +644,13 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KConfigurationRoot> KE_CM_Regist
   if (!KE_OB_InsertObject(KE_OB_GetConfigDirectory(), hive)) {
     return nullptr;
   }
-  
+
   return hive;
 }
 
 namespace kernel::configuration_manager {
 void init() {
-  KE_CM_RegisterHive("LocalMachine", kConfigurationBootLocalMachine);
+  KE_CM_RegisterHive("LocalMachine", kConfigurationLocalMachine);
 }
 
 bool RebindHiveFile(const kstd::string_view &hiveName, const kstd::string_view &newFilePath) {

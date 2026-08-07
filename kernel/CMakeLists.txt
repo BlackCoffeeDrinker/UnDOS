@@ -53,8 +53,6 @@ add_executable(kernel
         src/vfs.cpp
         src/vfs.hpp
         src/user_process.cpp
-        src/initial/boot_modules_vfs.cpp
-        src/initial/boot_modules_vfs.hpp
         src/initial/boot_device_vfs.cpp
         src/initial/boot_device_vfs.hpp
         src/initial/mini_fat16.cpp

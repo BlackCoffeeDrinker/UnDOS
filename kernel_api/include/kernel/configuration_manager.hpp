@@ -3,6 +3,7 @@
 
 #include <atomic.hpp>
 #include <chrono.hpp>
+#include <span.hpp>
 #include <kernel/configuration_manager/configuration_key.hpp>
 #include <kernel/configuration_manager/configuration_key_access.hpp>
 #include <kernel/configuration_manager/configuration_key_info.hpp>
@@ -77,7 +78,8 @@ UNDOS_KERNEL_PUBLIC_V1API(bool, KE_CM_GetKeyValueUInt32, const kernel::KConfigur
 UNDOS_KERNEL_PUBLIC_V1API(bool, KE_CM_GetKeyValueUInt64, const kernel::KConfigurationKeyPtr &key, uint64_t &outValue);
 UNDOS_KERNEL_PUBLIC_V1API(bool, KE_CM_GetKeyValueSInt32, const kernel::KConfigurationKeyPtr &key, int32_t &outValue);
 UNDOS_KERNEL_PUBLIC_V1API(bool, KE_CM_GetKeyValueSInt64, const kernel::KConfigurationKeyPtr &key, int64_t &outValue);
-UNDOS_KERNEL_PUBLIC_V1API(bool, KE_CM_GetKeyValueString, const kernel::KConfigurationKeyPtr &key, kstd::string_view &outValue);
+UNDOS_KERNEL_PUBLIC_V1API(bool, KE_CM_GetKeyValueString, const kernel::KConfigurationKeyPtr &key, kstd::span<char> outValue);
+UNDOS_KERNEL_PUBLIC_V1API(size_t, KE_CM_GetKeyValueStringSize, const kernel::KConfigurationKeyPtr &key);
 // endregion
 
 // region Configuration Set Value

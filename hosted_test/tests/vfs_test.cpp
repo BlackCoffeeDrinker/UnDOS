@@ -34,6 +34,8 @@ struct TestFsDriverState {
   bool mountVolumeCalled = false;
   kernel::KDevicePtr<kernel::KDevice> lastMountedVolume;
   kstd::static_string<64> lastMountOptions;
+  bool unmountVolumeCalled = false;
+  kernel::KObjectPtr<kernel::KVolumeMountObject> lastUnmountedMount;
 };
 
 TestFsDriverState g_testFsState;
@@ -42,6 +44,12 @@ bool TestFs_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mo
   g_testFsState.mountVolumeCalled = true;
   g_testFsState.lastMountedVolume = mount->volume;
   g_testFsState.lastMountOptions = options;
+  return true;
+}
+
+bool TestFs_UnmountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount) {
+  g_testFsState.unmountVolumeCalled = true;
+  g_testFsState.lastUnmountedMount = mount;
   return true;
 }
 
@@ -104,6 +112,7 @@ struct TestFsFixture {
     filesystem = KE_VFS_RegisterFilesystemDriver(driver, fsName);
     if (filesystem) {
       filesystem->MountVolume = TestFs_MountVolume;
+      filesystem->UnmountVolume = TestFs_UnmountVolume;
       filesystem->GetRootNode = TestFs_GetRootNode;
       filesystem->Lookup = TestFs_Lookup;
       filesystem->CreateHandle = TestFs_CreateHandle;
@@ -113,9 +122,11 @@ struct TestFsFixture {
   }
 
   ~TestFsFixture() {
-    // The VFS directory is a process-wide singleton with no unmount API, so
-    // explicitly detach the mount created by Mount() to avoid leaking it into
-    // later, unrelated test cases that mount at the same path.
+    // The VFS directory is a process-wide singleton, so explicitly detach
+    // the mount created by Mount() (if it's still mounted) to avoid leaking
+    // it into later, unrelated test cases that mount at the same path. Uses
+    // KE_OB_RemoveObject directly rather than KE_VFS_Unmount so tearing down
+    // a still-mounted fixture doesn't unexpectedly invoke UnmountVolume.
     if (!mountedAt.empty()) {
       if (auto mount = KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(KE_OB_GetVFSDirectory(), mountedAt)) {
         KE_OB_RemoveObject(KE_OB_GetVFSDirectory(), mount);
@@ -189,6 +200,55 @@ TEST_CASE("KE_VFS_Mount", "[vfs]") {
 
     REQUIRE(g_testFsState.lastMountedVolume.get() == fixture.volume.get());
     REQUIRE(g_testFsState.lastMountOptions == "opt=value");
+  }
+}
+
+TEST_CASE("KE_VFS_Unmount", "[vfs]") {
+  EnsureObjectManagerInitialized();
+
+  SECTION("Unmounting an existing mount then re-mounting at the same path succeeds") {
+    TestFsFixture fixture("unmount_remount");
+    REQUIRE(fixture.Mount("/", ""));
+
+    REQUIRE(KE_VFS_Unmount("/"));
+    // The mount is gone, so a fresh Mount() at the same path must succeed
+    // where it would previously have been rejected as "already in use".
+    REQUIRE(fixture.Mount("/", ""));
+  }
+
+  SECTION("UnmountVolume is invoked with the correct mount object") {
+    TestFsFixture fixture("unmount_callback");
+    REQUIRE(fixture.Mount("/", ""));
+
+    const auto mount = KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(KE_OB_GetVFSDirectory(), "/");
+    REQUIRE(mount != nullptr);
+
+    REQUIRE(KE_VFS_Unmount("/"));
+    REQUIRE(g_testFsState.unmountVolumeCalled);
+    REQUIRE(g_testFsState.lastUnmountedMount.get() == mount.get());
+
+    // Unmount already dropped the mount; avoid the fixture's destructor
+    // trying to remove it a second time.
+    fixture.mountedAt.clear();
+  }
+
+  SECTION("Unmounting with no UnmountVolume callback still succeeds") {
+    TestFsFixture fixture("unmount_nocallback");
+    REQUIRE(fixture.filesystem != nullptr);
+    fixture.filesystem->UnmountVolume = nullptr;
+    REQUIRE(fixture.Mount("/", ""));
+
+    REQUIRE(KE_VFS_Unmount("/"));
+    fixture.mountedAt.clear();
+  }
+
+  SECTION("Unmounting a non-existent mount point returns false and leaves the VFS directory unchanged") {
+    TestFsFixture fixture("unmount_missing");
+    REQUIRE(fixture.Mount("/", ""));
+
+    REQUIRE_FALSE(KE_VFS_Unmount("/nonexistent"));
+    // The existing mount at "/" must be untouched.
+    REQUIRE(KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(KE_OB_GetVFSDirectory(), "/") != nullptr);
   }
 }
 

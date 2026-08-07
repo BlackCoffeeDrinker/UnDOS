@@ -24,13 +24,9 @@ struct KConfigurationKey {
   KConfigurationKeyAccess access;
 
   // Scratch storage backing the kstd::string_view returned by
-  // KE_CM_GetKeyValueString(): the view needs somewhere stable to point at,
-  // and this handle's own lifetime is a convenient place to keep it.
-  kstd::static_string<128> stringValueScratch;
-
-  // Scratch storage backing the kstd::string_view returned by
-  // KE_CM_EnumKey()/KE_CM_EnumValue(): same rationale as stringValueScratch
-  // above, sized to match KConfigurationRoot::Root::name's capacity.
+  // KE_CM_EnumKey()/KE_CM_EnumValue(): the view needs somewhere stable to
+  // point at, and this handle's own lifetime is a convenient place to keep
+  // it, sized to match KConfigurationRoot::Root::name's capacity.
   kstd::static_string<32> enumNameScratch;
 
   // Own lifetime reference count for this handle object itself (distinct

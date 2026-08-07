@@ -82,12 +82,20 @@ void remap_pic() noexcept {
   KE_TIME_UpdateSystemTime();
 }
 
-// Vector 33: The Keyboard or Generic IRQ 1 Shared Dispatcher
-[[gnu::interrupt]] void generic_irq1_handler(stack_frame *f) {
+// Vectors 33-47: Generic Hardware IRQ 1-15 Dispatchers.
+//
+// IRQ0 keeps its bespoke pit_irq_handler above (EOI first, then
+// KE_TIME_UpdateSystemTime, preserved verbatim). Every other hardware line
+// shares this template-instantiated stub: acknowledge the PIC(s), then
+// invoke whichever KInterruptServiceRoutineObject a driver has connected via
+// g_hardware_interrupts[IRQ]. Lines with nothing connected simply do the EOI
+// and return, instead of falling into the panicking catch-all.
+template<uint8_t IRQ>
+[[gnu::interrupt]] void hw_irq_handler(stack_frame *f) {
   kstd::ignore = f;
-  pic_send_eoi(1);
+  pic_send_eoi(IRQ);
 
-  if (auto *intro_obj = g_hardware_interrupts[1]) {
+  if (auto *intro_obj = g_hardware_interrupts[IRQ]) {
     intro_obj->service_routine(intro_obj, intro_obj->service_context);
   }
 }
@@ -234,9 +242,27 @@ void init_idt() {
   idt.set(17, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
   idt.set(30, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
 
-  // 2. Register Remapped Hardware Vectors (32+)
+  // 2. Register Remapped Hardware Vectors (32+). IRQ0 keeps its dedicated
+  //    handler; IRQ1-15 each get a template-instantiated hw_irq_handler<N>
+  //    stub dispatching through g_hardware_interrupts[N]. remap_pic() above
+  //    still masks everything except IRQ0/IRQ1/IRQ2, so most of these lines
+  //    are inert until HAL_INTR_ConnectInterrupt unmasks them.
   idt.set(32, KERNEL_GDT_SELECTOR, &pit_irq_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(33, KERNEL_GDT_SELECTOR, &generic_irq1_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(33, KERNEL_GDT_SELECTOR, &hw_irq_handler<1>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(34, KERNEL_GDT_SELECTOR, &hw_irq_handler<2>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(35, KERNEL_GDT_SELECTOR, &hw_irq_handler<3>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(36, KERNEL_GDT_SELECTOR, &hw_irq_handler<4>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(37, KERNEL_GDT_SELECTOR, &hw_irq_handler<5>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(38, KERNEL_GDT_SELECTOR, &hw_irq_handler<6>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(39, KERNEL_GDT_SELECTOR, &hw_irq_handler<7>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(40, KERNEL_GDT_SELECTOR, &hw_irq_handler<8>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(41, KERNEL_GDT_SELECTOR, &hw_irq_handler<9>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(42, KERNEL_GDT_SELECTOR, &hw_irq_handler<10>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(43, KERNEL_GDT_SELECTOR, &hw_irq_handler<11>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(44, KERNEL_GDT_SELECTOR, &hw_irq_handler<12>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(45, KERNEL_GDT_SELECTOR, &hw_irq_handler<13>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(46, KERNEL_GDT_SELECTOR, &hw_irq_handler<14>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  idt.set(47, KERNEL_GDT_SELECTOR, &hw_irq_handler<15>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
 
   // Vector 13: #GP. Raw-assembly stub (see above) so v86-mode faults with
   // their extended (ES/DS/FS/GS) frame can be handled by the v86 monitor;

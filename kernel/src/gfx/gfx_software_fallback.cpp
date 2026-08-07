@@ -135,8 +135,8 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
   const uint32_t srcPitch = src->pitch;
   const kernel::PixelFormat dstFmt = dst->pixelFormat;
   const kernel::PixelFormat srcFmt = src->pixelFormat;
-  const uint32_t dstBpp = BytesPerPixel(dstFmt);
-  const uint32_t srcBpp = BytesPerPixel(srcFmt);
+  const size_t dstBpp = BytesPerPixel(dstFmt);
+  const size_t srcBpp = BytesPerPixel(srcFmt);
 
   // Calculate starting byte offsets for the top-left of the blit region
   uint8_t *dstRow = dstBase + static_cast<size_t>(dstY) * dstPitch + static_cast<size_t>(dstX) * dstBpp;

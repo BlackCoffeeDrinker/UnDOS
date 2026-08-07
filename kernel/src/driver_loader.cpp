@@ -71,35 +71,33 @@ void LoadDriversWithStart(const kstd::string_view &startFilter, const kstd::stri
       break;
     }
 
-    const auto driverKey = KE_CM_OpenKey(driversKey, childName);
-    if (!driverKey) {
-      continue;
-    }
+    if (const auto driverKey = KE_CM_OpenKey(driversKey, childName)) {
+      if (const auto startKey = KE_CM_OpenKey(driverKey, "Start")) {
+        kstd::string startValue;
+        startValue.resize(KE_CM_GetKeyValueStringSize(startKey));
+        if (KE_CM_GetKeyValueString(startKey, kstd::span(startValue.data(), startValue.size())) &&
+            startValue == startFilter) {
+          if (const auto imagePathKey = KE_CM_OpenKey(driverKey, "ImagePath")) {
+            kstd::string imagePath;
+            imagePath.resize(KE_CM_GetKeyValueStringSize(imagePathKey));
 
-    const auto startKey = KE_CM_OpenKey(driverKey, "Start");
-    if (!startKey) {
-      continue;
+            if (KE_CM_GetKeyValueString(imagePathKey, kstd::span(imagePath.data(), imagePath.size())) &&
+                !imagePath.empty()) {
+              // Both "Boot"- and "Automatic"-start drivers' ImagePath now
+              // resolve unmodified through "/": Boot-start drivers load
+              // while BootDeviceVolume is still mounted at "/", Automatic-
+              // start drivers load once the real root fs has replaced it.
+              early_print_fmt("Loading {}-start driver '{}' from '{}'\r\n", logLabel, childName, imagePath);
+              KE_DRIVER_Load(imagePath);
+            } else {
+              early_print_fmt("{}-start driver '{}' has empty/invalid ImagePath, skipping\r\n", logLabel, childName);
+            }
+          } else {
+            early_print_fmt("{}-start driver '{}' has no ImagePath, skipping\r\n", logLabel, childName);
+          }
+        }
+      }
     }
-
-    kstd::string_view startValue;
-    if (!KE_CM_GetKeyValueString(startKey, startValue) || startValue != startFilter) {
-      continue;
-    }
-
-    const auto imagePathKey = KE_CM_OpenKey(driverKey, "ImagePath");
-    if (!imagePathKey) {
-      early_print_fmt("{}-start driver '{}' has no ImagePath, skipping\r\n", logLabel, childName);
-      continue;
-    }
-
-    kstd::string_view imagePath;
-    if (!KE_CM_GetKeyValueString(imagePathKey, imagePath) || imagePath.empty()) {
-      early_print_fmt("{}-start driver '{}' has empty/invalid ImagePath, skipping\r\n", logLabel, childName);
-      continue;
-    }
-
-    early_print_fmt("Loading {}-start driver '{}' from '{}'\r\n", logLabel, childName, imagePath);
-    KE_DRIVER_Load(imagePath);
   }
 
   early_print_fmt("Loading {} drivers complete.\r\n", logLabel);
@@ -114,7 +112,9 @@ void init(const BootInfoT &boot_info) {
     if (sym.name.empty()) continue;
     g_SymbolTable.Register(sym.name, static_cast<uintptr_t>(sym.address));
   }
+}
 
+void LoadBootDrivers() {
   // Load boot-start drivers declared under LocalMachine's /Drivers key
   // (Start == "Boot", ImagePath = VFS path to the driver ELF). These are
   // needed to bring up the real disk stack and mount the root filesystem.
@@ -161,11 +161,12 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(co
     early_print_fmt("KE_DRIVER_Load: Failed to create driver object\r\n");
     return nullptr;
   }
-  
+
   // Give the driver its own configuration key under LocalMachine, e.g.
   // "/LocalMachine/Drivers/<name>". LocalMachine is disk-backed from the
-  // start of boot (first via BootDeviceVolume, then rebound onto the real
-  // root mount), so there is no separate volatile "Boot" hive to target.
+  // start of boot (first via BootDeviceVolume mounted at "/", then rebound
+  // onto the real root mount, also at "/"), so there is no separate
+  // volatile "Boot" hive to target.
   kernel::KConfigurationKeyPtr driverConfig = nullptr;
   if (const auto driverConfigRoot = KE_CM_OpenRoot("LocalMachine")) {
     if (const auto driversKey = KE_CM_CreateKey(driverConfigRoot, "Drivers", kernel::KConfigurationKeyAccess::ReadWrite)) {
@@ -179,7 +180,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(co
   driver_object->entry_point(driver_object, driverConfig);
 
   // TODO: Remove the entry point from memory once it's done executing
-  
+
   KE_OB_InsertObject(KE_OB_GetDriverDirectory(), driver_object);
   KE_PNP_RegisterDriver(driver_object);
   return driver_object;

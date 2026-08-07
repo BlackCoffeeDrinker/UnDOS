@@ -45,7 +45,7 @@ void ResetFakeAdapterState() {
 }
 
 bool FakeSetMode(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
-                  kernel::KObjectPtr<kernel::KSurface> surface,
+                  const kernel::KObjectPtr<kernel::KSurface> &surface,
                   size_t modeIndex) {
   g_fakeAdapterState.lastSetModeIndex = modeIndex;
   if (!g_fakeAdapterState.setModeShouldSucceed) {

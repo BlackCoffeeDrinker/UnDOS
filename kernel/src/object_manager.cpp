@@ -101,12 +101,6 @@ void init() {
   KE_OB_InsertObject(g_root, g_gfx);
   KE_OB_InsertObject(g_root, system);
 
-  const auto initial = kernel::CreateKObject<KDirectoryObject>("Initial");
-  const auto boot_modules = kernel::CreateKObject<KDirectoryObject>("BootModules");
-
-  KE_OB_InsertObject(system, initial);
-  KE_OB_InsertObject(initial, boot_modules);
-
   early_print_fmt("Initial Object Manager started\r\n");
 }
 }// namespace kernel::objectmanager

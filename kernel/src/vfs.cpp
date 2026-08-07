@@ -113,6 +113,29 @@ UNDOS_KERNEL_API_DEF bool KE_VFS_Mount(const kernel::KDevicePtr<kernel::KDevice>
   return false;
 }
 
+UNDOS_KERNEL_API_DEF bool KE_VFS_Unmount(const kstd::string_view &mountPoint) noexcept {
+  const auto vfsRoot = KE_OB_GetVFSDirectory();
+  if (!vfsRoot) return false;
+
+  const auto mount = KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(vfsRoot, mountPoint);
+  if (!mount || mount->name != mountPoint) {
+    early_print_fmt("KE_VFS_Unmount: Mount point '{}' not found\r\n", mountPoint);
+    return false;
+  }
+
+  if (mount->fileSystem && mount->fileSystem->UnmountVolume) {
+    if (!mount->fileSystem->UnmountVolume(mount)) {
+      early_print_fmt("KE_VFS_Unmount: Filesystem refused to unmount '{}'\r\n", mountPoint);
+      return false;
+    }
+  }
+
+  mount->isMounted = false;
+  KE_OB_RemoveObject(vfsRoot, mount);
+  early_print_fmt("KE_VFS_Unmount: Unmounted '{}'\r\n", mountPoint);
+  return true;
+}
+
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFilesystemObject> KE_VFS_RegisterFilesystemDriver(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     const kstd::string_view &name) noexcept {

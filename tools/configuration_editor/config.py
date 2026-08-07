@@ -28,12 +28,14 @@ def author_localmachine_hive(filename: str) -> None:
     cfg.entries = {}
 
     # Boot-start: needed to bring up the disk stack and mount the root fs,
-    # so their ImagePath is resolved through the early-boot BootDeviceVolume.
+    # so their ImagePath is resolved through "/" while it is still the
+    # early-boot BootDeviceVolume mount, before it gets replaced by the
+    # real root filesystem.
     boot_drivers = [
-        ("bus_isa", "//!/BootDeviceVolume/System/Drivers/bus_isa.elf"),
-        ("disk_ata", "//!/BootDeviceVolume/System/Drivers/disk_ata.elf"),
-        ("volmgr", "//!/BootDeviceVolume/System/Drivers/volmgr.elf"),
-        ("fs_fat", "//!/BootDeviceVolume/System/Drivers/fs_fat.elf"),
+        ("bus_isa", "/System/Drivers/bus_isa.elf"),
+        ("disk_ata", "/System/Drivers/disk_ata.elf"),
+        ("volmgr", "/System/Drivers/volmgr.elf"),
+        ("fs_fat", "/System/Drivers/fs_fat.elf"),
     ]
 
     # Automatic-start: loaded only after the real root fs is mounted and

@@ -17,10 +17,10 @@ void init();
 bool RebindHiveFile(const kstd::string_view &hiveName, const kstd::string_view &newFilePath);
 
 // Once the real root filesystem is mounted, rebinds the "LocalMachine" hive
-// from its early-boot BootDeviceVolume path onto the writable root-mount
-// path "/System/Config/LocalMachine". The in-memory roots index is kept
-// intact (same on-disk bytes, different VFS access path) - there is no
-// longer a separate volatile "Boot" hive to copy from.
+// onto the same path "/System/Config/MACHI", now resolved through the
+// freshly mounted writable root filesystem instead of the early-boot
+// BootDeviceVolume that was previously mounted at "/". The in-memory roots
+// index is kept intact (same on-disk bytes, different underlying volume).
 void PromoteBootHive();
 }
 }// namespace kernel

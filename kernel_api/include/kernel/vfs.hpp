@@ -43,6 +43,18 @@ UNDOS_KERNEL_PUBLIC_V1API(
 
 /**
  * @ingroup VFS
+ * @brief Method KE_VFS_Unmount
+ *
+ * @param mountPoint the exact mount point to unmount
+ * @return true if a mount existed at that exact path and was unmounted
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+  bool,
+  KE_VFS_Unmount,
+  const kstd::string_view &mountPoint);
+
+/**
+ * @ingroup VFS
  * @brief Method KE_VFS_OpenFile
  *
  */

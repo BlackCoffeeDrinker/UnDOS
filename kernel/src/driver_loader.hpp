@@ -8,6 +8,7 @@
 
 namespace kernel::driver {
 void init(const kernel::BootInfoT &boot_info);
+void LoadBootDrivers();
 
 // Loads every driver declared under LocalMachine's "/Drivers" key whose
 // "Start" value is "Automatic": drivers that aren't needed to mount the root

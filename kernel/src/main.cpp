@@ -1,19 +1,14 @@
-#include "configuration_manager.hpp"
 #include "stdkrn.hpp"
 
+#include "configuration_manager.hpp"
 #include "driver_loader.hpp"
 #include "initial/boot_device_vfs.hpp"
-#include "initial/boot_modules_vfs.hpp"
 #include "object_manager.hpp"
 #include "pnp_manager.hpp"
 #include "resource_manager.hpp"
 #include "scheduler/Scheduler.hpp"
 #include "vfs.hpp"
 #include "vmm.hpp"
-
-#include <kernel/kobject/KSubsystemObject.hpp>
-
-#include <Kernel.hpp>
 
 uint32_t g_page_size;
 
@@ -217,6 +212,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   kernel::vmm::init();
   kernel::objectmanager::init();
   kernel::vmm::late_init();
+  kernel::driver::init(boot_info);//< This just copies the symbols
   HAL_VMM_FinalizeInit();
 
   // Memory management is now fully functional
@@ -233,8 +229,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   kernel::vfs::init();
   kernel::initial::init_boot_device_volume();
   kernel::configuration_manager::init();
-  kernel::driver::init(boot_info);
-  kernel::initial::init();
+  kernel::driver::LoadBootDrivers();
 
   // Tell the HAL the Object Manager is ready.
   // HAL can now safely allocate object handles for PCI/PCIe buses and drivers.
@@ -259,6 +254,13 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
     if (const auto root = KE_OB_LookupObjectOfTypeWithRoot<kernel::KDeviceObject>(
             KE_OB_GetDeviceDirectory(),
             parser.get("root"))) {
+      // Drop the early-boot BootDeviceVolume mount before mounting the real
+      // root filesystem in its place: "/" is the same mount point both
+      // before and after this swap.
+      if (!KE_VFS_Unmount("/")) {
+        HAL_PLATFORM_Panic("Failed to unmount BootDeviceVolume from root\r\n", __FILE__, __LINE__);
+      }
+
       if (!KE_VFS_Mount(
               root->device,
               parser.get("rootfs", "FAT"),
