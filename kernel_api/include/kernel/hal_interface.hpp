@@ -7,6 +7,8 @@
 #include <kernel/__core.hpp>
 #include <kernel/cfunc.hpp>
 #include <kernel/entry.hpp>
+#include <kernel/fwd/KObjectPtr.hpp>
+#include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
 #include <kernel/memory/address.hpp>
 #include <kernel/virtual_memory.hpp>
 
@@ -107,6 +109,41 @@ UNDOS_HAL_PUBLIC_V1API(uint32_t, HAL_IO_In32, uint16_t port);
  *
  */
 UNDOS_HAL_PUBLIC_V1API(void, HAL_IO_Delay);
+// endregion
+
+// region Interrupt API
+/**
+ * @ingroup INTERRUPT
+ * @brief Method HAL_INTR_ConnectInterrupt
+ *
+ * Connects an already-constructed KInterruptServiceRoutineObject to the
+ * given hardware IRQ line (0-15) and unmasks it on the PIC (and, for IRQ
+ * 8-15, also unmasks the master's cascade line, IRQ2). Fails (returns
+ * false) if the line is already connected.
+ */
+UNDOS_HAL_PUBLIC_V1API(
+    bool,
+    HAL_INTR_ConnectInterrupt,
+    uint32_t irq,
+    const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr);
+
+/**
+ * @ingroup INTERRUPT
+ * @brief Method HAL_INTR_DisconnectInterrupt
+ *
+ * Detaches whatever KInterruptServiceRoutineObject is connected to `irq`
+ * and re-masks the line.
+ */
+UNDOS_HAL_PUBLIC_V1API(void, HAL_INTR_DisconnectInterrupt, uint32_t irq);
+
+/**
+ * @ingroup INTERRUPT
+ * @brief Method HAL_INTR_SetIrqMask
+ *
+ * Masks or unmasks a single hardware IRQ line (0-15) on the appropriate
+ * PIC via a read-modify-write of its Interrupt Mask Register.
+ */
+UNDOS_HAL_PUBLIC_V1API(void, HAL_INTR_SetIrqMask, uint32_t irq, bool masked);
 // endregion
 
 // region CPU Execution Environment API

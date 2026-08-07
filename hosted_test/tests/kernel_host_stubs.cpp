@@ -74,6 +74,22 @@ UNDOS_HAL_API_DEF bool HAL_ATOMIC_CompareExchange32(kernel::VirtualAddress addr,
   expected_out = *ptr;
   return false;
 }
+
+// Real hardware IRQ lines/PIC (intr.cpp) are out of scope for hosted tests;
+// KE_IO_ConnectInterrupt/KE_IO_DisconnectInterrupt (io.cpp) just need
+// something to link against here. These no-op stubs mirror the "no locking,
+// no real hardware" spirit of the other HAL stubs above.
+UNDOS_HAL_API_DEF bool HAL_INTR_ConnectInterrupt(
+    uint32_t irq,
+    const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
+  (void) irq;
+  (void) isr;
+  return true;
+}
+
+UNDOS_HAL_API_DEF void HAL_INTR_DisconnectInterrupt(uint32_t irq) noexcept {
+  (void) irq;
+}
 #include <stdexcept>
 void HAL_PLATFORM_Panic(const kstd::string_view &message, const char *file, int line) noexcept {
   (void) file;

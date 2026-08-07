@@ -43,6 +43,10 @@ def author_localmachine_hive(filename: str) -> None:
     # post-mount root path.
     automatic_drivers = [
         ("gfx_vga", "/System/Drivers/gfx_vga.elf"),
+        # ImagePath's filename base must be <=8 chars: fs_fat's short-name
+        # lookup (drivers/fs_fat/fat_short_name.hpp) has no truncation/tilde
+        # fallback for longer names, so "input_i8042.elf" would never resolve.
+        ("input_i8042", "/System/Drivers/i8042.elf"),
     ]
 
     cfg.ensure_key("/Drivers")
@@ -63,8 +67,14 @@ def author_localmachine_hive(filename: str) -> None:
     # one detected. DriverImage is left unset for gfx_vga since it is already
     # loaded above as an Automatic-start driver; a device with no matching
     # loaded driver simply reports a PDO that stays unmatched.
+    #
+    # i8042's Irq value only reserves IRQ1 (the keyboard line): a single
+    # LegacyISAReservations entry only carries one Irq, so IRQ12 (the
+    # aux/mouse line) is hardcoded in the driver instead (see
+    # drivers/input_i8042/i8042_registers.hpp).
     legacy_isa_devices = [
         ("VGA", {"HwID": "gfx_vga", "IoPorts": "0x3C0-0x3DF", "Memory": "0xA0000-0xAFFFF"}),
+        ("i8042", {"HwID": "input_i8042", "IoPorts": "0x60-0x64", "Irq": "1"}),
     ]
 
     cfg.ensure_key("/LegacyISAReservations")

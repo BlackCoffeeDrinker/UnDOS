@@ -22,7 +22,9 @@ bool setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice> &device,
   // devices (empty deviceName) live purely in the device stack / devnode
   // tree, exactly like Windows PDOs/FDOs, and cannot collide with siblings.
   if (!deviceName.empty()) {
-    const kstd::static_string<64> deviceNameStr(deviceName);
+    const auto num = KE_OB_MakeUniqueName(KE_OB_GetDeviceDirectory(), deviceName);
+    kstd::static_string<64> deviceNameStr;
+    kstd::format(deviceNameStr, "{}{}", deviceName, num);
     const auto deviceObj = kernel::CreateKObject<kernel::KDeviceObject>(deviceNameStr);
     deviceObj->device = device;
     device->deviceObject = deviceObj;
@@ -41,11 +43,11 @@ bool setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice> &device,
 UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDevice> KE_IO_CreateDevice(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     size_t deviceExtensionSize,
-    const kstd::string_view &deviceName,
+    const kstd::string_view &baseDeviceName,
     kernel::DeviceType deviceType) noexcept {
 
   if (auto device = KE_CreateKPtrObject<kernel::KDevice>(driver)) {
-    setupCommonKDevice(device, driver, deviceExtensionSize, deviceName);
+    setupCommonKDevice(device, driver, deviceExtensionSize, baseDeviceName);
     device->deviceType = deviceType;
     return device;
   }
@@ -132,4 +134,29 @@ UNDOS_KERNEL_API_DEF kernel::IoStatus KE_IO_WriteDevice(
     return kernel::IoStatus::Unsupported;
   }
   return device->driverObject->Write(device, offset, buffer, transferred);
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> KE_IO_ConnectInterrupt(
+    const kernel::KDevicePtr<kernel::KDevice> & /*device*/,
+    uint32_t irq,
+    kernel::cfunc<void(const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *)> routine,
+    void *context) noexcept {
+  if (!routine) return nullptr;
+
+  auto isr = kernel::CreateAnonymousKObject<kernel::KInterruptServiceRoutineObject>();
+  if (!isr) return nullptr;
+
+  isr->service_routine = routine;
+  isr->service_context = context;
+  isr->irql = 0;
+
+  if (!HAL_INTR_ConnectInterrupt(irq, isr)) {
+    return nullptr;
+  }
+
+  return isr;
+}
+
+UNDOS_KERNEL_API_DEF void KE_IO_DisconnectInterrupt(uint32_t irq) noexcept {
+  HAL_INTR_DisconnectInterrupt(irq);
 }

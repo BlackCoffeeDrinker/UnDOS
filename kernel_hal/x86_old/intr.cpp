@@ -49,15 +49,16 @@ void remap_pic() noexcept {
   asm volatile("outb %0, %1" ::"a"(static_cast<uint8_t>(0x01)), "Nd"(static_cast<uint16_t>(0x21)));
   asm volatile("outb %0, %1" ::"a"(static_cast<uint8_t>(0x01)), "Nd"(static_cast<uint16_t>(0xA1)));
 
-  // Interrupt masks (IMR). Only vectors 32 (IRQ0/PIT) and 33 (IRQ1/keyboard)
-  // have dedicated handlers; every other line falls through to the panicking
-  // catch-all handler. Unmask just IRQ0, IRQ1 and the cascade line (IRQ2) on
-  // the master and keep the whole slave PIC masked, so a stray device IRQ
-  // (e.g. the ATA IRQ14 latched during boot IDENTIFY) can't panic the kernel
-  // the moment interrupts are enabled for scheduling.
-  //   Master mask 0xF8 = 1111 1000b -> IRQ0,1,2 enabled, IRQ3-7 masked.
+  // Interrupt masks (IMR). Every hardware line now gets a real IDT stub
+  // (hw_irq_handler<IRQ> below) that no-ops when nothing is connected, so
+  // there is no longer a need to keep lines masked "just in case" -- a
+  // driver unmasks its own line on demand via HAL_INTR_ConnectInterrupt.
+  // Unmask only IRQ0 (PIT, always running) and the cascade line (IRQ2,
+  // required for any slave-PIC line 8-15 to ever reach the CPU); mask
+  // everything else by default.
+  //   Master mask 0xFA = 1111 1010b -> IRQ0,2 enabled, IRQ1,3-7 masked.
   //   Slave  mask 0xFF -> IRQ8-15 all masked.
-  asm volatile("outb %0, %1" ::"a"(static_cast<uint8_t>(0xF8)), "Nd"(static_cast<uint16_t>(0x21)));
+  asm volatile("outb %0, %1" ::"a"(static_cast<uint8_t>(0xFA)), "Nd"(static_cast<uint16_t>(0x21)));
   asm volatile("outb %0, %1" ::"a"(static_cast<uint8_t>(0xFF)), "Nd"(static_cast<uint16_t>(0xA1)));
 }
 
@@ -288,3 +289,64 @@ void init_idt() {
   //asm volatile("sti");
 }
 }// namespace hal::x86
+
+// HAL_INTR_SetIrqMask: read-modify-write the Interrupt Mask Register of
+// whichever PIC owns `irq` (master 0x21 for IRQ 0-7, slave 0xA1 for IRQ
+// 8-15). Unmasking a slave line (8-15) also unmasks the master's cascade
+// line (IRQ2), since a slave IRQ can never reach the CPU while IRQ2 is
+// masked.
+//
+// Defined at global scope (matching hal_interface.hpp's asm-named
+// declarations) rather than inside namespace hal::x86 -- see HAL_IO_In8 and
+// friends in ia32.cpp for the same pattern -- so the plain, unmangled
+// symbol name is what actually gets exported and cross-stitched by Stage
+// 1.5 into kernel_core's undefined references.
+UNDOS_HAL_API_DEF void HAL_INTR_SetIrqMask(uint32_t irq, bool masked) noexcept {
+  if (irq >= 16) return;
+
+  const uint16_t port = irq < 8 ? 0x21 : 0xA1;
+  const auto bit = static_cast<uint8_t>(1u << (irq % 8));
+
+  uint8_t imr = HAL_IO_In8(port);
+  if (masked) {
+    imr |= bit;
+  } else {
+    imr &= static_cast<uint8_t>(~bit);
+  }
+  HAL_IO_Out8(port, imr);
+
+  if (irq >= 8 && !masked) {
+    constexpr auto cascade_bit = static_cast<uint8_t>(1u << 2);
+    uint8_t master_imr = HAL_IO_In8(0x21);
+    master_imr &= static_cast<uint8_t>(~cascade_bit);
+    HAL_IO_Out8(0x21, master_imr);
+  }
+}
+
+// HAL_INTR_ConnectInterrupt: bind an already-constructed
+// KInterruptServiceRoutineObject to `irq`. Rejects an already-occupied
+// line (returns false) so two drivers can never silently clobber each
+// other's ISR; the caller (KE_IO_ConnectInterrupt) is responsible for
+// keeping the KObjectPtr alive for as long as the line stays connected --
+// only the raw pointer is stored here, matching how g_hardware_interrupts
+// already held IRQ1's ISR before this task.
+UNDOS_HAL_API_DEF bool HAL_INTR_ConnectInterrupt(
+    uint32_t irq,
+    const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
+  if (irq >= 16 || !isr) return false;
+  if (hal::x86::g_hardware_interrupts[irq] != nullptr) return false;
+
+  isr->vector = 32 + irq;
+  hal::x86::g_hardware_interrupts[irq] = isr.get();
+  HAL_INTR_SetIrqMask(irq, false);
+  return true;
+}
+
+// HAL_INTR_DisconnectInterrupt: detach whatever is connected to `irq` (if
+// anything) and re-mask the line.
+UNDOS_HAL_API_DEF void HAL_INTR_DisconnectInterrupt(uint32_t irq) noexcept {
+  if (irq >= 16) return;
+
+  hal::x86::g_hardware_interrupts[irq] = nullptr;
+  HAL_INTR_SetIrqMask(irq, true);
+}

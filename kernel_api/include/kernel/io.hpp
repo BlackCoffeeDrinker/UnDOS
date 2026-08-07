@@ -3,6 +3,7 @@
 #include <kernel/device.hpp>
 #include <kernel/kobject/KDeviceObject.hpp>
 #include <kernel/kobject/KDriverObject.hpp>
+#include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
 
 #include <new.hpp>
 #include <span.hpp>
@@ -20,7 +21,9 @@
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KDevicePtr<kernel::KDevice>,
     KE_IO_CreateDevice,
-    kernel::KObjectPtr<kernel::KDriverObject> driver, size_t deviceExtensionSize, const kstd::string_view &deviceName, kernel::DeviceType deviceType);
+    kernel::KObjectPtr<kernel::KDriverObject> driver, 
+    size_t deviceExtensionSize, const kstd::string_view &baseDeviceName,
+    kernel::DeviceType deviceType);
 
 /**
  * @ingroup IO
@@ -78,6 +81,35 @@ UNDOS_KERNEL_PUBLIC_V1API(
     kernel::IoStatus,
     KE_IO_WriteDevice,
     const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<const uint8_t> buffer, size_t &transferred);
+
+/**
+ * @ingroup IO
+ * @brief Method KE_IO_ConnectInterrupt
+ *
+ * Builds a KInterruptServiceRoutineObject wrapping `routine`/`context`,
+ * connects it to `irq` via HAL_INTR_ConnectInterrupt (which also unmasks
+ * the line), and returns it. The caller (typically the driver's AddDevice
+ * or StartDevice) MUST keep the returned KObjectPtr alive for as long as
+ * the interrupt should stay connected -- e.g. by storing it in the
+ * driver's device extension -- since dropping it frees a live ISR object.
+ * Returns nullptr on allocation failure or if `irq` is already connected.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject>,
+    KE_IO_ConnectInterrupt,
+    const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t irq,
+    kernel::cfunc<void(const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *)> routine,
+    void *context);
+
+/**
+ * @ingroup IO
+ * @brief Method KE_IO_DisconnectInterrupt
+ *
+ * Disconnects `irq` (re-masking the line via HAL_INTR_DisconnectInterrupt).
+ * Does not free the KObjectPtr itself -- that happens when the caller's
+ * last reference to it is dropped.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(void, KE_IO_DisconnectInterrupt, uint32_t irq);
 
 
 template<typename T>
