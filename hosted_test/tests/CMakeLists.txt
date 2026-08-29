@@ -3,6 +3,7 @@ add_executable(KernelTests
         array_test.cpp
         vector_test.cpp
         list_test.cpp
+        map_test.cpp
         expected_test.cpp
         unique_ptr_test.cpp
         unique_lock_test.cpp
@@ -15,6 +16,9 @@ add_executable(KernelTests
         fat_short_name_test.cpp
         scheduler_test.cpp
         percpu_test.cpp
+        input_scancode_test.cpp
+        mouse_packet_test.cpp
+        input_queue_test.cpp
 
         kernel_host_stubs.cpp
         kernel_host_vmm_stubs.cpp

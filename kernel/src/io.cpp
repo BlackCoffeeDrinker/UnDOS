@@ -5,7 +5,7 @@ namespace {
 bool setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice> &device,
                         const kernel::KObjectPtr<kernel::KDriverObject> &driver,
                         size_t deviceExtensionSize,
-                        const kstd::string_view &deviceName) {
+                        const kstd::string_view &deviceName, CreateDeviceFlags flags) {
 
   device->driverObject = driver;
 
@@ -22,9 +22,15 @@ bool setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice> &device,
   // devices (empty deviceName) live purely in the device stack / devnode
   // tree, exactly like Windows PDOs/FDOs, and cannot collide with siblings.
   if (!deviceName.empty()) {
-    const auto num = KE_OB_MakeUniqueName(KE_OB_GetDeviceDirectory(), deviceName);
     kstd::static_string<64> deviceNameStr;
-    kstd::format(deviceNameStr, "{}{}", deviceName, num);
+    
+    if (flags & CreateDeviceFlags::MultipleAllowed) {
+      const auto num = KE_OB_MakeUniqueName(KE_OB_GetDeviceDirectory(), deviceName);
+      kstd::format(deviceNameStr, "{}{}", deviceName, num);
+    } else {
+      kstd::format(deviceNameStr, "{}", deviceName);
+    }
+    
     const auto deviceObj = kernel::CreateKObject<kernel::KDeviceObject>(deviceNameStr);
     deviceObj->device = device;
     device->deviceObject = deviceObj;
@@ -44,10 +50,10 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDevice> KE_IO_CreateDevice(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     size_t deviceExtensionSize,
     const kstd::string_view &baseDeviceName,
-    kernel::DeviceType deviceType) noexcept {
+    kernel::DeviceType deviceType, CreateDeviceFlags flags) noexcept {
 
   if (auto device = KE_CreateKPtrObject<kernel::KDevice>(driver)) {
-    setupCommonKDevice(device, driver, deviceExtensionSize, baseDeviceName);
+    setupCommonKDevice(device, driver, deviceExtensionSize, baseDeviceName, flags);
     device->deviceType = deviceType;
     return device;
   }
@@ -58,10 +64,10 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDevice> KE_IO_CreateDevice(
 UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDeviceBus> KE_IO_CreateBus(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     size_t deviceExtensionSize,
-    const kstd::string_view &busName) noexcept {
+    const kstd::string_view &busName, CreateDeviceFlags flags) noexcept {
 
   if (auto device = KE_CreateKPtrObject<kernel::KDeviceBus>(driver)) {
-    setupCommonKDevice(device, driver, deviceExtensionSize, busName);
+    setupCommonKDevice(device, driver, deviceExtensionSize, busName, flags);
     device->deviceType = kernel::device_type::Bus;
     return device;
   }

@@ -156,15 +156,14 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
     return;
   }
 
-  for (size_t i = 0; i < count; i++) {
-    // Name is <ParentName>Volume<i>
-    kstd::static_string<64> nameBuf;
-    kstd::format(nameBuf, "{}Volume{}", diskFdo->Name(), i);
+  kstd::static_string<64> nameBuf;
+  kstd::format(nameBuf, "{}Volume", diskFdo->Name());
 
+  for (size_t i = 0; i < count; i++) {
     const auto volPdo = KE_IO_CreateDeviceWithContext<VolumeContext>(
         s_driver,
         nameBuf,
-        kernel::device_type::Volume);
+        kernel::device_type::Volume, CreateDeviceFlags::MultipleAllowed);
     if (!volPdo) continue;
 
     auto *vctx = volPdo->deviceExtension.as<VolumeContext>();
@@ -177,7 +176,7 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
     }
 
     early_print_fmt("VolMgr: Volume {} uses disk '{}', baseLBA={}, sectors={}\r\n",
-                    i,
+                    volPdo->Name(),
                     diskFdo->Name(),
                     parts[i].baseOffsetBytes / volmgr::kSectorSize,
                     parts[i].lengthBytes / volmgr::kSectorSize);

@@ -34,9 +34,7 @@ public:
   }
 
   constexpr pointer operator->() const {
-    _Iter __tmp = __t;
-    --__tmp;
-    return __tmp;
+    return &(operator*());
   }
 
   constexpr reverse_iterator &operator++() {

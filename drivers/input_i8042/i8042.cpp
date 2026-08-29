@@ -1,5 +1,6 @@
 
 #include <Kernel.hpp>
+#include <kernel/input.hpp>
 #include <kernel/resource.hpp>
 
 #include "i8042_registers.hpp"
@@ -26,6 +27,12 @@ struct I8042Context {
   // can find them without walking the FDO's child list.
   kernel::KDevicePtr<kernel::KDevice> keyboardDevice{nullptr};
   kernel::KDevicePtr<kernel::KDevice> mouseDevice{nullptr};
+
+  // Kept alive here so the connected ISRs stay attached for the lifetime of
+  // the FDO -- dropping a KObjectPtr<KInterruptServiceRoutineObject> frees a
+  // live ISR object (see KE_IO_ConnectInterrupt's contract in io.hpp).
+  kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> keyboardIsr{nullptr};
+  kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> mouseIsr{nullptr};
 };
 
 // Bounded-spin polled I/O primitives. A real 8042 (and QEMU's model) always
@@ -182,13 +189,202 @@ bool I8042_InitController() {
   return true;
 }
 
+// Forwards one data byte to the aux (mouse) device via command::WriteToAuxPort
+// -- every aux-directed write goes through this, per the 8042 spec.
+bool I8042_WriteAuxCommand(uint8_t data) {
+  if (!I8042_WriteCommand(i8042_regs::command::WriteToAuxPort)) return false;
+  return I8042_WriteData(data);
+}
+
+// Reads one response byte and checks it is the device Ack (0xFA). Every
+// aux command below is followed by exactly one of these before the next
+// step, so a missing/wedged mouse times out here (bounded by
+// I8042_ReadData's WaitOutputFull spin) rather than hanging boot.
+bool I8042_WaitAck() {
+  uint8_t ack = 0;
+  if (!I8042_ReadData(ack)) return false;
+  return ack == i8042_regs::device::Ack;
+}
+
+// Sends the 0xF3 <rate> sample-rate command, used both for Task 14's mouse
+// bring-up and Task 15's Microsoft wheel/5-button knock sequences (a
+// sequence of specific sample-rate writes with no other purpose than to be
+// recognised by IntelliMouse-compatible firmware).
+bool I8042_SetMouseSampleRate(uint8_t rate) {
+  if (!I8042_WriteAuxCommand(i8042_regs::device::SetSampleRate) || !I8042_WaitAck()) return false;
+  if (!I8042_WriteAuxCommand(rate) || !I8042_WaitAck()) return false;
+  return true;
+}
+
+// Issues 0xF2 (get device ID) and returns the single response byte, or
+// 0xFF (never a real device ID) if the command/ack/read failed -- treated
+// the same as "no extension support" by the negotiation below.
+uint8_t I8042_ReadMouseDeviceId() {
+  if (!I8042_WriteAuxCommand(i8042_regs::device::GetDeviceId) || !I8042_WaitAck()) return 0xFF;
+  uint8_t id = 0xFF;
+  if (!I8042_ReadData(id)) return 0xFF;
+  return id;
+}
+
+// Enables the aux port at the controller level and brings the mouse itself
+// into streaming mode (defaults, sample rate, data reporting on). Every
+// failure path logs and returns false without touching the CCB bits it
+// hasn't set yet, leaving the keyboard -- already fully initialised by
+// I8042_InitController -- completely unaffected.
+bool I8042_InitMouse() {
+  if (!I8042_WriteCommand(i8042_regs::command::EnableAuxPort)) {
+    early_print("i8042: WriteCommand(EnableAuxPort) timed out\r\n");
+    return false;
+  }
+  if (!I8042_WriteCommand(i8042_regs::command::TestAuxPort)) {
+    early_print("i8042: WriteCommand(TestAuxPort) timed out\r\n");
+    return false;
+  }
+  uint8_t auxTestResult = 0;
+  if (!I8042_ReadData(auxTestResult)) {
+    early_print("i8042: aux interface test response timed out; no mouse\r\n");
+    return false;
+  }
+  early_print_fmt("i8042: aux interface test=0x{x}\r\n", auxTestResult);
+  if (auxTestResult != 0x00) {
+    early_print("i8042: aux interface test failed; no mouse\r\n");
+    return false;
+  }
+
+  if (!I8042_WriteCommand(i8042_regs::command::ReadCommandByte)) {
+    early_print("i8042: WriteCommand(ReadCommandByte) [aux] timed out\r\n");
+    return false;
+  }
+  uint8_t ccb = 0;
+  if (!I8042_ReadData(ccb)) {
+    early_print("i8042: read CCB [aux] timed out\r\n");
+    return false;
+  }
+  ccb |= i8042_regs::ccb::AuxInterruptEnable;
+  ccb &= static_cast<uint8_t>(~i8042_regs::ccb::AuxClockDisable);
+  if (!I8042_WriteCommand(i8042_regs::command::WriteCommandByte)) {
+    early_print("i8042: WriteCommand(WriteCommandByte) [aux] timed out\r\n");
+    return false;
+  }
+  if (!I8042_WriteData(ccb)) {
+    early_print("i8042: write CCB [aux] timed out\r\n");
+    return false;
+  }
+
+  if (!I8042_WriteAuxCommand(i8042_regs::device::Reset)) {
+    early_print("i8042: mouse reset write timed out; no mouse\r\n");
+    return false;
+  }
+  if (!I8042_WaitAck()) {
+    early_print("i8042: mouse reset not acknowledged; no mouse\r\n");
+    return false;
+  }
+  uint8_t bat = 0;
+  if (!I8042_ReadData(bat)) {
+    early_print("i8042: mouse BAT response timed out; no mouse\r\n");
+    return false;
+  }
+  early_print_fmt("i8042: mouse BAT=0x{x}\r\n", bat);
+  if (bat != i8042_regs::device::BatPass) {
+    early_print("i8042: mouse BAT failed; no mouse\r\n");
+    return false;
+  }
+  uint8_t deviceId = 0;
+  if (!I8042_ReadData(deviceId)) {
+    early_print("i8042: mouse device-id read timed out; no mouse\r\n");
+    return false;
+  }
+  early_print_fmt("i8042: mouse device id=0x{x}\r\n", deviceId);
+
+  if (!I8042_WriteAuxCommand(i8042_regs::device::SetDefaults) || !I8042_WaitAck()) {
+    early_print("i8042: mouse set-defaults failed; no mouse\r\n");
+    return false;
+  }
+
+  if (!I8042_SetMouseSampleRate(100)) {
+    early_print("i8042: mouse sample-rate command failed; no mouse\r\n");
+    return false;
+  }
+
+  if (!I8042_WriteAuxCommand(i8042_regs::device::EnableDataReporting) || !I8042_WaitAck()) {
+    early_print("i8042: mouse enable-reporting failed; no mouse\r\n");
+    return false;
+  }
+
+  early_print("i8042: mouse in streaming mode\r\n");
+  return true;
+}
+
+// Microsoft's IntelliMouse wheel and IntelliMouse-Explorer 5-button "knock"
+// sequences: a specific run of sample-rate writes that plain PS/2 mice
+// ignore, but IntelliMouse-compatible firmware recognises as a request to
+// report a wider device ID (0x03 / 0x04) and switch to 4-byte packets. Any
+// other response -- including a timeout -- leaves the decoder on
+// Standard3Byte, which is always safe.
+void I8042_NegotiateMouseExtensions() {
+  if (!I8042_SetMouseSampleRate(200) || !I8042_SetMouseSampleRate(100) || !I8042_SetMouseSampleRate(80)) {
+    early_print("i8042: mouse wheel knock sequence failed; mouse protocol = Standard3Byte\r\n");
+    return;
+  }
+  const uint8_t wheelId = I8042_ReadMouseDeviceId();
+  early_print_fmt("i8042: mouse device id after wheel knock=0x{x}\r\n", wheelId);
+  if (wheelId != 0x03) {
+    early_print("i8042: mouse protocol = Standard3Byte\r\n");
+    return;
+  }
+  KE_INPUT_SetMousePacketMode(kernel::input::MousePacketMode::IntelliMouse4Byte);
+
+  if (!I8042_SetMouseSampleRate(200) || !I8042_SetMouseSampleRate(200) || !I8042_SetMouseSampleRate(80)) {
+    early_print("i8042: mouse 5-button knock sequence failed; mouse protocol = IntelliMouse4Byte\r\n");
+    return;
+  }
+  const uint8_t explorerId = I8042_ReadMouseDeviceId();
+  early_print_fmt("i8042: mouse device id after 5-button knock=0x{x}\r\n", explorerId);
+  if (explorerId == 0x04) {
+    KE_INPUT_SetMousePacketMode(kernel::input::MousePacketMode::IntelliMouseExplorer4Byte);
+    early_print("i8042: mouse protocol = IntelliMouseExplorer4Byte\r\n");
+  } else {
+    early_print("i8042: mouse protocol = IntelliMouse4Byte\r\n");
+  }
+}
+
+// Drains the controller's output buffer and routes each byte to the input
+// manager by the AUX status bit, exactly as Task 9 specifies: the same
+// draining logic serves both the keyboard (IRQ1) and aux (IRQ12) ISRs below,
+// since hardware tags the byte's origin in the status register regardless
+// of which line raised the interrupt. Bounded loop, port I/O only, no
+// allocation, no early_print -- ISR context.
+void I8042_DrainAndReport() {
+  for (int i = 0; i < 16; ++i) {
+    const uint8_t status = HAL_IO_In8(i8042_regs::kStatusPort);
+    if (!(status & i8042_regs::status::OutputBufferFull)) break;
+
+    const uint8_t data = HAL_IO_In8(i8042_regs::kDataPort);
+    if (status & i8042_regs::status::AuxData) {
+      KE_INPUT_ReportAuxData(data);
+    } else {
+      KE_INPUT_ReportKeyboardData(data);
+    }
+  }
+}
+
+void I8042_KeyboardIsr(const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *) {
+  I8042_DrainAndReport();
+}
+
+void I8042_AuxIsr(const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *) {
+  I8042_DrainAndReport();
+}
+
 // Registers \Device\Keyboard0 and \Device\PointerPort0 as children of the
 // i8042 FDO (mirroring drivers/gfx_vga/vga.cpp's named-device pattern) so
 // both are visible in the Object Manager namespace and the device-tree
 // dump. No device extension is needed yet -- the input manager (Task 8+)
 // owns all decode state -- so these are created with 0 extension size.
 void I8042_CreateNamedDevices(const kernel::KDevicePtr<kernel::KDeviceBus> &fdo, I8042Context &ctx) {
-  ctx.keyboardDevice = KE_IO_CreateDevice(fdo->driverObject, 0, "Keyboard", kernel::device_type::Keyboard);
+  ctx.keyboardDevice = KE_IO_CreateDevice(fdo->driverObject,
+                                          0, "Keyboard", kernel::device_type::Keyboard,
+                                          CreateDeviceFlags::MultipleAllowed);
   if (ctx.keyboardDevice) {
     ctx.keyboardDevice->hardwareId = "input_i8042";
     KE_IO_AttachChildDevice(fdo, ctx.keyboardDevice);
@@ -196,7 +392,9 @@ void I8042_CreateNamedDevices(const kernel::KDevicePtr<kernel::KDeviceBus> &fdo,
     early_print("i8042: Failed to create Keyboard0 device\r\n");
   }
 
-  ctx.mouseDevice = KE_IO_CreateDevice(fdo->driverObject, 0, "PointerPort", kernel::device_type::Mouse);
+  ctx.mouseDevice = KE_IO_CreateDevice(fdo->driverObject,
+                                       0, "PointerPort", kernel::device_type::Mouse,
+                                       CreateDeviceFlags::MultipleAllowed);
   if (ctx.mouseDevice) {
     ctx.mouseDevice->hardwareId = "input_i8042";
     KE_IO_AttachChildDevice(fdo, ctx.mouseDevice);
@@ -250,6 +448,33 @@ void I8042_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   }
 
   I8042_CreateNamedDevices(fdo, *ctx);
+
+  // Run all polled controller/device init -- keyboard already done above,
+  // mouse below -- before connecting either ISR. Once the keyboard IRQ is
+  // connected, the CCB's kbd-interrupt-enable bit (set by
+  // I8042_InitController) means the controller raises IRQ1 for *any* byte
+  // landing in the output buffer, including 0xA9's test response and every
+  // byte of the mouse reset/negotiation handshake -- the ISR would race the
+  // polled reads below and steal those bytes out from under them.
+  if (I8042_InitMouse()) {
+    I8042_NegotiateMouseExtensions();
+  } else {
+    early_print("i8042: no mouse detected; pointer device inactive\r\n");
+  }
+
+  // Connect both ISRs now that every polled command/response exchange is
+  // done: IRQ1 for real keystrokes, IRQ12 for real mouse packets (silent
+  // if no mouse was found, since I8042_InitMouse leaves the CCB's aux-IRQ
+  // bit unset on any failure path).
+  ctx->keyboardIsr = KE_IO_ConnectInterrupt(fdo, ctx->irqKeyboard, I8042_KeyboardIsr, ctx);
+  if (!ctx->keyboardIsr) {
+    early_print_fmt("i8042: Failed to connect keyboard ISR to IRQ {}\r\n", ctx->irqKeyboard);
+  }
+
+  ctx->mouseIsr = KE_IO_ConnectInterrupt(fdo, ctx->irqMouse, I8042_AuxIsr, ctx);
+  if (!ctx->mouseIsr) {
+    early_print_fmt("i8042: Failed to connect aux ISR to IRQ {}\r\n", ctx->irqMouse);
+  }
 }
 
 }// namespace

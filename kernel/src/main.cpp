@@ -3,6 +3,7 @@
 #include "configuration_manager.hpp"
 #include "driver_loader.hpp"
 #include "initial/boot_device_vfs.hpp"
+#include "input/input_manager.hpp"
 #include "object_manager.hpp"
 #include "pnp_manager.hpp"
 #include "resource_manager.hpp"
@@ -226,6 +227,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
 
   kernel::pnp::init();
   kernel::resource::init();
+  kernel::input::init();
   kernel::vfs::init();
   kernel::initial::init_boot_device_volume();
   kernel::configuration_manager::init();

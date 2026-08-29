@@ -41,6 +41,14 @@ namespace device {
 constexpr uint8_t Reset = 0xFF;  // -> Ack then BatPass on success
 constexpr uint8_t Ack = 0xFA;
 constexpr uint8_t BatPass = 0xAA;
+
+// Aux (mouse) device commands, used from Task 14/15 onward, always sent
+// through command::WriteToAuxPort so the controller forwards the next data
+// byte to the aux device instead of the keyboard.
+constexpr uint8_t SetDefaults = 0xF6;
+constexpr uint8_t SetSampleRate = 0xF3;// followed by a data byte (samples/sec)
+constexpr uint8_t GetDeviceId = 0xF2;  // -> one data byte: 0x00 plain, 0x03 wheel, 0x04 5-button
+constexpr uint8_t EnableDataReporting = 0xF4;
 }// namespace device
 
 // Controller Command Byte (CCB) bits, read/written via command::ReadCommandByte /

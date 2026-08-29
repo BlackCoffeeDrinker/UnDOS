@@ -152,12 +152,10 @@ void init() noexcept {
   // Idle thread runs at the lowest priority; it is always ready so the ready
   // queue is never empty once the scheduler is live.
   g_idle = KE_SCHED_CreateThread(cfunc<void(void *)>(&idle_entry), nullptr, 0);
-  
-  early_print_fmt("Scheduler: Ready\r\n");
 }
 
 void tick() noexcept {
-  KThreadObject *cur = sched::g_current.get();
+  KThreadObject *cur = g_current.get();
   if (!cur) return;
 
   if (cur->quantum_ticks > 0) {
@@ -165,7 +163,7 @@ void tick() noexcept {
   }
   if (cur->quantum_ticks == 0) {
     // Called from the timer ISR: interrupts are already disabled here.
-    sched::schedule_next();
+    schedule_next();
   }
 }
 }// namespace kernel::sched

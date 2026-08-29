@@ -68,6 +68,9 @@ add_executable(kernel
         src/gfx/gfx_management.cpp
         src/gfx/gfx_software_fallback.cpp
         src/gfx/gfx_dc_table.cpp
+
+        src/input/input_manager.cpp
+        src/input/input_manager.hpp
 )
 
 add_dependencies(kernel undos-syscalls-gen)

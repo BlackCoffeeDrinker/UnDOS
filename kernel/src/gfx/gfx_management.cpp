@@ -2,9 +2,6 @@
 #include "stdkrn.hpp"
 
 namespace {
-uint32_t g_next_surface_id = 0;
-uint32_t g_next_display_id = 0;
-
 // First KDisplay ever registered via KE_GFX_RegisterDisplay; this is the
 // display GDI-style syscalls target when no specific device is requested.
 kernel::KObjectPtr<kernel::KDisplay> g_primary_display;
@@ -29,15 +26,15 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDisplay> KE_GFX_RegisterDisplay
     const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
     const kstd::string_view &name) noexcept {
 
-  kstd::static_string<64> realName;
+  const auto next_display_id = KE_OB_MakeUniqueName(KE_OB_GetGfxDirectory(), name);
 
   // Make unique name
-  kstd::format(realName, "{}{}", name, g_next_display_id++);
+  kstd::static_string<64> realName;
+  kstd::format(realName, "{}{}", name, next_display_id);
   auto ret = kernel::CreateKObject<kernel::KDisplay>(realName);
   ret->adapter = adapter;
 
   if (!KE_OB_InsertObject(KE_OB_GetGfxDirectory(), ret)) {
-    g_next_display_id--;
     return nullptr;
   }
 
@@ -69,8 +66,9 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KSurface> KE_GFX_CreateSurfaceFo
     return nullptr;
   }
 
+  const auto next_surface_id = KE_OB_MakeUniqueName(KE_OB_GetGfxDirectory(), "Surface");
   kstd::static_string<64> name;
-  kstd::format(name, "Surface{}", g_next_surface_id++);
+  kstd::format(name, "Surface{}", next_surface_id);
   auto ret = kernel::CreateKObject<kernel::KSurface>(name);
   if (!ret) {
     return nullptr;

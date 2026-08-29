@@ -14,6 +14,7 @@ add_library(libkcpp INTERFACE
         include/initializer_list.hpp
         include/limits.hpp
         include/list.hpp
+        include/map.hpp
         include/memory.hpp
         include/mutex.hpp
         include/new.hpp

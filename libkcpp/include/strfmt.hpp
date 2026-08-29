@@ -34,6 +34,7 @@ struct format_arg {
     int_type,
     uint_type,
     ulong_type,
+    slong_type,
     bool_type,
     char_type,
     float_type,
@@ -51,6 +52,7 @@ struct format_arg {
     int int_value;
     unsigned int uint_value;
     unsigned long ulong_value;
+    long slong_value;
     bool bool_value;
     char char_value;
     float float_value;
@@ -78,6 +80,11 @@ struct format_arg {
   explicit constexpr format_arg(unsigned uiv) : type(arg_type::uint_type), uint_value(uiv) {}
   explicit constexpr format_arg(int iv) : type(arg_type::int_type), int_value(iv) {}
   explicit constexpr format_arg(unsigned long ul) : type(arg_type::ulong_type), ulong_value(ul) {}
+  // A plain `long` needs its own overload -- without it, a `long` argument
+  // (e.g. int32_t on toolchains where stdint.h defines int32_t as `long`,
+  // as i686-elf's does) is ambiguous between the `int` and `long long`
+  // overloads above, since both are equally-ranked standard conversions.
+  explicit constexpr format_arg(long lv) : type(arg_type::slong_type), slong_value(lv) {}
   explicit constexpr format_arg(unsigned long long ullv) : type(arg_type::ulong_long_type), ulong_long_value(ullv) {}
   explicit constexpr format_arg(long long llv) : type(arg_type::long_long_type), long_long_value(llv) {}
 
@@ -89,6 +96,7 @@ struct format_arg {
            type == arg_type::long_long_type ||
            type == arg_type::uint_type ||
            type == arg_type::int_type ||
+           type == arg_type::slong_type ||
            type == arg_type::ulong_type;
   }
 };
@@ -166,6 +174,14 @@ inline void handlePrintArgument(DESTINATION &target, const format_arg &arg, cons
       break;
     case format_arg::arg_type::ulong_type:
       print_uint(arg.ulong_value, options.integer_format == format_options::NumberFormat::hexadecimal ? 16 : 10);
+      break;
+    case format_arg::arg_type::slong_type:
+      if (arg.slong_value < 0) {
+        target('-');
+        print_uint(static_cast<unsigned long long>(-arg.slong_value), 10);
+      } else {
+        print_uint(static_cast<unsigned long long>(arg.slong_value), options.integer_format == format_options::NumberFormat::hexadecimal ? 16 : 10);
+      }
       break;
     case format_arg::arg_type::ulong_long_type:
       print_uint(arg.ulong_long_value, options.integer_format == format_options::NumberFormat::hexadecimal ? 16 : 10);

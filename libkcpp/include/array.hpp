@@ -28,12 +28,12 @@ struct array {
   T elements[N];
 
   // Accessors
-  T &operator[](size_t i) { return elements[i]; }
-  T &operator[](int i) { return elements[i]; }
-  const T &operator[](size_t i) const { return elements[i]; }
-  const T &operator[](int i) const { return elements[i]; }
+  constexpr T &operator[](size_t i) { return elements[i]; }
+  constexpr T &operator[](int i) { return elements[i]; }
+  constexpr const T &operator[](size_t i) const { return elements[i]; }
+  constexpr const T &operator[](int i) const { return elements[i]; }
 
-  bool operator==(const array &rhs) const {
+  constexpr bool operator==(const array &rhs) const {
     for (size_t i = 0; i < N; i++)
       if (elements[i] != rhs.elements[i])
         return false;
@@ -83,8 +83,8 @@ struct array<T, 0> {
   using const_reverse_iterator = kstd::reverse_iterator<const_iterator>;
 
   // Accessors
-  T &operator[](size_t) { return *data(); }
-  const T &operator[](size_t) const { return *data(); }
+  constexpr T &operator[](size_t) { return *data(); }
+  constexpr const T &operator[](size_t) const { return *data(); }
 
   // iterators:
   [[nodiscard]] constexpr iterator begin() noexcept {

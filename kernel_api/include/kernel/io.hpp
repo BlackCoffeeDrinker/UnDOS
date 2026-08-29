@@ -9,6 +9,14 @@
 #include <span.hpp>
 #include <utility.hpp>
 
+enum class CreateDeviceFlags : uint16_t {
+  None = 0,
+  MultipleAllowed = 1 << 1,//< Treats name as a base name and appends a number to it to make it unique
+};
+
+inline CreateDeviceFlags operator|(CreateDeviceFlags lhs, CreateDeviceFlags rhs) { return static_cast<CreateDeviceFlags>(static_cast<uint16_t>(lhs) | static_cast<uint16_t>(rhs)); }
+inline bool operator&(CreateDeviceFlags a, CreateDeviceFlags b) { return (static_cast<uint16_t>(a) & static_cast<uint16_t>(b)) != 0; }
+
 /**
  * @ingroup IO
  * @brief Method KE_IO_CreateDevice
@@ -21,9 +29,9 @@
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KDevicePtr<kernel::KDevice>,
     KE_IO_CreateDevice,
-    kernel::KObjectPtr<kernel::KDriverObject> driver, 
+    kernel::KObjectPtr<kernel::KDriverObject> driver,
     size_t deviceExtensionSize, const kstd::string_view &baseDeviceName,
-    kernel::DeviceType deviceType);
+    kernel::DeviceType deviceType, CreateDeviceFlags flags = CreateDeviceFlags::None);
 
 /**
  * @ingroup IO
@@ -33,7 +41,8 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KDevicePtr<kernel::KDeviceBus>,
     KE_IO_CreateBus,
-    kernel::KObjectPtr<kernel::KDriverObject> driver, size_t deviceExtensionSize, const kstd::string_view &busName);
+    kernel::KObjectPtr<kernel::KDriverObject> driver, size_t deviceExtensionSize,
+    const kstd::string_view &busName, CreateDeviceFlags flags = CreateDeviceFlags::None);
 
 /**
  * @ingroup IO
@@ -116,8 +125,8 @@ template<typename T>
 kernel::KDevicePtr<kernel::KDevice> KE_IO_CreateDeviceWithContext(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     const kstd::string_view &deviceName,
-    kernel::DeviceType deviceType) {
-  if (const auto dev = KE_IO_CreateDevice(kstd::move(driver), sizeof(T), deviceName, deviceType)) {
+    kernel::DeviceType deviceType, CreateDeviceFlags flags = CreateDeviceFlags::None) {
+  if (const auto dev = KE_IO_CreateDevice(kstd::move(driver), sizeof(T), deviceName, deviceType, flags)) {
     new (dev->deviceExtension.as<T *>()) T();
     return dev;
   }
@@ -127,8 +136,8 @@ kernel::KDevicePtr<kernel::KDevice> KE_IO_CreateDeviceWithContext(
 template<typename T>
 kernel::KDevicePtr<kernel::KDeviceBus> KE_IO_CreateBusWithContext(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
-    const kstd::string_view &busName = {}) {
-  if (auto dev = KE_IO_CreateBus(kstd::move(driver), sizeof(T), busName)) {
+    const kstd::string_view &busName = {}, CreateDeviceFlags flags = CreateDeviceFlags::None) {
+  if (auto dev = KE_IO_CreateBus(kstd::move(driver), sizeof(T), busName, flags)) {
     new (dev->deviceExtension.as<T *>()) T();
     return dev;
   }

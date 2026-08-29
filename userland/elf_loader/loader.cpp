@@ -19,12 +19,6 @@ asm(
     ".size _start, . - _start\n\t");
 
 extern "C" [[noreturn]] void loader_main(const char *exec_path) {
-  
-  
-  UD_SYS_PrintV1("USER SPACE: NativeElfLoader (C++): exec_path = ");
-  UD_SYS_PrintV1(exec_path);
-  UD_SYS_PrintV1("\n");
-
   uint32_t fd;
   if (UD_SYS_OpenV1(exec_path, FileOpenMode_Read, &fd) != SyscallReturnCode_OKAY) {
     (void) UD_SYS_ExitV1(255);
@@ -47,11 +41,9 @@ extern "C" [[noreturn]] void loader_main(const char *exec_path) {
       (void) UD_SYS_ExitV1(255);
       __builtin_unreachable();
     }
-
-    UD_SYS_PrintV1("USER SPACE: NativeElfLoader is valid\r\n");
   }
 
-  // read ELF, mmap segments, jump to entry
+  // read ELF, mmap segments, jump to entry, load shared libraries
 
 
   // Later: open ELF, read ELF, mmap segments, jump to entry
