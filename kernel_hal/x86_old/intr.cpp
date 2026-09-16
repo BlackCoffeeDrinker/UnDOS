@@ -1,6 +1,7 @@
 
 #include "intr.hpp"
 
+#include <kernel/dispatch.hpp>
 #include <kernel/hal_interface.hpp>
 #include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
 #include <kernel/syscall.hpp>
@@ -87,18 +88,20 @@ void remap_pic() noexcept {
 //
 // IRQ0 keeps its bespoke pit_irq_handler above (EOI first, then
 // KE_TIME_UpdateSystemTime, preserved verbatim). Every other hardware line
-// shares this template-instantiated stub: acknowledge the PIC(s), then
-// invoke whichever KInterruptServiceRoutineObject a driver has connected via
-// g_hardware_interrupts[IRQ]. Lines with nothing connected simply do the EOI
-// and return, instead of falling into the panicking catch-all.
+// shares this template-instantiated stub: acknowledge the PIC(s) immediately,
+// capture an interrupt record, push it to the kernel dispatch service, and
+// return immediately without running driver routines inside the IDT gate.
 template<uint8_t IRQ>
 [[gnu::interrupt]] void hw_irq_handler(stack_frame *f) {
   kstd::ignore = f;
   pic_send_eoi(IRQ);
 
-  if (auto *intro_obj = g_hardware_interrupts[IRQ]) {
-    intro_obj->service_routine(intro_obj, intro_obj->service_context);
-  }
+  kernel::HalInterruptRecord record{};
+  record.vector = 32 + IRQ;
+  record.irq = IRQ;
+  record.timestamp = 0;
+  record.flags = 0;
+  KE_DISPATCH_EnqueueInterrupt(record);
 }
 
 // [Exception and Page Fault Handlers remain exactly as you wrote them]

@@ -19,8 +19,8 @@ asm(
     ".size _start, . - _start\n\t");
 
 extern "C" [[noreturn]] void loader_main(const char *exec_path) {
-  uint32_t fd;
-  if (UD_SYS_OpenV1(exec_path, FileOpenMode_Read, &fd) != SyscallReturnCode_OKAY) {
+  uint32_t handle;
+  if (UD_SYS_OpenV1(exec_path, FileOpenMode_Read, &handle) != SyscallReturnCode_OKAY) {
     (void) UD_SYS_ExitV1(255);
     __builtin_unreachable();
   }
@@ -29,15 +29,15 @@ extern "C" [[noreturn]] void loader_main(const char *exec_path) {
   {
     char e_ident[16];
     size_t size = sizeof(e_ident);
-    if (UD_SYS_ReadV1(fd, reinterpret_cast<uint8_t *>(e_ident), &size) != SyscallReturnCode_OKAY) {
-      (void) UD_SYS_CloseV1(fd);
+    if (UD_SYS_ReadV1(handle, reinterpret_cast<uint8_t *>(e_ident), &size) != SyscallReturnCode_OKAY) {
+      (void) UD_SYS_CloseV1(handle);
       (void) UD_SYS_ExitV1(255);
       __builtin_unreachable();
     }
 
     // Make sure it's an ELF file
     if (e_ident[0] != 0x7F || e_ident[1] != 'E' || e_ident[2] != 'L' || e_ident[3] != 'F') {
-      (void) UD_SYS_CloseV1(fd);
+      (void) UD_SYS_CloseV1(handle);
       (void) UD_SYS_ExitV1(255);
       __builtin_unreachable();
     }

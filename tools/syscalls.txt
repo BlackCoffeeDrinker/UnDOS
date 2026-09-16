@@ -108,33 +108,62 @@ flags FileOpenMode : uint32_t {
     Exclusive;
 };
 
-syscall V1 FS Open [220] {
-    /** Path to the file to open. */
+syscall V1 IO Open [220] {
+    /** Path to the object to open. */
     path: IN string;
     /** Open mode (read, write, append). */
     mode: IN flags<FileOpenMode>;
-    /** File descriptor to receive the open file descriptor. */
-    fileDescriptor: OUT c<uint32_t>;
+    /** Handle to receive the opened object. */
+    handle: OUT c<uint32_t>;
 };
 
-syscall V1 FS Close [221] {
-    /** Open file descriptor to close. */
-    fileDescriptor: IN c<uint32_t>;
+syscall V1 IO Close [221] {
+    /** Open handle to close. */
+    handle: IN c<uint32_t>;
 };
 
-/** Reads data from an open file descriptor into `data`. */
-syscall V1 FS Read [222] {
-    /** Open file descriptor to read from. */
-    fileDescriptor: IN c<uint32_t>;
-    /** Buffer that receives the data read from the file. */
+/** Reads data from an open object handle into `data`. */
+syscall V1 IO Read [222] {
+    /** Open handle to read from. */
+    handle: IN c<uint32_t>;
+    /** Buffer that receives the data read. */
     data: OUT buffer<c<uint8_t>>;
 };
 
-/** Writes data from `data` to an open file descriptor. */
-syscall V1 FS Write [223] {
-    /** Open file descriptor to write to. */
-    fileDescriptor: IN c<uint32_t>;
-    /** Buffer containing the data to write to the file. */
+/** Writes data from `data` to an open object handle. */
+syscall V1 IO Write [223] {
+    /** Open handle to write to. */
+    handle: IN c<uint32_t>;
+    /** Buffer containing the data to write. */
     data: IN buffer<c<uint8_t>>;
+};
+
+flags TtyModeFlags : uint32_t {
+    Echo;
+    Canonical;
+    CrToNl;
+    NlToCrNl;
+};
+
+/** Creates a paired virtual TTY returning source and sink handles. */
+syscall V1 TTY Create [250] {
+    sourceHandle: OUT c<uint32_t>;
+    sinkHandle: OUT c<uint32_t>;
+};
+
+/** Sets TTY configuration flags and window dimensions. */
+syscall V1 TTY SetConfig [251] {
+    handle: IN c<uint32_t>;
+    flags: IN flags<TtyModeFlags>;
+    rows: IN c<uint16_t>;
+    cols: IN c<uint16_t>;
+};
+
+/** Retrieves TTY configuration flags and window dimensions. */
+syscall V1 TTY GetConfig [252] {
+    handle: IN c<uint32_t>;
+    flags: OUT flags<TtyModeFlags>;
+    rows: OUT c<uint16_t>;
+    cols: OUT c<uint16_t>;
 };
 

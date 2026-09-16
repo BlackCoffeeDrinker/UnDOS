@@ -4,13 +4,13 @@
 
 namespace kernel::configuration_manager_io {
 
-bool ReadRawAt(const kernel::KObjectPtr<kernel::KFileObject> &file, uint64_t offset, kstd::span<uint8_t> outValue) {
+bool ReadRawAt(const KObjectPtr<KFileObject> &file, uint64_t offset, kstd::span<uint8_t> outValue) {
   if (!file) return false;
   KE_VFS_SeekFile(file, offset);
   return KE_VFS_ReadFile(file, outValue) == outValue.size();
 }
 
-bool WriteRawAt(const kernel::KObjectPtr<kernel::KFileObject> &file, uint64_t offset, kstd::span<const uint8_t> data) {
+bool WriteRawAt(const KObjectPtr<KFileObject> &file, uint64_t offset, kstd::span<const uint8_t> data) {
   if (!file) return false;
   KE_VFS_SeekFile(file, offset);
   return KE_VFS_WriteFile(file, data) == data.size();
@@ -20,7 +20,7 @@ uint64_t PairedNameBlockOffset(uint32_t indexBlockOffset) {
   return static_cast<uint64_t>(indexBlockOffset) + sizeof(ConfigurationIndexBlock);
 }
 
-void ReadNameEntry(const kernel::KObjectPtr<kernel::KFileObject> &file, uint32_t indexBlockOffset, uint16_t nameEntryIndex, uint64_t keyHash, kstd::static_string<32> &outName) {
+void ReadNameEntry(const KObjectPtr<KFileObject> &file, uint32_t indexBlockOffset, uint16_t nameEntryIndex, uint64_t keyHash, kstd::static_string<32> &outName) {
   if (nameEntryIndex == NO_NAME_ENTRY || nameEntryIndex >= ENTRIES_PER_NAME_BLOCK) return;
 
   const uint64_t entryOffset = PairedNameBlockOffset(indexBlockOffset) + offsetof(ConfigurationNameBlock, entries) +
@@ -33,7 +33,7 @@ void ReadNameEntry(const kernel::KObjectPtr<kernel::KFileObject> &file, uint32_t
   outName = kstd::string_view(entry.name, kstd::char_traits<char>::length(entry.name));
 }
 
-uint64_t ComputeDataRegionEnd(const kernel::KConfigurationRoot &root, uint32_t indexBlockOffset) {
+uint64_t ComputeDataRegionEnd(const KConfigurationRoot &root, uint32_t indexBlockOffset) {
   uint64_t end = indexBlockOffset + BLOCK_PAIR_BYTES;
   for (const auto &entry: root.roots) {
     if (entry.indexBlockOffset != indexBlockOffset) continue;
@@ -43,7 +43,7 @@ uint64_t ComputeDataRegionEnd(const kernel::KConfigurationRoot &root, uint32_t i
   return end;
 }
 
-bool PersistIndexEntry(const kernel::KObjectPtr<kernel::KFileObject> &file, const kernel::KConfigurationRoot::Root &root) {
+bool PersistIndexEntry(const KObjectPtr<KFileObject> &file, const KConfigurationRoot::Root &root) {
   const ConfigurationIndexEntry onDisk{
       .keyHash = root.keyHash,
       .parentHash = root.parentHash,
@@ -56,7 +56,7 @@ bool PersistIndexEntry(const kernel::KObjectPtr<kernel::KFileObject> &file, cons
                     kstd::span(reinterpret_cast<const uint8_t *>(&onDisk), sizeof(ConfigurationIndexEntry)));
 }
 
-bool PersistNameEntry(const kernel::KObjectPtr<kernel::KFileObject> &file, uint32_t indexBlockOffset, uint16_t nameEntryIndex, uint64_t keyHash, const kstd::string_view &name) {
+bool PersistNameEntry(const KObjectPtr<KFileObject> &file, uint32_t indexBlockOffset, uint16_t nameEntryIndex, uint64_t keyHash, const kstd::string_view &name) {
   ConfigurationNameEntry onDisk{};
   onDisk.keyHash = keyHash;
   const size_t toCopy = name.size() < NAME_LENGTH ? name.size() : NAME_LENGTH;
@@ -69,7 +69,7 @@ bool PersistNameEntry(const kernel::KObjectPtr<kernel::KFileObject> &file, uint3
   return WriteRawAt(file, entryOffset, kstd::span(reinterpret_cast<const uint8_t *>(&onDisk), sizeof(ConfigurationNameEntry)));
 }
 
-bool FindOrAllocateNameSlot(const kernel::KObjectPtr<kernel::KFileObject> &file, uint32_t indexBlockOffset, uint64_t keyHash, const kstd::string_view &name, uint16_t &outNameEntryIndex) {
+bool FindOrAllocateNameSlot(const KObjectPtr<KFileObject> &file, uint32_t indexBlockOffset, uint64_t keyHash, const kstd::string_view &name, uint16_t &outNameEntryIndex) {
   const uint64_t nameBlockOffset = PairedNameBlockOffset(indexBlockOffset);
 
   for (uint16_t slot = 0; slot < ENTRIES_PER_NAME_BLOCK; slot++) {
@@ -91,7 +91,7 @@ bool FindOrAllocateNameSlot(const kernel::KObjectPtr<kernel::KFileObject> &file,
   return false;
 }
 
-bool ReadKeyValue(const kernel::KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, kernel::ConfigurationValueType expectedType, kstd::span<uint8_t> outValue) {
+bool ReadKeyValue(const KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, ConfigurationValueType expectedType, kstd::span<uint8_t> outValue) {
   for (const auto &entry: root.roots) {
     if (entry.keyHash == keyHash && entry.parentHash == parentHash) {
       if (entry.valueType != expectedType || entry.length != outValue.size()) {
@@ -104,7 +104,7 @@ bool ReadKeyValue(const kernel::KConfigurationRoot &root, uint64_t keyHash, uint
   return false;
 }
 
-bool FindOrAllocateFreeSlot(kernel::KConfigurationRoot &root, uint32_t &outIndexBlockOffset, uint32_t &outIndexEntryOffset) {
+bool FindOrAllocateFreeSlot(KConfigurationRoot &root, uint32_t &outIndexBlockOffset, uint32_t &outIndexEntryOffset) {
   uint64_t indexBlockOffset = sizeof(ConfigurationFileHeader);
 
   while (true) {
@@ -153,7 +153,7 @@ bool FindOrAllocateFreeSlot(kernel::KConfigurationRoot &root, uint32_t &outIndex
   }
 }
 
-bool WriteKeyValue(kernel::KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, kernel::ConfigurationValueType type, kstd::span<const uint8_t> data) {
+bool WriteKeyValue(KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, ConfigurationValueType type, kstd::span<const uint8_t> data) {
   for (auto &entry: root.roots) {
     if (entry.keyHash == keyHash && entry.parentHash == parentHash) {
       uint64_t targetOffset = entry.offset;
@@ -179,7 +179,7 @@ bool WriteKeyValue(kernel::KConfigurationRoot &root, uint64_t keyHash, uint64_t 
   return false;
 }
 
-bool FormatEmptyConfigurationFile(const kernel::KObjectPtr<kernel::KFileObject> &file) {
+bool FormatEmptyConfigurationFile(const KObjectPtr<KFileObject> &file) {
   if (!file) return false;
 
   constexpr uint32_t indexBlockOffset = sizeof(ConfigurationFileHeader);
@@ -207,7 +207,7 @@ bool FormatEmptyConfigurationFile(const kernel::KObjectPtr<kernel::KFileObject> 
                     kstd::span(reinterpret_cast<const uint8_t *>(&emptyNameBlock), sizeof(emptyNameBlock)));
 }
 
-bool LoadConfigurationIndex(const kernel::KObjectPtr<kernel::KFileObject> &file, kstd::list<kernel::KConfigurationRoot::Root> &outRoots, size_t &outNumRoots) {
+bool LoadConfigurationIndex(const KObjectPtr<KFileObject> &file, kstd::list<KConfigurationRoot::Root> &outRoots, size_t &outNumRoots) {
   ConfigurationFileHeader header{};
   {
     const kstd::span headerData(reinterpret_cast<uint8_t *>(&header), sizeof(ConfigurationFileHeader));
@@ -222,7 +222,7 @@ bool LoadConfigurationIndex(const kernel::KObjectPtr<kernel::KFileObject> &file,
   // entries each, immediately followed by their paired NAME BLOCK): walk
   // the chain via each block's absolute `nextBlockOffset`, collecting every
   // populated slot (keyHash != 0) until a block's next-block offset is 0.
-  kstd::list<kernel::KConfigurationRoot::Root> loaded;
+  kstd::list<KConfigurationRoot::Root> loaded;
   size_t populatedCount = 0;
   uint64_t indexBlockOffset = header.offsetToFirstIndexBlock;
 
@@ -240,10 +240,10 @@ bool LoadConfigurationIndex(const kernel::KObjectPtr<kernel::KFileObject> &file,
         continue;
       }
 
-      kernel::KConfigurationRoot::Root loadedEntry{
+      KConfigurationRoot::Root loadedEntry{
           .keyHash = entry.keyHash,
           .parentHash = entry.parentHash,
-          .valueType = static_cast<kernel::ConfigurationValueType>(entry.valueType),
+          .valueType = static_cast<ConfigurationValueType>(entry.valueType),
           .offset = entry.offset,
           .length = entry.length,
           .name = {},

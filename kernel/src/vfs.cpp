@@ -172,7 +172,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFileObject> KE_VFS_OpenFile(con
   }
   kstd::static_string<64> fileObjectName;
   kstd::format(fileObjectName, "{:x}", storage);
-  auto file = kernel::KObjectPtr<kernel::KFileObject>(new (storage) kernel::KFileObject(fileObjectName));
+  auto file = kernel::KObjectPtr(new (storage) kernel::KFileObject(fileObjectName));
 
   file->mode = mode;
   file->offset = 0;

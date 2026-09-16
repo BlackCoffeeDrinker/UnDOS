@@ -50,6 +50,8 @@ add_executable(kernel
         src/guard/guard.cpp
         src/atexit.cpp
         src/io.cpp
+        src/dispatch.cpp
+        src/dispatch.hpp
         src/vfs.cpp
         src/vfs.hpp
         src/user_process.cpp
@@ -64,6 +66,7 @@ add_executable(kernel
         src/configuration_manager.cpp
         src/configuration_manager_io.cpp
         src/syscalls/IO.cpp
+        src/syscalls/TTY.cpp
         src/syscalls/GFX.cpp
         src/gfx/gfx_management.cpp
         src/gfx/gfx_software_fallback.cpp
@@ -71,6 +74,9 @@ add_executable(kernel
 
         src/input/input_manager.cpp
         src/input/input_manager.hpp
+
+        src/tty/tty.cpp
+        src/tty/tty_device.cpp
 )
 
 add_dependencies(kernel undos-syscalls-gen)

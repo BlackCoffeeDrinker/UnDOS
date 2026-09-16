@@ -28,7 +28,7 @@ bool GrowArena(size_t min_size) {
   const size_t chunk_size = align_up(min_size > ARENA_CHUNK_SIZE ? min_size : ARENA_CHUNK_SIZE, PAGE_SIZE);
 
   uint32_t address = 0;
-  if (UD_SYS_AllocatePagesV1(static_cast<uint32_t>(chunk_size), MemoryProtectFlags_Read | MemoryProtectFlags_Write, &address) != SyscallReturnCode_OKAY) {
+  if (UD_SYS_AllocatePagesV1(static_cast<uint32_t>(chunk_size), static_cast<MemoryProtectFlags>(MemoryProtectFlags_Read | MemoryProtectFlags_Write), &address) != SyscallReturnCode_OKAY) {
     return false;
   }
 

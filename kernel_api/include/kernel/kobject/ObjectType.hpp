@@ -35,6 +35,8 @@ constexpr auto TYPE_CONFIGROOT_SECTION = "configroot"_type;
 constexpr auto TYPE_GRAPHICS_ADAPTER = "graphics_adapter"_type;
 constexpr auto TYPE_DISPLAY = "display"_type;
 constexpr auto TYPE_SURFACE = "surface"_type;
+constexpr auto TYPE_TTY_SOURCE = "tty_source"_type;
+constexpr auto TYPE_TTY_SINK = "tty_sink"_type;
 
 template<ObjectType T>
 struct ObjectTypeOf {};

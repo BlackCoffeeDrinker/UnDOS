@@ -1,5 +1,6 @@
 
 #include "stdkrn.hpp"
+#include <kernel/dispatch.hpp>
 
 namespace {
 bool setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice> &device,
@@ -156,7 +157,12 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> 
   isr->service_context = context;
   isr->irql = 0;
 
+  if (!KE_DISPATCH_RegisterHandler(irq, isr)) {
+    return nullptr;
+  }
+
   if (!HAL_INTR_ConnectInterrupt(irq, isr)) {
+    KE_DISPATCH_UnregisterHandler(irq);
     return nullptr;
   }
 
@@ -164,5 +170,6 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> 
 }
 
 UNDOS_KERNEL_API_DEF void KE_IO_DisconnectInterrupt(uint32_t irq) noexcept {
+  KE_DISPATCH_UnregisterHandler(irq);
   HAL_INTR_DisconnectInterrupt(irq);
 }

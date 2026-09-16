@@ -233,7 +233,7 @@ void EnumerateLegacyISADevices() {
       KE_DRIVER_Load(driverImage);
     }
 
-    auto enumerator = kernel::CreateKObject<kernel::KDriverObject>("LegacyIsaEnum");
+    const auto enumerator = kernel::CreateKObject<KDriverObject>("LegacyIsaEnum");
     if (!enumerator) {
       early_print_fmt("LegacyIsaEnum: failed to create enumerator driver object for '{}'\r\n", childName);
       continue;

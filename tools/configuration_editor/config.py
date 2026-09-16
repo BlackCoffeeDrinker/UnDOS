@@ -47,6 +47,7 @@ def author_localmachine_hive(filename: str) -> None:
         # lookup (drivers/fs_fat/fat_short_name.hpp) has no truncation/tilde
         # fallback for longer names, so "input_i8042.elf" would never resolve.
         ("input_i8042", "/System/Drivers/i8042.elf"),
+        ("serial_uart", "/System/Drivers/serial.elf"),
     ]
 
     cfg.ensure_key("/Drivers")
@@ -75,6 +76,7 @@ def author_localmachine_hive(filename: str) -> None:
     legacy_isa_devices = [
         ("VGA", {"HwID": "gfx_vga", "IoPorts": "0x3C0-0x3DF", "Memory": "0xA0000-0xAFFFF"}),
         ("i8042", {"HwID": "input_i8042", "IoPorts": "0x60-0x64", "Irq": "1"}),
+        ("COM1", {"HwID": "serial_uart", "IoPorts": "0x3F8-0x3FF", "Irq": "4"}),
     ]
 
     cfg.ensure_key("/LegacyISAReservations")

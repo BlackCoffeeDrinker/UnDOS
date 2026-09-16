@@ -68,15 +68,6 @@ ByteRing g_auxRing;
 kernel::input::KeyTranslator g_keyTranslator;
 kernel::input::MousePacketDecoder g_mouseDecoder;
 
-// Mouse position accumulator + previous button state, both pump-thread-only.
-// There is no real display yet (Step 3 of the parent plan owns that), so the
-// clamp bounds below are a placeholder "virtual desktop" purely to exercise
-// the edge-clamping requirement; USER will replace them with the real
-// screen dimensions once it exists.
-constexpr int32_t kPlaceholderScreenWidth = 640;
-constexpr int32_t kPlaceholderScreenHeight = 480;
-constexpr int32_t kMouseScale = 1;// single linear scale factor (Task 16)
-
 int32_t g_mouseX = 0;
 int32_t g_mouseY = 0;
 uint8_t g_prevMouseButtons = 0;
@@ -108,10 +99,10 @@ int32_t ClampAxis(int32_t value, int32_t maxExclusive) noexcept {
 kernel::input::MouseInputEvent BuildMouseEvent(const kernel::input::MousePacket &packet) noexcept {
   using namespace kernel::input;
 
-  const int32_t proposedX = g_mouseX + packet.dx * kMouseScale;
-  const int32_t proposedY = g_mouseY + packet.dy * kMouseScale;
-  const int32_t clampedX = ClampAxis(proposedX, kPlaceholderScreenWidth);
-  const int32_t clampedY = ClampAxis(proposedY, kPlaceholderScreenHeight);
+  const int32_t proposedX = g_mouseX + packet.dx;
+  const int32_t proposedY = g_mouseY + packet.dy;
+  const int32_t clampedX = ClampAxis(proposedX, 1600); // TODO Check the associated virtual desktop size
+  const int32_t clampedY = ClampAxis(proposedY, 1200);
 
   MouseInputEvent event;
   event.lastX = clampedX - g_mouseX;

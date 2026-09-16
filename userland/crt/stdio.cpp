@@ -40,7 +40,47 @@ size_t FormatSigned(int32_t value, char *out) {
 }// namespace
 
 extern "C" void crt_puts(const char *message) {
-  (void) UD_SYS_PrintV1(message);
+  if (!message) return;
+  const size_t len = strlen(message);
+  if (len == 0) return;
+
+  const auto rc = UD_SYS_WriteV1(1, reinterpret_cast<const uint8_t *>(message), static_cast<uint32_t>(len));
+  if (rc != SyscallReturnCode_OKAY) {
+    (void) UD_SYS_PrintV1(message);
+  }
+}
+
+extern "C" int crt_getchar(void) {
+  uint8_t ch = 0;
+  while (true) {
+    uint32_t bytesRead = 1;
+    const auto rc = UD_SYS_ReadV1(0, &ch, &bytesRead);
+    if (rc != SyscallReturnCode_OKAY) {
+      return -1;
+    }
+    if (bytesRead > 0) {
+      return static_cast<int>(ch);
+    }
+  }
+}
+
+extern "C" char *crt_readline(char *buffer, size_t size) {
+  if (!buffer || size == 0) return nullptr;
+
+  size_t idx = 0;
+  while (idx < size - 1) {
+    const int c = crt_getchar();
+    if (c < 0) {
+      if (idx == 0) return nullptr;
+      break;
+    }
+    buffer[idx++] = static_cast<char>(c);
+    if (c == '\n') {
+      break;
+    }
+  }
+  buffer[idx] = '\0';
+  return buffer;
 }
 
 extern "C" void crt_vprintf(const char *fmt, va_list args) {

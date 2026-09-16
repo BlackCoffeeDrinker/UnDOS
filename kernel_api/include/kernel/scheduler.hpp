@@ -64,6 +64,18 @@ UNDOS_KERNEL_PUBLIC_V1API(
     KE_SCHED_Unblock,
     const kernel::KObjectPtr<kernel::KThreadObject> &thread);
 
+/**
+ * @ingroup SCHED
+ * @brief Method KE_SCHED_UnblockFromIsr
+ * 
+ * Return a blocked thread to the ready queue without modifying CPU interrupt state.
+ * Safe to call from hardware interrupt service routines (DIRQL).
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    void,
+    KE_SCHED_UnblockFromIsr,
+    const kernel::KObjectPtr<kernel::KThreadObject> &thread);
+
 // Retire the current thread permanently and switch away.
 UNDOS_KERNEL_PUBLIC_V1API([[noreturn]] void, KE_SCHED_Terminate);
 

@@ -12,6 +12,7 @@
 #include "__flags_RegionCombineMode.h"
 #include "__flags_Device3DFlags.h"
 #include "__flags_FileOpenMode.h"
+#include "__flags_TtyModeFlags.h"
 
 #include "__struct_Point.h"
 #include "__struct_Rect.h"
@@ -53,3 +54,6 @@
 #include "__syscall_Close_V1.h"
 #include "__syscall_Read_V1.h"
 #include "__syscall_Write_V1.h"
+#include "__syscall_Create_V1.h"
+#include "__syscall_SetConfig_V1.h"
+#include "__syscall_GetConfig_V1.h"

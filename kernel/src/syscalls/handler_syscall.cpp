@@ -20,6 +20,7 @@
 #include <undos/syscalls/__flags_RegionCombineMode.h>
 #include <undos/syscalls/__flags_Device3DFlags.h>
 #include <undos/syscalls/__flags_FileOpenMode.h>
+#include <undos/syscalls/__flags_TtyModeFlags.h>
 
 #include <undos/syscalls/__struct_Point.h>
 #include <undos/syscalls/__struct_Rect.h>
@@ -61,6 +62,9 @@
 #include <undos/syscalls/__syscall_Close_V1.h>
 #include <undos/syscalls/__syscall_Read_V1.h>
 #include <undos/syscalls/__syscall_Write_V1.h>
+#include <undos/syscalls/__syscall_Create_V1.h>
+#include <undos/syscalls/__syscall_SetConfig_V1.h>
+#include <undos/syscalls/__syscall_GetConfig_V1.h>
 
 constexpr size_t UNDOS_MAX_COPY_SIZE = 4096;
 constexpr size_t UNDOS_MAX_MAPPED_BUFFER_SIZE = 64 * 1024 * 1024;
@@ -1039,15 +1043,15 @@ static uint32_t Dispatch_Protect_V1(void *userData, size_t size, uint32_t flags)
 }
 
 static uint32_t Dispatch_Open_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_FS_OPEN_V1)) return SyscallReturnCode_INVALID_SIZE;
+  if (size < sizeof(__SYS_IO_OPEN_V1)) return SyscallReturnCode_INVALID_SIZE;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
   auto &address_space = currentThread->owner_process->address_space;
 
-  __SYS_FS_OPEN_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_FS_OPEN_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_FS_OPEN_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_FS_OPEN_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_FS_OPEN_V1), address_space);
+  __SYS_IO_OPEN_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_IO_OPEN_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_OPEN_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_OPEN_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_OPEN_V1), address_space);
   } else {
     return SyscallReturnCode_INVALID_ADDRESS;
   }
@@ -1057,7 +1061,7 @@ static uint32_t Dispatch_Open_V1(void *userData, size_t size, uint32_t flags) {
     if (headerCopy.pathLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
-  __KRN_FS_OPEN_V1 args {};
+  __KRN_IO_OPEN_V1 args {};
   if (headerCopy.path != nullptr && headerCopy.pathLength > 0) {
     args.path.resize(headerCopy.pathLength);
     if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return SyscallReturnCode_OUT_OF_MEMORY;
@@ -1073,26 +1077,26 @@ static uint32_t Dispatch_Open_V1(void *userData, size_t size, uint32_t flags) {
   (void)flags;
   const SyscallReturnCode ret = handle_Open_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_FS_OPEN_V1, fileDescriptor), &args.fileDescriptor, sizeof(args.fileDescriptor));
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_OPEN_V1, handle), &args.handle, sizeof(args.handle));
   return ret;
 }
 
 static uint32_t Dispatch_Close_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_FS_CLOSE_V1)) return SyscallReturnCode_INVALID_SIZE;
+  if (size < sizeof(__SYS_IO_CLOSE_V1)) return SyscallReturnCode_INVALID_SIZE;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
   auto &address_space = currentThread->owner_process->address_space;
 
-  __SYS_FS_CLOSE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_FS_CLOSE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_FS_CLOSE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_FS_CLOSE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_FS_CLOSE_V1), address_space);
+  __SYS_IO_CLOSE_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_IO_CLOSE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_CLOSE_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_CLOSE_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_CLOSE_V1), address_space);
   } else {
     return SyscallReturnCode_INVALID_ADDRESS;
   }
 
-  __KRN_FS_CLOSE_V1 args {};
-  args.fileDescriptor = headerCopy.fileDescriptor;
+  __KRN_IO_CLOSE_V1 args {};
+  args.handle = headerCopy.handle;
 
   (void)flags;
   const SyscallReturnCode ret = handle_Close_V1(kstd::move(args));
@@ -1101,15 +1105,15 @@ static uint32_t Dispatch_Close_V1(void *userData, size_t size, uint32_t flags) {
 }
 
 static uint32_t Dispatch_Read_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_FS_READ_V1)) return SyscallReturnCode_INVALID_SIZE;
+  if (size < sizeof(__SYS_IO_READ_V1)) return SyscallReturnCode_INVALID_SIZE;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
   auto &address_space = currentThread->owner_process->address_space;
 
-  __SYS_FS_READ_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_FS_READ_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_FS_READ_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_FS_READ_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_FS_READ_V1), address_space);
+  __SYS_IO_READ_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_IO_READ_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_READ_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_READ_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_READ_V1), address_space);
   } else {
     return SyscallReturnCode_INVALID_ADDRESS;
   }
@@ -1119,8 +1123,8 @@ static uint32_t Dispatch_Read_V1(void *userData, size_t size, uint32_t flags) {
     if (headerCopy.dataLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
-  __KRN_FS_READ_V1 args {};
-  args.fileDescriptor = headerCopy.fileDescriptor;
+  __KRN_IO_READ_V1 args {};
+  args.handle = headerCopy.handle;
   if (headerCopy.data != nullptr) {
     args.data = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(KE_VMM_MapBorrowed(headerCopy.data, headerCopy.dataLength * sizeof(uint8_t), address_space)), headerCopy.dataLength, address_space);
     args.data_len = headerCopy.dataLength;
@@ -1132,21 +1136,21 @@ static uint32_t Dispatch_Read_V1(void *userData, size_t size, uint32_t flags) {
   // buffer was mapped and filled by the kernel directly; report actual length written.
   {
     const auto len = static_cast<uint32_t>(args.data_len);
-    KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_FS_READ_V1, dataLength), &len, sizeof(len));
+    KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_READ_V1, dataLength), &len, sizeof(len));
   }
   return ret;
 }
 
 static uint32_t Dispatch_Write_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_FS_WRITE_V1)) return SyscallReturnCode_INVALID_SIZE;
+  if (size < sizeof(__SYS_IO_WRITE_V1)) return SyscallReturnCode_INVALID_SIZE;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
   auto &address_space = currentThread->owner_process->address_space;
 
-  __SYS_FS_WRITE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_FS_WRITE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_FS_WRITE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_FS_WRITE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_FS_WRITE_V1), address_space);
+  __SYS_IO_WRITE_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_IO_WRITE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_WRITE_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_WRITE_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_WRITE_V1), address_space);
   } else {
     return SyscallReturnCode_INVALID_ADDRESS;
   }
@@ -1156,8 +1160,8 @@ static uint32_t Dispatch_Write_V1(void *userData, size_t size, uint32_t flags) {
     if (headerCopy.dataLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
-  __KRN_FS_WRITE_V1 args {};
-  args.fileDescriptor = headerCopy.fileDescriptor;
+  __KRN_IO_WRITE_V1 args {};
+  args.handle = headerCopy.handle;
   if (headerCopy.data != nullptr) {
     if (auto* mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.data), headerCopy.dataLength * sizeof(uint8_t), address_space)) {
       args.data = kernel::borrowed_ptr<uint8_t>(const_cast<uint8_t *>(static_cast<const uint8_t *>(mapped)), headerCopy.dataLength, address_space);
@@ -1169,6 +1173,82 @@ static uint32_t Dispatch_Write_V1(void *userData, size_t size, uint32_t flags) {
   (void)flags;
   const SyscallReturnCode ret = handle_Write_V1(kstd::move(args));
 
+  return ret;
+}
+
+static uint32_t Dispatch_Create_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_TTY_CREATE_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_TTY_CREATE_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_TTY_CREATE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_CREATE_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_TTY_CREATE_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_TTY_CREATE_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_TTY_CREATE_V1 args {};
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_Create_V1(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_CREATE_V1, sourceHandle), &args.sourceHandle, sizeof(args.sourceHandle));
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_CREATE_V1, sinkHandle), &args.sinkHandle, sizeof(args.sinkHandle));
+  return ret;
+}
+
+static uint32_t Dispatch_SetConfig_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_TTY_SETCONFIG_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_TTY_SETCONFIG_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_TTY_SETCONFIG_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_SETCONFIG_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_TTY_SETCONFIG_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_TTY_SETCONFIG_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_TTY_SETCONFIG_V1 args {};
+  args.handle = headerCopy.handle;
+  args.flags = headerCopy.flags;
+  args.rows = headerCopy.rows;
+  args.cols = headerCopy.cols;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_SetConfig_V1(kstd::move(args));
+
+  return ret;
+}
+
+static uint32_t Dispatch_GetConfig_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_TTY_GETCONFIG_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_TTY_GETCONFIG_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_TTY_GETCONFIG_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_GETCONFIG_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_TTY_GETCONFIG_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_TTY_GETCONFIG_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_TTY_GETCONFIG_V1 args {};
+  args.handle = headerCopy.handle;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_GetConfig_V1(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, flags), &args.flags, sizeof(args.flags));
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, rows), &args.rows, sizeof(args.rows));
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, cols), &args.cols, sizeof(args.cols));
   return ret;
 }
 
@@ -1211,6 +1291,9 @@ UNDOS_KERNEL_API_DEF uint32_t KE_SYSCALL_Dispatch(uint32_t number, uint32_t size
     case 221: return Dispatch_Close_V1(data, size, flags);
     case 222: return Dispatch_Read_V1(data, size, flags);
     case 223: return Dispatch_Write_V1(data, size, flags);
+    case 250: return Dispatch_Create_V1(data, size, flags);
+    case 251: return Dispatch_SetConfig_V1(data, size, flags);
+    case 252: return Dispatch_GetConfig_V1(data, size, flags);
   }
   return SyscallReturnCode_UNKNOWN;
 }

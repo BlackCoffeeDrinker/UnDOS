@@ -2,6 +2,7 @@
 #include "elf_loader.hpp"
 #include "stdkrn.hpp"
 #include "vmm.hpp"
+#include <kernel/tty/tty_device.hpp>
 
 #include <Kernel.hpp>
 
@@ -17,6 +18,20 @@ UNDOS_KERNEL_API_DEF void KE_USER_CreateProcess(const kstd::string_view &exec_pa
   if (!process) {
     early_print_fmt("KE_USER_CreateProcess: failed to allocate KProcessObject\r\n");
     return;
+  }
+
+  // Inherit inheritable handles (e.g. standard streams) from parent process if present
+  if (const auto currentThread = KE_SCHED_GetCurrentThread()) {
+    if (currentThread->owner_process) {
+      process->InheritHandlesFrom(currentThread->owner_process->handles);
+    }
+  }
+
+  // If no handles were inherited, attach default console streams if available
+  if (process->handles.entries.empty()) {
+    if (auto defaultSink = KE_TTY_GetDefaultConsoleSink()) {
+      process->AttachStandardStreams(defaultSink);
+    }
   }
 
   if (!kernel::vmm::create_user_address_space(process->address_space)) {

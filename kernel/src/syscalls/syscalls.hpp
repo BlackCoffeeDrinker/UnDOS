@@ -47,10 +47,16 @@ SyscallReturnCode handle_AllocatePages_V1(__KRN_MEM_ALLOCATEPAGES_V1 && args);
 SyscallReturnCode handle_FreePages_V1(__KRN_MEM_FREEPAGES_V1 && args);
 /** Changes the protection of an existing page range (e.g. mark executable). */
 SyscallReturnCode handle_Protect_V1(__KRN_MEM_PROTECT_V1 && args);
-SyscallReturnCode handle_Open_V1(__KRN_FS_OPEN_V1 && args);
-SyscallReturnCode handle_Close_V1(__KRN_FS_CLOSE_V1 && args);
-/** Reads data from an open file descriptor into `data`. */
-SyscallReturnCode handle_Read_V1(__KRN_FS_READ_V1 && args);
-/** Writes data from `data` to an open file descriptor. */
-SyscallReturnCode handle_Write_V1(__KRN_FS_WRITE_V1 && args);
+SyscallReturnCode handle_Open_V1(__KRN_IO_OPEN_V1 && args);
+SyscallReturnCode handle_Close_V1(__KRN_IO_CLOSE_V1 && args);
+/** Reads data from an open object handle into `data`. */
+SyscallReturnCode handle_Read_V1(__KRN_IO_READ_V1 && args);
+/** Writes data from `data` to an open object handle. */
+SyscallReturnCode handle_Write_V1(__KRN_IO_WRITE_V1 && args);
+/** Creates a paired virtual TTY returning source and sink handles. */
+SyscallReturnCode handle_Create_V1(__KRN_TTY_CREATE_V1 && args);
+/** Sets TTY configuration flags and window dimensions. */
+SyscallReturnCode handle_SetConfig_V1(__KRN_TTY_SETCONFIG_V1 && args);
+/** Retrieves TTY configuration flags and window dimensions. */
+SyscallReturnCode handle_GetConfig_V1(__KRN_TTY_GETCONFIG_V1 && args);
 

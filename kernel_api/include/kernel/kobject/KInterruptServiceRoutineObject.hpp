@@ -1,6 +1,7 @@
 #pragma once
 
 #include <kernel/__core.hpp>
+#include <kernel/cfunc.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/ObjectType.hpp>

@@ -5,16 +5,16 @@
 #include <stdint.h>
 #include <stddef.h>
 
-struct __SYS_FS_OPEN_V1 {
-    /** Path to the file to open. */
+struct __SYS_IO_OPEN_V1 {
+    /** Path to the object to open. */
     const char* path;
     size_t pathLength;
     /** Open mode (read, write, append). */
     enum FileOpenMode mode;
-    /** File descriptor to receive the open file descriptor. */
-    uint32_t fileDescriptor;
+    /** Handle to receive the opened object. */
+    uint32_t handle;
 };
 
-constexpr size_t   __SYS_FS_OPEN_V1_SIZE = sizeof(struct __SYS_FS_OPEN_V1);
-constexpr uint32_t __SYS_FS_OPEN_V1_CALLNUMBER = 220;
+constexpr size_t   __SYS_IO_OPEN_V1_SIZE = sizeof(struct __SYS_IO_OPEN_V1);
+constexpr uint32_t __SYS_IO_OPEN_V1_CALLNUMBER = 220;
 

@@ -1,6 +1,7 @@
 #include "stdkrn.hpp"
 
 #include "configuration_manager.hpp"
+#include "dispatch.hpp"
 #include "driver_loader.hpp"
 #include "initial/boot_device_vfs.hpp"
 #include "input/input_manager.hpp"
@@ -10,6 +11,7 @@
 #include "scheduler/Scheduler.hpp"
 #include "vfs.hpp"
 #include "vmm.hpp"
+#include <kernel/tty/tty_device.hpp>
 
 uint32_t g_page_size;
 
@@ -220,6 +222,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   early_print_fmt("Memory management is now fully functional\r\n");
 
   kernel::sched::init();
+  kernel::dispatch::init();
   HAL_PLATFORM_InitializeSystemTimer();
   HAL_CPU_EnableInterrupts();
 
@@ -309,6 +312,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   // Thread 0 becomes a low-noise heartbeat. It must never return or shut the
   // CPU down, which would tear down the threads now running on it.
   for (;;) {
+    KE_TTY_PumpAllAttachedDevices();
     HAL_CPU_Halt();
     KE_SCHED_Yield();
   }

@@ -18,6 +18,7 @@
 #include <undos/syscalls/__flags_RegionCombineMode.h>
 #include <undos/syscalls/__flags_Device3DFlags.h>
 #include <undos/syscalls/__flags_FileOpenMode.h>
+#include <undos/syscalls/__flags_TtyModeFlags.h>
 
 #include <undos/syscalls/__struct_Point.h>
 #include <undos/syscalls/__struct_Rect.h>
@@ -248,35 +249,57 @@ struct __KRN_MEM_PROTECT_V1 {
     enum MemoryProtectFlags flags;
 };
 
-struct __KRN_FS_OPEN_V1 {
-    /** Path to the file to open. */
+struct __KRN_IO_OPEN_V1 {
+    /** Path to the object to open. */
     kstd::string path {};
     /** Open mode (read, write, append). */
     enum FileOpenMode mode;
-    /** File descriptor to receive the open file descriptor. */
-    uint32_t fileDescriptor;
+    /** Handle to receive the opened object. */
+    uint32_t handle;
 };
 
-struct __KRN_FS_CLOSE_V1 {
-    /** Open file descriptor to close. */
-    uint32_t fileDescriptor;
+struct __KRN_IO_CLOSE_V1 {
+    /** Open handle to close. */
+    uint32_t handle;
 };
 
-/** Reads data from an open file descriptor into `data`. */
-struct __KRN_FS_READ_V1 {
-    /** Open file descriptor to read from. */
-    uint32_t fileDescriptor;
-    /** Buffer that receives the data read from the file. */
+/** Reads data from an open object handle into `data`. */
+struct __KRN_IO_READ_V1 {
+    /** Open handle to read from. */
+    uint32_t handle;
+    /** Buffer that receives the data read. */
     kernel::borrowed_ptr<uint8_t> data = nullptr;
     size_t data_len = 0;
 };
 
-/** Writes data from `data` to an open file descriptor. */
-struct __KRN_FS_WRITE_V1 {
-    /** Open file descriptor to write to. */
-    uint32_t fileDescriptor;
-    /** Buffer containing the data to write to the file. */
+/** Writes data from `data` to an open object handle. */
+struct __KRN_IO_WRITE_V1 {
+    /** Open handle to write to. */
+    uint32_t handle;
+    /** Buffer containing the data to write. */
     kernel::borrowed_ptr<uint8_t> data = nullptr;
     size_t data_len = 0;
+};
+
+/** Creates a paired virtual TTY returning source and sink handles. */
+struct __KRN_TTY_CREATE_V1 {
+    uint32_t sourceHandle;
+    uint32_t sinkHandle;
+};
+
+/** Sets TTY configuration flags and window dimensions. */
+struct __KRN_TTY_SETCONFIG_V1 {
+    uint32_t handle;
+    enum TtyModeFlags flags;
+    uint16_t rows;
+    uint16_t cols;
+};
+
+/** Retrieves TTY configuration flags and window dimensions. */
+struct __KRN_TTY_GETCONFIG_V1 {
+    uint32_t handle;
+    enum TtyModeFlags flags;
+    uint16_t rows;
+    uint16_t cols;
 };
 

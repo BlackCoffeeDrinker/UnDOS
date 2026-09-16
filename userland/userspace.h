@@ -587,10 +587,10 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_ProtectV1(uint32_t address, uint32_t size, enu
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_OpenV1(const char* path, enum FileOpenMode mode, uint32_t* fileDescriptor)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_OpenV1(const char* path, enum FileOpenMode mode, uint32_t* handle)
 {
     uint32_t ret = 0;
-    struct __SYS_FS_OPEN_V1 __wire;
+    struct __SYS_IO_OPEN_V1 __wire;
     __wire.path = path;
     __wire.pathLength = path ? 1 : 0;
      while (path[__wire.pathLength]) __wire.pathLength++;
@@ -602,15 +602,15 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_OpenV1(const char* path, enum FileOpenMode mod
         : "a"(220), "b"(sizeof __wire), "c"(&__wire), "d"(0)
         : "memory");
 
-    *fileDescriptor = __wire.fileDescriptor;
+    *handle = __wire.handle;
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_CloseV1(uint32_t fileDescriptor)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CloseV1(uint32_t handle)
 {
     uint32_t ret = 0;
-    struct __SYS_FS_CLOSE_V1 __wire;
-    __wire.fileDescriptor = fileDescriptor;
+    struct __SYS_IO_CLOSE_V1 __wire;
+    __wire.handle = handle;
 
     asm volatile(
         "int $0x80"
@@ -621,12 +621,12 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CloseV1(uint32_t fileDescriptor)
     return ret;
 }
 
-/** Reads data from an open file descriptor into `data`. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_ReadV1(uint32_t fileDescriptor, uint8_t* data, uint32_t* dataLength)
+/** Reads data from an open object handle into `data`. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_ReadV1(uint32_t handle, uint8_t* data, uint32_t* dataLength)
 {
     uint32_t ret = 0;
-    struct __SYS_FS_READ_V1 __wire;
-    __wire.fileDescriptor = fileDescriptor;
+    struct __SYS_IO_READ_V1 __wire;
+    __wire.handle = handle;
     __wire.data = data;
     __wire.dataLength = dataLength ? *dataLength : 0;
 
@@ -641,12 +641,12 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_ReadV1(uint32_t fileDescriptor, uint8_t* data,
     return ret;
 }
 
-/** Writes data from `data` to an open file descriptor. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_WriteV1(uint32_t fileDescriptor, const uint8_t* data, uint32_t dataLength)
+/** Writes data from `data` to an open object handle. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_WriteV1(uint32_t handle, const uint8_t* data, uint32_t dataLength)
 {
     uint32_t ret = 0;
-    struct __SYS_FS_WRITE_V1 __wire;
-    __wire.fileDescriptor = fileDescriptor;
+    struct __SYS_IO_WRITE_V1 __wire;
+    __wire.handle = handle;
     __wire.data = data;
     __wire.dataLength = dataLength;
 
@@ -656,6 +656,61 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_WriteV1(uint32_t fileDescriptor, const uint8_t
         : "a"(223), "b"(sizeof __wire), "c"(&__wire), "d"(0)
         : "memory");
 
+    return ret;
+}
+
+/** Creates a paired virtual TTY returning source and sink handles. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateV1(uint32_t* sourceHandle, uint32_t* sinkHandle)
+{
+    uint32_t ret = 0;
+    struct __SYS_TTY_CREATE_V1 __wire;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(250), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *sourceHandle = __wire.sourceHandle;
+    *sinkHandle = __wire.sinkHandle;
+    return ret;
+}
+
+/** Sets TTY configuration flags and window dimensions. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetConfigV1(uint32_t handle, enum TtyModeFlags flags, uint16_t rows, uint16_t cols)
+{
+    uint32_t ret = 0;
+    struct __SYS_TTY_SETCONFIG_V1 __wire;
+    __wire.handle = handle;
+    __wire.flags = flags;
+    __wire.rows = rows;
+    __wire.cols = cols;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(251), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** Retrieves TTY configuration flags and window dimensions. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetConfigV1(uint32_t handle, enum TtyModeFlags* flags, uint16_t* rows, uint16_t* cols)
+{
+    uint32_t ret = 0;
+    struct __SYS_TTY_GETCONFIG_V1 __wire;
+    __wire.handle = handle;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(252), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *flags = __wire.flags;
+    *rows = __wire.rows;
+    *cols = __wire.cols;
     return ret;
 }
 

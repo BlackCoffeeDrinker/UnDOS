@@ -85,6 +85,8 @@ void idle_entry(void *) {
   }
 }
 
+} // namespace
+
 // Core scheduling decision + context switch. MUST be called with interrupts
 // disabled. Picks the highest-priority ready thread, re-queues the outgoing
 // thread if it is still runnable, and swaps CPU context. When there is nothing
@@ -130,8 +132,6 @@ void schedule_next() noexcept {
   // rescheduled, control resumes right here.
   HAL_CPU_SwitchContext(prev->kernel_stack_top, next->kernel_stack_top);
 }
-
-}// namespace
 
 void init() noexcept {
   // Adopt the currently-running execution stream as the bootstrap thread. Its
@@ -253,6 +253,14 @@ UNDOS_KERNEL_API_DEF void KE_SCHED_Unblock(const KObjectPtr<KThreadObject> &thre
     sched::g_ready.enqueue(thread.get());
   }
   HAL_CPU_EnableInterrupts();
+}
+
+UNDOS_KERNEL_API_DEF void KE_SCHED_UnblockFromIsr(const KObjectPtr<KThreadObject> &thread) noexcept {
+  if (!thread) return;
+  if (thread->state == KThreadObject::State::Blocked) {
+    thread->state = KThreadObject::State::Ready;
+    sched::g_ready.enqueue(thread.get());
+  }
 }
 
 UNDOS_KERNEL_API_DEF [[noreturn]] void KE_SCHED_Terminate() noexcept {

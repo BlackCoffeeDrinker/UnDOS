@@ -105,6 +105,21 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
 
   ProcessHandleTable handles;
   DeviceContextTable dcTable;
+
+  void AttachStandardStreams(const KObjectPtr<KObject> &sink) {
+    if (!sink) return;
+    handles.Allocate(sink, ProcessHandleTable::HandleAccess::Read, ProcessHandleTable::HandleFlags::Inheritable);
+    handles.Allocate(sink, ProcessHandleTable::HandleAccess::Write, ProcessHandleTable::HandleFlags::Inheritable);
+    handles.Allocate(sink, ProcessHandleTable::HandleAccess::Write, ProcessHandleTable::HandleFlags::Inheritable);
+  }
+
+  void InheritHandlesFrom(ProcessHandleTable &parentHandles) {
+    for (const auto &entry : parentHandles.entries) {
+      if ((static_cast<uint32_t>(entry.flags) & static_cast<uint32_t>(ProcessHandleTable::HandleFlags::Inheritable)) != 0) {
+        handles.Allocate(entry.object, entry.access, entry.flags);
+      }
+    }
+  }
 };
 
 template<>

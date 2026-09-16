@@ -8,4 +8,6 @@ namespace kernel::sched {
 void init() noexcept;
 
 void tick() noexcept;
+
+void schedule_next() noexcept;
 }// namespace kernel::sched

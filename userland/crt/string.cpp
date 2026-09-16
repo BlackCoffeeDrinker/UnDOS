@@ -2,8 +2,8 @@
 
 extern "C" {
 void *memcpy(void *dst, const void *src, size_t n) {
-  unsigned char *d = dst;
-  const unsigned char *s = src;
+  unsigned char *d = static_cast<unsigned char *>(dst);
+  const unsigned char *s = static_cast<const unsigned char *>(src);
 
   for (size_t i = 0; i < n; i++)
     d[i] = s[i];
@@ -12,8 +12,8 @@ void *memcpy(void *dst, const void *src, size_t n) {
 }
 
 void *memmove(void *dst, const void *src, size_t n) {
-  unsigned char *d = dst;
-  const unsigned char *s = src;
+  unsigned char *d = static_cast<unsigned char *>(dst);
+  const unsigned char *s = static_cast<const unsigned char *>(src);
 
   if (d == s || n == 0)
     return dst;
@@ -32,8 +32,8 @@ void *memmove(void *dst, const void *src, size_t n) {
 }
 
 void *memset(void *dst, int value, size_t n) {
-  unsigned char *d = dst;
-  unsigned char v = (unsigned char)value;
+  unsigned char *d = static_cast<unsigned char *>(dst);
+  unsigned char v = static_cast<unsigned char>(value);
 
   for (size_t i = 0; i < n; i++)
     d[i] = v;
@@ -42,8 +42,8 @@ void *memset(void *dst, int value, size_t n) {
 }
 
 int memcmp(const void *a, const void *b, size_t n) {
-  const unsigned char *x = a;
-  const unsigned char *y = b;
+  const unsigned char *x = static_cast<const unsigned char *>(a);
+  const unsigned char *y = static_cast<const unsigned char *>(b);
 
   for (size_t i = 0; i < n; i++) {
     if (x[i] != y[i])
