@@ -68,7 +68,7 @@ bool BootDeviceVFS_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &
   return true;
 }
 
-bool BootDeviceVFS_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &vnode, kernel::KFileObject::OpenMode mode) {
+bool BootDeviceVFS_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &vnode, kernel::KIOObject::OpenMode mode) {
   (void) mountPoint;
 
   auto *ctx = vnode.fsPrivate.as<FS_NodeExtension>();
@@ -81,7 +81,7 @@ bool BootDeviceVFS_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObj
   // configuration manager opens hives with ReadWrite|Create so that the same
   // path works once rebound onto the real writable root. Accept any mode that
   // includes Read; writes simply fail later via the missing WriteHandle.
-  if (!(mode & kernel::KFileObject::OpenMode::Read)) {
+  if (!(mode & kernel::KIOObject::OpenMode::Read)) {
     early_print_fmt("Invalid open mode for BootDeviceVolume file handle\r\n");
     return false;
   }

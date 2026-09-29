@@ -4,6 +4,7 @@
 
 #include <kernel/__core.hpp>
 #include <kernel/gfx/KDeviceContextTable.hpp>
+#include <kernel/kobject/KDispatcherHeader.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/kobject/ObjectType.hpp>
@@ -72,10 +73,15 @@ struct ProcessHandleTable {
     return nullptr;
   }
 
+  bool HasAccess(KHandle h, HandleAccess required) {
+    const auto *entry = Lookup(h);
+    return entry && (static_cast<uint32_t>(entry->access) & static_cast<uint32_t>(required)) == static_cast<uint32_t>(required);
+  }
+
   bool Close(KHandle h) {
     for (auto it = entries.begin(); it != entries.end(); ++it) {
       if (it->handle == h) {
-        if (it->flags == HandleFlags::ProtectFromClose)
+        if ((static_cast<uint32_t>(it->flags) & static_cast<uint32_t>(HandleFlags::ProtectFromClose)) != 0)
           return false;
 
         if (--it->refcount == 0) {
@@ -102,6 +108,8 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
   KObjectPtr<KSubsystemObject> subsystem;
   int32_t exit_code{0};
   State state{State::Running};
+  // Signalled (manual-reset) when the process exits.
+  KDispatcherHeader exitHeader;
 
   ProcessHandleTable handles;
   DeviceContextTable dcTable;

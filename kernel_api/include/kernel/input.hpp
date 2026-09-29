@@ -190,6 +190,15 @@ UNDOS_KERNEL_PUBLIC_V1API(bool, KE_INPUT_DequeueEvent, kernel::input::AnyInputEv
 
 /**
  * @ingroup INPUT
+ * @brief Method KE_INPUT_WaitEvent
+ *
+ * Kernel-side consumer (USER raw input thread): pops the oldest event,
+ * blocking up to `timeout` (WAIT_INFINITE allowed) until one arrives.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(bool, KE_INPUT_WaitEvent, kernel::input::AnyInputEvent &out, kstd::chrono::milliseconds timeout);
+
+/**
+ * @ingroup INPUT
  * @brief Method KE_INPUT_SetConsumer
  *
  * Registers a callback invoked synchronously on the input pump thread for

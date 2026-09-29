@@ -11,8 +11,17 @@
 #include <kernel/spinlock.hpp>
 
 namespace kernel {
+struct KObject;
 struct KDisplay;
 struct KSurface;
+
+// Half-open clip rectangle in target (screen) coordinates.
+struct KClipRect {
+  int32_t left;
+  int32_t top;
+  int32_t right;
+  int32_t bottom;
+};
 
 // GDI-style device context handle: bits 0-15 are the slot index, bits 16-31
 // are the slot's generation tag (bumped on every Close(), rejecting stale
@@ -41,6 +50,16 @@ struct KDeviceContextSlot {
   // MoveTo/LineTo cursor
   int32_t currentX = 0;
   int32_t currentY = 0;
+
+  // Added to every coordinate before drawing (window DCs from BeginPaint).
+  int32_t originX = 0;
+  int32_t originY = 0;
+  // When clipped, drawing is limited to clipRects[0..clipCount). The rects
+  // are owned by clipOwner, which the slot keeps alive.
+  bool clipped = false;
+  const KClipRect *clipRects = nullptr;
+  uint32_t clipCount = 0;
+  KObjectPtr<KObject> clipOwner;
 };
 
 // Dynamically-growing, chunked table of KDeviceContextSlots owned by a

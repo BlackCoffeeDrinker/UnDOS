@@ -1,5 +1,6 @@
 #include "stdkrn.hpp"
 #include "syscalls.hpp"
+#include <kernel/kobject/KIOObject.hpp>
 #include <kernel/kobject/KVttyObject.hpp>
 #include <kernel/object_manager.hpp>
 
@@ -12,19 +13,16 @@ SyscallReturnCode handle_Create_V1(__KRN_TTY_CREATE_V1 &&args) {
   kernel::tty::VttyPtr vtty(new kernel::tty::KVtty());
   if (!vtty) return SyscallReturnCode_OUT_OF_MEMORY;
 
-  auto source = kernel::CreateKObject<kernel::KVttySourceObject>("TtySource");
-  auto sink = kernel::CreateKObject<kernel::KVttySinkObject>("TtySink");
-  if (!source || !sink) return SyscallReturnCode_OUT_OF_MEMORY;
-
-  source->vtty = vtty;
-  sink->vtty = vtty;
+  auto ioSource = KE_IO_CreateTtySourceStream(vtty, "TtySource");
+  auto ioSink = KE_IO_CreateTtySinkStream(vtty, "TtySink");
+  if (!ioSource || !ioSink) return SyscallReturnCode_OUT_OF_MEMORY;
 
   kernel::KHandle sourceHandle = proc->handles.Allocate(
-      source,
+      ioSource,
       kernel::ProcessHandleTable::HandleAccess::Read | kernel::ProcessHandleTable::HandleAccess::Write,
       kernel::ProcessHandleTable::HandleFlags::Inheritable);
   kernel::KHandle sinkHandle = proc->handles.Allocate(
-      sink,
+      ioSink,
       kernel::ProcessHandleTable::HandleAccess::Read | kernel::ProcessHandleTable::HandleAccess::Write,
       kernel::ProcessHandleTable::HandleFlags::Inheritable);
 
@@ -44,7 +42,9 @@ SyscallReturnCode handle_SetConfig_V1(__KRN_TTY_SETCONFIG_V1 &&args) {
   if (!entry) return SyscallReturnCode_INVALID_ARGUMENT;
 
   kernel::tty::VttyPtr vtty;
-  if (auto source = entry->object.As<kernel::KVttySourceObject>()) {
+  if (auto io = entry->object.As<kernel::KIOObject>()) {
+    vtty = io->vtty;
+  } else if (auto source = entry->object.As<kernel::KVttySourceObject>()) {
     vtty = source->vtty;
   } else if (auto sink = entry->object.As<kernel::KVttySinkObject>()) {
     vtty = sink->vtty;
@@ -73,7 +73,9 @@ SyscallReturnCode handle_GetConfig_V1(__KRN_TTY_GETCONFIG_V1 &&args) {
   if (!entry) return SyscallReturnCode_INVALID_ARGUMENT;
 
   kernel::tty::VttyPtr vtty;
-  if (auto source = entry->object.As<kernel::KVttySourceObject>()) {
+  if (auto io = entry->object.As<kernel::KIOObject>()) {
+    vtty = io->vtty;
+  } else if (auto source = entry->object.As<kernel::KVttySourceObject>()) {
     vtty = source->vtty;
   } else if (auto sink = entry->object.As<kernel::KVttySinkObject>()) {
     vtty = sink->vtty;

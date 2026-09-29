@@ -8,21 +8,33 @@
 #include <string_view.hpp>
 #include <undos/syscalls/__enum_PixelFormat.h>
 #include <undos/syscalls/__enum_RasterOp.h>
+#include <undos/syscalls/__enum_WindowMessage.h>
+#include <undos/syscalls/__enum_ShowCommand.h>
+#include <undos/syscalls/__enum_HitTest.h>
+#include <undos/syscalls/__enum_WindowLongIndex.h>
 #include <undos/syscalls/__enum_SyscallReturnCode.h>
 #include <undos/syscalls/__enum_ProcessFlags.h>
+#include <undos/syscalls/__enum_WaitTimeout.h>
 #include <undos/syscalls/__enum_MemoryProtectFlags.h>
+#include <undos/syscalls/__enum_IoControlCode.h>
 
 #include <undos/syscalls/__flags_DCInitFlags.h>
 #include <undos/syscalls/__flags_PenStyle.h>
 #include <undos/syscalls/__flags_BrushPattern.h>
 #include <undos/syscalls/__flags_RegionCombineMode.h>
 #include <undos/syscalls/__flags_Device3DFlags.h>
+#include <undos/syscalls/__flags_WindowStyle.h>
+#include <undos/syscalls/__flags_EventFlags.h>
 #include <undos/syscalls/__flags_FileOpenMode.h>
 #include <undos/syscalls/__flags_TtyModeFlags.h>
 
 #include <undos/syscalls/__struct_Point.h>
 #include <undos/syscalls/__struct_Rect.h>
 #include <undos/syscalls/__struct_DeviceCaps.h>
+#include <undos/syscalls/__struct_Msg.h>
+#include <undos/syscalls/__struct_PaintInfo.h>
+#include <undos/syscalls/__struct_IoctlDisplayMode.h>
+#include <undos/syscalls/__struct_IoctlMouseConfig.h>
 
 struct __KRN_GFX_CREATEDC_V1 {
     kstd::string driverName {};
@@ -190,6 +202,111 @@ struct __KRN_GFX_GETDEVICECAPS_V1 {
     struct DeviceCaps caps;
 };
 
+/** Registers a window class; wndProc is stored opaquely and called by userland. */
+struct __KRN_USER_REGISTERCLASS_V1 {
+    kstd::string name {};
+    uint32_t wndProc;
+    uint32_t background;
+};
+
+/** Creates a top-level window owned by the calling thread. */
+struct __KRN_USER_CREATEWINDOW_V1 {
+    kstd::string className {};
+    kstd::string title {};
+    enum WindowStyle style;
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+    uint32_t parent;
+    uint32_t userData;
+    uint32_t hwnd;
+};
+
+struct __KRN_USER_DESTROYWINDOW_V1 {
+    uint32_t hwnd;
+};
+
+/** One of ShowCommand. */
+struct __KRN_USER_SHOWWINDOW_V1 {
+    uint32_t hwnd;
+    uint32_t command;
+};
+
+struct __KRN_USER_MOVEWINDOW_V1 {
+    uint32_t hwnd;
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+};
+
+/** Window rectangle in screen coordinates. */
+struct __KRN_USER_GETWINDOWRECT_V1 {
+    uint32_t hwnd;
+    struct Rect rect;
+};
+
+/** Adds rect (window coordinates) to the invalid area; whole != 0 invalidates everything. */
+struct __KRN_USER_INVALIDATERECT_V1 {
+    uint32_t hwnd;
+    struct Rect rect;
+    uint32_t whole;
+};
+
+/** Returns a DC clipped to the visible part of the invalid area, origin at the window. */
+struct __KRN_USER_BEGINPAINT_V1 {
+    uint32_t hwnd;
+    uint32_t dc;
+    struct PaintInfo paint;
+};
+
+struct __KRN_USER_ENDPAINT_V1 {
+    uint32_t hwnd;
+    uint32_t dc;
+};
+
+/** Blocks until a message arrives; msg.message == Quit ends a message loop. */
+struct __KRN_USER_GETMESSAGE_V1 {
+    struct Msg msg;
+};
+
+/** Non-blocking; returns TIMEOUT when the queue is empty. remove == 0 leaves it queued. */
+struct __KRN_USER_PEEKMESSAGE_V1 {
+    struct Msg msg;
+    uint32_t remove;
+};
+
+/** Queues a message; returns OUT_OF_MEMORY when the target ring is full. */
+struct __KRN_USER_POSTMESSAGE_V1 {
+    uint32_t hwnd;
+    uint32_t message;
+    uint32_t wParam;
+    uint32_t lParam;
+};
+
+/** One of WindowLongIndex. */
+struct __KRN_USER_GETWINDOWLONGPTR_V1 {
+    uint32_t hwnd;
+    uint32_t index;
+    uint32_t value;
+};
+
+struct __KRN_USER_SETWINDOWLONGPTR_V1 {
+    uint32_t hwnd;
+    uint32_t index;
+    uint32_t value;
+    uint32_t previous;
+};
+
+struct __KRN_USER_SETCAPTURE_V1 {
+    uint32_t hwnd;
+};
+
+struct __KRN_USER_RELEASECAPTURE_V1 {
+    uint32_t unused;
+};
+
 struct __KRN_DEBUG_PRINT_V1 {
     kstd::string message {};
 };
@@ -202,6 +319,8 @@ struct __KRN_PROC_CREATEPROCESS_V1 {
     kstd::string argument {};
     /** Combination of ProcessFlags controlling the new process. */
     uint32_t flags;
+    /** Handle to the new process (waitable with WaitProcess). */
+    uint32_t handle;
 };
 
 /** Retrieves information about a running or exited process. */
@@ -219,6 +338,38 @@ struct __KRN_PROC_GETINFO_V1 {
 struct __KRN_PROC_EXIT_V1 {
     /** Return code to report to the parent process. */
     uint32_t exitCode;
+};
+
+/** Blocks until a waitable handle (event or process) is signalled. Returns TIMEOUT on expiry. */
+struct __KRN_PROC_WAITFOROBJECT_V1 {
+    /** Handle to wait on. */
+    uint32_t handle;
+    /** Timeout in milliseconds; 0 polls, WaitTimeout_Infinite never expires. */
+    uint32_t timeoutMs;
+};
+
+/** Blocks until a process exits and returns its exit code. Returns TIMEOUT on expiry. */
+struct __KRN_PROC_WAITPROCESS_V1 {
+    /** Process handle from CreateProcess. */
+    uint32_t handle;
+    /** Timeout in milliseconds; 0 polls, WaitTimeout_Infinite never expires. */
+    uint32_t timeoutMs;
+    /** Exit code of the process. */
+    uint32_t exitCode;
+};
+
+/** Creates an event object. */
+struct __KRN_PROC_CREATEEVENT_V1 {
+    /** Combination of EventFlags. */
+    enum EventFlags flags;
+    /** Handle to the new event. */
+    uint32_t handle;
+};
+
+/** Signals an event. */
+struct __KRN_PROC_SETEVENT_V1 {
+    /** Event handle. */
+    uint32_t handle;
 };
 
 /** Allocates `size` bytes of pages with the given protection. */
@@ -246,6 +397,13 @@ struct __KRN_MEM_PROTECT_V1 {
     /** Size in bytes of the region to reprotect. */
     uint32_t size;
     /** New protection to apply. */
+    enum MemoryProtectFlags flags;
+};
+
+/** Maps anonymous user pages at a page-aligned address selected by the caller. */
+struct __KRN_MEM_MAPFIXEDPAGES_V1 {
+    uint32_t address;
+    uint32_t size;
     enum MemoryProtectFlags flags;
 };
 
@@ -279,6 +437,20 @@ struct __KRN_IO_WRITE_V1 {
     /** Buffer containing the data to write. */
     kernel::borrowed_ptr<uint8_t> data = nullptr;
     size_t data_len = 0;
+};
+
+/** Sends a control code to the device behind an open handle. */
+struct __KRN_IO_CONTROL_V1 {
+    /** Open handle to the device. */
+    uint32_t handle;
+    /** One of IoControlCode. */
+    uint32_t code;
+    /** Code-specific input payload. */
+    kernel::borrowed_ptr<uint8_t> input = nullptr;
+    size_t input_len = 0;
+    /** Code-specific output payload; receives the number of bytes written. */
+    kernel::borrowed_ptr<uint8_t> output = nullptr;
+    size_t output_len = 0;
 };
 
 /** Creates a paired virtual TTY returning source and sink handles. */

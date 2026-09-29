@@ -5,7 +5,7 @@ namespace kernel::tty {
 KVtty::KVtty() = default;
 
 size_t KVtty::source_write(const uint8_t *src, size_t count) {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   if (m_sourceClosed || m_sinkClosed) {
     return 0;
   }
@@ -95,28 +95,28 @@ size_t KVtty::source_write(const uint8_t *src, size_t count) {
 }
 
 size_t KVtty::source_read(uint8_t *dst, size_t count) {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   if (count == 0) return 0;
   return m_sourceOutRing.read(dst, count);
 }
 
 bool KVtty::source_has_data() const {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   return !m_sourceOutRing.empty();
 }
 
 void KVtty::close_source() {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   m_sourceClosed = true;
 }
 
 bool KVtty::is_source_closed() const {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   return m_sourceClosed;
 }
 
 size_t KVtty::sink_write(const uint8_t *src, size_t count) {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   if (m_sinkClosed || m_sourceClosed) {
     return 0;
   }
@@ -142,7 +142,7 @@ size_t KVtty::sink_write(const uint8_t *src, size_t count) {
 }
 
 size_t KVtty::sink_read(uint8_t *dst, size_t count) {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   if (count == 0) return 0;
 
   if (m_sinkInRing.empty()) {
@@ -160,56 +160,56 @@ size_t KVtty::sink_read(uint8_t *dst, size_t count) {
 }
 
 bool KVtty::sink_has_data() const {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   return !m_sinkInRing.empty();
 }
 
 void KVtty::close_sink() {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   m_sinkClosed = true;
 }
 
 bool KVtty::is_sink_closed() const {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   return m_sinkClosed;
 }
 
 TtyConfig KVtty::get_config() const {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   return m_config;
 }
 
 void KVtty::set_config(const TtyConfig &config) {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   m_config = config;
 }
 
 uint32_t KVtty::get_flags() const {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   return m_config.flags;
 }
 
 void KVtty::set_flags(uint32_t flags) {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   m_config.flags = flags;
 }
 
 WinSize KVtty::get_winsize() const {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   return m_config.size;
 }
 
 void KVtty::set_winsize(const WinSize &ws) {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   m_config.size = ws;
 }
 
 void KVtty::flush() {
-  kstd::unique_lock<kernel::Mutex> lock(m_lock);
+  kstd::unique_lock lock(m_lock);
   m_sinkInRing.clear();
   m_sourceOutRing.clear();
   m_editLen = 0;
   m_eofSignaled = false;
 }
 
-} // namespace kernel::tty
+}// namespace kernel::tty

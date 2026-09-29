@@ -10,7 +10,7 @@
 #include <static_string.hpp>
 
 namespace kernel {
-struct KFileObject;
+struct KIOObject;
 
 struct KConfigurationRoot : KObjectT<KConfigurationRoot, 1, TYPE_CONFIGROOT_SECTION> {
   using KObjectT::KObjectT;
@@ -47,7 +47,7 @@ struct KConfigurationRoot : KObjectT<KConfigurationRoot, 1, TYPE_CONFIGROOT_SECT
   };
 
   kstd::static_string<255> filePath;//< The path to the configroot file
-  KObjectPtr<KFileObject> file;     //< If the configroot is currently open, this is its backing file (only valid if references != 0)
+  KObjectPtr<KIOObject> file;     //< If the configroot is currently open, this is its backing file (only valid if references != 0)
   uint32_t configptr_references = 0;//< Number of KConfigurationKey opened, once it's 0, the configroot is closed
 
   Mutex mtx;             //< Lock for reading and writing to the configroot

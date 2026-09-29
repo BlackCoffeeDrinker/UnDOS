@@ -11,6 +11,7 @@
 #include "scheduler/Scheduler.hpp"
 #include "vfs.hpp"
 #include "vmm.hpp"
+#include "user/user.hpp"
 #include <kernel/tty/tty_device.hpp>
 
 uint32_t g_page_size;
@@ -299,11 +300,14 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
     early_print_fmt("Failed to allocate NativeElfLoader subsystem\r\n");
   }
 
+  // Start init once PnP has bound every driver, so it sees all devices.
+  KE_PNP_WaitForQuiescence();
+
+  kernel::user::init_raw_input();
+
   // Try and find the init
   early_print_fmt("Loading init\r\n");
   KE_USER_CreateProcess("/System/init.elf");
-
-  KE_PNP_WaitForQuiescence();
   DumpObjectTree(KE_OB_GetRootDirectory());
   DumpDeviceTree();
   early_print("Done\r\n");

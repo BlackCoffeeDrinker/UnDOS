@@ -5,6 +5,9 @@
 
 #include "i8042_registers.hpp"
 
+#include <undos/syscalls/__enum_IoControlCode.h>
+#include <undos/syscalls/__struct_IoctlMouseConfig.h>
+
 namespace {
 
 // Per-controller state, held in the FDO's deviceExtension (mirrors
@@ -403,6 +406,49 @@ void I8042_CreateNamedDevices(const kernel::KDevicePtr<kernel::KDeviceBus> &fdo,
   }
 }
 
+// Mouse enable/disable and sample-rate change. Masks IRQ1/IRQ12 around the
+// polled command/ack exchange so the ISRs cannot steal the ack bytes; a
+// report byte already queued ahead of the ack is dropped by the retry loop.
+kernel::IoStatus I8042_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
+                                     kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred) {
+  (void) output;
+  transferred = 0;
+  if (code != IoControlCode_MouseConfigure) return kernel::IoStatus::Unsupported;
+  if (device->deviceType != kernel::device_type::Mouse) return kernel::IoStatus::Unsupported;
+  if (input.size() < sizeof(IoctlMouseConfig)) return kernel::IoStatus::InvalidSize;
+
+  IoctlMouseConfig config{};
+  __builtin_memcpy(&config, input.data(), sizeof(config));
+  if (config.sampleRate != 0 && (config.sampleRate < 10 || config.sampleRate > 200)) {
+    return kernel::IoStatus::InvalidParameter;
+  }
+
+  HAL_INTR_SetIrqMask(i8042_regs::kDefaultIrqKeyboard, true);
+  HAL_INTR_SetIrqMask(i8042_regs::kDefaultIrqMouse, true);
+
+  // Stop reporting first so no new packets are queued during the exchange.
+  bool ok = I8042_WriteAuxCommand(i8042_regs::device::DisableDataReporting);
+  if (ok) {
+    ok = false;
+    uint8_t byte = 0;
+    for (int i = 0; i < 8 && I8042_ReadData(byte); ++i) {
+      if (byte == i8042_regs::device::Ack) {
+        ok = true;
+        break;
+      }
+    }
+  }
+  if (ok && config.sampleRate != 0) ok = I8042_SetMouseSampleRate(static_cast<uint8_t>(config.sampleRate));
+  if (ok && config.enable) ok = I8042_WriteAuxCommand(i8042_regs::device::EnableDataReporting) && I8042_WaitAck();
+
+  HAL_INTR_SetIrqMask(i8042_regs::kDefaultIrqMouse, false);
+  HAL_INTR_SetIrqMask(i8042_regs::kDefaultIrqKeyboard, false);
+
+  early_print_fmt("i8042: DeviceControl MouseConfigure enable={} rate={} -> {}\r\n",
+                  config.enable, config.sampleRate, ok ? "ok" : "failed");
+  return ok ? kernel::IoStatus::Success : kernel::IoStatus::DeviceError;
+}
+
 bool I8042_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto fdo = KE_IO_CreateBusWithContext<I8042Context>(driver, {});
   if (!fdo) {
@@ -484,4 +530,5 @@ UNDOS_DRIVER_ENTRY {
 
   driver->AddDevice = I8042_AddDevice;
   driver->StartDevice = I8042_StartDevice;
+  driver->DeviceControl = I8042_DeviceControl;
 }

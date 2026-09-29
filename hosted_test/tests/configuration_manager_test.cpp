@@ -58,7 +58,7 @@ bool TestFs_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const
   return true;
 }
 
-bool TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kernel::KFileObject::OpenMode) {
+bool TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kernel::KIOObject::OpenMode) {
   return true;
 }
 
@@ -137,7 +137,7 @@ struct TestFsFixture {
 bool FormatEmptyHiveFile(const kernel::KObjectPtr<kernel::KConfigurationRoot> &hive) {
   if (!hive) return false;
 
-  auto file = KE_VFS_OpenFile(hive->filePath, kernel::KFileObject::OpenMode::ReadWrite);
+  auto file = KE_VFS_OpenFile(hive->filePath, kernel::KIOObject::OpenMode::ReadWrite);
   if (!file) return false;
 
   const bool formatted = kernel::configuration_manager_io::FormatEmptyConfigurationFile(file);

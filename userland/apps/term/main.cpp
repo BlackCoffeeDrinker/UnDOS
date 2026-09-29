@@ -205,7 +205,8 @@ extern "C" int main(int argc, char **argv) {
   s_term.render();
 
   // 5. Spawn child shell/init if requested or available
-  (void) UD_SYS_CreateProcessV1("/System/sh.elf", "", ProcessFlags_None);
+  uint32_t shell = 0;
+  (void) UD_SYS_CreateProcessV1("/System/sh.elf", "", ProcessFlags_None, &shell);
 
   // 6. Loop: read output from child via source and render
   uint8_t buffer[256];

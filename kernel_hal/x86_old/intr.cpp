@@ -116,6 +116,41 @@ template<uint8_t IRQ>
   early_print_fmt("Unhandled Interrupt/Exception at EIP: 0x{:x}\n\r", f->eip);
   HAL_PLATFORM_Panic("Unhandled Interrupt/Exception", __FILE__, __LINE__);
 }
+// Writes "#VEC xx EIP xxxxxxxx" straight to COM1, without the formatter, so
+// the first exception is still named if the stack or formatter is broken.
+static void raw_serial_hex(uint32_t value, int digits) {
+  for (int i = digits - 1; i >= 0; --i) {
+    const uint8_t nib = (value >> (i * 4)) & 0xF;
+    const uint8_t c = nib < 10 ? '0' + nib : 'a' + nib - 10;
+    while ((HAL_IO_In8(0x3FD) & 0x20) == 0) {}
+    HAL_IO_Out8(0x3F8, c);
+  }
+}
+static void raw_serial_str(const char *s) {
+  for (; *s; ++s) {
+    while ((HAL_IO_In8(0x3FD) & 0x20) == 0) {}
+    HAL_IO_Out8(0x3F8, static_cast<uint8_t>(*s));
+  }
+}
+
+template<uint8_t VEC>
+[[gnu::interrupt]] void vector_handler(stack_frame *f) {
+  __asm__ volatile("cli");
+  raw_serial_str("\r\n#VEC ");
+  raw_serial_hex(VEC, 2);
+  raw_serial_str(" EIP ");
+  raw_serial_hex(f->eip, 8);
+  raw_serial_str(" CS ");
+  raw_serial_hex(f->cs, 4);
+  raw_serial_str("\r\n");
+  HAL_PLATFORM_Panic("Unhandled Interrupt/Exception", __FILE__, __LINE__);
+}
+
+template<uint8_t... V>
+static void set_vector_handlers(kstd::integer_sequence<uint8_t, V...>) {
+  (idt.set(V, KERNEL_GDT_SELECTOR, &vector_handler<V>, GateType::INTERRUPT_32, IDTFlags::PRESENT), ...);
+}
+
 [[gnu::interrupt]] void exception_handler(stack_frame *frame, uword_t error_code) {
   kstd::ignore = frame;
   __asm__ volatile("cli");
@@ -236,6 +271,9 @@ void init_idt() {
         GateType::INTERRUPT_32,
         IDTFlags::PRESENT);
   }
+
+  // Per-vector stubs for 0-31 so the first exception reports its number.
+  set_vector_handlers(kstd::make_integer_sequence<uint8_t, 32>{});
 
   // Map the exceptions
   idt.set(8, KERNEL_GDT_SELECTOR, &exception_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);

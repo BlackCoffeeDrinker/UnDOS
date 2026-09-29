@@ -3,6 +3,9 @@
 
 #include "vga_registers.hpp"
 
+#include <undos/syscalls/__enum_IoControlCode.h>
+#include <undos/syscalls/__struct_IoctlDisplayMode.h>
+
 namespace {
 
 constexpr size_t kVgaFramebufferSize = 0x10000;// 64 KiB (4 planes x 16 KiB window)
@@ -139,6 +142,19 @@ bool Vga_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display, const kern
   }
 
   Vga_ProgramMode12h();
+
+  // Clear all four planes: whatever text mode left in the window (font,
+  // characters) otherwise shows up as garbage in mode 12h.
+  HAL_IO_Out8(vga_regs::kSequencerIndex, 0x02);// Map Mask
+  HAL_IO_Out8(vga_regs::kSequencerData, 0x0F);
+  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcEnableSetReset);
+  HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0x00);
+  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcBitMask);
+  HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0xFF);
+  auto *fb = g_vga.framebuffer.as_ptr<volatile uint8_t>();
+  for (size_t i = 0; i < static_cast<size_t>(kModePitch) * kModeHeight; ++i) {
+    fb[i] = 0;
+  }
 
   outSurface->backing = KE_VMM_CreateDirectBacking(g_vga.framebuffer, kVgaFramebufferSize);
   if (!outSurface->backing) {
@@ -279,6 +295,21 @@ bool Vga_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, cons
   return true;
 }
 
+kernel::IoStatus Vga_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
+                                   kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred) {
+  (void) device;
+  (void) input;
+  transferred = 0;
+  if (code != IoControlCode_DisplayQueryMode) return kernel::IoStatus::Unsupported;
+  if (output.size() < sizeof(IoctlDisplayMode)) return kernel::IoStatus::InvalidSize;
+
+  const IoctlDisplayMode mode{kModeWidth, kModeHeight, 4, kModePitch};
+  __builtin_memcpy(output.data(), &mode, sizeof(mode));
+  transferred = sizeof(mode);
+  early_print_fmt("gfx_vga: DeviceControl QueryMode -> {}x{}x{}\r\n", mode.width, mode.height, mode.bpp);
+  return kernel::IoStatus::Success;
+}
+
 void Vga_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto driver = pdo->driverObject;
 
@@ -344,4 +375,5 @@ UNDOS_DRIVER_ENTRY {
 
   driver->AddDevice = Vga_AddDevice;
   driver->StartDevice = Vga_StartDevice;
+  driver->DeviceControl = Vga_DeviceControl;
 }

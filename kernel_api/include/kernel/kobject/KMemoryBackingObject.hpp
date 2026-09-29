@@ -4,7 +4,7 @@
 #include <kernel/kobject/KObjectT.hpp>
 
 namespace kernel {
-struct KFileObject;
+struct KIOObject;
 
 struct KMemoryBackingObject : KObjectT<KMemoryBackingObject, 1, TYPE_MEMORY_SECTION> {
   using KObjectT::KObjectT;
@@ -21,7 +21,7 @@ struct KMemoryBackingObject : KObjectT<KMemoryBackingObject, 1, TYPE_MEMORY_SECT
 
   // For File or KernelModule kinds: a pointer to the open file object that
   // supplies the contents. May be null for Anonymous/Shared kinds.
-  KObjectPtr<KFileObject> file;
+  KObjectPtr<KIOObject> file;
 
   // Base offset (in bytes) inside `file` that corresponds to backing->start.
   // Page i of the mapping is read from file at (file_offset + i * PAGE_SIZE).

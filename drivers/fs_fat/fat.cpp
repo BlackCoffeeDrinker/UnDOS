@@ -318,7 +318,7 @@ void FAT_FillNode(const FAT_DirEntry &entry, kernel::KVFSNode &out) {
   node->isFixedRoot = false;
 }
 
-bool FAT_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &vnode, kernel::KFileObject::OpenMode mode) {
+bool FAT_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &vnode, kernel::KIOObject::OpenMode mode) {
   (void) mountPoint;
   (void) mode;
 

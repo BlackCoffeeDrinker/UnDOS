@@ -49,6 +49,7 @@ constexpr uint8_t SetDefaults = 0xF6;
 constexpr uint8_t SetSampleRate = 0xF3;// followed by a data byte (samples/sec)
 constexpr uint8_t GetDeviceId = 0xF2;  // -> one data byte: 0x00 plain, 0x03 wheel, 0x04 5-button
 constexpr uint8_t EnableDataReporting = 0xF4;
+constexpr uint8_t DisableDataReporting = 0xF5;
 }// namespace device
 
 // Controller Command Byte (CCB) bits, read/written via command::ReadCommandByte /

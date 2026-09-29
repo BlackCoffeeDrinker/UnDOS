@@ -2,6 +2,7 @@
 #include "elf_loader.hpp"
 #include "stdkrn.hpp"
 #include "vmm.hpp"
+#include <kernel/kobject/KIOObject.hpp>
 #include <kernel/tty/tty_device.hpp>
 
 #include <Kernel.hpp>
@@ -12,12 +13,12 @@ namespace {
 constexpr size_t USER_STACK_SIZE = 0x4000;// 16 KB
 }// namespace
 
-UNDOS_KERNEL_API_DEF void KE_USER_CreateProcess(const kstd::string_view &exec_path) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KProcessObject> KE_USER_CreateProcess(const kstd::string_view &exec_path) noexcept {
   // Step 1 — Create an isolated address space for the process.
   const auto process = kernel::CreateKObject<kernel::KProcessObject>(exec_path);
   if (!process) {
     early_print_fmt("KE_USER_CreateProcess: failed to allocate KProcessObject\r\n");
-    return;
+    return nullptr;
   }
 
   // Inherit inheritable handles (e.g. standard streams) from parent process if present
@@ -30,13 +31,17 @@ UNDOS_KERNEL_API_DEF void KE_USER_CreateProcess(const kstd::string_view &exec_pa
   // If no handles were inherited, attach default console streams if available
   if (process->handles.entries.empty()) {
     if (auto defaultSink = KE_TTY_GetDefaultConsoleSink()) {
-      process->AttachStandardStreams(defaultSink);
+      if (auto ioObj = KE_IO_FromObject(defaultSink)) {
+        process->AttachStandardStreams(ioObj);
+      } else {
+        process->AttachStandardStreams(defaultSink);
+      }
     }
   }
 
   if (!kernel::vmm::create_user_address_space(process->address_space)) {
     early_print_fmt("KE_USER_CreateProcess: failed to create address space for {}\r\n", exec_path);
-    return;
+    return nullptr;
   }
   early_print_fmt("KE_USER_CreateProcess: created address space for {}: translation_root={}, current_base={}, limit={}\r\n",
                   process->name,
@@ -52,7 +57,7 @@ UNDOS_KERNEL_API_DEF void KE_USER_CreateProcess(const kstd::string_view &exec_pa
   if (!subsystem) {
     early_print_fmt("KE_USER_CreateProcess: failed to find NativeElfLoader subsystem for {}\r\n", exec_path);
     kernel::vmm::destroy_user_address_space(process->address_space);
-    return;
+    return nullptr;
   }
   early_print_fmt("KE_USER_CreateProcess: found {} subsystem for {}\r\n", subsystem->name, exec_path);
   process->subsystem = subsystem;
@@ -66,7 +71,7 @@ UNDOS_KERNEL_API_DEF void KE_USER_CreateProcess(const kstd::string_view &exec_pa
   if (!result.ok) {
     early_print_fmt("KE_USER_CreateProcess: failed to load Loader for: {}\r\n", exec_path);
     kernel::vmm::destroy_user_address_space(process->address_space);
-    return;
+    return nullptr;
   }
 
   const auto entry = result.entry_point;
@@ -83,7 +88,7 @@ UNDOS_KERNEL_API_DEF void KE_USER_CreateProcess(const kstd::string_view &exec_pa
   if (!user_stack) {
     early_print_fmt("KE_USER_CreateProcess: failed to allocate user stack for {}\r\n", exec_path);
     kernel::vmm::destroy_user_address_space(process->address_space);
-    return;
+    return nullptr;
   }
 
   auto user_stack_top = kernel::VirtualAddress::from_ptr(user_stack) + USER_STACK_SIZE;
@@ -120,7 +125,7 @@ UNDOS_KERNEL_API_DEF void KE_USER_CreateProcess(const kstd::string_view &exec_pa
   if (!thread) {
     early_print_fmt("KE_USER_CreateProcess: failed to create user thread for {}\r\n", exec_path);
     kernel::vmm::destroy_user_address_space(process->address_space);
-    return;
+    return nullptr;
   }
   early_print_fmt("KE_USER_CreateProcess: created user thread for {} @ {}\r\n", exec_path, thread->name);
 
@@ -137,4 +142,5 @@ UNDOS_KERNEL_API_DEF void KE_USER_CreateProcess(const kstd::string_view &exec_pa
   // Step 6 — Ring-3 code can now reach the kernel via int 0x80 (see
   // kernel_hal/x86_old/intr.cpp's syscall_handler / kernel/src/syscall.cpp's
   // dispatcher for SYS_EXIT/SYS_WRITE).
+  return process;
 }

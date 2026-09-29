@@ -1,6 +1,10 @@
 
 #include "stdkrn.hpp"
 #include <kernel/dispatch.hpp>
+#include <kernel/kobject/KIOObject.hpp>
+#include <kernel/tty/tty.hpp>
+#include <kernel/tty/tty_device.hpp>
+#include <kernel/vfs.hpp>
 
 namespace {
 bool setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice> &device,
@@ -143,6 +147,20 @@ UNDOS_KERNEL_API_DEF kernel::IoStatus KE_IO_WriteDevice(
   return device->driverObject->Write(device, offset, buffer, transferred);
 }
 
+UNDOS_KERNEL_API_DEF kernel::IoStatus KE_IO_ControlDevice(
+    const kernel::KDevicePtr<kernel::KDevice> &device,
+    uint32_t code,
+    kstd::span<const uint8_t> input,
+    kstd::span<uint8_t> output,
+    size_t &transferred) noexcept {
+  transferred = 0;
+  if (!device) return kernel::IoStatus::InvalidParameter;
+  if (!device->driverObject || !device->driverObject->DeviceControl) {
+    return kernel::IoStatus::Unsupported;
+  }
+  return device->driverObject->DeviceControl(device, code, input, output, transferred);
+}
+
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> KE_IO_ConnectInterrupt(
     const kernel::KDevicePtr<kernel::KDevice> & /*device*/,
     uint32_t irq,
@@ -172,4 +190,195 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> 
 UNDOS_KERNEL_API_DEF void KE_IO_DisconnectInterrupt(uint32_t irq) noexcept {
   KE_DISPATCH_UnregisterHandler(irq);
   HAL_INTR_DisconnectInterrupt(irq);
+}
+
+namespace kernel {
+
+KIOObject::~KIOObject() {
+  if (!isClosed) {
+    // Close ops may wrap `this` in a temporary KObjectPtr; keep it from re-freeing.
+    KE_OB_Retain(this);
+    (void) Close();
+  }
+}
+
+IoStatus KIOObject::Read(kstd::span<uint8_t> buffer, size_t &transferred) {
+  transferred = 0;
+  if (isClosed) return IoStatus::DeviceError;
+  if (!ops || !ops->Read) return IoStatus::Unsupported;
+  return ops->Read(*this, buffer, transferred);
+}
+
+IoStatus KIOObject::Write(kstd::span<const uint8_t> buffer, size_t &transferred) {
+  transferred = 0;
+  if (isClosed) return IoStatus::DeviceError;
+  if (!ops || !ops->Write) return IoStatus::Unsupported;
+  return ops->Write(*this, buffer, transferred);
+}
+
+IoStatus KIOObject::Control(uint32_t code, kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred) {
+  transferred = 0;
+  if (isClosed) return IoStatus::DeviceError;
+  if (!ops || !ops->Control) return IoStatus::Unsupported;
+  return ops->Control(*this, code, input, output, transferred);
+}
+
+IoStatus KIOObject::Close() {
+  if (isClosed) return IoStatus::Success;
+  if (!ops || !ops->Close) {
+    isClosed = true;
+    return IoStatus::Success;
+  }
+  return ops->Close(*this);
+}
+
+namespace {
+IoStatus TtySinkRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
+  if (!io.vtty) return IoStatus::InvalidParameter;
+  KE_TTY_PumpDevice(io.vtty);
+  transferred = io.vtty->sink_read(buffer.data(), buffer.size());
+  io.offset += transferred;
+  return IoStatus::Success;
+}
+
+IoStatus TtySinkWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
+  if (!io.vtty) return IoStatus::InvalidParameter;
+  transferred = io.vtty->sink_write(buffer.data(), buffer.size());
+  KE_TTY_PumpDevice(io.vtty);
+  io.offset += transferred;
+  return IoStatus::Success;
+}
+
+IoStatus TtySinkClose(KIOObject &io) {
+  io.isClosed = true;
+  if (io.vtty) io.vtty->close_sink();
+  return IoStatus::Success;
+}
+
+IoStatus TtySourceRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
+  if (!io.vtty) return IoStatus::InvalidParameter;
+  transferred = io.vtty->source_read(buffer.data(), buffer.size());
+  io.offset += transferred;
+  return IoStatus::Success;
+}
+
+IoStatus TtySourceWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
+  if (!io.vtty) return IoStatus::InvalidParameter;
+  transferred = io.vtty->source_write(buffer.data(), buffer.size());
+  io.offset += transferred;
+  return IoStatus::Success;
+}
+
+IoStatus TtySourceClose(KIOObject &io) {
+  io.isClosed = true;
+  if (io.vtty) io.vtty->close_source();
+  return IoStatus::Success;
+}
+
+IoStatus DeviceRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
+  if (!io.device) return IoStatus::InvalidParameter;
+  if (!(io.mode & KIOObject::OpenMode::Read)) return IoStatus::AccessDenied;
+  const auto status = KE_IO_ReadDevice(io.device, io.offset, buffer, transferred);
+  if (status == IoStatus::Success) io.offset += transferred;
+  return status;
+}
+
+IoStatus DeviceWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
+  if (!io.device) return IoStatus::InvalidParameter;
+  if (!(io.mode & KIOObject::OpenMode::Write)) return IoStatus::AccessDenied;
+  const auto status = KE_IO_WriteDevice(io.device, io.offset, buffer, transferred);
+  if (status == IoStatus::Success) io.offset += transferred;
+  return status;
+}
+
+IoStatus DeviceControl(KIOObject &io, uint32_t code, kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred) {
+  if (!io.device) return IoStatus::InvalidParameter;
+  return KE_IO_ControlDevice(io.device, code, input, output, transferred);
+}
+
+IoStatus DeviceClose(KIOObject &io) {
+  io.isClosed = true;
+  return IoStatus::Success;
+}
+} // namespace
+
+namespace io {
+const KIOOps TtySinkOps{TtySinkRead, TtySinkWrite, {}, TtySinkClose};
+const KIOOps TtySourceOps{TtySourceRead, TtySourceWrite, {}, TtySourceClose};
+const KIOOps DeviceOps{DeviceRead, DeviceWrite, DeviceControl, DeviceClose};
+} // namespace io
+
+} // namespace kernel
+
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_IO_CreateTtySinkStream(
+    const kernel::tty::VttyPtr &vtty,
+    const kstd::string_view &name) noexcept {
+  if (!vtty) return nullptr;
+  auto ioObj = name.empty()
+      ? kernel::CreateAnonymousKObject<kernel::KIOObject>()
+      : kernel::CreateKObject<kernel::KIOObject>(name);
+  if (!ioObj) return nullptr;
+
+  ioObj->ops = &kernel::io::TtySinkOps;
+  ioObj->vtty = vtty;
+  ioObj->mode = kernel::KIOObject::OpenMode::ReadWrite;
+  return ioObj;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_IO_CreateTtySourceStream(
+    const kernel::tty::VttyPtr &vtty,
+    const kstd::string_view &name) noexcept {
+  if (!vtty) return nullptr;
+  auto ioObj = name.empty()
+      ? kernel::CreateAnonymousKObject<kernel::KIOObject>()
+      : kernel::CreateKObject<kernel::KIOObject>(name);
+  if (!ioObj) return nullptr;
+
+  ioObj->ops = &kernel::io::TtySourceOps;
+  ioObj->vtty = vtty;
+  ioObj->mode = kernel::KIOObject::OpenMode::ReadWrite;
+  return ioObj;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_IO_CreateDeviceStream(
+    const kernel::KDevicePtr<kernel::KDevice> &device,
+    kernel::KIOObject::OpenMode mode,
+    const kstd::string_view &name) noexcept {
+  if (!device) return nullptr;
+  auto ioObj = name.empty()
+      ? kernel::CreateAnonymousKObject<kernel::KIOObject>()
+      : kernel::CreateKObject<kernel::KIOObject>(name);
+  if (!ioObj) return nullptr;
+
+  ioObj->ops = &kernel::io::DeviceOps;
+  ioObj->device = device;
+  ioObj->mode = mode;
+  return ioObj;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_IO_FromObject(
+    const kernel::KObjectPtr<kernel::KObject> &obj) noexcept {
+  if (!obj) return nullptr;
+
+  if (auto ioObj = obj.As<kernel::KIOObject>()) {
+    return ioObj;
+  }
+
+
+  if (auto sink = obj.As<kernel::KVttySinkObject>()) {
+    return KE_IO_CreateTtySinkStream(sink->vtty, sink->name);
+  }
+
+  if (auto source = obj.As<kernel::KVttySourceObject>()) {
+    return KE_IO_CreateTtySourceStream(source->vtty, source->name);
+  }
+
+  if (auto devObj = obj.As<kernel::KDeviceObject>()) {
+    if (devObj->device) {
+      return KE_IO_CreateDeviceStream(devObj->device, kernel::KIOObject::OpenMode::ReadWrite, devObj->name);
+    }
+  }
+
+  return nullptr;
 }

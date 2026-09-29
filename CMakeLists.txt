@@ -98,7 +98,7 @@ find_program(PYTHON3_EXECUTABLE NAMES python3 REQUIRED)
 add_custom_target(undos-syscalls-gen
         COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/create-syscalls.py tools/syscalls.txt kernel_userland_shared/include/undos/syscalls userland/ kernel/src/syscalls
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        DEPENDS tools/syscalls.txt tools/gfxsyscall.txt
+        DEPENDS tools/syscalls.txt tools/gfxsyscall.txt tools/usersyscall.txt
         COMMENT "Generating syscalls from tools/syscalls.txt (includes tools/gfxsyscall.txt)"
 )
 
@@ -154,16 +154,17 @@ if (NOT TESTING_ONLY)
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:serial_uart> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/serial.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:term> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/term.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:init> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/init.elf
+            COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/userland/apps/init/initlib.so ${CMAKE_SOURCE_DIR}/bin/filesystem/System/initlib.so
             COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/configuration_editor/config.py
                     ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Config/MACHI
                     author-localmachine
             COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py ${PROJECT_SOURCE_DIR}/bin/fat32.img ${PROJECT_SOURCE_DIR}/bin/filesystem
 
-            DEPENDS native_elf_loader bus_isa disk_ata volmgr fs_fat gfx_vga input_i8042 serial_uart term init
+            DEPENDS native_elf_loader bus_isa disk_ata volmgr fs_fat gfx_vga input_i8042 serial_uart term init init_shared
             $<TARGET_FILE:native_elf_loader>
             $<TARGET_FILE:bus_isa> $<TARGET_FILE:disk_ata> $<TARGET_FILE:volmgr> $<TARGET_FILE:fs_fat> $<TARGET_FILE:gfx_vga> $<TARGET_FILE:input_i8042>
             $<TARGET_FILE:serial_uart>
-            $<TARGET_FILE:term> $<TARGET_FILE:init>
+            $<TARGET_FILE:term> $<TARGET_FILE:init> ${CMAKE_BINARY_DIR}/userland/apps/init/initlib.so
             ${PROJECT_SOURCE_DIR}/tools/configuration_editor/config.py
             ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py
             BYPRODUCTS ${PROJECT_SOURCE_DIR}/bin/fat32.img
@@ -177,6 +178,7 @@ if (NOT TESTING_ONLY)
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/serial.elf
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/term.elf
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/init.elf
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/initlib.so
 
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
             COMMENT "Generating initial disk image"

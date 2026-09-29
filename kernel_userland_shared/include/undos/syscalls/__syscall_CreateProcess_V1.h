@@ -15,6 +15,8 @@ struct __SYS_PROC_CREATEPROCESS_V1 {
     size_t argumentLength;
     /** Combination of ProcessFlags controlling the new process. */
     uint32_t flags;
+    /** Handle to the new process (waitable with WaitProcess). */
+    uint32_t handle;
 };
 
 constexpr size_t   __SYS_PROC_CREATEPROCESS_V1_SIZE = sizeof(struct __SYS_PROC_CREATEPROCESS_V1);

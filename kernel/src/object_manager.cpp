@@ -209,7 +209,12 @@ UNDOS_KERNEL_API_DEF void KE_OB_Release(kernel::KObject *obj) noexcept {
     return;
   }
 
-  if (obj->reference_count.fetch_sub(1, kstd::memory_order_acq_rel) == 1) {
+  const auto previous = obj->reference_count.fetch_sub(1, kstd::memory_order_acq_rel);
+  if (previous == 2 && obj->type == kernel::TYPE_IO && obj->parent == KE_OB_GetFileDirectory().get()) {
+    KE_VFS_CloseFile(static_cast<kernel::KIOObject *>(obj));
+    return;
+  }
+  if (previous == 1) {
     kstd::atomic_thread_fence(kstd::memory_order_acquire);
     obj->~KObject();
     KE_Free(obj);

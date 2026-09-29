@@ -459,6 +459,293 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetDeviceCapsV1(uint32_t dc, struct DeviceCaps
     return ret;
 }
 
+/** Registers a window class; wndProc is stored opaquely and called by userland. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_RegisterClassV1(const char* name, uint32_t wndProc, uint32_t background)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_REGISTERCLASS_V1 __wire;
+    __wire.name = name;
+    __wire.nameLength = name ? 1 : 0;
+     while (name[__wire.nameLength]) __wire.nameLength++;
+    __wire.wndProc = wndProc;
+    __wire.background = background;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(400), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** Creates a top-level window owned by the calling thread. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateWindowV1(const char* className, const char* title, enum WindowStyle style, int32_t x, int32_t y, int32_t width, int32_t height, uint32_t parent, uint32_t userData, uint32_t* hwnd)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_CREATEWINDOW_V1 __wire;
+    __wire.className = className;
+    __wire.classNameLength = className ? 1 : 0;
+     while (className[__wire.classNameLength]) __wire.classNameLength++;
+    __wire.title = title;
+    __wire.titleLength = title ? 1 : 0;
+     while (title[__wire.titleLength]) __wire.titleLength++;
+    __wire.style = style;
+    __wire.x = x;
+    __wire.y = y;
+    __wire.width = width;
+    __wire.height = height;
+    __wire.parent = parent;
+    __wire.userData = userData;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(401), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *hwnd = __wire.hwnd;
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_DestroyWindowV1(uint32_t hwnd)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_DESTROYWINDOW_V1 __wire;
+    __wire.hwnd = hwnd;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(402), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** One of ShowCommand. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_ShowWindowV1(uint32_t hwnd, uint32_t command)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_SHOWWINDOW_V1 __wire;
+    __wire.hwnd = hwnd;
+    __wire.command = command;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(403), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_MoveWindowV1(uint32_t hwnd, int32_t x, int32_t y, int32_t width, int32_t height)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_MOVEWINDOW_V1 __wire;
+    __wire.hwnd = hwnd;
+    __wire.x = x;
+    __wire.y = y;
+    __wire.width = width;
+    __wire.height = height;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(404), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** Window rectangle in screen coordinates. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetWindowRectV1(uint32_t hwnd, struct Rect* rect)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_GETWINDOWRECT_V1 __wire;
+    __wire.hwnd = hwnd;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(405), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *rect = __wire.rect;
+    return ret;
+}
+
+/** Adds rect (window coordinates) to the invalid area; whole != 0 invalidates everything. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_InvalidateRectV1(uint32_t hwnd, const struct Rect* rect, uint32_t whole)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_INVALIDATERECT_V1 __wire;
+    __wire.hwnd = hwnd;
+    __wire.rect = *rect;
+    __wire.whole = whole;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(406), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** Returns a DC clipped to the visible part of the invalid area, origin at the window. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_BeginPaintV1(uint32_t hwnd, uint32_t* dc, struct PaintInfo* paint)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_BEGINPAINT_V1 __wire;
+    __wire.hwnd = hwnd;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(407), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *dc = __wire.dc;
+    *paint = __wire.paint;
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_EndPaintV1(uint32_t hwnd, uint32_t dc)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_ENDPAINT_V1 __wire;
+    __wire.hwnd = hwnd;
+    __wire.dc = dc;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(408), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** Blocks until a message arrives; msg.message == Quit ends a message loop. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetMessageV1(struct Msg* msg)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_GETMESSAGE_V1 __wire;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(409), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *msg = __wire.msg;
+    return ret;
+}
+
+/** Non-blocking; returns TIMEOUT when the queue is empty. remove == 0 leaves it queued. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_PeekMessageV1(struct Msg* msg, uint32_t remove)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_PEEKMESSAGE_V1 __wire;
+    __wire.remove = remove;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(410), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *msg = __wire.msg;
+    return ret;
+}
+
+/** Queues a message; returns OUT_OF_MEMORY when the target ring is full. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_PostMessageV1(uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_POSTMESSAGE_V1 __wire;
+    __wire.hwnd = hwnd;
+    __wire.message = message;
+    __wire.wParam = wParam;
+    __wire.lParam = lParam;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(411), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** One of WindowLongIndex. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetWindowLongPtrV1(uint32_t hwnd, uint32_t index, uint32_t* value)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_GETWINDOWLONGPTR_V1 __wire;
+    __wire.hwnd = hwnd;
+    __wire.index = index;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(412), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *value = __wire.value;
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetWindowLongPtrV1(uint32_t hwnd, uint32_t index, uint32_t value, uint32_t* previous)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_SETWINDOWLONGPTR_V1 __wire;
+    __wire.hwnd = hwnd;
+    __wire.index = index;
+    __wire.value = value;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(413), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *previous = __wire.previous;
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetCaptureV1(uint32_t hwnd)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_SETCAPTURE_V1 __wire;
+    __wire.hwnd = hwnd;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(414), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_ReleaseCaptureV1(uint32_t unused)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_RELEASECAPTURE_V1 __wire;
+    __wire.unused = unused;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(415), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_PrintV1(const char* message)
 {
     uint32_t ret = 0;
@@ -477,7 +764,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_PrintV1(const char* message)
 }
 
 /** Creates a new process from the executable at `path`. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateProcessV1(const char* path, const char* argument, uint32_t flags)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateProcessV1(const char* path, const char* argument, uint32_t flags, uint32_t* handle)
 {
     uint32_t ret = 0;
     struct __SYS_PROC_CREATEPROCESS_V1 __wire;
@@ -495,6 +782,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateProcessV1(const char* path, const char* 
         : "a"(200), "b"(sizeof __wire), "c"(&__wire), "d"(0)
         : "memory");
 
+    *handle = __wire.handle;
     return ret;
 }
 
@@ -529,6 +817,74 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_ExitV1(uint32_t exitCode)
         "int $0x80"
         : "=a"(ret)
         : "a"(202), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** Blocks until a waitable handle (event or process) is signalled. Returns TIMEOUT on expiry. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_WaitForObjectV1(uint32_t handle, uint32_t timeoutMs)
+{
+    uint32_t ret = 0;
+    struct __SYS_PROC_WAITFOROBJECT_V1 __wire;
+    __wire.handle = handle;
+    __wire.timeoutMs = timeoutMs;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(203), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** Blocks until a process exits and returns its exit code. Returns TIMEOUT on expiry. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_WaitProcessV1(uint32_t handle, uint32_t timeoutMs, uint32_t* exitCode)
+{
+    uint32_t ret = 0;
+    struct __SYS_PROC_WAITPROCESS_V1 __wire;
+    __wire.handle = handle;
+    __wire.timeoutMs = timeoutMs;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(204), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *exitCode = __wire.exitCode;
+    return ret;
+}
+
+/** Creates an event object. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateEventV1(enum EventFlags flags, uint32_t* handle)
+{
+    uint32_t ret = 0;
+    struct __SYS_PROC_CREATEEVENT_V1 __wire;
+    __wire.flags = flags;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(205), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *handle = __wire.handle;
+    return ret;
+}
+
+/** Signals an event. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetEventV1(uint32_t handle)
+{
+    uint32_t ret = 0;
+    struct __SYS_PROC_SETEVENT_V1 __wire;
+    __wire.handle = handle;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(206), "b"(sizeof __wire), "c"(&__wire), "d"(0)
         : "memory");
 
     return ret;
@@ -582,6 +938,24 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_ProtectV1(uint32_t address, uint32_t size, enu
         "int $0x80"
         : "=a"(ret)
         : "a"(212), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** Maps anonymous user pages at a page-aligned address selected by the caller. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_MapFixedPagesV1(uint32_t address, uint32_t size, enum MemoryProtectFlags flags)
+{
+    uint32_t ret = 0;
+    struct __SYS_MEM_MAPFIXEDPAGES_V1 __wire;
+    __wire.address = address;
+    __wire.size = size;
+    __wire.flags = flags;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(213), "b"(sizeof __wire), "c"(&__wire), "d"(0)
         : "memory");
 
     return ret;
@@ -656,6 +1030,29 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_WriteV1(uint32_t handle, const uint8_t* data, 
         : "a"(223), "b"(sizeof __wire), "c"(&__wire), "d"(0)
         : "memory");
 
+    return ret;
+}
+
+/** Sends a control code to the device behind an open handle. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_ControlV1(uint32_t handle, uint32_t code, const uint8_t* input, uint32_t inputLength, uint8_t* output, uint32_t* outputLength)
+{
+    uint32_t ret = 0;
+    struct __SYS_IO_CONTROL_V1 __wire;
+    __wire.handle = handle;
+    __wire.code = code;
+    __wire.input = input;
+    __wire.inputLength = inputLength;
+    __wire.output = output;
+    __wire.outputLength = outputLength ? *outputLength : 0;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(224), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    /* buffer was mapped and filled by the kernel directly; report actual length written */
+    if (outputLength) *outputLength = __wire.outputLength;
     return ret;
 }
 

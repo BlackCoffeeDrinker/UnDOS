@@ -28,7 +28,6 @@ constexpr auto TYPE_THREAD = "thread"_type;
 constexpr auto TYPE_PROCESS = "process"_type;
 constexpr auto TYPE_VOLUME_MOUNT = "volume_mount"_type;
 constexpr auto TYPE_FILE_SYSTEM = "file_system"_type;
-constexpr auto TYPE_FILE = "file"_type;
 constexpr auto TYPE_SUBSYSTEM = "subsystem"_type;
 constexpr auto TYPE_MEMORY_SECTION = "memory_section"_type;
 constexpr auto TYPE_CONFIGROOT_SECTION = "configroot"_type;
@@ -37,6 +36,9 @@ constexpr auto TYPE_DISPLAY = "display"_type;
 constexpr auto TYPE_SURFACE = "surface"_type;
 constexpr auto TYPE_TTY_SOURCE = "tty_source"_type;
 constexpr auto TYPE_TTY_SINK = "tty_sink"_type;
+constexpr auto TYPE_IO = "io"_type;
+constexpr auto TYPE_EVENT = "event"_type;
+constexpr auto TYPE_WINDOW = "window"_type;
 
 template<ObjectType T>
 struct ObjectTypeOf {};

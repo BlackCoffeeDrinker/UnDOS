@@ -5,6 +5,8 @@
 #include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/virtual_memory.hpp>
 
+#include <chrono.hpp>
+
 // Platform-agnostic thread scheduler service. The core owns the policy (ready
 // queue, current thread, scheduling decision); all CPU-specific work is done
 // through the HAL_CPU_* context primitives declared in hal_interface.hpp.
@@ -87,3 +89,69 @@ UNDOS_KERNEL_PUBLIC_V1API([[noreturn]] void, KE_SCHED_Terminate);
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KThreadObject>, KE_SCHED_GetCurrentThread);
+
+namespace kernel {
+struct KDispatcherHeader;
+struct KEventObject;
+
+enum class WaitStatus : uint32_t {
+  Signalled = 0,
+  Timeout,
+  Invalid,
+};
+
+// Infinite timeout for KE_SCHED_WaitForObject.
+constexpr kstd::chrono::milliseconds WAIT_INFINITE{-1};
+} // namespace kernel
+
+/**
+ * @ingroup SCHED
+ * @brief Method KE_SCHED_WaitForObject
+ *
+ * Block the current thread until the waitable `object` (event or process) is
+ * signalled or `timeout` elapses. A zero timeout polls; WAIT_INFINITE never
+ * times out.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kernel::WaitStatus,
+    KE_SCHED_WaitForObject,
+    const kernel::KObjectPtr<kernel::KObject> &object, kstd::chrono::milliseconds timeout);
+
+/**
+ * @ingroup SCHED
+ * @brief Method KE_SCHED_WaitForHeader
+ *
+ * Same as KE_SCHED_WaitForObject for a header embedded in a kernel structure.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kernel::WaitStatus,
+    KE_SCHED_WaitForHeader,
+    kernel::KDispatcherHeader &header, kstd::chrono::milliseconds timeout);
+
+/**
+ * @ingroup SCHED
+ * @brief Method KE_EVENT_Signal
+ *
+ * Signal a dispatcher header and ready its waiters. Not ISR-safe: it toggles
+ * interrupts. Use KE_EVENT_SignalFromIsr from interrupt context.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(void, KE_EVENT_Signal, kernel::KDispatcherHeader &header, bool wakeAll);
+
+/**
+ * @ingroup SCHED
+ * @brief Method KE_EVENT_SignalFromIsr
+ *
+ * KE_EVENT_Signal for callers that already run with interrupts disabled.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(void, KE_EVENT_SignalFromIsr, kernel::KDispatcherHeader &header, bool wakeAll);
+
+/**
+ * @ingroup SCHED
+ * @brief Method KE_EVENT_Create
+ *
+ * Create an unnamed event object.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kernel::KObjectPtr<kernel::KEventObject>,
+    KE_EVENT_Create,
+    bool manualReset, bool initialState);

@@ -9,6 +9,8 @@ add_executable(kernel
         src/vmm.cpp
         src/vmm.hpp
         src/time.cpp
+        src/wait.cpp
+        src/wait.hpp
         src/percpu.cpp
 
         src/scheduler/ReadyQueue.hpp
@@ -68,6 +70,15 @@ add_executable(kernel
         src/syscalls/IO.cpp
         src/syscalls/TTY.cpp
         src/syscalls/GFX.cpp
+        src/syscalls/User.cpp
+        src/user/user.hpp
+        src/user/region.hpp
+        src/user/msgring.hpp
+        src/user/window.cpp
+        src/user/msgqueue.cpp
+        src/user/paint.cpp
+        src/user/nonclient.cpp
+        src/user/rawinput.cpp
         src/gfx/gfx_management.cpp
         src/gfx/gfx_software_fallback.cpp
         src/gfx/gfx_dc_table.cpp

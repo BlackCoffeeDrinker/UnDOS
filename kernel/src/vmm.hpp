@@ -9,6 +9,7 @@ void init() noexcept;
 void late_init() noexcept;
 
 void *allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept;
+bool map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, ProtectFlags flags) noexcept;
 
 // Creates a fully-initialized, isolated user address space backed by a fresh
 // HAL translation root (kernel higher-half cloned, user half empty).

@@ -2,7 +2,9 @@
 #include <kernel/hal_interface.hpp>
 #include <kernel/pnp.hpp>
 #include <kernel/scheduler.hpp>
+#include <kernel/time.hpp>
 #include <kernel/virtual_memory.hpp>
+#include <kernel/kobject/KDispatcherHeader.hpp>
 
 #include "pnp_test_hooks.hpp"
 
@@ -59,6 +61,20 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KThreadObject> KE_SCHED_GetCurre
 UNDOS_KERNEL_API_DEF void KE_SCHED_Yield() noexcept {
 }
 
+UNDOS_KERNEL_API_DEF kernel::WaitStatus KE_SCHED_WaitForHeader(kernel::KDispatcherHeader &header, kstd::chrono::milliseconds) noexcept {
+  if (header.TryAcquire()) return kernel::WaitStatus::Signalled;
+  return kernel::WaitStatus::Timeout;
+}
+
+UNDOS_KERNEL_API_DEF void KE_EVENT_Signal(kernel::KDispatcherHeader &header, bool wakeAll) noexcept {
+  auto wake = [](kernel::KThreadObject *) {};
+  header.Signal(wakeAll, wake);
+}
+
+UNDOS_KERNEL_API_DEF kstd::chrono::milliseconds KE_TIME_GetSystemTime() noexcept {
+  return kstd::chrono::milliseconds(0);
+}
+
 UNDOS_HAL_API_DEF void HAL_ATOMIC_Store32(kernel::VirtualAddress addr, uint32_t value, PlatformMemoryOrder order) noexcept {
   (void) order;
   *addr.as_ptr<uint32_t>() = value;
@@ -89,6 +105,67 @@ UNDOS_HAL_API_DEF bool HAL_INTR_ConnectInterrupt(
 
 UNDOS_HAL_API_DEF void HAL_INTR_DisconnectInterrupt(uint32_t irq) noexcept {
   (void) irq;
+}
+
+#include "dispatch_test_hooks.hpp"
+
+namespace {
+kernel::InterruptRecordRing g_testRing;
+kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> g_testHandlers[16]{};
+}
+
+namespace test_dispatch {
+
+kernel::InterruptRecordRing &GetRing() noexcept {
+  return g_testRing;
+}
+
+kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> GetHandler(uint32_t irq) noexcept {
+  if (irq < 16) {
+    return g_testHandlers[irq];
+  }
+  return nullptr;
+}
+
+void Reset() noexcept {
+  g_testRing.Reset();
+  for (auto &h : g_testHandlers) {
+    h = nullptr;
+  }
+}
+
+void Pump() noexcept {
+  kernel::HalInterruptRecord record{};
+  while (g_testRing.Pop(record)) {
+    if (record.irq < 16 && g_testHandlers[record.irq]) {
+      auto &isr = g_testHandlers[record.irq];
+      if (isr->service_routine) {
+        isr->service_routine(isr, isr->service_context);
+      }
+    }
+  }
+}
+
+} // namespace test_dispatch
+
+UNDOS_KERNEL_API_DEF bool KE_DISPATCH_EnqueueInterrupt(const kernel::HalInterruptRecord &record) noexcept {
+  return g_testRing.Push(record);
+}
+
+UNDOS_KERNEL_API_DEF bool KE_DISPATCH_RegisterHandler(
+    uint32_t irq,
+    const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
+  if (irq >= 16 || !isr) {
+    return false;
+  }
+  g_testHandlers[irq] = isr;
+  return true;
+}
+
+UNDOS_KERNEL_API_DEF void KE_DISPATCH_UnregisterHandler(uint32_t irq) noexcept {
+  if (irq < 16) {
+    g_testHandlers[irq] = nullptr;
+  }
 }
 #include <stdexcept>
 void HAL_PLATFORM_Panic(const kstd::string_view &message, const char *file, int line) noexcept {

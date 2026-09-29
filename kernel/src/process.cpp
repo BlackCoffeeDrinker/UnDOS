@@ -2,6 +2,7 @@
 #include "process.hpp"
 
 #include "vmm.hpp"
+#include "user/user.hpp"
 
 #include <Kernel.hpp>
 #include <kernel/kobject/KProcessObject.hpp>
@@ -10,10 +11,16 @@
   const auto thread = KE_SCHED_GetCurrentThread();
 
   if (thread && thread->owner_process) {
-    const auto process = KObjectPtr(static_cast<KProcessObject *>(thread->owner_process));
+    const auto process = KObjectPtr(thread->owner_process);
 
     process->exit_code = code;
     process->state = KProcessObject::State::Terminated;
+
+    // Windows, classes and message queues die with their process.
+    kernel::user::on_process_exit(*process);
+
+    // Release WaitProcess/WaitForObject callers.
+    KE_EVENT_Signal(process->exitHeader, true);
 
     // Free the physical frames tracked by this process's VADs and its
     // translation root; must happen before we drop the thread and switch

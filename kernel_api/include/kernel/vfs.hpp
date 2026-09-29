@@ -59,9 +59,9 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KFileObject>,
+    kernel::KObjectPtr<kernel::KIOObject>,
     KE_VFS_OpenFile,
-    const kstd::string_view &path, kernel::KFileObject::OpenMode mode);
+    const kstd::string_view &path, kernel::KIOObject::OpenMode mode);
 
 /**
  * @ingroup VFS
@@ -71,7 +71,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     void,
     KE_VFS_CloseFile,
-    kernel::KObjectPtr<kernel::KFileObject> file);
+    const kernel::KObjectPtr<kernel::KIOObject> &file);
 
 /**
  * @ingroup VFS
@@ -81,7 +81,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     uint64_t,
     KE_VFS_ReadFile,
-    kernel::KObjectPtr<kernel::KFileObject> file, const kstd::span<uint8_t> &readInto);
+    const kernel::KObjectPtr<kernel::KIOObject> &file, const kstd::span<uint8_t> &readInto);
 
 /**
  * @ingroup VFS
@@ -91,7 +91,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     uint64_t,
     KE_VFS_WriteFile,
-    kernel::KObjectPtr<kernel::KFileObject> file, const kstd::span<const uint8_t> &buffer);
+    const kernel::KObjectPtr<kernel::KIOObject> &file, const kstd::span<const uint8_t> &buffer);
 
 /**
  * @ingroup VFS
@@ -101,9 +101,9 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     uint64_t,
     KE_VFS_SeekFile,
-    kernel::KObjectPtr<kernel::KFileObject> file, uint64_t absolute_offset);
+    const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t absolute_offset);
 
 UNDOS_KERNEL_PUBLIC_V1API(
   uint64_t,
   KE_VFS_TellFile,
-  const kernel::KObjectPtr<kernel::KFileObject>& file);
+  const kernel::KObjectPtr<kernel::KIOObject>& file);

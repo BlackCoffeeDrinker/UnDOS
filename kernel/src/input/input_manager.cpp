@@ -1,11 +1,17 @@
 
 #include "input_manager.hpp"
 
+#include "stdkrn.hpp"
+
 #include <Kernel.hpp>
 #include <kernel/input.hpp>
 #include <kernel/mutex.hpp>
 #include <kernel/scheduler.hpp>
 #include <kernel/time.hpp>
+#include <kernel/object_manager.hpp>
+#include <kernel/kobject/KDirectoryObject.hpp>
+#include <kernel/kobject/KDispatcherHeader.hpp>
+#include <kernel/kobject/KIOObject.hpp>
 
 #include <mutex.hpp>
 
@@ -81,6 +87,12 @@ kernel::Mutex g_eventRingLock;
 kernel::input::EventRing g_eventRing;
 kernel::KObjectPtr<kernel::KThreadObject> g_pumpThread;
 
+// Manual-reset: signalled while the event ring is non-empty. Readers reset
+// it with interrupts off only after seeing the ring empty, so a push that
+// lands in between cannot be lost (single CPU).
+kernel::KDispatcherHeader g_eventHeader;
+kernel::KObjectPtr<kernel::KIOObject> g_inputStream;
+
 kernel::input::ConsumerFn g_consumer{nullptr};
 uint32_t g_modifiers = 0;
 
@@ -147,6 +159,7 @@ void QueueEvent(kernel::input::AnyInputEvent &event) noexcept {
     kstd::unique_lock guard(g_eventRingLock);
     g_eventRing.Push(event);
   }
+  KE_EVENT_Signal(g_eventHeader, true);
 
   if (g_consumer) {
     g_consumer(event.base);
@@ -211,6 +224,57 @@ void InputPumpThread(void *) {
   }
 }
 
+// Resets the header if the ring is (still) empty. Returns true if empty.
+bool ResetIfEmpty() noexcept {
+  HAL_CPU_DisableInterrupts();
+  bool empty;
+  {
+    kstd::unique_lock guard(g_eventRingLock);
+    empty = g_eventRing.Empty();
+  }
+  if (empty) g_eventHeader.Reset();
+  HAL_CPU_EnableInterrupts();
+  return empty;
+}
+
+// \Device\Input: each Read returns whole AnyInputEvent records and blocks
+// until at least one is available.
+kernel::IoStatus InputRead(kernel::KIOObject &, kstd::span<uint8_t> buffer, size_t &transferred) {
+  using kernel::input::AnyInputEvent;
+  transferred = 0;
+  if (buffer.size() < sizeof(AnyInputEvent)) return kernel::IoStatus::InvalidSize;
+  for (;;) {
+    AnyInputEvent event;
+    while (transferred + sizeof(AnyInputEvent) <= buffer.size() && KE_INPUT_DequeueEvent(event)) {
+      __builtin_memcpy(buffer.data() + transferred, &event, sizeof(event));
+      transferred += sizeof(event);
+    }
+    if (transferred) return kernel::IoStatus::Success;
+    if (ResetIfEmpty()) {
+      (void) KE_SCHED_WaitForHeader(g_eventHeader, kernel::WAIT_INFINITE);
+    }
+  }
+}
+
+kernel::IoStatus InputClose(kernel::KIOObject &) { return kernel::IoStatus::Success; }
+
+const kernel::KIOOps InputOps{InputRead, {}, {}, InputClose};
+
+void RegisterInputStream() noexcept {
+  const auto dir = KE_OB_LookupObject("/Device").As<kernel::KDirectoryObject>();
+  auto stream = kernel::CreateKObject<kernel::KIOObject>("Input");
+  if (!dir || !stream) {
+    early_print_fmt("Input manager: cannot register \\Device\\Input\r\n");
+    return;
+  }
+  stream->ops = &InputOps;
+  stream->mode = kernel::KIOObject::OpenMode::Read;
+  stream->waitable = &g_eventHeader;
+  if (KE_OB_InsertObject(dir, kernel::KObjectPtr<kernel::KObject>(stream.get()))) {
+    g_inputStream = stream;
+  }
+}
+
 }// namespace
 
 namespace kernel::input {
@@ -225,6 +289,8 @@ void init() {
   g_prevMouseButtons = 0;
   g_consumer = nullptr;
   g_modifiers = 0;
+  g_eventHeader = kernel::KDispatcherHeader();
+  RegisterInputStream();
 
   g_pumpThread = KE_SCHED_CreateThread(&InputPumpThread, nullptr, 0);
 
@@ -253,6 +319,15 @@ UNDOS_KERNEL_API_DEF void KE_INPUT_ReportAuxData(uint8_t data) noexcept {
 UNDOS_KERNEL_API_DEF bool KE_INPUT_DequeueEvent(kernel::input::AnyInputEvent &out) noexcept {
   kstd::unique_lock guard(g_eventRingLock);
   return g_eventRing.Pop(out);
+}
+
+UNDOS_KERNEL_API_DEF bool KE_INPUT_WaitEvent(kernel::input::AnyInputEvent &out,
+                                             kstd::chrono::milliseconds timeout) noexcept {
+  for (;;) {
+    if (KE_INPUT_DequeueEvent(out)) return true;
+    if (!ResetIfEmpty()) continue;
+    if (KE_SCHED_WaitForHeader(g_eventHeader, timeout) != kernel::WaitStatus::Signalled) return false;
+  }
 }
 
 UNDOS_KERNEL_API_DEF void KE_INPUT_SetConsumer(kernel::input::ConsumerFn consumer) noexcept {

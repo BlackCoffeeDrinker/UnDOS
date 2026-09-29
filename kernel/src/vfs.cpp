@@ -7,24 +7,6 @@ namespace {
 }
 
 namespace kernel {
-KFileObject::~KFileObject() {
-  // Make sure the handle is closed. KE_VFS_CloseFile() takes ownership via a
-  // KObjectPtr, so passing `this` implicitly constructs a temporary
-  // KObjectPtr<KFileObject> that retains `this` -- but we're already being
-  // torn down because our reference count JUST hit zero. Without the
-  // KE_OB_Retain() below, that temporary's own release (at the end of the
-  // full expression) would bring the count back to zero *again* while this
-  // destructor is still on the stack, recursively re-entering it and
-  // freeing `this` before the *original* caller (the one that got us here)
-  // gets a chance to -- a double free. Bumping the count first keeps it
-  // above zero for the temporary's release, so only the original caller
-  // ends up freeing the object once this destructor returns.
-  if (!isClosed) {
-    KE_OB_Retain(this);
-    KE_VFS_CloseFile(this);
-  }
-}
-
 namespace vfs {
 void init() {
 }
@@ -160,19 +142,21 @@ UNDOS_KERNEL_API_DEF void KE_VFS_UnregisterFilesystemDriver(kernel::KObjectPtr<k
   (void) filesystem;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFileObject> KE_VFS_OpenFile(const kstd::string_view &path, kernel::KFileObject::OpenMode mode) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_VFS_OpenFile(const kstd::string_view &path, kernel::KIOObject::OpenMode mode) noexcept {
   // Create a uniquely-named file object. Name is const on KObject, so it must
   // be chosen before construction: allocate, format the storage address as
   // hex (the previous intent of the unused fileObjectName local), then
   // placement-new. An empty name collides on the second open under FileRoot.
-  void *storage = KE_Malloc(sizeof(kernel::KFileObject));
+  void *storage = KE_Malloc(sizeof(kernel::KIOObject));
   if (!storage) {
     early_print_fmt("KE_VFS_OpenFile: Failed to allocate file object for '{}'\r\n", path);
     return {};
   }
   kstd::static_string<64> fileObjectName;
   kstd::format(fileObjectName, "{:x}", storage);
-  auto file = kernel::KObjectPtr(new (storage) kernel::KFileObject(fileObjectName));
+  auto file = kernel::KObjectPtr(new (storage) kernel::KIOObject(fileObjectName));
+
+  file->ops = &kernel::io::FileOps;
 
   file->mode = mode;
   file->offset = 0;
@@ -293,41 +277,42 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFileObject> KE_VFS_OpenFile(con
     early_print_fmt("KE_VFS_OpenFile: Filesystem CreateHandle failed for '{}'\r\n", path);
     return {};
   }
+  file->fileHandleCreated = true;
 
   // ------------------------------------------------------------------
   // Insert into Object Manager
   // ------------------------------------------------------------------
   if (!KE_OB_InsertObject(KE_OB_GetFileDirectory(), file)) {
     early_print_fmt("KE_VFS_OpenFile: Failed to insert file object for '{}'\r\n", path);
+    KE_VFS_CloseFile(file);
     return {};
   }
 
   return file;
 }
 
-UNDOS_KERNEL_API_DEF void KE_VFS_CloseFile(kernel::KObjectPtr<kernel::KFileObject> file) noexcept {
+UNDOS_KERNEL_API_DEF void KE_VFS_CloseFile(const kernel::KObjectPtr<kernel::KIOObject> &file) noexcept {
   if (!file) [[unlikely]] { return; }
   if (file->isClosed) [[unlikely]] { return; }
-  if (!file->mountPoint) [[unlikely]] { return; }
-  if (!file->FileSystem()) [[unlikely]] { return; }
-  if (file->FileSystem()->CloseHandle) {
+  if (file->ops != &kernel::io::FileOps) return;
+  file->isClosed = true;
+  if (file->fileHandleCreated && file->mountPoint && file->FileSystem() && file->FileSystem()->CloseHandle) {
     file->FileSystem()->CloseHandle(file);
   }
-
-  file->isClosed = true;// The destructor checks this and if it's not false, calls this method
+  file->fileHandleCreated = false;
   file->vfsNode = nullptr;
 
   // Remove file from the OB
-  KE_OB_RemoveObject(KE_OB_GetFileDirectory(), file);
+  if (file->parent) KE_OB_RemoveObject(KE_OB_GetFileDirectory(), file);
 }
 
-UNDOS_KERNEL_API_DEF uint64_t KE_VFS_ReadFile(kernel::KObjectPtr<kernel::KFileObject> file, const kstd::span<uint8_t> &readInto) noexcept {
-  if (!file) [[unlikely]] { return 0; }
+UNDOS_KERNEL_API_DEF uint64_t KE_VFS_ReadFile(const kernel::KObjectPtr<kernel::KIOObject> &file, const kstd::span<uint8_t> &readInto) noexcept {
+  if (!file || file->isClosed || !file->vfsNode || file->ops != &kernel::io::FileOps) [[unlikely]] { return 0; }
   if (!file->FileSystem()) [[unlikely]] { return 0; }
   if (!file->FileSystem()->ReadHandle) [[unlikely]] { return 0; }
   
   // Make sure the mode includes read
-  if (!(file->mode & kernel::KFileObject::OpenMode::Read)) [[unlikely]] { return 0; }
+  if (!(file->mode & kernel::KIOObject::OpenMode::Read)) [[unlikely]] { return 0; }
 
   const auto read = file->FileSystem()->ReadHandle(file->mountPoint, *file->vfsNode, file->offset, readInto);
   file->offset += read;
@@ -335,12 +320,12 @@ UNDOS_KERNEL_API_DEF uint64_t KE_VFS_ReadFile(kernel::KObjectPtr<kernel::KFileOb
   return read;
 }
 
-UNDOS_KERNEL_API_DEF uint64_t KE_VFS_WriteFile(kernel::KObjectPtr<kernel::KFileObject> file, const kstd::span<const uint8_t> &buffer) noexcept {
-  if (!file) [[unlikely]] { return 0; }
+UNDOS_KERNEL_API_DEF uint64_t KE_VFS_WriteFile(const kernel::KObjectPtr<kernel::KIOObject> &file, const kstd::span<const uint8_t> &buffer) noexcept {
+  if (!file || file->isClosed || !file->vfsNode || file->ops != &kernel::io::FileOps) [[unlikely]] { return 0; }
   if (!file->FileSystem()) [[unlikely]] { return 0; }
   if (!file->FileSystem()->WriteHandle) [[unlikely]] { return 0; }
 
-  if (!(file->mode & kernel::KFileObject::OpenMode::Write)) [[unlikely]] { return 0; }
+  if (!(file->mode & kernel::KIOObject::OpenMode::Write)) [[unlikely]] { return 0; }
   
   const auto written = file->FileSystem()->WriteHandle(file->mountPoint, *file->vfsNode, file->offset, buffer);
   file->offset += written;
@@ -348,13 +333,38 @@ UNDOS_KERNEL_API_DEF uint64_t KE_VFS_WriteFile(kernel::KObjectPtr<kernel::KFileO
   return written;
 }
 
-UNDOS_KERNEL_API_DEF uint64_t KE_VFS_SeekFile(kernel::KObjectPtr<kernel::KFileObject> file, uint64_t absolute_offset) noexcept {
-  if (!file) [[unlikely]] { return 0; }
+UNDOS_KERNEL_API_DEF uint64_t KE_VFS_SeekFile(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t absolute_offset) noexcept {
+  if (!file || file->isClosed) [[unlikely]] { return 0; }
 
   return file->offset = absolute_offset;
 }
 
-UNDOS_KERNEL_API_DEF uint64_t KE_VFS_TellFile(const kernel::KObjectPtr<kernel::KFileObject> &file) noexcept {
+UNDOS_KERNEL_API_DEF uint64_t KE_VFS_TellFile(const kernel::KObjectPtr<kernel::KIOObject> &file) noexcept {
   if (!file) [[unlikely]] { return 0; }
   return file->offset;
 }
+
+namespace kernel {
+namespace {
+IoStatus FileRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
+  if (!(io.mode & KIOObject::OpenMode::Read)) return IoStatus::AccessDenied;
+  transferred = static_cast<size_t>(KE_VFS_ReadFile(&io, buffer));
+  return IoStatus::Success;
+}
+
+IoStatus FileWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
+  if (!(io.mode & KIOObject::OpenMode::Write)) return IoStatus::AccessDenied;
+  transferred = static_cast<size_t>(KE_VFS_WriteFile(&io, buffer));
+  return IoStatus::Success;
+}
+
+IoStatus FileClose(KIOObject &io) {
+  KE_VFS_CloseFile(&io);
+  return IoStatus::Success;
+}
+} // namespace
+
+namespace io {
+const KIOOps FileOps{FileRead, FileWrite, {}, FileClose};
+} // namespace io
+} // namespace kernel

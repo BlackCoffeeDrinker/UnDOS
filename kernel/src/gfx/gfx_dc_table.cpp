@@ -12,8 +12,8 @@ kstd::pair<KDeviceContextSlot *, HDC> DeviceContextTable::Allocate() noexcept {
   } else {
     index = next_index;
 
-    const size_t chunkIndex = index / kSlotsPerChunk;
-    if (chunkIndex >= chunks.size()) {
+    if (const size_t chunkIndex = index / kSlotsPerChunk;
+        chunkIndex >= chunks.size()) {
       auto chunk = kstd::make_unique<Chunk>();
       if (!chunk) {
         table_lock.unlock();
@@ -36,6 +36,12 @@ kstd::pair<KDeviceContextSlot *, HDC> DeviceContextTable::Allocate() noexcept {
   slot.penColor = 0;
   slot.currentX = 0;
   slot.currentY = 0;
+  slot.originX = 0;
+  slot.originY = 0;
+  slot.clipped = false;
+  slot.clipRects = nullptr;
+  slot.clipCount = 0;
+  slot.clipOwner = nullptr;
 
   const HDC hdc = (static_cast<uint32_t>(slot.generation) << 16) | (index & 0xFFFF);
 
@@ -74,6 +80,10 @@ bool DeviceContextTable::Close(HDC hdc) noexcept {
   slot->display = nullptr;
   slot->target = nullptr;
   slot->selectedBitmap = nullptr;
+  slot->clipped = false;
+  slot->clipRects = nullptr;
+  slot->clipCount = 0;
+  slot->clipOwner = nullptr;
   ++slot->generation;
 
   table_lock.lock();

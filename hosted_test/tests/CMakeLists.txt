@@ -15,10 +15,13 @@ add_executable(KernelTests
         volume_manager_test.cpp
         fat_short_name_test.cpp
         scheduler_test.cpp
+        wait_test.cpp
+        user_test.cpp
         percpu_test.cpp
         input_scancode_test.cpp
         mouse_packet_test.cpp
         input_queue_test.cpp
+        dispatch_interrupt_test.cpp
 
         kernel_host_stubs.cpp
         kernel_host_vmm_stubs.cpp
@@ -37,6 +40,12 @@ add_executable(KernelTests
         ../../kernel/src/gfx/gfx_management.cpp
         ../../kernel/src/gfx/gfx_software_fallback.cpp
         ../../kernel/src/gfx/gfx_dc_table.cpp
+        ../../kernel/src/tty/tty.cpp
+        ../../kernel/src/tty/tty_device.cpp
+        ../../kernel/src/user/window.cpp
+        ../../kernel/src/user/msgqueue.cpp
+        ../../kernel/src/user/paint.cpp
+        ../../kernel/src/user/nonclient.cpp
 
         object_manager_test.cpp
         subsystem_object_test.cpp
@@ -44,6 +53,8 @@ add_executable(KernelTests
         object_creation_leak_test.cpp
         configuration_manager_test.cpp
         gfx_test.cpp
+        tty_test.cpp
+        io_object_test.cpp
 
         ../../drivers/disk_fake/fake_disk_file_backend.cpp
         disk_fake_test.cpp

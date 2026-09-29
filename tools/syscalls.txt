@@ -2,6 +2,7 @@
 // is pulled in here so both groups end up in a single generated dispatch
 // table (see kernel/src/gfx/gfx_management.cpp and kernel/src/syscalls/GFX.cpp).
 include "gfxsyscall.txt";
+include "usersyscall.txt";
 
 enum SyscallReturnCode {
     OKAY = 0,
@@ -10,6 +11,8 @@ enum SyscallReturnCode {
     OUT_OF_MEMORY = 0xFFFFFFFD,
     INVALID_ADDRESS = 0xFFFFFFFC,
     INVALID_ARGUMENT = 0xFFFFFFFB,
+    UNSUPPORTED = 0xFFFFFFFA,
+    TIMEOUT = 0xFFFFFFF9,
 
 };
 
@@ -37,6 +40,8 @@ syscall V1 PROC CreateProcess [200] {
     argument: IN string;
     /** Combination of ProcessFlags controlling the new process. */
     flags: IN c<uint32_t>;
+    /** Handle to the new process (waitable with WaitProcess). */
+    handle: OUT c<uint32_t>;
 };
 
 /** Retrieves information about a running or exited process. */
@@ -53,6 +58,48 @@ syscall V1 PROC GetInfo [201] {
 syscall V1 PROC Exit [202] {
     /** Return code to report to the parent process. */
     exitCode: IN c<uint32_t>;
+};
+
+/** Timeout value meaning "wait forever". */
+enum WaitTimeout {
+    Infinite = 0xFFFFFFFF,
+};
+
+/** Blocks until a waitable handle (event or process) is signalled. Returns TIMEOUT on expiry. */
+syscall V1 PROC WaitForObject [203] {
+    /** Handle to wait on. */
+    handle: IN c<uint32_t>;
+    /** Timeout in milliseconds; 0 polls, WaitTimeout_Infinite never expires. */
+    timeoutMs: IN c<uint32_t>;
+};
+
+/** Blocks until a process exits and returns its exit code. Returns TIMEOUT on expiry. */
+syscall V1 PROC WaitProcess [204] {
+    /** Process handle from CreateProcess. */
+    handle: IN c<uint32_t>;
+    /** Timeout in milliseconds; 0 polls, WaitTimeout_Infinite never expires. */
+    timeoutMs: IN c<uint32_t>;
+    /** Exit code of the process. */
+    exitCode: OUT c<uint32_t>;
+};
+
+flags EventFlags : uint32_t {
+    ManualReset;
+    InitialState;
+};
+
+/** Creates an event object. */
+syscall V1 PROC CreateEvent [205] {
+    /** Combination of EventFlags. */
+    flags: IN flags<EventFlags>;
+    /** Handle to the new event. */
+    handle: OUT c<uint32_t>;
+};
+
+/** Signals an event. */
+syscall V1 PROC SetEvent [206] {
+    /** Event handle. */
+    handle: IN c<uint32_t>;
 };
 
 /** Memory protection bit flags, mirrors kernel::vmm::ProtectFlags. */
@@ -92,6 +139,13 @@ syscall V1 MEM Protect [212] {
     /** Size in bytes of the region to reprotect. */
     size: IN c<uint32_t>;
     /** New protection to apply. */
+    flags: IN enum<MemoryProtectFlags>;
+};
+
+/** Maps anonymous user pages at a page-aligned address selected by the caller. */
+syscall V1 MEM MapFixedPages [213] {
+    address: IN c<uint32_t>;
+    size: IN c<uint32_t>;
     flags: IN enum<MemoryProtectFlags>;
 };
 
@@ -136,6 +190,40 @@ syscall V1 IO Write [223] {
     handle: IN c<uint32_t>;
     /** Buffer containing the data to write. */
     data: IN buffer<c<uint8_t>>;
+};
+
+/** Device control codes understood by IO Control. */
+enum IoControlCode {
+    /** Display: output is struct<IoctlDisplayMode>. */
+    DisplayQueryMode = 0x0100,
+    /** Pointer: input is struct<IoctlMouseConfig>. */
+    MouseConfigure   = 0x0200,
+};
+
+struct IoctlDisplayMode {
+    width: c<uint32_t>;
+    height: c<uint32_t>;
+    bpp: c<uint32_t>;
+    pitch: c<uint32_t>;
+};
+
+struct IoctlMouseConfig {
+    /** Non-zero enables data reporting, zero disables it. */
+    enable: c<uint32_t>;
+    /** Sample rate in reports per second (10-200), 0 keeps the current rate. */
+    sampleRate: c<uint32_t>;
+};
+
+/** Sends a control code to the device behind an open handle. */
+syscall V1 IO Control [224] {
+    /** Open handle to the device. */
+    handle: IN c<uint32_t>;
+    /** One of IoControlCode. */
+    code: IN c<uint32_t>;
+    /** Code-specific input payload. */
+    input: IN buffer<c<uint8_t>>;
+    /** Code-specific output payload; receives the number of bytes written. */
+    output: OUT buffer<c<uint8_t>>;
 };
 
 flags TtyModeFlags : uint32_t {

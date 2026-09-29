@@ -42,6 +42,33 @@ kernel::KObjectPtr<kernel::KSurface> ResolveSurface(kernel::KProcessObject &proc
   return entry->object.As<kernel::KSurface>();
 }
 
+// Calls fn(left, top, right, bottom) for each part of the rectangle that lies
+// inside the slot's clip list (or once, unclipped, when the DC has none).
+template<typename Fn>
+void ForEachClip(const kernel::KDeviceContextSlot &slot, int32_t l, int32_t t, int32_t r, int32_t b, Fn &&fn) {
+  if (!slot.clipped) {
+    if (r > l && b > t) fn(l, t, r, b);
+    return;
+  }
+  for (uint32_t i = 0; i < slot.clipCount; ++i) {
+    const auto &c = slot.clipRects[i];
+    const int32_t cl = l > c.left ? l : c.left;
+    const int32_t ct = t > c.top ? t : c.top;
+    const int32_t cr = r < c.right ? r : c.right;
+    const int32_t cb = b < c.bottom ? b : c.bottom;
+    if (cr > cl && cb > ct) fn(cl, ct, cr, cb);
+  }
+}
+
+bool InClip(const kernel::KDeviceContextSlot &slot, int32_t x, int32_t y) {
+  if (!slot.clipped) return true;
+  for (uint32_t i = 0; i < slot.clipCount; ++i) {
+    const auto &c = slot.clipRects[i];
+    if (x >= c.left && x < c.right && y >= c.top && y < c.bottom) return true;
+  }
+  return false;
+}
+
 }// namespace
 
 SyscallReturnCode handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
@@ -123,7 +150,7 @@ SyscallReturnCode handle_CreateBitmap_V1(__KRN_GFX_CREATEBITMAP_V1 &&args) {
 
   const auto pixelFormat = static_cast<kernel::PixelFormat>(args.format);
   const size_t bpp = BytesPerPixel(pixelFormat);
-  const size_t pitch = static_cast<size_t>(args.width) * bpp;
+  const size_t pitch = args.width * bpp;
   const size_t size = pitch * args.height;
 
   auto &as = KE_VMM_GetKernelAddressSpace();
@@ -204,9 +231,31 @@ SyscallReturnCode handle_LineTo_V1(__KRN_GFX_LINETO_V1 &&args) {
     return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
-  bool ok = adapter->DrawLine(slot->target, slot->currentX, slot->currentY, args.x, args.y, slot->penColor);
-  if (!ok) {
-    ok = KE_GFX_SoftwareDrawLine(slot->target, slot->currentX, slot->currentY, args.x, args.y, slot->penColor);
+  const int32_t x0 = slot->currentX + slot->originX;
+  const int32_t y0 = slot->currentY + slot->originY;
+  const int32_t x1 = args.x + slot->originX;
+  const int32_t y1 = args.y + slot->originY;
+  bool ok = true;
+  if (slot->clipped) {
+    // Clipped DCs plot the line point by point so each pixel is tested.
+    int32_t x = x0, y = y0;
+    const int32_t dx = x1 > x0 ? x1 - x0 : x0 - x1;
+    const int32_t dy = y1 > y0 ? y0 - y1 : y1 - y0;
+    const int32_t sx = x0 < x1 ? 1 : -1;
+    const int32_t sy = y0 < y1 ? 1 : -1;
+    int32_t err = dx + dy;
+    for (;;) {
+      if (InClip(*slot, x, y)) KE_GFX_SoftwareFillRect(slot->target, x, y, 1, 1, slot->penColor);
+      if (x == x1 && y == y1) break;
+      const int32_t e2 = 2 * err;
+      if (e2 >= dy) { err += dy; x += sx; }
+      if (e2 <= dx) { err += dx; y += sy; }
+    }
+  } else {
+    ok = adapter->DrawLine(slot->target, x0, y0, x1, y1, slot->penColor);
+    if (!ok) {
+      ok = KE_GFX_SoftwareDrawLine(slot->target, x0, y0, x1, y1, slot->penColor);
+    }
   }
 
   slot->currentX = args.x;
@@ -236,13 +285,14 @@ SyscallReturnCode handle_Rectangle_V1(__KRN_GFX_RECTANGLE_V1 &&args) {
     return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
-  const int w = args.right - args.left;
-  const int h = args.bottom - args.top;
-
-  bool ok = adapter->FillRect && adapter->FillRect(slot->target, args.left, args.top, w, h, slot->penColor);
-  if (!ok) {
-    ok = KE_GFX_SoftwareFillRect(slot->target, args.left, args.top, w, h, slot->penColor);
-  }
+  bool ok = true;
+  ForEachClip(*slot, args.left + slot->originX, args.top + slot->originY,
+              args.right + slot->originX, args.bottom + slot->originY,
+              [&](int32_t l, int32_t t, int32_t r, int32_t b) {
+                bool drawn = adapter->FillRect && adapter->FillRect(slot->target, l, t, r - l, b - t, slot->penColor);
+                if (!drawn) drawn = KE_GFX_SoftwareFillRect(slot->target, l, t, r - l, b - t, slot->penColor);
+                ok = ok && drawn;
+              });
 
   slot->lock.unlock();
 
@@ -290,10 +340,21 @@ SyscallReturnCode handle_BitBlt_V1(__KRN_GFX_BITBLT_V1 &&args) {
 
   const auto rop = static_cast<kernel::RasterOp>(args.rop);
 
-  bool ok = adapter->BitBlt && adapter->BitBlt(dstSlot->target, args.x, args.y, srcSlot->target, args.srcX, args.srcY, args.width, args.height, rop);
-  if (!ok) {
-    ok = KE_GFX_SoftwareBitBlt(dstSlot->target, args.x, args.y, srcSlot->target, args.srcX, args.srcY, args.width, args.height, rop);
-  }
+  const int32_t dx = args.x + dstSlot->originX;
+  const int32_t dy = args.y + dstSlot->originY;
+  const int32_t sx = args.srcX + srcSlot->originX;
+  const int32_t sy = args.srcY + srcSlot->originY;
+  bool ok = true;
+  ForEachClip(*dstSlot, dx, dy, dx + static_cast<int32_t>(args.width), dy + static_cast<int32_t>(args.height),
+              [&](int32_t l, int32_t t, int32_t r, int32_t b) {
+                const int32_t csx = sx + (l - dx);
+                const int32_t csy = sy + (t - dy);
+                const auto w = static_cast<uint32_t>(r - l);
+                const auto h = static_cast<uint32_t>(b - t);
+                bool drawn = adapter->BitBlt && adapter->BitBlt(dstSlot->target, l, t, srcSlot->target, csx, csy, w, h, rop);
+                if (!drawn) drawn = KE_GFX_SoftwareBitBlt(dstSlot->target, l, t, srcSlot->target, csx, csy, w, h, rop);
+                ok = ok && drawn;
+              });
 
   if (!sameSlot) srcSlot->lock.unlock();
   dstSlot->lock.unlock();
@@ -349,7 +410,7 @@ SyscallReturnCode handle_GetBitmapBits_V1(__KRN_GFX_GETBITMAPBITS_V1 &&args) {
   if (!bitmap || !bitmap->backing || !bitmap->backing->directAddress) return SyscallReturnCode_INVALID_ARGUMENT;
   if (!args.buffer) return SyscallReturnCode_INVALID_ARGUMENT;
 
-  const size_t surfaceSize = static_cast<size_t>(bitmap->pitch) * bitmap->height;
+  const size_t surfaceSize = bitmap->pitch * bitmap->height;
   const size_t copySize = args.buffer.size() < surfaceSize ? args.buffer.size() : surfaceSize;
 
   kstd::memcpy(args.buffer.get(), bitmap->backing->directAddress.as_ptr<uint8_t>(), copySize);
@@ -366,7 +427,7 @@ SyscallReturnCode handle_SetBitmapBits_V1(__KRN_GFX_SETBITMAPBITS_V1 &&args) {
   if (!bitmap || !bitmap->backing || !bitmap->backing->directAddress) return SyscallReturnCode_INVALID_ARGUMENT;
   if (!args.buffer) return SyscallReturnCode_INVALID_ARGUMENT;
 
-  const size_t surfaceSize = static_cast<size_t>(bitmap->pitch) * bitmap->height;
+  const size_t surfaceSize = bitmap->pitch * bitmap->height;
   const size_t copySize = args.buffer.size() < surfaceSize ? args.buffer.size() : surfaceSize;
 
   kstd::memcpy(bitmap->backing->directAddress.as_ptr<uint8_t>(), args.buffer.get(), copySize);

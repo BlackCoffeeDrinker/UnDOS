@@ -2,6 +2,7 @@
 
 #include <kernel/io.hpp>
 #include <kernel/object_manager.hpp>
+#include <kernel/kobject/KProcessObject.hpp>
 #include <kernel/vfs.hpp>
 
 #include "ob_test_support.hpp"
@@ -32,6 +33,8 @@ kstd::static_string<128> MakeTempImagePath(const char *name) {
 // sequentially, and each TestFsFixture resets it on construction).
 struct TestFsDriverState {
   bool mountVolumeCalled = false;
+  bool createHandleSucceeds = true;
+  size_t closeCount = 0;
   kernel::KDevicePtr<kernel::KDevice> lastMountedVolume;
   kstd::static_string<64> lastMountOptions;
   bool unmountVolumeCalled = false;
@@ -65,8 +68,12 @@ bool TestFs_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const
   return true;
 }
 
-bool TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kernel::KFileObject::OpenMode) {
-  return true;
+bool TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kernel::KIOObject::OpenMode) {
+  return g_testFsState.createHandleSucceeds;
+}
+
+void TestFs_CloseHandle(const kernel::KObjectPtr<kernel::KIOObject> &) {
+  ++g_testFsState.closeCount;
 }
 
 uint64_t TestFs_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &buffer) {
@@ -116,6 +123,7 @@ struct TestFsFixture {
       filesystem->GetRootNode = TestFs_GetRootNode;
       filesystem->Lookup = TestFs_Lookup;
       filesystem->CreateHandle = TestFs_CreateHandle;
+      filesystem->CloseHandle = TestFs_CloseHandle;
       filesystem->ReadHandle = TestFs_ReadHandle;
       filesystem->WriteHandle = TestFs_WriteHandle;
     }
@@ -257,8 +265,9 @@ TEST_CASE("KE_VFS_OpenFile / ReadFile / WriteFile / SeekFile / TellFile / CloseF
   TestFsFixture fixture("filerw");
   REQUIRE(fixture.Mount("/", ""));
 
-  auto file = KE_VFS_OpenFile("/somefile.txt", kernel::KFileObject::OpenMode::ReadWrite);
+  auto file = KE_VFS_OpenFile("/somefile.txt", kernel::KIOObject::OpenMode::ReadWrite);
   REQUIRE(file != nullptr);
+  REQUIRE(file->ops == &kernel::io::FileOps);
   REQUIRE(KE_VFS_TellFile(file) == 0);
 
   kstd::array<uint8_t, 16> writeBuf{};
@@ -282,8 +291,48 @@ TEST_CASE("KE_VFS_OpenFile / ReadFile / WriteFile / SeekFile / TellFile / CloseF
     REQUIRE(readBuf[i] == writeBuf[i]);
   }
 
-  // KE_VFS_CloseFile takes the handle by rvalue reference but does not null
-  // out the caller's variable, so we can't assert `file == nullptr` here;
-  // just verify the close call completes without issue.
-  KE_VFS_CloseFile(kstd::move(file));
+  KE_VFS_CloseFile(file);
+  KE_VFS_CloseFile(file);
+  REQUIRE(g_testFsState.closeCount == 1);
+  REQUIRE(file->isClosed);
+  REQUIRE(KE_VFS_ReadFile(file, readSpan) == 0);
+}
+
+TEST_CASE("KE_VFS_OpenFile cleans up failed opens", "[vfs]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("open_failure");
+  REQUIRE(fixture.Mount("/", ""));
+  g_testFsState.createHandleSucceeds = false;
+  REQUIRE(KE_VFS_OpenFile("/somefile.txt", kernel::KIOObject::OpenMode::Read) == nullptr);
+  REQUIRE(g_testFsState.closeCount == 0);
+  g_testFsState.createHandleSucceeds = true;
+  auto file = KE_VFS_OpenFile("/somefile.txt", kernel::KIOObject::OpenMode::Read);
+  REQUIRE(file != nullptr);
+  KE_VFS_CloseFile(file);
+  REQUIRE(g_testFsState.closeCount == 1);
+}
+
+TEST_CASE("KIOObject remains usable across shared handles", "[vfs][io]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("shared_handles");
+  REQUIRE(fixture.Mount("/", ""));
+  auto file = KE_VFS_OpenFile("/shared.txt", kernel::KIOObject::OpenMode::ReadWrite);
+  REQUIRE(file != nullptr);
+  kernel::ProcessHandleTable table;
+  const auto first = table.Allocate(file, kernel::ProcessHandleTable::HandleAccess::Read,
+                                    kernel::ProcessHandleTable::HandleFlags::None);
+  const auto second = table.Allocate(file, kernel::ProcessHandleTable::HandleAccess::Read,
+                                     kernel::ProcessHandleTable::HandleFlags::None);
+  file = nullptr;
+  REQUIRE(table.Close(first));
+  REQUIRE(g_testFsState.closeCount == 0);
+  auto remaining = table.Lookup(second)->object.As<kernel::KIOObject>();
+  REQUIRE_FALSE(remaining->isClosed);
+  uint8_t buffer[1]{};
+  size_t transferred = 0;
+  REQUIRE(remaining->Read(kstd::span<uint8_t>(buffer, sizeof(buffer)), transferred) == kernel::IoStatus::Success);
+  REQUIRE(table.Close(second));
+  REQUIRE(g_testFsState.closeCount == 0);
+  remaining = nullptr;
+  REQUIRE(g_testFsState.closeCount == 1);
 }

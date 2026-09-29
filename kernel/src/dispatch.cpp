@@ -46,8 +46,7 @@ void InterruptDispatchThread(void *) {
 
     HAL_CPU_DisableInterrupts();
     if (g_interruptRing.Empty()) {
-      auto current = KE_SCHED_GetCurrentThread();
-      if (current) {
+      if (const auto current = KE_SCHED_GetCurrentThread()) {
         current->state = kernel::KThreadObject::State::Blocked;
       }
       kernel::sched::schedule_next();

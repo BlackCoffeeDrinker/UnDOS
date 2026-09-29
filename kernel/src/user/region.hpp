@@ -1,0 +1,98 @@
+#pragma once
+
+#include <stdint.h>
+
+namespace kernel::user {
+
+// Half-open rectangle [left, right) x [top, bottom).
+struct URect {
+  int32_t left{0};
+  int32_t top{0};
+  int32_t right{0};
+  int32_t bottom{0};
+
+  [[nodiscard]] constexpr bool Empty() const noexcept { return right <= left || bottom <= top; }
+
+  [[nodiscard]] constexpr URect Intersect(const URect &o) const noexcept {
+    URect r{left > o.left ? left : o.left, top > o.top ? top : o.top,
+            right < o.right ? right : o.right, bottom < o.bottom ? bottom : o.bottom};
+    if (r.Empty()) return {};
+    return r;
+  }
+
+  [[nodiscard]] constexpr URect Union(const URect &o) const noexcept {
+    if (Empty()) return o;
+    if (o.Empty()) return *this;
+    return {left < o.left ? left : o.left, top < o.top ? top : o.top,
+            right > o.right ? right : o.right, bottom > o.bottom ? bottom : o.bottom};
+  }
+
+  [[nodiscard]] constexpr URect Offset(int32_t dx, int32_t dy) const noexcept {
+    return {left + dx, top + dy, right + dx, bottom + dy};
+  }
+
+  constexpr bool operator==(const URect &) const noexcept = default;
+};
+
+// Fixed-capacity list of disjoint rectangles (no allocation). When a
+// subtraction would exceed the capacity the rectangle is kept whole, which
+// errs on the side of drawing too much rather than leaving holes.
+struct URegion {
+  static constexpr uint32_t kMaxRects = 32;
+
+  URect rects[kMaxRects]{};
+  uint32_t count{0};
+
+  void Clear() noexcept { count = 0; }
+
+  void Set(const URect &r) noexcept {
+    count = 0;
+    if (!r.Empty()) rects[count++] = r;
+  }
+
+  [[nodiscard]] bool Empty() const noexcept { return count == 0; }
+
+  [[nodiscard]] URect Bounds() const noexcept {
+    URect b{};
+    for (uint32_t i = 0; i < count; ++i) b = b.Union(rects[i]);
+    return b;
+  }
+
+  void Intersect(const URect &clip) noexcept {
+    uint32_t out = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+      const URect r = rects[i].Intersect(clip);
+      if (!r.Empty()) rects[out++] = r;
+    }
+    count = out;
+  }
+
+  void Subtract(const URect &cut) noexcept {
+    if (cut.Empty()) return;
+    URect result[kMaxRects];
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+      const URect &r = rects[i];
+      const URect x = r.Intersect(cut);
+      if (x.Empty()) {
+        if (n < kMaxRects) result[n++] = r;
+        continue;
+      }
+      URect parts[4];
+      uint32_t p = 0;
+      if (r.top < x.top) parts[p++] = {r.left, r.top, r.right, x.top};
+      if (x.bottom < r.bottom) parts[p++] = {r.left, x.bottom, r.right, r.bottom};
+      if (r.left < x.left) parts[p++] = {r.left, x.top, x.left, x.bottom};
+      if (x.right < r.right) parts[p++] = {x.right, x.top, r.right, x.bottom};
+      if (n + p > kMaxRects) {
+        if (n < kMaxRects) result[n++] = r;
+        continue;
+      }
+      for (uint32_t k = 0; k < p; ++k) result[n++] = parts[k];
+    }
+    for (uint32_t i = 0; i < n; ++i) rects[i] = result[i];
+    count = n;
+  }
+};
+
+} // namespace kernel::user

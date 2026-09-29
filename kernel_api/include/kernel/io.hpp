@@ -93,6 +93,19 @@ UNDOS_KERNEL_PUBLIC_V1API(
 
 /**
  * @ingroup IO
+ * @brief Method KE_IO_ControlDevice
+ *
+ * Synchronous control dispatch to the device's driver DeviceControl handler.
+ * Returns IoStatus::Unsupported when the driver has no handler.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kernel::IoStatus,
+    KE_IO_ControlDevice,
+    const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
+    kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred);
+
+/**
+ * @ingroup IO
  * @brief Method KE_IO_ConnectInterrupt
  *
  * Builds a KInterruptServiceRoutineObject wrapping `routine`/`context`,

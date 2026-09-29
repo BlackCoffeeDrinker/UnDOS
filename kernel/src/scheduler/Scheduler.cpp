@@ -166,6 +166,20 @@ void tick() noexcept {
     schedule_next();
   }
 }
+
+void block_current_locked() noexcept {
+  if (g_current) {
+    g_current->state = KThreadObject::State::Blocked;
+  }
+  schedule_next();
+}
+
+void ready_locked(KThreadObject *thread) noexcept {
+  if (thread && thread->state == KThreadObject::State::Blocked) {
+    thread->state = KThreadObject::State::Ready;
+    g_ready.enqueue(thread);
+  }
+}
 }// namespace kernel::sched
 
 using namespace kernel;

@@ -1,7 +1,7 @@
 ENTRY(_start)
 
 SECTIONS {
-    . = 0x10000;     /* arbitrary load address */
+    . = 0x20000;     /* separate from the application image at 0x10000 */
 
     .text : {
         *(.text*)

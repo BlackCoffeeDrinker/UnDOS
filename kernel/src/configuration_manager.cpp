@@ -52,8 +52,7 @@ bool EnsureRootIsOpened(const kernel::KObjectPtr<kernel::KConfigurationRoot> &co
     return true;
   }
 
-  configRoot->file = KE_VFS_OpenFile(configRoot->filePath,
-                                     kernel::KFileObject::OpenMode::ReadWrite);
+  configRoot->file = KE_VFS_OpenFile(configRoot->filePath, kernel::KIOObject::OpenMode::ReadWrite);
   if (!configRoot->file) {
     // Unable to open file
     early_print_fmt("ERROR: Unable to open configuration {}\r\n", configRoot->filePath);
@@ -503,11 +502,11 @@ UNDOS_KERNEL_API_DEF size_t KE_CM_GetKeyValueStringSize(const kernel::KConfigura
       if (entry.valueType != kernel::ConfigurationValueType::String) {
         return false;
       }
-      
+
       return entry.length;
     }
   }
-  
+
   return 0;
 }
 
@@ -687,8 +686,8 @@ bool RebindHiveFile(const kstd::string_view &hiveName, const kstd::string_view &
   // Same underlying bytes as before, just reached through a different VFS
   // mount: reopen without re-parsing so `roots` stays intact.
   configRoot->file = KE_VFS_OpenFile(configRoot->filePath,
-                                     KFileObject::OpenMode::ReadWrite |
-                                         KFileObject::OpenMode::Create);
+                                     KIOObject::OpenMode::ReadWrite |
+                                         KIOObject::OpenMode::Create);
   if (!configRoot->file) {
     early_print_fmt("RebindHiveFile: failed to reopen hive '{}' at '{}'\r\n",
                     hiveName, newFilePath);

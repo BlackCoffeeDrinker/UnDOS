@@ -1,0 +1,193 @@
+
+// region USER
+//
+// =====================================================
+//  Window Manager (USER)
+//  Syscalls 400–499
+// =====================================================
+//
+
+enum WindowMessage {
+    Null        = 0x0000,
+    Create      = 0x0001,
+    Destroy     = 0x0002,
+    Move        = 0x0003,
+    Size        = 0x0005,
+    Activate    = 0x0006,
+    Paint       = 0x000F,
+    Close       = 0x0010,
+    Quit        = 0x0012,
+    NcHitTest   = 0x0084,
+    NcMouseMove = 0x00A0,
+    NcLButtonDown = 0x00A1,
+    NcLButtonUp   = 0x00A2,
+    KeyDown     = 0x0100,
+    KeyUp       = 0x0101,
+    Char        = 0x0102,
+    MouseMove   = 0x0200,
+    LButtonDown = 0x0201,
+    LButtonUp   = 0x0202,
+    RButtonDown = 0x0204,
+    RButtonUp   = 0x0205,
+    User        = 0x0400,
+};
+
+flags WindowStyle : uint32 {
+    Visible;
+    Caption;
+    Border;
+    Child;
+};
+
+enum ShowCommand {
+    Hide = 0,
+    Show = 1,
+};
+
+enum HitTest {
+    Transparent = -1,
+    Nowhere = 0,
+    Client = 1,
+    Caption = 2,
+    SysMenu = 3,
+    MinButton = 8,
+    MaxButton = 9,
+    Left = 10,
+    Right = 11,
+    Top = 12,
+    TopLeft = 13,
+    TopRight = 14,
+    Bottom = 15,
+    BottomLeft = 16,
+    BottomRight = 17,
+    Border = 18,
+    Close = 20,
+};
+
+enum WindowLongIndex {
+    WndProc  = 0,
+    UserData = 1,
+    Style    = 2,
+};
+
+struct Msg {
+    hwnd:    c<uint32_t>;
+    message: c<uint32_t>;
+    wParam:  c<uint32_t>;
+    lParam:  c<uint32_t>;
+    time:    c<uint32_t>;
+};
+
+struct PaintInfo {
+    /** Invalid area in window coordinates. */
+    rcPaint: struct<Rect>;
+    /** Non-zero when the background was erased by the kernel. */
+    erased:  c<uint32_t>;
+};
+
+/** Registers a window class; wndProc is stored opaquely and called by userland. */
+syscall V1 USER RegisterClass [400] {
+    name:       IN string;
+    wndProc:    IN c<uint32_t>;
+    background: IN COLORREF;
+};
+
+/** Creates a top-level window owned by the calling thread. */
+syscall V1 USER CreateWindow [401] {
+    className: IN string;
+    title:     IN string;
+    style:     IN flags<WindowStyle>;
+    x:         IN c<int32_t>;
+    y:         IN c<int32_t>;
+    width:     IN c<int32_t>;
+    height:    IN c<int32_t>;
+    parent:    IN c<uint32_t>;
+    userData:  IN c<uint32_t>;
+    hwnd:      OUT c<uint32_t>;
+};
+
+syscall V1 USER DestroyWindow [402] {
+    hwnd: IN c<uint32_t>;
+};
+
+/** One of ShowCommand. */
+syscall V1 USER ShowWindow [403] {
+    hwnd:    IN c<uint32_t>;
+    command: IN c<uint32_t>;
+};
+
+syscall V1 USER MoveWindow [404] {
+    hwnd:   IN c<uint32_t>;
+    x:      IN c<int32_t>;
+    y:      IN c<int32_t>;
+    width:  IN c<int32_t>;
+    height: IN c<int32_t>;
+};
+
+/** Window rectangle in screen coordinates. */
+syscall V1 USER GetWindowRect [405] {
+    hwnd: IN c<uint32_t>;
+    rect: OUT RECT;
+};
+
+/** Adds rect (window coordinates) to the invalid area; whole != 0 invalidates everything. */
+syscall V1 USER InvalidateRect [406] {
+    hwnd:  IN c<uint32_t>;
+    rect:  IN RECT;
+    whole: IN c<uint32_t>;
+};
+
+/** Returns a DC clipped to the visible part of the invalid area, origin at the window. */
+syscall V1 USER BeginPaint [407] {
+    hwnd:  IN c<uint32_t>;
+    dc:    OUT c<uint32_t>;
+    paint: OUT struct<PaintInfo>;
+};
+
+syscall V1 USER EndPaint [408] {
+    hwnd: IN c<uint32_t>;
+    dc:   IN c<uint32_t>;
+};
+
+/** Blocks until a message arrives; msg.message == Quit ends a message loop. */
+syscall V1 USER GetMessage [409] {
+    msg: OUT struct<Msg>;
+};
+
+/** Non-blocking; returns TIMEOUT when the queue is empty. remove == 0 leaves it queued. */
+syscall V1 USER PeekMessage [410] {
+    msg:    OUT struct<Msg>;
+    remove: IN c<uint32_t>;
+};
+
+/** Queues a message; returns OUT_OF_MEMORY when the target ring is full. */
+syscall V1 USER PostMessage [411] {
+    hwnd:    IN c<uint32_t>;
+    message: IN c<uint32_t>;
+    wParam:  IN c<uint32_t>;
+    lParam:  IN c<uint32_t>;
+};
+
+/** One of WindowLongIndex. */
+syscall V1 USER GetWindowLongPtr [412] {
+    hwnd:  IN c<uint32_t>;
+    index: IN c<uint32_t>;
+    value: OUT c<uint32_t>;
+};
+
+syscall V1 USER SetWindowLongPtr [413] {
+    hwnd:     IN c<uint32_t>;
+    index:    IN c<uint32_t>;
+    value:    IN c<uint32_t>;
+    previous: OUT c<uint32_t>;
+};
+
+syscall V1 USER SetCapture [414] {
+    hwnd: IN c<uint32_t>;
+};
+
+syscall V1 USER ReleaseCapture [415] {
+    unused: IN c<uint32_t>;
+};
+
+// endregion

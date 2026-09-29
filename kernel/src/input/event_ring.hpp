@@ -21,7 +21,7 @@ namespace kernel::input {
 
 class EventRing {
   public:
-  static constexpr size_t kCapacity = 64;
+  static constexpr size_t kCapacity = 128;
 
   // Always succeeds: on a full ring, the oldest pure-motion mouse event is
   // coalesced away first (Task 16); if none exists, the oldest event of any

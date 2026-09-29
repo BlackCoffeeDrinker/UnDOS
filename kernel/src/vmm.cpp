@@ -124,6 +124,60 @@ void *allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcep
 
   return virt;
 }
+
+bool map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, ProtectFlags flags) noexcept {
+  if (!size || (address & (g_page_size - 1)) || address < 0x10000 ||
+      address >= static_cast<uintptr_t>(as.limit) ||
+      size > static_cast<uintptr_t>(as.limit) - address || size > SIZE_MAX - (g_page_size - 1)) return false;
+  const size_t aligned = (size + g_page_size - 1) & ~(g_page_size - 1);
+  if (aligned > static_cast<uintptr_t>(as.limit) - address) return false;
+  bool overlap = false;
+  as.vads.each([&](VirtualAddressDescriptor *existing) {
+    if (address < static_cast<uintptr_t>(existing->end) &&
+        address + aligned > static_cast<uintptr_t>(existing->start)) overlap = true;
+  });
+  if (overlap) return false;
+
+  auto vad = KE_CreateObject<VirtualAddressDescriptor>();
+  if (!vad) return false;
+  const auto caller = HAL_VMM_GetCurrentTranslationRoot();
+  const bool switch_as = as.translation_root != caller;
+  if (switch_as) {
+    HAL_CPU_DisableInterrupts();
+    HAL_VMM_SwitchAddressSpace(as.translation_root);
+  }
+  size_t mapped = 0;
+  for (; mapped < aligned; mapped += g_page_size) {
+    if (HAL_VMM_GetPhysicalAddress(VirtualAddress(address + mapped))) break;
+    const auto phys = HAL_PMM_AllocateFrames(1);
+    if (!phys) break;
+    if (!HAL_VMM_MapPage(VirtualAddress(address + mapped), phys,
+                         flags | ProtectFlags::USER | ProtectFlags::WRITE)) {
+      HAL_PMM_FreeFrames(phys, 1);
+      break;
+    }
+    HAL_VMM_Flush(VirtualAddress(address + mapped));
+    __builtin_memset(reinterpret_cast<void *>(address + mapped), 0, g_page_size);
+  }
+  if (mapped != aligned) {
+    for (size_t offset = 0; offset < mapped; offset += g_page_size) {
+      const auto page = VirtualAddress(address + offset);
+      const auto phys = HAL_VMM_GetPhysicalAddress(page);
+      HAL_VMM_UnmapPage(page);
+      HAL_PMM_FreeFrames(phys, 1);
+    }
+  }
+  if (switch_as) {
+    HAL_VMM_SwitchAddressSpace(caller);
+    HAL_CPU_EnableInterrupts();
+  }
+  if (mapped != aligned) return false;
+  vad->start = VirtualAddress(address);
+  vad->end = VirtualAddress(address + aligned);
+  vad->flags = flags | ProtectFlags::USER;
+  as.vads.insert(*vad.release());
+  return true;
+}
 }// namespace kernel::vmm
 
 UNDOS_KERNEL_API_DEF void *KE_Malloc(size_t size) noexcept {

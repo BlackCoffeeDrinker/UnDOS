@@ -23,6 +23,9 @@ enum class IoStatus : uint8_t {
   OutOfRange,
   Unsupported,
   DeviceError,
+  InvalidSize,
+  AccessDenied,
+  DeviceNotReady,
 };
 
 struct KDriverObject : KObjectT<KDriverObject, 1, TYPE_DRIVER> {
@@ -56,6 +59,13 @@ struct KDriverObject : KObjectT<KDriverObject, 1, TYPE_DRIVER> {
   // `transferred` receives the number of bytes moved.
   cfunc<IoStatus(const KDevicePtr<KDevice> &, uint64_t, kstd::span<uint8_t>, size_t &)> Read;
   cfunc<IoStatus(const KDevicePtr<KDevice> &, uint64_t, kstd::span<const uint8_t>, size_t &)> Write;
+  // endregion
+
+  // region Device control
+  // Synchronous control request (code, input payload, output buffer). The
+  // driver sets `transferred` to the bytes written to the output buffer and
+  // returns IoStatus::Unsupported for codes it does not handle.
+  cfunc<IoStatus(const KDevicePtr<KDevice> &, uint32_t, kstd::span<const uint8_t>, kstd::span<uint8_t>, size_t &)> DeviceControl;
   // endregion
 };
 

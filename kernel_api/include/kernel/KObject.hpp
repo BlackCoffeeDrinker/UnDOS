@@ -4,7 +4,7 @@
 #include <kernel/kobject/KDeviceObject.hpp>
 #include <kernel/kobject/KDirectoryObject.hpp>
 #include <kernel/kobject/KDriverObject.hpp>
-#include <kernel/kobject/KFileObject.hpp>
+#include <kernel/kobject/KIOObject.hpp>
 #include <kernel/kobject/KFilesystemObject.hpp>
 #include <kernel/kobject/KGraphicsAdapter.hpp>
 #include <kernel/kobject/KDisplay.hpp>

@@ -19,7 +19,7 @@ constexpr size_t MAX_SECTION_HEADERS = 64;
 
 // Reads exactly `buffer.size()` bytes starting at `offset` from `file`,
 // seeking first. Returns false if the seek/read comes up short.
-bool ReadExact(const kernel::KObjectPtr<kernel::KFileObject> &file, uint64_t offset, kstd::span<uint8_t> buffer) noexcept {
+bool ReadExact(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t offset, kstd::span<uint8_t> buffer) noexcept {
   if (KE_VFS_SeekFile(file, offset) != offset) {
     early_print_fmt("ReadExact: Failed to seek to offset\r\n");
     return false;
@@ -39,7 +39,7 @@ bool ReadExact(const kernel::KObjectPtr<kernel::KFileObject> &file, uint64_t off
 // Reads a `size`-byte region from `file` at `offset` into a freshly
 // KE_Malloc'd buffer that the caller owns (KE_Free it). Returns nullptr on
 // allocation or short-read failure; size == 0 also returns nullptr.
-uint8_t *ReadBlob(const kernel::KObjectPtr<kernel::KFileObject> &file, uint64_t offset, size_t size) noexcept {
+uint8_t *ReadBlob(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t offset, size_t size) noexcept {
   if (size == 0) return nullptr;
   auto *data = static_cast<uint8_t *>(KE_Malloc(size));
   if (!data) return nullptr;
@@ -53,7 +53,7 @@ uint8_t *ReadBlob(const kernel::KObjectPtr<kernel::KFileObject> &file, uint64_t 
 // Applies every SHT_REL relocation section found in the section header
 // table `shdrs` (`shnum` entries, already resident in memory) of an ELF32
 // image streamed from `file`.
-bool ProcessRelocationsFromVfs(const kernel::KObjectPtr<kernel::KFileObject> &file, const hal::Elf32_Shdr *shdrs, size_t shnum, uintptr_t delta, const kernel::cfunc<uintptr_t(kstd::string_view)> &resolve_symbol) noexcept {
+bool ProcessRelocationsFromVfs(const kernel::KObjectPtr<kernel::KIOObject> &file, const hal::Elf32_Shdr *shdrs, size_t shnum, uintptr_t delta, const kernel::cfunc<uintptr_t(kstd::string_view)> &resolve_symbol) noexcept {
   for (size_t i = 0; i < shnum; ++i) {
     if (shdrs[i].sh_type != hal::SHT_REL) continue;
 
@@ -99,7 +99,7 @@ bool ProcessRelocationsFromVfs(const kernel::KObjectPtr<kernel::KFileObject> &fi
 // Reads the section-header-string-table and, for every named section,
 // invokes policy.capture_section with that section's bytes (still resident
 // in a temporary buffer, freed right after the callback returns).
-bool CaptureSections(const kernel::KObjectPtr<kernel::KFileObject> &file, const hal::Elf32_Ehdr &header, const hal::Elf32_Shdr *shdrs, const kernel::elf::LoadPolicy &policy) noexcept {
+bool CaptureSections(const kernel::KObjectPtr<kernel::KIOObject> &file, const hal::Elf32_Ehdr &header, const hal::Elf32_Shdr *shdrs, const kernel::elf::LoadPolicy &policy) noexcept {
   if (!policy.capture_section.valid()) return true;
   if (header.e_shstrndx >= header.e_shnum) return true;
 
@@ -206,7 +206,7 @@ bool kernel::elf::ProcessRelocationsFromBlob(const uint8_t *raw_blob, uintptr_t 
 kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &path, const LoadPolicy &policy) noexcept {
   LoadResult result;
 
-  auto file = KE_VFS_OpenFile(path, KFileObject::OpenMode::Read);
+  auto file = KE_VFS_OpenFile(path, KIOObject::OpenMode::Read);
   if (!file) {
     early_print_fmt("LoadElfFromVfs: Failed to open file\r\n");
     return result;

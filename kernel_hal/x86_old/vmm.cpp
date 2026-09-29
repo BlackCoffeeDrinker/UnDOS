@@ -8,6 +8,12 @@
 using kernel::PhysicalAddress;
 using kernel::VirtualAddress;
 
+namespace {
+void register_root(uintptr_t root) noexcept;
+void unregister_root(uintptr_t root) noexcept;
+void propagate_kernel_pde(size_t pd_index) noexcept;
+}// namespace
+
 namespace hal::x86 {
 constexpr uintptr_t RECURSIVE_PT_WINDOW = 0xFFC00000;
 constexpr uintptr_t RECURSIVE_PD_WINDOW = 0xFFFFF000;
@@ -54,6 +60,8 @@ void init_vmm() noexcept {
 
   // Force a global TLB flush by reloading CR3 to validate our window setup immediately
   __asm__ volatile("mov %0, %%cr3" ::"r"(current_pd_phys) : "memory");
+
+  ::register_root(current_pd_phys);
 }
 }// namespace hal::x86
 
@@ -96,6 +104,44 @@ namespace {
 // unused by any real mapping; borrowed briefly to peek at a not-yet-active
 // page directory frame through the recursive window mechanism.
 constexpr size_t TEMP_PD_SLOT = 1022;
+constexpr size_t KERNEL_SPLIT = 768;// 0xC0000000 >> 22
+
+// Every live page directory (the boot/kernel one plus each user address
+// space). Kernel-half page tables are shared: when one is created, its PDE is
+// copied into all of them so a kernel mapping made while any address space is
+// active is visible from every other one.
+constexpr size_t MAX_ADDRESS_SPACES = 64;
+uintptr_t g_roots[MAX_ADDRESS_SPACES];
+size_t g_root_count = 0;
+
+void register_root(uintptr_t root) noexcept {
+  if (g_root_count < MAX_ADDRESS_SPACES) g_roots[g_root_count++] = root;
+}
+
+void unregister_root(uintptr_t root) noexcept {
+  for (size_t i = 0; i < g_root_count; ++i) {
+    if (g_roots[i] == root) {
+      g_roots[i] = g_roots[--g_root_count];
+      return;
+    }
+  }
+}
+
+// Copy PDE `pd_index` of the active directory into every other registered one.
+void propagate_kernel_pde(size_t pd_index) noexcept {
+  auto *directory = hal::x86::get_page_directory();
+  const uintptr_t current = static_cast<uintptr_t>(HAL_VMM_GetCurrentTranslationRoot());
+  auto *window = reinterpret_cast<hal::x86::page_directory_entry_t *>(
+      hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096));
+  for (size_t i = 0; i < g_root_count; ++i) {
+    if (g_roots[i] == current) continue;
+    directory[TEMP_PD_SLOT].set_page_table(g_roots[i], hal::x86::PageFlags::PRESENT | hal::x86::PageFlags::WRITABLE);
+    HAL_VMM_Flush(VirtualAddress(reinterpret_cast<uintptr_t>(window)));
+    window[pd_index] = directory[pd_index];
+  }
+  directory[TEMP_PD_SLOT].clear();
+  HAL_VMM_Flush(VirtualAddress(reinterpret_cast<uintptr_t>(window)));
+}
 }// namespace
 
 UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_CreateAddressSpace() noexcept {
@@ -128,6 +174,8 @@ UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_CreateAddressSpace() noexcept {
   for (size_t i = kernel_split; i < 1023; ++i) {
     new_pd[i] = directory[i];
   }
+  // Slot TEMP_PD_SLOT currently aliases new_pd itself; do not inherit it.
+  new_pd[TEMP_PD_SLOT].clear();
 
   // Self-map the recursive slot so the new address space can walk/modify its
   // own page tables once it becomes active.
@@ -139,6 +187,7 @@ UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_CreateAddressSpace() noexcept {
   directory[TEMP_PD_SLOT].clear();
   HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
 
+  register_root(static_cast<uintptr_t>(new_pd_phys));
   return new_pd_phys;
 }
 
@@ -172,6 +221,7 @@ UNDOS_HAL_API_DEF void HAL_VMM_DestroyAddressSpace(PhysicalAddress root) noexcep
   directory[TEMP_PD_SLOT].clear();
   HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
 
+  unregister_root(static_cast<uintptr_t>(root));
   HAL_PMM_FreeFrames(root, 1);
 }
 
@@ -204,6 +254,10 @@ UNDOS_HAL_API_DEF bool HAL_VMM_MapPage(VirtualAddress virtual_addr, PhysicalAddr
 
     // We should also flush the directory entry itself, just in case
     HAL_VMM_Flush(virtual_addr);
+
+    if (pd_index >= KERNEL_SPLIT && pd_index < TEMP_PD_SLOT) {
+      propagate_kernel_pde(pd_index);
+    }
   }
 
   auto *page_table = hal::x86::get_page_table(virtual_addr);
@@ -238,7 +292,8 @@ UNDOS_HAL_API_DEF void HAL_VMM_UnmapPage(VirtualAddress virtual_addr) noexcept {
     }
 
     // 3. If no pages remain in this table, reclaim the page table frame itself!
-    if (table_is_empty) {
+    //    Kernel-half tables are shared by every address space and stay.
+    if (table_is_empty && pd_index < KERNEL_SPLIT) {
       // Grab the physical address of the page table before we sever the connection
       const PhysicalAddress page_table_phys = directory[pd_index].get_page_table();
 

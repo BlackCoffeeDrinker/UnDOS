@@ -105,7 +105,13 @@ bool FakeBitBlt(const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
 kernel::KObjectPtr<kernel::KDisplay> MakeFakeDisplay() {
   ResetFakeAdapterState();
 
-  auto adapter = KE_GFX_RegisterGraphicsAdapter(nullptr, kernel::KDevicePtr<kernel::KDevice>(), "FakeAdapter");
+  static uint32_t s_fakeCounter = 0;
+  char adapterName[32];
+  char displayName[32];
+  snprintf(adapterName, sizeof(adapterName), "FakeAdapter%u", ++s_fakeCounter);
+  snprintf(displayName, sizeof(displayName), "FakeDisplay%u", s_fakeCounter);
+
+  auto adapter = KE_GFX_RegisterGraphicsAdapter(nullptr, kernel::KDevicePtr<kernel::KDevice>(), adapterName);
   REQUIRE(adapter);
 
   adapter->SetMode = FakeSetMode;
@@ -113,7 +119,7 @@ kernel::KObjectPtr<kernel::KDisplay> MakeFakeDisplay() {
   adapter->DrawLine = FakeDrawLine;
   adapter->BitBlt = FakeBitBlt;
 
-  auto display = KE_GFX_RegisterDisplay(adapter, "FakeDisplay");
+  auto display = KE_GFX_RegisterDisplay(adapter, displayName);
   REQUIRE(display);
 
   display->GetModeCount = FakeGetModeCount;
