@@ -58,24 +58,14 @@ UNDOS_KERNEL_PUBLIC_V1API(void, KE_SCHED_Block);
  * @ingroup SCHED
  * @brief Method KE_SCHED_Unblock
  * 
- * Return a blocked thread to the ready queue.
+ * Return a blocked thread to the ready queue. Safe to call from a hardware
+ * interrupt service routine: it saves and restores the caller's interrupt
+ * state instead of enabling interrupts unconditionally.
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
     void,
     KE_SCHED_Unblock,
-    const kernel::KObjectPtr<kernel::KThreadObject> &thread);
-
-/**
- * @ingroup SCHED
- * @brief Method KE_SCHED_UnblockFromIsr
- * 
- * Return a blocked thread to the ready queue without modifying CPU interrupt state.
- * Safe to call from hardware interrupt service routines (DIRQL).
- */
-UNDOS_KERNEL_PUBLIC_V1API(
-    void,
-    KE_SCHED_UnblockFromIsr,
     const kernel::KObjectPtr<kernel::KThreadObject> &thread);
 
 // Retire the current thread permanently and switch away.
@@ -132,18 +122,11 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @ingroup SCHED
  * @brief Method KE_EVENT_Signal
  *
- * Signal a dispatcher header and ready its waiters. Not ISR-safe: it toggles
- * interrupts. Use KE_EVENT_SignalFromIsr from interrupt context.
+ * Signal a dispatcher header and ready its waiters. ISR-safe: the waiter list
+ * is taken with an IRQ-saving spinlock, so the caller's interrupt state is
+ * preserved.
  */
 UNDOS_KERNEL_PUBLIC_V1API(void, KE_EVENT_Signal, kernel::KDispatcherHeader &header, bool wakeAll);
-
-/**
- * @ingroup SCHED
- * @brief Method KE_EVENT_SignalFromIsr
- *
- * KE_EVENT_Signal for callers that already run with interrupts disabled.
- */
-UNDOS_KERNEL_PUBLIC_V1API(void, KE_EVENT_SignalFromIsr, kernel::KDispatcherHeader &header, bool wakeAll);
 
 /**
  * @ingroup SCHED

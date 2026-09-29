@@ -156,15 +156,23 @@ UNDOS_HAL_PUBLIC_V1API(uint32_t, HAL_PLATFORM_GetCpuCount);
 
 /**
  * @ingroup CPU
- * @brief Method KE_CPU_EnableInterrupts
+ * @brief Method HAL_CPU_EnableInterrupts
  *
+ * Unconditionally enables interrupts. Reserved for the one-way transition a
+ * CPU makes when it enters the scheduler for the first time (BSP boot, AP
+ * bring-up) and for HAL-internal use. Every other caller must use
+ * HAL_CPU_SaveAndDisableInterrupts / HAL_CPU_RestoreInterrupts, which nest
+ * correctly.
  */
 UNDOS_HAL_PUBLIC_V1API(void, HAL_CPU_EnableInterrupts);
 
 /**
  * @ingroup CPU
- * @brief Method KE_CPU_DisableInterrupts
+ * @brief Method HAL_CPU_DisableInterrupts
  *
+ * Unconditionally disables interrupts, discarding the previous state.
+ * HAL-internal only; kernel code uses
+ * HAL_CPU_SaveAndDisableInterrupts / HAL_CPU_RestoreInterrupts instead.
  */
 UNDOS_HAL_PUBLIC_V1API(void, HAL_CPU_DisableInterrupts);
 
@@ -215,6 +223,70 @@ UNDOS_HAL_PUBLIC_V1API(
  * IRQ, exception) for the about-to-run thread lands on its own kernel stack.
  */
 UNDOS_HAL_PUBLIC_V1API(void, HAL_CPU_SetKernelStack, kernel::VirtualAddress kernel_stack_top);
+
+/**
+ * @ingroup CPU
+ * @brief Method HAL_CPU_GetCurrentId
+ *
+ * Identifies the logical CPU executing the call. Must be valid everywhere,
+ * including inside an ISR and on a CPU that has just been started. A
+ * uniprocessor HAL returns 0.
+ */
+UNDOS_HAL_PUBLIC_V1API(uint32_t, HAL_CPU_GetCurrentId);
+
+/**
+ * @ingroup CPU
+ * @brief Method HAL_CPU_SaveAndDisableInterrupts
+ *
+ * Captures the current interrupt-enable state, disables interrupts, and
+ * returns an opaque token to hand back to HAL_CPU_RestoreInterrupts. Nesting
+ * is supported: restoring a token captured while interrupts were already
+ * disabled leaves them disabled.
+ */
+UNDOS_HAL_PUBLIC_V1API(uintptr_t, HAL_CPU_SaveAndDisableInterrupts);
+
+/**
+ * @ingroup CPU
+ * @brief Method HAL_CPU_RestoreInterrupts
+ *
+ * Restores the interrupt-enable state captured by a previous
+ * HAL_CPU_SaveAndDisableInterrupts call.
+ */
+UNDOS_HAL_PUBLIC_V1API(void, HAL_CPU_RestoreInterrupts, uintptr_t state);
+// endregion
+
+// region SMP API
+/**
+ * @ingroup CPU
+ * @brief Method HAL_SMP_StartProcessor
+ *
+ * Brings logical CPU `cpu_id` out of reset so it enters `entry` with
+ * `stack_top` as its kernel stack and its own CPU id as the argument.
+ * Returns false when the platform cannot start that CPU; a uniprocessor HAL
+ * always returns false, which is a supported outcome rather than an error.
+ */
+UNDOS_HAL_PUBLIC_V1API(
+    bool,
+    HAL_SMP_StartProcessor,
+    uint32_t cpu_id, kernel::cfunc<void(uint32_t)> entry, kernel::VirtualAddress stack_top);
+
+/**
+ * @ingroup CPU
+ * @brief Method HAL_SMP_SendRescheduleIpi
+ *
+ * Nudges a remote CPU so it re-runs the scheduler. A no-op on uniprocessor
+ * HALs and when `cpu_id` names the calling CPU.
+ */
+UNDOS_HAL_PUBLIC_V1API(void, HAL_SMP_SendRescheduleIpi, uint32_t cpu_id);
+
+/**
+ * @ingroup CPU
+ * @brief Method HAL_SMP_ShootdownTlb
+ *
+ * Invalidates `addr` on every CPU that may have it cached. On uniprocessor
+ * HALs this degrades to a local HAL_VMM_Flush.
+ */
+UNDOS_HAL_PUBLIC_V1API(void, HAL_SMP_ShootdownTlb, kernel::VirtualAddress addr);
 // endregion
 
 // region Debug

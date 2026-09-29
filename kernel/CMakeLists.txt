@@ -12,8 +12,12 @@ add_executable(kernel
         src/wait.cpp
         src/wait.hpp
         src/percpu.cpp
+        src/smp.cpp
+        src/smp.hpp
 
         src/scheduler/ReadyQueue.hpp
+        src/scheduler/CpuContext.hpp
+        src/scheduler/CpuContext.cpp
         src/scheduler/Scheduler.hpp
         src/scheduler/Scheduler.cpp
         src/driver_loader.cpp

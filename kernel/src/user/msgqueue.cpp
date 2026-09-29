@@ -19,9 +19,9 @@ KWindowObject *paint_candidate_locked(const MessageQueue &queue) noexcept {
 }
 
 void reset_header(MessageQueue &queue) noexcept {
-  HAL_CPU_DisableInterrupts();
+  const uintptr_t irq_state = HAL_CPU_SaveAndDisableInterrupts();
   queue.header.Reset();
-  HAL_CPU_EnableInterrupts();
+  HAL_CPU_RestoreInterrupts(irq_state);
 }
 }// namespace
 

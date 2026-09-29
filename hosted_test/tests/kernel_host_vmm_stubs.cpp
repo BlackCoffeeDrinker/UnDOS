@@ -107,5 +107,54 @@ UNDOS_HAL_API_DEF void HAL_VMM_Flush(kernel::VirtualAddress virt) noexcept {
   (void) virt;
 }
 
-UNDOS_HAL_API_DEF void HAL_CPU_DisableInterrupts() noexcept {}
-UNDOS_HAL_API_DEF void HAL_CPU_EnableInterrupts() noexcept {}
+// Simulated CPU identity / interrupt state. There is a single host thread
+// running the tests, so a pair of plain globals is enough; tests drive them
+// through smp_test_hooks.hpp.
+namespace {
+uint32_t g_host_cpu_id = 0;
+bool g_host_interrupts_enabled = true;
+}// namespace
+
+namespace test_smp {
+void SetCurrentCpuId(const uint32_t id) noexcept { g_host_cpu_id = id; }
+void Reset() noexcept {
+  g_host_cpu_id = 0;
+  g_host_interrupts_enabled = true;
+}
+bool InterruptsEnabled() noexcept { return g_host_interrupts_enabled; }
+void SetInterruptsEnabled(const bool enabled) noexcept { g_host_interrupts_enabled = enabled; }
+}// namespace test_smp
+
+UNDOS_HAL_API_DEF void HAL_CPU_DisableInterrupts() noexcept { g_host_interrupts_enabled = false; }
+UNDOS_HAL_API_DEF void HAL_CPU_EnableInterrupts() noexcept { g_host_interrupts_enabled = true; }
+
+UNDOS_HAL_API_DEF uint32_t HAL_CPU_GetCurrentId() noexcept { return g_host_cpu_id; }
+
+UNDOS_HAL_API_DEF uintptr_t HAL_CPU_SaveAndDisableInterrupts() noexcept {
+  const uintptr_t state = g_host_interrupts_enabled ? 1u : 0u;
+  g_host_interrupts_enabled = false;
+  return state;
+}
+
+UNDOS_HAL_API_DEF void HAL_CPU_RestoreInterrupts(const uintptr_t state) noexcept {
+  if (state != 0) {
+    g_host_interrupts_enabled = true;
+  }
+}
+
+UNDOS_HAL_API_DEF uint32_t HAL_PLATFORM_GetCpuCount() noexcept { return 1; }
+
+UNDOS_HAL_API_DEF bool HAL_SMP_StartProcessor(uint32_t cpu_id,
+                                              kernel::cfunc<void(uint32_t)> entry,
+                                              kernel::VirtualAddress stack_top) noexcept {
+  (void) cpu_id;
+  (void) entry;
+  (void) stack_top;
+  return false;
+}
+
+UNDOS_HAL_API_DEF void HAL_SMP_SendRescheduleIpi(uint32_t cpu_id) noexcept { (void) cpu_id; }
+
+UNDOS_HAL_API_DEF void HAL_SMP_ShootdownTlb(const kernel::VirtualAddress addr) noexcept {
+  HAL_VMM_Flush(addr);
+}

@@ -15,6 +15,7 @@ add_executable(KernelTests
         volume_manager_test.cpp
         fat_short_name_test.cpp
         scheduler_test.cpp
+        cpu_context_test.cpp
         wait_test.cpp
         user_test.cpp
         percpu_test.cpp
@@ -30,6 +31,7 @@ add_executable(KernelTests
         ../../kernel/src/vfs.cpp
         ../../kernel/src/vmm.cpp
         ../../kernel/src/percpu.cpp
+        ../../kernel/src/scheduler/CpuContext.cpp
         ../../kernel/src/memory/Allocator.cpp
         ../../kernel/src/memory/Cache.cpp
         ../../kernel/src/memory/Layout.cpp

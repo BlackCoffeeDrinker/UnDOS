@@ -101,7 +101,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KProcessObject> KE_USER_CreatePr
   // pattern used by kernel::process::load_elf_from_vfs.
   {
     const kernel::PhysicalAddress caller_root = HAL_VMM_GetCurrentTranslationRoot();
-    HAL_CPU_DisableInterrupts();
+    const uintptr_t irq_state = HAL_CPU_SaveAndDisableInterrupts();
     HAL_VMM_SwitchAddressSpace(process->address_space.translation_root);
 
     const auto path_len = exec_path.size() + 1;// include NUL terminator
@@ -117,7 +117,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KProcessObject> KE_USER_CreatePr
     *user_stack_top.as_ptr<kernel::VirtualAddress>() = exec_path_addr;
 
     HAL_VMM_SwitchAddressSpace(caller_root);
-    HAL_CPU_EnableInterrupts();
+    HAL_CPU_RestoreInterrupts(irq_state);
   }
 
   // Step 4 — Create the process's ring-3 main thread.

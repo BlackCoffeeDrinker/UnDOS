@@ -15,7 +15,7 @@ bool kernel::elf::MapAndCopySegment(uintptr_t virt_start, const uint8_t *data, s
       HAL_PMM_FreeFrames(phys, 1);
       return false;
     }
-    HAL_VMM_Flush(kernel::VirtualAddress(page));
+    HAL_SMP_ShootdownTlb(kernel::VirtualAddress(page));
 
     __builtin_memset(reinterpret_cast<void *>(page), 0, 4096);
   }

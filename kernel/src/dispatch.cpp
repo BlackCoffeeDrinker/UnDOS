@@ -44,14 +44,18 @@ void InterruptDispatchThread(void *) {
       }
     }
 
-    HAL_CPU_DisableInterrupts();
+    // Check-then-block: mask interrupts (and restore whatever state we came
+    // in with) so an enqueue from an ISR on this CPU cannot land between the
+    // emptiness test and the switch away. The ring itself is safe against a
+    // producer on another CPU.
+    const uintptr_t state = HAL_CPU_SaveAndDisableInterrupts();
     if (g_interruptRing.Empty()) {
       if (const auto current = KE_SCHED_GetCurrentThread()) {
         current->state = kernel::KThreadObject::State::Blocked;
       }
       kernel::sched::schedule_next();
     }
-    HAL_CPU_EnableInterrupts();
+    HAL_CPU_RestoreInterrupts(state);
   }
 }
 
@@ -73,7 +77,7 @@ InterruptRecordRing &get_ring() noexcept {
 bool enqueue(const HalInterruptRecord &record) noexcept {
   const bool pushed = g_interruptRing.Push(record);
   if (pushed && g_dispatchThread) {
-    KE_SCHED_UnblockFromIsr(g_dispatchThread);
+    KE_SCHED_Unblock(g_dispatchThread);
   }
   return pushed;
 }

@@ -30,5 +30,6 @@ add_hal(hal_x86_old
         v86.cpp
         v86.hpp
         bootdev.cpp
+        smp_up.cpp
 )
 

@@ -8,7 +8,9 @@
 #include "object_manager.hpp"
 #include "pnp_manager.hpp"
 #include "resource_manager.hpp"
+#include "scheduler/CpuContext.hpp"
 #include "scheduler/Scheduler.hpp"
+#include "smp.hpp"
 #include "vfs.hpp"
 #include "vmm.hpp"
 #include "user/user.hpp"
@@ -222,7 +224,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   // Memory management is now fully functional
   early_print_fmt("Memory management is now fully functional\r\n");
 
-  kernel::sched::init();
+  kernel::sched::init_bsp();
   kernel::dispatch::init();
   HAL_PLATFORM_InitializeSystemTimer();
   HAL_CPU_EnableInterrupts();
@@ -250,9 +252,12 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   KE_PNP_WaitForQuiescence();
   //MemoryReclaim_BootStructures(boot_info);
 
-  // TODO: Bring extra CPUs online
-  if (HAL_PLATFORM_GetCpuCount() > 1) {
-  }
+  // Bring every CPU the HAL reports online. On a uniprocessor HAL this is a
+  // no-op and online_count() stays 1.
+  kernel::smp::start_secondary_cpus();
+  early_print_fmt("SMP: {} of {} CPU(s) online\r\n",
+                  kernel::cpu::online_count(),
+                  HAL_PLATFORM_GetCpuCount());
 
   // Mount the root fs
   if (parser.has_key("root")) {

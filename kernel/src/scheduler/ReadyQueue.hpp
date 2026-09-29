@@ -15,9 +15,13 @@ namespace kernel::sched {
 class ReadyQueue {
   KThreadObject *_head{nullptr};
   KThreadObject *_tail{nullptr};
+  size_t _count{0};
 
  public:
   [[nodiscard]] bool empty() const noexcept { return _head == nullptr; }
+
+  // Number of queued threads. Used to place work on the least-loaded CPU.
+  [[nodiscard]] size_t size() const noexcept { return _count; }
 
   // Append `t` at the tail (back of its arrival order).
   void enqueue(KThreadObject *t) noexcept {
@@ -30,6 +34,7 @@ class ReadyQueue {
       _head = t;
     }
     _tail = t;
+    ++_count;
   }
 
   // Unlink a specific node. Safe for head, middle or tail nodes.
@@ -47,6 +52,7 @@ class ReadyQueue {
     }
     t->rq_next = nullptr;
     t->rq_prev = nullptr;
+    if (_count > 0) --_count;
   }
 
   // Return and unlink the highest-priority ready thread (FIFO within a level),

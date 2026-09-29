@@ -6,6 +6,7 @@
 #include <kernel/kobject/KEventObject.hpp>
 #include <kernel/kobject/KProcessObject.hpp>
 #include <kernel/kobject/KIOObject.hpp>
+#include <kernel/spinlock.hpp>
 #include <kernel/time.hpp>
 
 #include "scheduler/Scheduler.hpp"
@@ -13,6 +14,11 @@
 namespace kernel::wait {
 namespace {
 TimedWaitList g_timed;
+
+// Protects every dispatcher header's waiter list and g_timed. Taken with
+// lock_irqsave because KE_EVENT_Signal and the timer tick reach the same
+// structures from interrupt context.
+SpinLock g_lock;
 
 KDispatcherHeader *header_of(const KObjectPtr<KObject> &object) noexcept {
   if (const auto event = object.As<KEventObject>()) return &event->header;
@@ -24,8 +30,12 @@ KDispatcherHeader *header_of(const KObjectPtr<KObject> &object) noexcept {
 void wake(KThreadObject *thread) noexcept { sched::ready_locked(thread); }
 } // namespace
 
+SpinLock &lock() noexcept { return g_lock; }
+
 void tick(uint64_t now_ms) noexcept {
+  const uintptr_t state = g_lock.lock_irqsave();
   g_timed.Expire(now_ms, wake);
+  g_lock.unlock_irqrestore(state);
 }
 } // namespace kernel::wait
 
@@ -36,14 +46,14 @@ UNDOS_KERNEL_API_DEF WaitStatus KE_SCHED_WaitForHeader(KDispatcherHeader &header
   const auto self = KE_SCHED_GetCurrentThread();
   if (!self) return WaitStatus::Invalid;
 
-  // Check-then-block with interrupts off so a signal cannot slip in between.
-  HAL_CPU_DisableInterrupts();
+  // Check-then-block under the wait lock so a signal cannot slip in between.
+  const uintptr_t irq_state = wait::lock().lock_irqsave();
   if (header.TryAcquire()) {
-    HAL_CPU_EnableInterrupts();
+    wait::lock().unlock_irqrestore(irq_state);
     return WaitStatus::Signalled;
   }
   if (timeout.count() == 0) {
-    HAL_CPU_EnableInterrupts();
+    wait::lock().unlock_irqrestore(irq_state);
     return WaitStatus::Timeout;
   }
 
@@ -58,12 +68,18 @@ UNDOS_KERNEL_API_DEF WaitStatus KE_SCHED_WaitForHeader(KDispatcherHeader &header
   }
 
   while (!wb.satisfied && !wb.timed_out) {
+    // The lock must not be held across the context switch: the CPU that
+    // signals us needs it. Interrupts stay masked throughout, so nothing on
+    // this CPU can observe the gap; a remote signaller sees the thread marked
+    // Blocked by block_current_locked and re-queues it.
+    wait::lock().unlock();
     sched::block_current_locked();
+    wait::lock().lock();
   }
 
   if (timed) wait::g_timed.Remove(wb);
   if (!wb.satisfied) header.RemoveWaiter(wb);
-  HAL_CPU_EnableInterrupts();
+  wait::lock().unlock_irqrestore(irq_state);
   return wb.satisfied ? WaitStatus::Signalled : WaitStatus::Timeout;
 }
 
@@ -77,14 +93,12 @@ UNDOS_KERNEL_API_DEF WaitStatus KE_SCHED_WaitForObject(const KObjectPtr<KObject>
   return KE_SCHED_WaitForHeader(*header, timeout);
 }
 
-UNDOS_KERNEL_API_DEF void KE_EVENT_SignalFromIsr(KDispatcherHeader &header, bool wakeAll) noexcept {
-  header.Signal(wakeAll, wait::wake);
-}
-
 UNDOS_KERNEL_API_DEF void KE_EVENT_Signal(KDispatcherHeader &header, bool wakeAll) noexcept {
-  HAL_CPU_DisableInterrupts();
+  // Usable from interrupt context: the lock masks interrupts itself and
+  // restores whatever state the caller had.
+  const uintptr_t state = wait::lock().lock_irqsave();
   header.Signal(wakeAll, wait::wake);
-  HAL_CPU_EnableInterrupts();
+  wait::lock().unlock_irqrestore(state);
 }
 
 UNDOS_KERNEL_API_DEF KObjectPtr<KEventObject> KE_EVENT_Create(bool manualReset, bool initialState) noexcept {

@@ -339,9 +339,10 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
   // active -- the kernel AS -- so no switch is needed there).
   const bool switch_as = ok && policy.target_as != nullptr;
   PhysicalAddress caller_root;
+  uintptr_t irq_state = 0;
   if (switch_as) {
     caller_root = HAL_VMM_GetCurrentTranslationRoot();
-    HAL_CPU_DisableInterrupts();
+    irq_state = HAL_CPU_SaveAndDisableInterrupts();
     HAL_VMM_SwitchAddressSpace(policy.target_as->translation_root);
   }
 
@@ -370,7 +371,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
 
   if (switch_as) {
     HAL_VMM_SwitchAddressSpace(caller_root);
-    HAL_CPU_EnableInterrupts();
+    HAL_CPU_RestoreInterrupts(irq_state);
   }
 
   for (size_t i = 0; i < header.e_phnum; ++i) {

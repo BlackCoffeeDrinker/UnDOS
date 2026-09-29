@@ -226,14 +226,14 @@ void InputPumpThread(void *) {
 
 // Resets the header if the ring is (still) empty. Returns true if empty.
 bool ResetIfEmpty() noexcept {
-  HAL_CPU_DisableInterrupts();
+  const uintptr_t irq_state = HAL_CPU_SaveAndDisableInterrupts();
   bool empty;
   {
     kstd::unique_lock guard(g_eventRingLock);
     empty = g_eventRing.Empty();
   }
   if (empty) g_eventHeader.Reset();
-  HAL_CPU_EnableInterrupts();
+  HAL_CPU_RestoreInterrupts(irq_state);
   return empty;
 }
 

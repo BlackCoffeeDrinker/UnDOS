@@ -1,14 +1,18 @@
+#include <kernel/hal_interface.hpp>
 #include <kernel/percpu.hpp>
 
 namespace kernel::cpu {
 
-// No HAL call exists yet to ask the platform which logical CPU is running
-// the current code, so this always returns 0 (the only CPU that exists
-// today). This is the single place that will be repointed at a real
-// HAL_CPU_GetCurrentId() once an APIC-aware HAL exists; every PerCpu<T>
-// call site is written against current_id() and will not need to change.
+// The platform owns CPU identity: on x86 this is the local APIC id mapped to
+// a dense logical index, on a uniprocessor HAL it is simply 0. Clamp to the
+// PerCpu<T> bound so a HAL reporting an id the kernel was not built for
+// cannot index out of bounds.
 size_t current_id() noexcept {
-  return 0;
+  const uint32_t id = HAL_CPU_GetCurrentId();
+  if (id >= MAX_CPUS) {
+    return 0;
+  }
+  return id;
 }
 
 }// namespace kernel::cpu

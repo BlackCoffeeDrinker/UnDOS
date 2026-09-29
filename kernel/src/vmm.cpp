@@ -52,7 +52,7 @@ void destroy_user_address_space(AddressSpace &as) noexcept {
   // address space is active, since HAL_VMM_GetPhysicalAddress walks whatever
   // page directory CR3 currently points at.
   const PhysicalAddress caller_root = HAL_VMM_GetCurrentTranslationRoot();
-  HAL_CPU_DisableInterrupts();
+  const uintptr_t irq_state = HAL_CPU_SaveAndDisableInterrupts();
 
   HAL_VMM_SwitchAddressSpace(as.translation_root);
 
@@ -69,7 +69,7 @@ void destroy_user_address_space(AddressSpace &as) noexcept {
   });
 
   HAL_VMM_SwitchAddressSpace(caller_root);
-  HAL_CPU_EnableInterrupts();
+  HAL_CPU_RestoreInterrupts(irq_state);
 
   HAL_VMM_DestroyAddressSpace(as.translation_root);
   as.translation_root = PhysicalAddress(0);
@@ -96,8 +96,9 @@ void *allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcep
   // map the pages into the caller's (kernel) address space instead.
   const PhysicalAddress caller_root = HAL_VMM_GetCurrentTranslationRoot();
   const bool switch_as = as.translation_root && as.translation_root != caller_root;
+  uintptr_t irq_state = 0;
   if (switch_as) {
-    HAL_CPU_DisableInterrupts();
+    irq_state = HAL_CPU_SaveAndDisableInterrupts();
     HAL_VMM_SwitchAddressSpace(as.translation_root);
   }
 
@@ -109,12 +110,12 @@ void *allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcep
       ok = false;
       break;
     }
-    HAL_VMM_Flush(v_addr + i * g_page_size);
+    HAL_SMP_ShootdownTlb(v_addr + i * g_page_size);
   }
 
   if (switch_as) {
     HAL_VMM_SwitchAddressSpace(caller_root);
-    HAL_CPU_EnableInterrupts();
+    HAL_CPU_RestoreInterrupts(irq_state);
   }
 
   if (!ok) {
@@ -142,8 +143,9 @@ bool map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, ProtectF
   if (!vad) return false;
   const auto caller = HAL_VMM_GetCurrentTranslationRoot();
   const bool switch_as = as.translation_root != caller;
+  uintptr_t irq_state = 0;
   if (switch_as) {
-    HAL_CPU_DisableInterrupts();
+    irq_state = HAL_CPU_SaveAndDisableInterrupts();
     HAL_VMM_SwitchAddressSpace(as.translation_root);
   }
   size_t mapped = 0;
@@ -156,7 +158,7 @@ bool map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, ProtectF
       HAL_PMM_FreeFrames(phys, 1);
       break;
     }
-    HAL_VMM_Flush(VirtualAddress(address + mapped));
+    HAL_SMP_ShootdownTlb(VirtualAddress(address + mapped));
     __builtin_memset(reinterpret_cast<void *>(address + mapped), 0, g_page_size);
   }
   if (mapped != aligned) {
@@ -169,7 +171,7 @@ bool map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, ProtectF
   }
   if (switch_as) {
     HAL_VMM_SwitchAddressSpace(caller);
-    HAL_CPU_EnableInterrupts();
+    HAL_CPU_RestoreInterrupts(irq_state);
   }
   if (mapped != aligned) return false;
   vad->start = VirtualAddress(address);
@@ -379,8 +381,9 @@ UNDOS_KERNEL_API_DEF void *KE_VMM_MapBorrowed(void *addr, size_t size, kernel::v
   // capture the physical frames backing the borrowed range.
   const kernel::PhysicalAddress caller_root = HAL_VMM_GetCurrentTranslationRoot();
   const bool switch_to_source = as.translation_root && as.translation_root != caller_root;
+  uintptr_t irq_state = 0;
   if (switch_to_source) {
-    HAL_CPU_DisableInterrupts();
+    irq_state = HAL_CPU_SaveAndDisableInterrupts();
     HAL_VMM_SwitchAddressSpace(as.translation_root);
   }
 
@@ -396,7 +399,7 @@ UNDOS_KERNEL_API_DEF void *KE_VMM_MapBorrowed(void *addr, size_t size, kernel::v
 
   if (switch_to_source) {
     HAL_VMM_SwitchAddressSpace(caller_root);
-    HAL_CPU_EnableInterrupts();
+    HAL_CPU_RestoreInterrupts(irq_state);
   }
 
   if (!ok) {
@@ -417,7 +420,7 @@ UNDOS_KERNEL_API_DEF void *KE_VMM_MapBorrowed(void *addr, size_t size, kernel::v
       ok = false;
       break;
     }
-    HAL_VMM_Flush(kernel_start + i * g_page_size);
+    HAL_SMP_ShootdownTlb(kernel_start + i * g_page_size);
   }
 
   KE_Free(phys_pages);
@@ -443,7 +446,9 @@ UNDOS_KERNEL_API_DEF void KE_VMM_UnmapBorrowed(void *addr, size_t size, kernel::
 
   for (size_t i = 0; i < page_count; ++i) {
     HAL_VMM_UnmapPage(page_start + i * g_page_size);
-    HAL_VMM_Flush(page_start + i * g_page_size);
+    // Unmapping removes a translation other CPUs may still have cached, so
+    // this one has to go out to all of them, not just the local TLB.
+    HAL_SMP_ShootdownTlb(page_start + i * g_page_size);
   }
 
   KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), page_start.as_ptr());
