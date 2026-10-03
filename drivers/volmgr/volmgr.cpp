@@ -107,8 +107,6 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
   auto *ctx = filterFdo->deviceExtension.as<VolMgrFdoContext>();
   if (!ctx) return;
 
-  early_print("VolMgr: Disk attached, reading partition table...\r\n");
-
   kstd::array<uint8_t, volmgr::kSectorSize> sector0{};
   kstd::array<uint8_t, volmgr::kSectorSize> lba1{};
   size_t transferred = 0;
@@ -118,7 +116,7 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
                                           kstd::span<uint8_t>(sector0),
                                           transferred);
       error != kernel::IoStatus::Success) {
-    early_print_fmt("VolMgr: Failed to read sector 0: {}\r\n", static_cast<uint8_t>(error));
+    KE_Print("VolMgr: Failed to read sector 0: {}", static_cast<uint8_t>(error));
     return;
   }
   const bool haveLba1 = KE_IO_ReadDevice(diskFdo, volmgr::kSectorSize, kstd::span<uint8_t>(lba1), transferred) == kernel::IoStatus::Success;
@@ -133,10 +131,10 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
   size_t count = 0;
 
   if (scheme == volmgr::PartitionScheme::Mbr) {
-    early_print("VolMgr: Detected MBR partition scheme\r\n");
+    KE_Print("VolMgr: Detected MBR partition scheme");
     count = volmgr::ParseMbr(sector0View, partsView);
   } else if (scheme == volmgr::PartitionScheme::Gpt) {
-    early_print("VolMgr: Detected GPT partition scheme\r\n");
+    KE_Print("VolMgr: Detected GPT partition scheme");
     if (haveLba1) {
       const uint64_t entriesLba = volmgr::ReadLe64(lba1View.subspan(72));
       const uint32_t numEntries = volmgr::ReadLe32(lba1View.subspan(80));
@@ -152,7 +150,7 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
       }
     }
   } else {
-    early_print("VolMgr: No recognizable partition table\r\n");
+    KE_Print("VolMgr: No recognizable partition table");
     return;
   }
 
@@ -175,7 +173,7 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
       ctx->volumes[ctx->volumeCount++] = volPdo;
     }
 
-    early_print_fmt("VolMgr: Volume {} uses disk '{}', baseLBA={}, sectors={}\r\n",
+    KE_Print("VolMgr: Volume {} uses disk '{}', baseLBA={}, sectors={}",
                     volPdo->Name(),
                     diskFdo->Name(),
                     parts[i].baseOffsetBytes / volmgr::kSectorSize,

@@ -42,12 +42,19 @@ def author_localmachine_hive(filename: str) -> None:
     # LocalMachine has been rebound onto it, so ImagePath is a normal,
     # post-mount root path.
     automatic_drivers = [
-        ("gfx_vga", "/System/Drivers/gfx_vga.elf"),
         # ImagePath's filename base must be <=8 chars: fs_fat's short-name
         # lookup (drivers/fs_fat/fat_short_name.hpp) has no truncation/tilde
         # fallback for longer names, so "input_i8042.elf" would never resolve.
+        ("gfx_cirrus", "/System/Drivers/gfxcirr.elf"),
         ("input_i8042", "/System/Drivers/i8042.elf"),
         ("serial_uart", "/System/Drivers/serial.elf"),
+    ]
+
+    # Last-resort: loaded only if, once every normal pass has settled, the job
+    # they stand in for is still vacant. gfx_vga is the fallback display
+    # driver, so it is loaded only when no other driver claimed the console.
+    last_resort_drivers = [
+        ("gfx_vga", "/System/Drivers/gfx_vga.elf"),
     ]
 
     cfg.ensure_key("/Drivers")
@@ -61,23 +68,48 @@ def author_localmachine_hive(filename: str) -> None:
         cfg.set(f"/Drivers/{name}/Start", "Automatic", Config.VALUE_STRING)
         cfg.set(f"/Drivers/{name}/ImagePath", image, Config.VALUE_STRING)
 
+    for name, image in last_resort_drivers:
+        cfg.ensure_key(f"/Drivers/{name}")
+        cfg.set(f"/Drivers/{name}/Start", "LastResort", Config.VALUE_STRING)
+        cfg.set(f"/Drivers/{name}/ImagePath", image, Config.VALUE_STRING)
+
     # LegacyISAReservations: "the registry is the enumeration" for fixed,
     # always-present ISA hardware that no real bus discovers on its own. The
     # kernel's generic legacy enumerator (EnumerateLegacyISADevices) walks
     # this subtree at boot, probes each entry, and reports a PDO for every
     # one detected. DriverImage is left unset for gfx_vga since it is already
-    # loaded above as an Automatic-start driver; a device with no matching
-    # loaded driver simply reports a PDO that stays unmatched.
+    # loaded above as a LastResort driver; a device with no matching loaded
+    # driver simply reports a PDO that stays unmatched. The VGA entry carries
+    # Start=LastResort too, so the normal pass skips it and it is only
+    # reported when the last-resort pass runs at all.
     #
     # i8042's Irq value only reserves IRQ1 (the keyboard line): a single
     # LegacyISAReservations entry only carries one Irq, so IRQ12 (the
     # aux/mouse line) is hardcoded in the driver instead (see
     # drivers/input_i8042/i8042_registers.hpp).
     legacy_isa_devices = [
-        ("VGA", {"HwID": "gfx_vga", "IoPorts": "0x3C0-0x3DF", "Memory": "0xA0000-0xAFFFF"}),
+        ("CIRRUS", {"HwID": "gfx_cirrus", "IoPorts": "0x3C0-0x3DF", "Memory": "0xA0000-0xAFFFF"}),
+        ("VGA", {"HwID": "gfx_vga", "IoPorts": "0x3C0-0x3DF", "Memory": "0xA0000-0xAFFFF",
+                 "Start": "LastResort"}),
         ("i8042", {"HwID": "input_i8042", "IoPorts": "0x60-0x64", "Irq": "1"}),
         ("COM1", {"HwID": "serial_uart", "IoPorts": "0x3F8-0x3FF", "Irq": "4"}),
     ]
+
+    # Console/Desktop: display preferences, not driver-private settings, so
+    # they live in a generic key every graphics driver can read. An absent,
+    # unparsable or unsupported combination falls back to 640x480x8 at 60Hz.
+    desktop_mode = {
+        "Width": "640",
+        "Height": "480",
+        "Bpp": "8",
+        "RefreshRate": "60",
+    }
+
+    cfg.ensure_key("/System")
+    cfg.ensure_key("/System/Console")
+    cfg.ensure_key("/System/Console/Desktop")
+    for value_name, value in desktop_mode.items():
+        cfg.set(f"/System/Console/Desktop/{value_name}", value, Config.VALUE_STRING)
 
     cfg.ensure_key("/LegacyISAReservations")
     for name, values in legacy_isa_devices:

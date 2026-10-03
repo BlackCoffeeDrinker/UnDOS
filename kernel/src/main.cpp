@@ -1,8 +1,10 @@
 #include "stdkrn.hpp"
 
+
 #include "configuration_manager.hpp"
 #include "dispatch.hpp"
 #include "driver_loader.hpp"
+#include "event_broadcaster.hpp"
 #include "initial/boot_device_vfs.hpp"
 #include "input/input_manager.hpp"
 #include "object_manager.hpp"
@@ -11,10 +13,9 @@
 #include "scheduler/CpuContext.hpp"
 #include "scheduler/Scheduler.hpp"
 #include "smp.hpp"
+#include "user/user.hpp"
 #include "vfs.hpp"
 #include "vmm.hpp"
-#include "user/user.hpp"
-#include <kernel/tty/tty_device.hpp>
 
 uint32_t g_page_size;
 
@@ -133,17 +134,22 @@ const char *GetObjectTypeName(kernel::ObjectType type) {
   return "Unknown";
 }
 
+kstd::string_view Indent(int depth) noexcept {
+  static constexpr char kSpaces[] = "                                                                ";
+  constexpr size_t kMax = sizeof(kSpaces) - 1;
+  const size_t n = static_cast<size_t>(depth < 0 ? 0 : depth) * 2;
+  return {kSpaces, n < kMax ? n : kMax};
+}
+
 void DumpObjectTree(const kernel::KObjectPtr<kernel::KObject> &obj, int depth = 0) {
   if (!obj) return;
-
-  for (int i = 0; i < depth; ++i) { early_print("  "); }
 
   kstd::string_view name = obj->name;
   if (name.empty() && depth == 0) {
     name = "/";
   }
 
-  early_print_fmt("|-- {} ({})\n\r", name, GetObjectTypeName(obj->type));
+  KE_Print("{}|-- {} ({})", Indent(depth), name, GetObjectTypeName(obj->type));
 
   if (const auto directory = obj.As<kernel::KDirectoryObject>()) {
     for (auto &entry: directory->child_list) {
@@ -172,8 +178,6 @@ const char *GetDeviceTypeName(kernel::DeviceType type) {
 void DumpDevice(const kernel::KDevicePtr<kernel::KDevice> &dev, int depth, bool isStack = false) {
   if (!dev) return;
 
-  for (int i = 0; i < depth; ++i) { early_print("  "); }
-
   kstd::string_view name = dev->Name();
   if (name.empty()) name = "<unnamed>";
   kstd::string_view hwid = dev->hardwareId;
@@ -183,7 +187,7 @@ void DumpDevice(const kernel::KDevicePtr<kernel::KDevice> &dev, int depth, bool 
                                            : kstd::string_view("<none>");
 
   const char *prefix = isStack ? "@-- " : "|-- ";
-  early_print_fmt("{} {} [type={} hwid={} driver={}]\n\r", prefix, name, GetDeviceTypeName(dev->deviceType), hwid, driverName);
+  KE_Print("{}{} {} [type={} hwid={} driver={}]", Indent(depth), prefix, name, GetDeviceTypeName(dev->deviceType), hwid, driverName);
 
   // 1. Recurse into the FDO stacked on top of this PDO (vertical)
   if (dev->attachedDevice) {
@@ -204,7 +208,7 @@ void DumpDeviceTree() {
   const auto root = KE_PNP_GetRootDevice();
   if (!root) return;
 
-  early_print("\n\rDevice stack (devnode tree):\n\r");
+  KE_Print("Device stack (devnode tree):");
   DumpDevice(root, 0, false);
 }
 
@@ -214,23 +218,20 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   const CommandLineParser parser(boot_info.command_line);
   g_page_size = boot_info.page_size;
 
+  KE_Print("UnDOS Kernel INIT with page size {}", g_page_size);
+  KE_Print("Command line: {}", boot_info.command_line);
+
   HAL_PLATFORM_Init(boot_info, KE_VMM_GetKernelAddressSpace());
   kernel::vmm::init();
   kernel::objectmanager::init();
   kernel::vmm::late_init();
   kernel::driver::init(boot_info);//< This just copies the symbols
   HAL_VMM_FinalizeInit();
-
-  // Memory management is now fully functional
-  early_print_fmt("Memory management is now fully functional\r\n");
-
   kernel::sched::init_bsp();
   kernel::dispatch::init();
   HAL_PLATFORM_InitializeSystemTimer();
   HAL_CPU_EnableInterrupts();
-
-  early_print_fmt("Scheduler is running\r\n");
-
+  kernel::event::init();
   kernel::pnp::init();
   kernel::resource::init();
   kernel::input::init();
@@ -255,9 +256,9 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   // Bring every CPU the HAL reports online. On a uniprocessor HAL this is a
   // no-op and online_count() stays 1.
   kernel::smp::start_secondary_cpus();
-  early_print_fmt("SMP: {} of {} CPU(s) online\r\n",
-                  kernel::cpu::online_count(),
-                  HAL_PLATFORM_GetCpuCount());
+  KE_Print("SMP: {} of {} CPU(s) online",
+           kernel::cpu::online_count(),
+           HAL_PLATFORM_GetCpuCount());
 
   // Mount the root fs
   if (parser.has_key("root")) {
@@ -299,23 +300,35 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   if (const auto native_elf_loader = kernel::CreateKObject<kernel::KSubsystemObject>("NativeElfLoader")) {
     native_elf_loader->loader_path = "/System/ELoader.elf";
     if (!KE_OB_InsertObject(KE_OB_GetSubsystemDirectory(), native_elf_loader)) {
-      early_print_fmt("Failed to register NativeElfLoader subsystem\r\n");
+      KE_Print("Failed to register NativeElfLoader subsystem");
     }
   } else {
-    early_print_fmt("Failed to allocate NativeElfLoader subsystem\r\n");
+    KE_Print("Failed to allocate NativeElfLoader subsystem");
   }
 
   // Start init once PnP has bound every driver, so it sees all devices.
   KE_PNP_WaitForQuiescence();
 
+  // Everything a real bus or the registry could report has now been bound, so
+  // the last-resort pass can tell whether its job is still vacant. Today the
+  // only such job is the console: load the fallback display driver (gfx_vga)
+  // only when no accelerated driver registered a display.
+  if (KE_GFX_GetPrimaryDisplay()) {
+    KE_Print("Last-resort drivers: a display is already registered, skipping");
+  } else {
+    KE_Print("Last-resort drivers: no display registered, loading fallbacks");
+    kernel::driver::LoadLastResortDrivers();
+    KE_PNP_WaitForQuiescence();
+  }
+
   kernel::user::init_raw_input();
 
   // Try and find the init
-  early_print_fmt("Loading init\r\n");
+  KE_Print("Loading init");
   KE_USER_CreateProcess("/System/init.elf");
   DumpObjectTree(KE_OB_GetRootDirectory());
   DumpDeviceTree();
-  early_print("Done\r\n");
+  KE_Print("Done");
 
 
   // Thread 0 becomes a low-noise heartbeat. It must never return or shut the

@@ -37,8 +37,10 @@ constexpr auto Volume = "volume"_dev;
 
 enum class KPnpState : uint8_t {
   NotStarted,
+  Starting,
   Started,
   Stopped,
+  StoppedConflicting,
   Removed,
 };
 

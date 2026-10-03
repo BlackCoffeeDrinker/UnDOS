@@ -1,4 +1,6 @@
 
+#include <Kernel.hpp>
+
 #include "atomics.hpp"
 #include "MemModelToPlatformEnum.hpp"
 
@@ -324,23 +326,23 @@ namespace hal::x86 {
 void init_atomic_ops(AtomicPlatorm platform) {
   switch (platform) {
     case AtomicPlatorm::X86_386:
-      early_print_fmt("Using 386 atomics\r\n");
+      KE_Print("Using 386 atomics");
       break;
     case AtomicPlatorm::X86_XADD:
-      early_print_fmt("Using XADD atomics\r\n");
+      KE_Print("Using XADD atomics");
       atomic_fetch_add_impl = &atomic_fetch_add_xadd;
       atomic_fetch_sub_impl = &atomic_fetch_sub_xadd;
       // XADD implies 486+, which also guarantees CMPXCHG.
       atomic_compare_exchange_32_impl = &atomic_compare_exchange_32_cmpxchg;
       break;
     case AtomicPlatorm::X86_CMPXCHG:
-      early_print_fmt("Using CMPXCHG atomics\r\n");
+      KE_Print("Using CMPXCHG atomics");
       atomic_fetch_add_impl = &atomic_fetch_add_cmpxchg;
       atomic_fetch_sub_impl = &atomic_fetch_sub_cmpxchg;
       atomic_compare_exchange_32_impl = &atomic_compare_exchange_32_cmpxchg;
       break;
     case AtomicPlatorm::X86_CMPXCHG8B:
-      early_print_fmt("Using CMPXCHG8B atomics\r\n");
+      KE_Print("Using CMPXCHG8B atomics");
       atomic_fetch_add_impl = &atomic_fetch_add_cmpxchg;
       atomic_fetch_sub_impl = &atomic_fetch_sub_cmpxchg;
       atomic_compare_exchange_32_impl = &atomic_compare_exchange_32_cmpxchg;

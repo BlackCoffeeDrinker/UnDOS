@@ -5,18 +5,18 @@
 #include <new.hpp>
 
 namespace {
-kernel::KObjectPtr<kernel::KDirectoryObject> g_root;
-kernel::KObjectPtr<kernel::KDirectoryObject> g_device;
-kernel::KObjectPtr<kernel::KDirectoryObject> g_driver;
-kernel::KObjectPtr<kernel::KDirectoryObject> g_memory;
-kernel::KObjectPtr<kernel::KDirectoryObject> g_filesystem;
-kernel::KObjectPtr<kernel::KDirectoryObject> g_thread;
-kernel::KObjectPtr<kernel::KDirectoryObject> g_process;
-kernel::KObjectPtr<kernel::KDirectoryObject> g_vfs;
-kernel::KObjectPtr<kernel::KDirectoryObject> g_file;
-kernel::KObjectPtr<kernel::KDirectoryObject> g_subsystem;
-kernel::KObjectPtr<kernel::KDirectoryObject> g_configroots;
-kernel::KObjectPtr<kernel::KDirectoryObject> g_gfx;
+kernel::KObjectPtr<kernel::KDirectoryObject> g_root{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_device{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_driver{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_memory{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_filesystem{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_thread{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_process{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_vfs{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_file{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_subsystem{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_configroots{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_gfx{};
 
 kernel::KObjectPtr<kernel::KObject> LookupChild(
     const kernel::KObjectPtr<kernel::KDirectoryObject> &parent,
@@ -71,9 +71,11 @@ kernel::KObjectPtr<kernel::KObject> LookupPathFrom(
 }// namespace
 
 namespace kernel::objectmanager {
-void init() {
-  early_print_fmt("Initializing Object Manager\r\n");
+bool is_initialized() {
+  return g_root != nullptr;
+}
 
+void init() {
   g_root = kernel::CreateKObject<KDirectoryObject>("<Root>");
   g_device = kernel::CreateKObject<KDirectoryObject>(kOBDevicesPath);
   g_driver = kernel::CreateKObject<KDirectoryObject>(kOBDriversPath);
@@ -100,26 +102,24 @@ void init() {
   KE_OB_InsertObject(g_root, g_configroots);
   KE_OB_InsertObject(g_root, g_gfx);
   KE_OB_InsertObject(g_root, system);
-
-  early_print_fmt("Initial Object Manager started\r\n");
 }
 }// namespace kernel::objectmanager
 
 UNDOS_KERNEL_API_DEF bool KE_OB_InsertObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
   if (!parent || !child) [[unlikely]] {
-    early_print_fmt("KE_OB_InsertObject failed\r\n");
+    KE_Print("KE_OB_InsertObject failed");
     return false;
   }
 
   if (child->parent != nullptr) [[unlikely]] {
     // Child already has a parent
-    early_print_fmt("KE_OB_InsertObject failed for object {}: Object already has a parent\r\n", child->name);
+    KE_Print("KE_OB_InsertObject failed for object {}: Object already has a parent", child->name);
     return false;
   }
 
   // Check if name already exists
   if (parent->child_list.find(kstd::string_view(child->name))) {
-    early_print_fmt("KE_OB_InsertObject failed for object {}\r\n", child->name);
+    KE_Print("KE_OB_InsertObject failed for object {}", child->name);
     return false;
   }
 

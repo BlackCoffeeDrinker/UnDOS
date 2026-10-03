@@ -35,7 +35,7 @@ Slab *Allocator::allocate_slab(Cache &cache) noexcept {
   const size_t pages = layout_.slab_size / layout_.page_size;
   const PhysicalAddress phys = HAL_PMM_AllocateFrames(pages);
   if (!phys) {
-    early_print_fmt("Failed to allocate physical frames for slab!\n\r");
+    KE_Print("Failed to allocate physical frames for slab!");
     return nullptr;
   }
 
@@ -74,7 +74,7 @@ void *allocate_large(size_t size) noexcept {
 
   if (!virt_ptr) {
     g_large_alloc_lock.unlock();
-    early_print_fmt("Failed to allocate large allocation!\n\r");
+    KE_Print("Failed to allocate large allocation!");
     return nullptr;
   }
 
@@ -95,7 +95,7 @@ void free_large(void *ptr) noexcept {
 
   if (header->magic != kLargeAllocMagic) [[unlikely]] {
     g_large_alloc_lock.unlock();
-    early_print_fmt("free_large: invalid header at {}\n\r", ptr);
+    KE_Print("free_large: invalid header at {}", ptr);
     return;
   }
 

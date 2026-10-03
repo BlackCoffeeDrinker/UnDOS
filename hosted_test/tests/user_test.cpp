@@ -119,3 +119,25 @@ TEST_CASE("Coordinate mapping", "[user]") {
   URect back = screen_to_client_locked(w, screen);
   REQUIRE(back == client);
 }
+
+TEST_CASE("region_merges_to_bounds collapses near-solid regions only", "[user][region]") {
+  using kernel::user::region_merges_to_bounds;
+
+  // A single rectangle is always its own bounding box.
+  URegion one;
+  one.Set({0, 0, 100, 100});
+  REQUIRE(region_merges_to_bounds(one));
+
+  // Two halves of a rectangle with a one-pixel gap waste almost nothing.
+  URegion adjacent;
+  adjacent.Set({0, 0, 100, 49});
+  adjacent.rects[adjacent.count++] = {0, 50, 100, 100};
+  REQUIRE(region_merges_to_bounds(adjacent));
+
+  // Two small rectangles at opposite screen corners: the bounding box is
+  // hundreds of times the covered area and must not be merged.
+  URegion sparse;
+  sparse.Set({0, 0, 10, 10});
+  sparse.rects[sparse.count++] = {600, 460, 610, 470};
+  REQUIRE_FALSE(region_merges_to_bounds(sparse));
+}

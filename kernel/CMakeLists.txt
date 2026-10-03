@@ -92,6 +92,9 @@ add_executable(kernel
 
         src/tty/tty.cpp
         src/tty/tty_device.cpp
+        src/konsole.cpp
+        src/event_broadcaster.cpp
+        src/event_broadcaster.hpp
 )
 
 add_dependencies(kernel undos-syscalls-gen)

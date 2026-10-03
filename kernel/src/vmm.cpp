@@ -25,7 +25,6 @@ void init() noexcept {
 }
 
 void late_init() noexcept {
-  early_print_fmt("VMM: Registered with OM\r\n");
 }
 
 bool create_user_address_space(AddressSpace &out_as) noexcept {
@@ -191,7 +190,7 @@ UNDOS_KERNEL_API_DEF void *KE_Malloc(size_t size) noexcept {
     if (size <= g_malloc_cache.object_size()) {
       auto allocate = g_malloc_cache.allocate();
 #if defined(KALLOC_DEBUG) && KALLOC_DEBUG == 1
-      early_print_fmt("ALLOC: {} @ {}\r\n", size, allocate);
+      KE_Print("ALLOC: {} @ {}", size, allocate);
 #endif
       return allocate;
     }
@@ -201,12 +200,12 @@ UNDOS_KERNEL_API_DEF void *KE_Malloc(size_t size) noexcept {
   // page-backed allocation instead of failing outright.
   if (auto *large = kernel::memory::allocate_large(size)) {
 #if defined(KALLOC_DEBUG) && KALLOC_DEBUG == 1
-    early_print_fmt("ALLOC LARGE: {} @ {}\r\n", size, large);
+    KE_Print("ALLOC LARGE: {} @ {}", size, large);
 #endif
     return large;
   }
 
-  early_print_fmt("ALLOC FAILED: {}\r\n", size);
+  KE_Print("ALLOC FAILED: {}", size);
   return nullptr;
 }
 
@@ -226,7 +225,7 @@ UNDOS_KERNEL_API_DEF void KE_Free(void *ptr) noexcept {
 
   if (auto *slab = kernel::memory::find_slab(ptr)) {
 #if defined(KALLOC_DEBUG) && KALLOC_DEBUG == 1
-    early_print_fmt("FREE SLAB: {}\r\n", ptr);
+    KE_Print("FREE SLAB: {}", ptr);
 #endif
     slab->cache()->free(ptr, *slab);
     return;
@@ -460,8 +459,8 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
   // privilege level, faulting IP) into `info`; this is the single place
   // where all platforms funnel into for demand paging / copy-on-write /
   // pagefile handling.
-  early_print_fmt(
-      "Page Fault: addr={} ip={} present={} write={} user={} exec={}\r\n",
+  KE_Print(
+      "Page Fault: addr={} ip={} present={} write={} user={} exec={}",
       info.fault_addr.as_ptr<>(), info.ip.as_ptr<>(),
       info.present, info.write, info.user, info.exec);
 

@@ -63,19 +63,11 @@ void draw_nonclient_locked(KWindowObject &window) noexcept {
   visible_region_locked(window, clip);
   if (clip.Empty()) return;
 
-  KObjectPtr<KDisplay> display = KE_GFX_GetPrimaryDisplay();
-  if (!display) return;
-  KSurface *surf = display->surface.get();
-
   auto draw_rect = [&](int32_t l, int32_t t, int32_t w, int32_t h, uint32_t color) {
     URect r = {l, t, l + w, t + h};
     for (uint32_t i = 0; i < clip.count; ++i) {
       URect intersection = r.Intersect(clip.rects[i]);
-      if (!intersection.Empty()) {
-        KE_GFX_SoftwareFillRect(surf, intersection.left, intersection.top, 
-                                intersection.right - intersection.left, 
-                                intersection.bottom - intersection.top, color);
-      }
+      if (!intersection.Empty()) fill_screen_locked(intersection, color);
     }
   };
 

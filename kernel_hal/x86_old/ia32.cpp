@@ -18,7 +18,6 @@ UNDOS_HAL_API_DEF void HAL_PLATFORM_Init(const kernel::BootInfoT &boot_info, ker
   // Stage 1.5 currently sets the page size to be 4096 bytes
   // Double check
   if (boot_info.page_size != 4096) {
-    early_print("Stage 1.5 did not set the page size to 4096 bytes");
     HAL_PLATFORM_Panic("Stage 1.5 did not set the page size to 4096 bytes", __FILE__, __LINE__);
   }
 
@@ -32,7 +31,7 @@ UNDOS_HAL_API_DEF void HAL_PLATFORM_Init(const kernel::BootInfoT &boot_info, ker
     atomic_platform = hal::x86::AtomicPlatorm::X86_XADD;
   }
 
-  early_print_fmt("CPU Family: {}, Model: {}\r\n", cpu_id.family, cpu_id.model);
+  KE_Print("CPU Family: {}, Model: {}", cpu_id.family, cpu_id.model);
 
   hal::x86::init_atomic_ops(atomic_platform);
   hal::x86::init_gdt();
@@ -115,7 +114,9 @@ UNDOS_HAL_API_DEF [[noreturn]] void HAL_PLATFORM_Panic(const kstd::string_view &
   // coming back to finish the halt below.
   __asm__ volatile("cli");
 
-  early_print_fmt("\r\n--------\r\nPANIC: {} at {}:{}\r\nSystem Halted\r\n", message, file, line);
+  KE_Print("--------");
+  KE_Print("PANIC: {} at {}:{}", message, file, line);
+  KE_Print("System Halted");
 
   while (true) {
     __asm__ volatile("cli; hlt");
@@ -148,16 +149,14 @@ bool HAL_PciPresent() noexcept {
 }// namespace
 
 UNDOS_HAL_API_DEF void HAL_PLATFORM_AfterObjectManager() noexcept {
-
-
   if (HAL_PciPresent()) {
     // TODO: A PCI bus is present. A future PCI bus driver would enumerate its
     // configuration space, discover the PCI-to-ISA bridge, and spawn a bridge
     // PDO for the ISA bus driver to attach to. Not implemented yet.
-    early_print("HAL: PCI bus detected (PCI enumeration not implemented yet)\r\n");
+    KE_Print("HAL: PCI bus detected (PCI enumeration not implemented yet)");
   } else {
     // No PCI bus: spawn a legacy ISA root PDO so the ISA bus driver can bind.
-    early_print("HAL: No PCI bus; reporting legacy ISA root device\r\n");
+    KE_Print("HAL: No PCI bus; reporting legacy ISA root device");
     KE_PNP_ReportRootDevice("bus_isa");
   }
 }

@@ -62,36 +62,36 @@ UNDOS_KERNEL_API_DEF bool KE_VFS_Mount(const kernel::KDevicePtr<kernel::KDevice>
   const auto existing = findMountPoint(mountPoint);
 
   if (existing && existing->name == mountPoint) {
-    early_print_fmt("KE_VFS_Mount: Mount point '{}' already in use\r\n", mountPoint);
+    KE_Print("KE_VFS_Mount: Mount point '{}' already in use", mountPoint);
     return false;
   }
 
   // Only "/" can be mounted if no parent mount exists
   if (!existing && !mountPointIsSpecial(mountPoint)) {
-    early_print_fmt("KE_VFS_Mount: Mount point '{}' is not valid\r\n", mountPoint);
+    KE_Print("KE_VFS_Mount: Mount point '{}' is not valid", mountPoint);
     return false;
   }
 
   // Find file system
   if (auto fs = KE_OB_FindDirectChildOfType<kernel::KFilesystemObject>(KE_OB_GetFilesystemDirectory(), filesystem)) {
-    early_print_fmt("KE_VFS_Mount: Found filesystem driver with name '{}'\r\n", filesystem);
+    KE_Print("KE_VFS_Mount: Found filesystem driver with name '{}'", filesystem);
     const auto volumemount = kernel::CreateKObject<kernel::KVolumeMountObject>(mountPoint);
     volumemount->fileSystem = kstd::move(fs);
     volumemount->volume = volume;
     volumemount->isMounted = false;
 
-    early_print_fmt("KE_VFS_Mount: Attempting to mount volume '{}' on mount point '{}' with file system '{}'\r\n", volume->Name(), mountPoint, volumemount->fileSystem->name);
+    KE_Print("KE_VFS_Mount: Attempting to mount volume '{}' on mount point '{}' with file system '{}'", volume->Name(), mountPoint, volumemount->fileSystem->name);
     if (volumemount->fileSystem->MountVolume(volumemount, options)) {
       volumemount->isMounted = true;
-      early_print_fmt("KE_VFS_Mount: Mounted volume '{}' on mount point '{}' with file system '{}'\r\n", volume->Name(), mountPoint, volumemount->fileSystem->name);
+      KE_Print("KE_VFS_Mount: Mounted volume '{}' on mount point '{}' with file system '{}'", volume->Name(), mountPoint, volumemount->fileSystem->name);
       KE_OB_InsertObject(KE_OB_GetVFSDirectory(), volumemount);
       return true;
     }
 
-    early_print_fmt("KE_VFS_Mount: Failed to mount volume\r\n");
+    KE_Print("KE_VFS_Mount: Failed to mount volume");
   }
 
-  early_print_fmt("KE_VFS_Mount: Filesystem driver with name '{}' not found\r\n", filesystem);
+  KE_Print("KE_VFS_Mount: Filesystem driver with name '{}' not found", filesystem);
   return false;
 }
 
@@ -101,20 +101,20 @@ UNDOS_KERNEL_API_DEF bool KE_VFS_Unmount(const kstd::string_view &mountPoint) no
 
   const auto mount = KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(vfsRoot, mountPoint);
   if (!mount || mount->name != mountPoint) {
-    early_print_fmt("KE_VFS_Unmount: Mount point '{}' not found\r\n", mountPoint);
+    KE_Print("KE_VFS_Unmount: Mount point '{}' not found", mountPoint);
     return false;
   }
 
   if (mount->fileSystem && mount->fileSystem->UnmountVolume) {
     if (!mount->fileSystem->UnmountVolume(mount)) {
-      early_print_fmt("KE_VFS_Unmount: Filesystem refused to unmount '{}'\r\n", mountPoint);
+      KE_Print("KE_VFS_Unmount: Filesystem refused to unmount '{}'", mountPoint);
       return false;
     }
   }
 
   mount->isMounted = false;
   KE_OB_RemoveObject(vfsRoot, mount);
-  early_print_fmt("KE_VFS_Unmount: Unmounted '{}'\r\n", mountPoint);
+  KE_Print("KE_VFS_Unmount: Unmounted '{}'", mountPoint);
   return true;
 }
 
@@ -124,14 +124,14 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KFilesystemObject> KE_VFS_Regist
 
   // Make sure the name is unique
   if (auto fsko = KE_OB_FindDirectChildOfType<kernel::KFilesystemObject>(KE_OB_GetFilesystemDirectory(), name)) {
-    early_print_fmt("KE_VFS_RegisterFilesystemDriver: Filesystem driver with name '{}' already exists\r\n", name);
+    KE_Print("KE_VFS_RegisterFilesystemDriver: Filesystem driver with name '{}' already exists", name);
     return {};
   }
 
   if (auto fsko = kernel::CreateKObject<kernel::KFilesystemObject>(name)) {
     fsko->driver = kstd::move(driver);
     KE_OB_InsertObject(KE_OB_GetFilesystemDirectory(), fsko);
-    early_print_fmt("KE_VFS_RegisterFilesystemDriver: Registered filesystem driver '{}'\r\n", name);
+    KE_Print("KE_VFS_RegisterFilesystemDriver: Registered filesystem driver '{}'", name);
     return fsko;
   }
 
@@ -149,7 +149,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_VFS_OpenFile(const
   // placement-new. An empty name collides on the second open under FileRoot.
   void *storage = KE_Malloc(sizeof(kernel::KIOObject));
   if (!storage) {
-    early_print_fmt("KE_VFS_OpenFile: Failed to allocate file object for '{}'\r\n", path);
+    KE_Print("KE_VFS_OpenFile: Failed to allocate file object for '{}'", path);
     return {};
   }
   kstd::static_string<64> fileObjectName;
@@ -164,7 +164,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_VFS_OpenFile(const
 
   file->mountPoint = findMountPoint(path);
   if (!file->mountPoint) {
-    early_print_fmt("KE_VFS_OpenFile: Failed to find mount point for file: {}\r\n", path);
+    KE_Print("KE_VFS_OpenFile: Failed to find mount point for file: {}", path);
     return {};
   }
 
@@ -179,20 +179,20 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_VFS_OpenFile(const
   // Filesystem pointer convenience
   const auto &fsObj = file->FileSystem();
   if (!fsObj) {
-    early_print_fmt("KE_VFS_OpenFile: mount {} has no filesystem\r\n", file->mountPoint->name);
+    KE_Print("KE_VFS_OpenFile: mount {} has no filesystem", file->mountPoint->name);
     return {};
   }
 
   // Ensure required FS callbacks exist
   if (!fsObj->Lookup || !fsObj->CreateHandle || !fsObj->GetRootNode) {
-    early_print_fmt("KE_VFS_OpenFile: Filesystem missing Lookup/CreateHandle/GetRootNode\r\n");
+    KE_Print("KE_VFS_OpenFile: Filesystem missing Lookup/CreateHandle/GetRootNode");
     return {};
   }
 
   // Allocate owned node for the file; populate with root node
   file->vfsNode = kstd::make_unique<kernel::KVFSNode>();
   if (!file->FileSystem()->GetRootNode(file->mountPoint, *file->vfsNode)) {
-    early_print_fmt("KE_VFS_OpenFile: Failed to get root node for mount {}\r\n", file->mountPoint->name);
+    KE_Print("KE_VFS_OpenFile: Failed to get root node for mount {}", file->mountPoint->name);
     return {};
   }
 
@@ -219,7 +219,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_VFS_OpenFile(const
     }
 
     if (name == "..") {
-      early_print_fmt("KE_VFS_OpenFile: '..' component in path '{}'\r\n", path);
+      KE_Print("KE_VFS_OpenFile: '..' component in path '{}'", path);
       return {};
     }
 
@@ -241,7 +241,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_VFS_OpenFile(const
     // tmpnode now contains the parent node (borrowed copy we own)
     // file->vfsNode is the output storage for the child
     if (!fsObj->Lookup(file->mountPoint, *tmpnode, name, *file->vfsNode)) {
-      early_print_fmt("KE_VFS_OpenFile: Lookup failed for '{}' in '{}'\r\n",
+      KE_Print("KE_VFS_OpenFile: Lookup failed for '{}' in '{}'",
                       name, rel);
       return {};
     }
@@ -262,7 +262,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_VFS_OpenFile(const
     // Validate directory for intermediate components
     const auto isLast = pos >= rel.size();
     if (!isLast && file->vfsNode->type != kernel::VFSNodeType::Directory) {
-      early_print_fmt("KE_VFS_OpenFile: '{}' is not a directory in path '{}'\r\n",
+      KE_Print("KE_VFS_OpenFile: '{}' is not a directory in path '{}'",
                       name, path);
       return {};
     }
@@ -274,7 +274,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_VFS_OpenFile(const
   // Create low-level filesystem handle for this vnode
   // ------------------------------------------------------------------
   if (!fsObj->CreateHandle(file->mountPoint, *file->vfsNode, file->mode)) {
-    early_print_fmt("KE_VFS_OpenFile: Filesystem CreateHandle failed for '{}'\r\n", path);
+    KE_Print("KE_VFS_OpenFile: Filesystem CreateHandle failed for '{}'", path);
     return {};
   }
   file->fileHandleCreated = true;
@@ -283,7 +283,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_VFS_OpenFile(const
   // Insert into Object Manager
   // ------------------------------------------------------------------
   if (!KE_OB_InsertObject(KE_OB_GetFileDirectory(), file)) {
-    early_print_fmt("KE_VFS_OpenFile: Failed to insert file object for '{}'\r\n", path);
+    KE_Print("KE_VFS_OpenFile: Failed to insert file object for '{}'", path);
     KE_VFS_CloseFile(file);
     return {};
   }

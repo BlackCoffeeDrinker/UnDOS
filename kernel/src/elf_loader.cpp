@@ -21,7 +21,7 @@ constexpr size_t MAX_SECTION_HEADERS = 64;
 // seeking first. Returns false if the seek/read comes up short.
 bool ReadExact(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t offset, kstd::span<uint8_t> buffer) noexcept {
   if (KE_VFS_SeekFile(file, offset) != offset) {
-    early_print_fmt("ReadExact: Failed to seek to offset\r\n");
+    KE_Print("ReadExact: Failed to seek to offset");
     return false;
   }
 
@@ -54,7 +54,14 @@ uint8_t *ReadBlob(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t of
 // table `shdrs` (`shnum` entries, already resident in memory) of an ELF32
 // image streamed from `file`.
 bool ProcessRelocationsFromVfs(const kernel::KObjectPtr<kernel::KIOObject> &file, const hal::Elf32_Shdr *shdrs, size_t shnum, uintptr_t delta, const kernel::cfunc<uintptr_t(kstd::string_view)> &resolve_symbol) noexcept {
-  for (size_t i = 0; i < shnum; ++i) {
+  // Relocation sections normally share one symbol/string table; keep them
+  // resident across sections instead of re-reading them from disk each time.
+  size_t loaded_sym_index = shnum;
+  hal::Elf32_Sym *syms = nullptr;
+  char *strings = nullptr;
+  bool ok = true;
+
+  for (size_t i = 0; i < shnum && ok; ++i) {
     if (shdrs[i].sh_type != hal::SHT_REL) continue;
 
     if (const uint32_t target_section_idx = shdrs[i].sh_info;
@@ -64,36 +71,46 @@ bool ProcessRelocationsFromVfs(const kernel::KObjectPtr<kernel::KIOObject> &file
       continue;
     }
 
-    if (shdrs[i].sh_link >= shnum) return false;
+    if (shdrs[i].sh_link >= shnum) {
+      ok = false;
+      break;
+    }
     const auto &sym_section = shdrs[shdrs[i].sh_link];
-    if (sym_section.sh_link >= shnum) return false;
+    if (sym_section.sh_link >= shnum) {
+      ok = false;
+      break;
+    }
     const auto &str_section = shdrs[sym_section.sh_link];
 
-    auto *rels = reinterpret_cast<hal::Elf32_Rel *>(ReadBlob(file, shdrs[i].sh_offset, shdrs[i].sh_size));
-    auto *syms = reinterpret_cast<hal::Elf32_Sym *>(ReadBlob(file, sym_section.sh_offset, sym_section.sh_size));
-    auto *strings = reinterpret_cast<char *>(ReadBlob(file, str_section.sh_offset, str_section.sh_size));
+    if (loaded_sym_index != shdrs[i].sh_link) {
+      KE_Free(syms);
+      KE_Free(strings);
+      syms = reinterpret_cast<hal::Elf32_Sym *>(ReadBlob(file, sym_section.sh_offset, sym_section.sh_size));
+      strings = reinterpret_cast<char *>(ReadBlob(file, str_section.sh_offset, str_section.sh_size));
+      loaded_sym_index = shdrs[i].sh_link;
+    }
 
-    bool ok = rels != nullptr && syms != nullptr && strings != nullptr;
+    auto *rels = reinterpret_cast<hal::Elf32_Rel *>(ReadBlob(file, shdrs[i].sh_offset, shdrs[i].sh_size));
+
+    ok = rels != nullptr && syms != nullptr && strings != nullptr;
     if (ok) {
       const size_t rel_count = shdrs[i].sh_size / sizeof(hal::Elf32_Rel);
       for (size_t r = 0; r < rel_count && ok; ++r) {
         if (!kernel::elf::ApplyRelocation(rels[r], syms, strings, delta, resolve_symbol)) {
           ok = false;
-          early_print_fmt("ProcessRelocationsFromBlob: Failed to apply relocation\r\n");
+          KE_Print("ProcessRelocationsFromBlob: Failed to apply relocation");
         }
       }
     } else {
-      early_print_fmt("ProcessRelocationsFromBlob: rels != nullptr && syms != nullptr && strings != nullptr\r\n");
+      KE_Print("ProcessRelocationsFromBlob: rels != nullptr && syms != nullptr && strings != nullptr");
     }
 
     KE_Free(rels);
-    KE_Free(syms);
-    KE_Free(strings);
-
-    if (!ok) return false;
   }
 
-  return true;
+  KE_Free(syms);
+  KE_Free(strings);
+  return ok;
 }
 
 // Reads the section-header-string-table and, for every named section,
@@ -111,6 +128,7 @@ bool CaptureSections(const kernel::KObjectPtr<kernel::KIOObject> &file, const ha
     if (shdrs[i].sh_name >= shstrtab.sh_size) continue;
     const kstd::string_view name(reinterpret_cast<const char *>(shstr + shdrs[i].sh_name));
     if (name.empty()) continue;
+    if (!policy.capture_section_name.empty() && name != policy.capture_section_name) continue;
 
     if (auto *data = ReadBlob(file, shdrs[i].sh_offset, shdrs[i].sh_size)) {
       policy.capture_section(policy.context, name, data, shdrs[i].sh_size);
@@ -138,7 +156,7 @@ bool kernel::elf::ApplyRelocation(
     const char *name = strings + sym.st_name;
     sym_val = resolve_symbol.valid() ? resolve_symbol(name) : 0;
     if (sym_val == 0) {
-      early_print_fmt("Elf Loader: Unresolved symbol: {}\n\r", name);
+      KE_Print("Elf Loader: Unresolved symbol: {}", name);
       return false;
     }
   } else {
@@ -193,7 +211,7 @@ bool kernel::elf::ProcessRelocationsFromBlob(const uint8_t *raw_blob, uintptr_t 
 
       for (size_t r = 0; r < rel_count; ++r) {
         if (!ApplyRelocation(rels[r], syms, strings, delta, resolve_symbol)) {
-          early_print_fmt("ProcessRelocationsFromBlob: Failed to apply relocation\r\n");
+          KE_Print("ProcessRelocationsFromBlob: Failed to apply relocation");
           return false;
         }
       }
@@ -205,10 +223,9 @@ bool kernel::elf::ProcessRelocationsFromBlob(const uint8_t *raw_blob, uintptr_t 
 
 kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &path, const LoadPolicy &policy) noexcept {
   LoadResult result;
-
   auto file = KE_VFS_OpenFile(path, KIOObject::OpenMode::Read);
   if (!file) {
-    early_print_fmt("LoadElfFromVfs: Failed to open file\r\n");
+    KE_Print("LoadElfFromVfs: Failed to open file");
     return result;
   }
 
@@ -219,24 +236,24 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
       header.e_ident[2] != 'L' || header.e_ident[3] != 'F' ||
       header.e_phnum > MAX_PROGRAM_HEADERS || header.e_phentsize != sizeof(hal::Elf32_Phdr)) {
     KE_VFS_CloseFile(kstd::move(file));
-    early_print_fmt("LoadElfFromVfs: Invalid ELF header\r\n");
+    KE_Print("LoadElfFromVfs: Invalid ELF header");
     return result;
   }
-  early_print_fmt("LoadElfFromVfs: Valid ELF header\r\n");
-  early_print_fmt("  Entry point: 0x{:x}\r\n", header.e_entry);
-  early_print_fmt("  Program headers: {} at offset 0x{:x}\r\n", header.e_phnum, header.e_phoff);
-  early_print_fmt("  Section headers: {} at offset 0x{:x}\r\n", header.e_shnum, header.e_shoff);
-  early_print_fmt("  Machine type: 0x{:x}\r\n", header.e_machine);
+  KE_Print("LoadElfFromVfs: Valid ELF header");
+  KE_Print("  Entry point: 0x{:x}", header.e_entry);
+  KE_Print("  Program headers: {} at offset 0x{:x}", header.e_phnum, header.e_phoff);
+  KE_Print("  Section headers: {} at offset 0x{:x}", header.e_shnum, header.e_shoff);
+  KE_Print("  Machine type: 0x{:x}", header.e_machine);
 
   // Step 2: read only the program header table.
   kstd::array<hal::Elf32_Phdr, MAX_PROGRAM_HEADERS> phdrs{};
   const size_t phdrs_size = static_cast<size_t>(header.e_phnum) * sizeof(hal::Elf32_Phdr);
   if (!ReadExact(file, header.e_phoff, kstd::span(reinterpret_cast<uint8_t *>(phdrs.data()), phdrs_size))) {
     KE_VFS_CloseFile(kstd::move(file));
-    early_print_fmt("LoadElfFromVfs: Failed to read program header table\r\n");
+    KE_Print("LoadElfFromVfs: Failed to read program header table");
     return result;
   }
-  early_print_fmt("  Program header table: {} entries at offset 0x{:x}\r\n", header.e_phnum, header.e_phoff);
+  KE_Print("  Program header table: {} entries at offset 0x{:x}", header.e_phnum, header.e_phoff);
 
   // Step 3 (relocatable path only): read the section header table, then
   // let the caller capture any named sections it cares about (e.g. a
@@ -246,13 +263,13 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     if (header.e_shnum > MAX_SECTION_HEADERS || header.e_shentsize != sizeof(hal::Elf32_Shdr) ||
         !ReadExact(file, header.e_shoff, kstd::span(reinterpret_cast<uint8_t *>(shdrs.data()), static_cast<size_t>(header.e_shnum) * sizeof(hal::Elf32_Shdr)))) {
       KE_VFS_CloseFile(kstd::move(file));
-      early_print_fmt("LoadElfFromVfs: Failed to read section header table\r\n");
+      KE_Print("LoadElfFromVfs: Failed to read section header table");
       return result;
     }
 
     if (!CaptureSections(file, header, shdrs.data(), policy)) {
       KE_VFS_CloseFile(kstd::move(file));
-      early_print_fmt("LoadElfFromVfs: Failed to capture sections\r\n");
+      KE_Print("LoadElfFromVfs: Failed to capture sections");
       return result;
     }
   }
@@ -276,7 +293,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     }
     if (max_vaddr <= min_vaddr) {
       KE_VFS_CloseFile(kstd::move(file));
-      early_print_fmt("LoadElfFromVfs: max_vaddr <= min_vaddr\r\n");
+      KE_Print("LoadElfFromVfs: max_vaddr <= min_vaddr");
       return result;
     }
 
@@ -293,7 +310,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     const auto backing = kernel::CreateKObject<KMemoryBackingObject>(backing_name);
     if (!backing) {
       KE_VFS_CloseFile(kstd::move(file));
-      early_print_fmt("LoadElfFromVfs: Failed to create backing object\r\n");
+      KE_Print("LoadElfFromVfs: Failed to create backing object");
       return result;
     }
     backing->kind = KMemoryBackingObject::Kind::KernelModule;
@@ -305,7 +322,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     const auto *vad = KE_VMM_MapBackingObject(kas, backing, region_size, vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
     if (!vad) {
       KE_VFS_CloseFile(kstd::move(file));
-      early_print_fmt("LoadElfFromVfs: Failed to allocate region\r\n");
+      KE_Print("LoadElfFromVfs: Failed to allocate region");
       return result;
     }
 
@@ -330,7 +347,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     segment_data[i] = ReadBlob(file, ph.p_offset, ph.p_filesz);
     if (!segment_data[i]) {
       ok = false;
-      early_print_fmt("LoadElfFromVfs: Failed to read segment data\r\n");
+      KE_Print("LoadElfFromVfs: Failed to read segment data");
     }
   }
 
@@ -364,7 +381,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
 
     const uintptr_t segment_virt_start = ph.p_vaddr + load_delta;
     if (!MapAndCopySegment(segment_virt_start, segment_data[i], ph.p_filesz, ph.p_memsz, perms)) {
-      early_print_fmt("LoadElfFromVfs: Failed to map and copy segment\r\n");
+      KE_Print("LoadElfFromVfs: Failed to map and copy segment");
       ok = false;
     }
   }
@@ -388,7 +405,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     result.entry_point = VirtualAddress(header.e_entry + load_delta);
     result.ok = true;
   } else {
-    early_print_fmt("LoadElfFromVfs: Failed\r\n");
+    KE_Print("LoadElfFromVfs: Failed");
   }
 
   KE_VFS_CloseFile(kstd::move(file));

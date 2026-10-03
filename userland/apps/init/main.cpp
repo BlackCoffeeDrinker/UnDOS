@@ -8,18 +8,6 @@ extern "C" const char *init_shared_message();
 
 namespace {
 void init_probe_device_control() {
-  uint32_t vga = 0;
-  if (UD_SYS_OpenV1("\\Device\\VGA16", FileOpenMode_Read, &vga) == SyscallReturnCode_OKAY) {
-    IoctlDisplayMode mode{};
-    uint32_t outLen = sizeof(mode);
-    const auto ret = UD_SYS_ControlV1(vga, IoControlCode_DisplayQueryMode, nullptr, 0,
-                                      reinterpret_cast<uint8_t *>(&mode), &outLen);
-    crt_printf("init: VGA16 QueryMode ret=%x %dx%dx%d\n", ret, mode.width, mode.height, mode.bpp);
-    const auto bad = UD_SYS_ControlV1(vga, 0xDEAD, nullptr, 0, nullptr, &outLen);
-    crt_printf("init: VGA16 unknown code ret=%x\n", bad);
-    (void) UD_SYS_CloseV1(vga);
-  }
-
   uint32_t mouse = 0;
   if (UD_SYS_OpenV1("\\Device\\PointerPort0", FileOpenMode_Read, &mouse) == SyscallReturnCode_OKAY) {
     IoctlMouseConfig config{1, 60};

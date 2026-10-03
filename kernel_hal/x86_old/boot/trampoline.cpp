@@ -135,7 +135,10 @@ uintptr_t get_elf_load_vaddr(uint32_t module_start) {
 }
 
 void register_global_symbol(const char *name, uint32_t value) {
-  if (g_symbol_count >= g_symbol_table.size()) return;
+  if (g_symbol_count >= g_symbol_table.size()) {
+    write_fmt("Stage 1.5: Failed to register symbol: {} g_symbol_count > {}\n\r", name, g_symbol_table.size());
+    return;
+  }
   g_symbol_table[g_symbol_count++] = {name, value};
 }
 
@@ -536,6 +539,21 @@ kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_
   boot_info_ptr->mapped_memory[3].virtual_base = reinterpret_cast<uintptr_t>(boot_info_ptr);
   boot_info_ptr->mapped_memory[3].physical_base = translate_vaddr_to_paddr(reinterpret_cast<uintptr_t>(boot_info_ptr));
   boot_info_ptr->mapped_memory[3].length = sizeof(kernel::BootInfoT);
+
+  // The paging structures stay live after the jump to the kernel (CR3 points
+  // at boot_page_dir), so they must be reported to keep the PMM from handing
+  // their frames out. They live in Stage 1.5's identity-mapped BSS.
+  const auto add_paging_region = [boot_info_ptr](size_t index, const void *table, size_t length) {
+    const auto addr = reinterpret_cast<uintptr_t>(table);
+    boot_info_ptr->mapped_memory[index].type = kernel::MappedMemoryRegionType::PagingStructures;
+    boot_info_ptr->mapped_memory[index].virtual_base = addr;
+    boot_info_ptr->mapped_memory[index].physical_base = addr;
+    boot_info_ptr->mapped_memory[index].length = length;
+  };
+  add_paging_region(4, boot_page_dir, sizeof(boot_page_dir));
+  add_paging_region(5, identity_page_table, sizeof(identity_page_table));
+  add_paging_region(6, hal_page_table, sizeof(hal_page_table));
+  add_paging_region(7, kernel_page_table, sizeof(kernel_page_table));
 
   if (mbi->flags & MULTIBOOT_INFO_CMDLINE) {
     boot_info_ptr->command_line = reinterpret_cast<const char *>(mbi->cmdline);

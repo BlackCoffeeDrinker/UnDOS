@@ -5,6 +5,7 @@
 #include <type_traits.hpp>
 #include <utility.hpp>
 
+
 #if __STDC_HOSTED__
 // On a hosted build (e.g. the host test binary), placement new comes from the
 // standard library rather than libkcpp's freestanding new.hpp.

@@ -3,6 +3,6 @@
 #include "syscalls.hpp"
 
 SyscallReturnCode handle_Print_V1(__KRN_DEBUG_PRINT_V1 &&args) {
-  early_print_fmt("{}", args.message);
+  KE_PrintBuffer(args.message.data(), args.message.size());
   return SyscallReturnCode_OKAY;
 }

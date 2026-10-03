@@ -1,10 +1,9 @@
 #include "v86.hpp"
 
-#include <kernel/hal_interface.hpp>
-#include <kernel/memory/protect.hpp>
+#include <Kernel.hpp>
 
-#include "__tuple/ignore.hpp"
-#include "strfmt.hpp"
+#include <tuple.hpp>
+
 #include "tss.hpp"
 #include "vmm.hpp"
 
@@ -124,7 +123,7 @@ __asm__(
 extern "C" [[noreturn, gnu::used]] void v86_non_v86_gp_panic(uint32_t error_code, uint32_t eip) noexcept {
   kstd::ignore = eip;
   __asm__ volatile("cli");
-  early_print_fmt("Exception: 0x{:x}\n\r", error_code);
+  KE_Print("Exception: 0x{:x}", error_code);
   HAL_PLATFORM_Panic("Unhandled Exception", __FILE__, __LINE__);
 }
 
@@ -133,8 +132,8 @@ namespace {
 
 [[noreturn]] void fatal_unknown_opcode(v86_context_t &ctx, uint8_t opcode) noexcept {
   __asm__ volatile("cli");
-  early_print_fmt("v86: unemulated opcode 0x{:x} at {:x}:{:x}\n\r",
-                  opcode, static_cast<uint16_t>(ctx.cs), static_cast<uint16_t>(ctx.eip));
+  KE_Print("v86: unemulated opcode 0x{:x} at {:x}:{:x}",
+           opcode, static_cast<uint16_t>(ctx.cs), static_cast<uint16_t>(ctx.eip));
   HAL_PLATFORM_Panic("v86 monitor: unsupported opcode", __FILE__, __LINE__);
 }
 

@@ -188,7 +188,14 @@ void schedule_next() noexcept {
 
   // Keep the TSS esp0 pointed at the incoming thread's own kernel stack, so a
   // ring-3 -> ring-0 transition (syscall, IRQ) while it is running lands on
-  // the right stack rather than whichever thread ran last.
+  // the right stack rather than whichever thread ran last. The outgoing
+  // thread's live value is saved first: it may differ from its stack top
+  // (e.g. the v86 monitor's private trap stack during a BIOS call), and
+  // restoring a stale value on resume would let the next trap scribble
+  // over arbitrary memory.
+  if (prev && prev != next) {
+    prev->kernel_stack_esp0 = HAL_CPU_GetKernelStack();
+  }
   HAL_CPU_SetKernelStack(next->kernel_stack_esp0);
 
   if (prev == next) {
@@ -219,6 +226,9 @@ void init_bsp() noexcept {
 
     // Register the bootstrap thread now that its directory exists.
     KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(ctx.current.get()));
+  } else {
+    // Panic
+    HAL_PLATFORM_Panic("Failed to create bootstrap thread", __FILE__, __LINE__);
   }
 
   ctx.idle = create_idle_thread(ctx.id);
@@ -239,6 +249,8 @@ void init_ap(const uint32_t cpu_id) noexcept {
     boot->translation_root = PhysicalAddress(0);
     ctx.current = boot;
     KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(ctx.current.get()));
+  } else {
+    HAL_PLATFORM_Panic("Failed to create bootstrap thread for CPU", __FILE__, __LINE__);
   }
 
   ctx.idle = create_idle_thread(cpu_id);
@@ -261,8 +273,7 @@ void tick() noexcept {
 }
 
 void block_current_locked() noexcept {
-  auto &ctx = cpu::current_context();
-  if (ctx.current) {
+  if (const auto &ctx = cpu::current_context(); ctx.current) {
     ctx.current->state = KThreadObject::State::Blocked;
   }
   schedule_next();

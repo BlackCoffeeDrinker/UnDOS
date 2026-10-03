@@ -19,17 +19,17 @@ struct KDisplay : KObjectT<KDisplay, 1, TYPE_DISPLAY> {
   KObjectPtr<KSurface> surface;
   KDisplayModeInfo currentMode;
 
-  cfunc<size_t()> GetModeCount;
-  cfunc<bool(size_t modeIndex, KDisplayModeInfo &outInfo)> GetModeInfo;
+  cfunc<size_t(const KObjectPtr<KDisplay> &)> GetModeCount;
+  cfunc<bool(const KObjectPtr<KDisplay> &, size_t modeIndex, KDisplayModeInfo &outInfo)> GetModeInfo;
 
   // Lifecycle hooks
-  cfunc<bool()> Enable;// program hardware mode and map framebuffer
-  cfunc<void()> Disable;
-  cfunc<bool()> Validate;// verify mode still present
+  cfunc<bool(const KObjectPtr<KDisplay> &)> Enable;// program hardware mode and map framebuffer
+  cfunc<void(const KObjectPtr<KDisplay> &)> Disable;
+  cfunc<bool(const KObjectPtr<KDisplay> &)> Validate;// verify mode still present
 
   // Optional: power management, hotplug
-  cfunc<void()> OnSuspend;
-  cfunc<void()> OnResume;
+  cfunc<void(const KObjectPtr<KDisplay> &)> OnSuspend;
+  cfunc<void(const KObjectPtr<KDisplay> &)> OnResume;
 };
 
 template<>

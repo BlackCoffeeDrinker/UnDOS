@@ -14,7 +14,7 @@ struct FS_NodeExtension {
 bool BootDeviceVFS_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &volume, const kstd::string_view &options) {
   // We can only support BootDeviceVolume volumes
   if (volume->volume->Name() != "BootDeviceVolume") {
-    early_print_fmt("Invalid volume type for BootDeviceVolume file handle\r\n");
+    KE_Print("Invalid volume type for BootDeviceVolume file handle");
     return false;
   }
 
@@ -73,7 +73,7 @@ bool BootDeviceVFS_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObj
 
   auto *ctx = vnode.fsPrivate.as<FS_NodeExtension>();
   if (!ctx) {
-    early_print_fmt("Invalid node for BootDeviceVolume file handle\r\n");
+    KE_Print("Invalid node for BootDeviceVolume file handle");
     return false;
   }
 
@@ -82,13 +82,13 @@ bool BootDeviceVFS_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObj
   // path works once rebound onto the real writable root. Accept any mode that
   // includes Read; writes simply fail later via the missing WriteHandle.
   if (!(mode & kernel::KIOObject::OpenMode::Read)) {
-    early_print_fmt("Invalid open mode for BootDeviceVolume file handle\r\n");
+    KE_Print("Invalid open mode for BootDeviceVolume file handle");
     return false;
   }
 
   if (!ctx->loaded) {
     if (!kernel::initial::minifat::ReadFile(ctx->path, ctx->data)) {
-      early_print_fmt("BootDeviceVolume: failed to read '{}'\r\n", static_cast<kstd::string_view>(ctx->path));
+      KE_Print("BootDeviceVolume: failed to read '{}'", static_cast<kstd::string_view>(ctx->path));
       return false;
     }
     ctx->loaded = true;
@@ -129,7 +129,7 @@ void init_boot_device_volume() {
                                                             "BootDeviceVolume");
 
     if (!volume || !filesystem) {
-      early_print_fmt("Failed to create BootDeviceVolume or filesystem driver\r\n");
+      KE_Print("Failed to create BootDeviceVolume or filesystem driver");
       return;
     }
 
@@ -141,7 +141,6 @@ void init_boot_device_volume() {
     filesystem->ReadHandle = BootDeviceVFS_ReadHandle;
   }
 
-  early_print_fmt("Mounting BootDeviceVolume\r\n");
 
   KE_VFS_Mount(volume, "BootDeviceVolume", "/", {});
 }

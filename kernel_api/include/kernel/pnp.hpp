@@ -1,10 +1,27 @@
 #pragma once
 
+#include <kernel/event_broadcast.hpp>
 #include <kernel/io.hpp>
 
 // NOTE: The KEvent/KPnpEvent dispatch layer was removed for now in favour of
 // raw method calls (e.g. the PnP manager calls driver->StartDevice directly).
 // If a richer event/IRP-style model is needed later, events can be reintroduced.
+
+namespace kernel::pnp {
+// Broadcast on the started function device after its PnP state is updated.
+// Subscribers register interest in event::Source(fdo).
+enum class DeviceEvent : uint32_t {
+  Started = 1,
+};
+}// namespace kernel::pnp
+namespace kernel::event {
+template<>
+struct is_code_enum<pnp::DeviceEvent> : kstd::true_type {};
+}
+
+UNDOS_KERNEL_PUBLIC_V1API(
+    const kernel::event::Category &,
+    KE_PNP_EventCategory);
 
 /**
  * @ingroup PNP
@@ -41,7 +58,6 @@ UNDOS_KERNEL_PUBLIC_V1API(
     void,
     KE_PNP_RegisterDeviceInterest,
     kernel::DeviceType type, const kernel::KObjectPtr<kernel::KDriverObject> &driver);
-
 
 /**
  * @ingroup PNP

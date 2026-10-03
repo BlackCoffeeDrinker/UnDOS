@@ -49,19 +49,19 @@ void CaptureDriverName(void *context, kstd::string_view name, const uint8_t *dat
 // (kernel::driver::init()) and the post-root-mount "Automatic" pass
 // (kernel::driver::LoadAutomaticStartDrivers()).
 void LoadDriversWithStart(const kstd::string_view &startFilter, const kstd::string_view &logLabel) {
-  early_print_fmt("Loading {} drivers...\r\n", logLabel);
+  KE_Print("Loading {} drivers...", logLabel);
 
   const auto localMachine = KE_CM_OpenRoot("LocalMachine");
   if (!localMachine) {
-    early_print_fmt("Loading {} drivers: failed to open LocalMachine\r\n", logLabel);
-    early_print_fmt("Loading {} drivers complete.\r\n", logLabel);
+    KE_Print("Loading {} drivers: failed to open LocalMachine", logLabel);
+    KE_Print("Loading {} drivers complete.", logLabel);
     return;
   }
 
   const auto driversKey = KE_CM_OpenKey(localMachine, "Drivers");
   if (!driversKey) {
-    early_print_fmt("Loading {} drivers: no Drivers key under LocalMachine\r\n", logLabel);
-    early_print_fmt("Loading {} drivers complete.\r\n", logLabel);
+    KE_Print("Loading {} drivers: no Drivers key under LocalMachine", logLabel);
+    KE_Print("Loading {} drivers complete.", logLabel);
     return;
   }
 
@@ -87,27 +87,26 @@ void LoadDriversWithStart(const kstd::string_view &startFilter, const kstd::stri
               // resolve unmodified through "/": Boot-start drivers load
               // while BootDeviceVolume is still mounted at "/", Automatic-
               // start drivers load once the real root fs has replaced it.
-              early_print_fmt("Loading {}-start driver '{}' from '{}'\r\n", logLabel, childName, imagePath);
+              KE_Print("Loading {}-start driver '{}' from '{}'", logLabel, childName, imagePath);
               KE_DRIVER_Load(imagePath);
             } else {
-              early_print_fmt("{}-start driver '{}' has empty/invalid ImagePath, skipping\r\n", logLabel, childName);
+              KE_Print("{}-start driver '{}' has empty/invalid ImagePath, skipping", logLabel, childName);
             }
           } else {
-            early_print_fmt("{}-start driver '{}' has no ImagePath, skipping\r\n", logLabel, childName);
+            KE_Print("{}-start driver '{}' has no ImagePath, skipping", logLabel, childName);
           }
         }
       }
     }
   }
 
-  early_print_fmt("Loading {} drivers complete.\r\n", logLabel);
+  KE_Print("Loading {} drivers complete.", logLabel);
 }
 
 }// namespace
 
 namespace kernel::driver {
 void init(const BootInfoT &boot_info) {
-  early_print_fmt("Loading symbols...\r\n");
   for (const auto &sym: boot_info.boot_symbols) {
     if (sym.name.empty()) continue;
     g_SymbolTable.Register(sym.name, static_cast<uintptr_t>(sym.address));
@@ -135,12 +134,15 @@ void LoadAutomaticStartDrivers() {
   // AddDevice/StartDevice, matching how bus_isa reports its ATA-channel PDOs.
   EnumerateLegacyISADevices();
 }
+
+void LoadLastResortDrivers() {
+  LoadDriversWithStart("LastResort", "last-resort");
+  EnumerateLastResortLegacyISADevices();
+}
 }// namespace kernel::driver
 
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(const kstd::string_view &path) noexcept {
-  if (path.empty()) {
-    return nullptr;
-  }
+  if (path.empty()) { return nullptr; }
 
   kstd::static_string<64> captured_name = "";
 
@@ -149,19 +151,21 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(co
   policy.context = &captured_name;
   policy.resolve_symbol = kernel::cfunc<uintptr_t(kstd::string_view)>(ResolveSymbol);
   policy.capture_section = kernel::cfunc<void(void *, kstd::string_view, const uint8_t *, size_t)>(CaptureDriverName);
+  policy.capture_section_name = ".driver_name";
 
+  
   const auto result = kernel::elf::LoadElfFromVfs(path, policy);
   if (!result.ok) {
-    early_print_fmt("KE_DRIVER_Load: Failed to load driver from path {}\r\n", path);
+    KE_Print("KE_DRIVER_Load: Failed to load driver from path {}", path);
     return nullptr;
   }
-
+  
   auto driver_object = kernel::CreateKObject<kernel::KDriverObject>(captured_name);
   if (!driver_object) {
-    early_print_fmt("KE_DRIVER_Load: Failed to create driver object\r\n");
+    KE_Print("KE_DRIVER_Load: Failed to create driver object");
     return nullptr;
   }
-
+  
   // Give the driver its own configuration key under LocalMachine, e.g.
   // "/LocalMachine/Drivers/<name>". LocalMachine is disk-backed from the
   // start of boot (first via BootDeviceVolume mounted at "/", then rebound

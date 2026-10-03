@@ -8,6 +8,9 @@ size_t BytesPerPixel(kernel::PixelFormat format) {
       return 3;
     case kernel::PixelFormat::ARGB32:
       return 4;
+    case kernel::PixelFormat::RGB15:
+    case kernel::PixelFormat::RGB16:
+      return 2;
     case kernel::PixelFormat::INDEX8:
     default:
       return 1;
@@ -47,6 +50,10 @@ void WritePixel(const kernel::KObjectPtr<kernel::KSurface> &surface, int x, int 
       break;
     case kernel::PixelFormat::ARGB32:
       *reinterpret_cast<uint32_t *>(pixel) = colorIndex;
+      break;
+    case kernel::PixelFormat::RGB15:
+    case kernel::PixelFormat::RGB16:
+      *reinterpret_cast<uint16_t *>(pixel) = static_cast<uint16_t>(colorIndex);
       break;
   }
 }
@@ -186,6 +193,10 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
         case kernel::PixelFormat::ARGB32:
           pixelValue = *reinterpret_cast<const uint32_t *>(srcPixel);
           break;
+        case kernel::PixelFormat::RGB15:
+        case kernel::PixelFormat::RGB16:
+          pixelValue = *reinterpret_cast<const uint16_t *>(srcPixel);
+          break;
       }
 
       // Inline pixel write based on dstFmt
@@ -200,6 +211,10 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
           break;
         case kernel::PixelFormat::ARGB32:
           *reinterpret_cast<uint32_t *>(dstPixel) = pixelValue;
+          break;
+        case kernel::PixelFormat::RGB15:
+        case kernel::PixelFormat::RGB16:
+          *reinterpret_cast<uint16_t *>(dstPixel) = static_cast<uint16_t>(pixelValue);
           break;
       }
 

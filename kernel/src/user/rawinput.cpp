@@ -19,17 +19,12 @@ struct InputState {
 static InputState g_input;
 
 static void draw_cursor(int32_t x, int32_t y) noexcept {
-  KObjectPtr<KDisplay> display = KE_GFX_GetPrimaryDisplay();
-  if (!display) return;
-  KSurface *surf = display->surface.get();
-
   // White crosshair with black outline
-  // Outline
-  KE_GFX_SoftwareFillRect(surf, x - 4, y - 1, 9, 3, 0);
-  KE_GFX_SoftwareFillRect(surf, x - 1, y - 4, 3, 9, 0);
-  // Crosshair
-  KE_GFX_SoftwareFillRect(surf, x - 3, y, 7, 1, 15);
-  KE_GFX_SoftwareFillRect(surf, x, y - 3, 1, 7, 15);
+  Guard g;
+  fill_screen_locked({x - 4, y - 1, x + 5, y + 2}, 0);
+  fill_screen_locked({x - 1, y - 4, x + 2, y + 5}, 0);
+  fill_screen_locked({x - 3, y, x + 4, y + 1}, 15);
+  fill_screen_locked({x, y - 3, x + 1, y + 4}, 15);
 }
 
 static void erase_cursor(int32_t x, int32_t y) noexcept {

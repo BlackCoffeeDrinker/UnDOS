@@ -55,14 +55,14 @@ bool EnsureRootIsOpened(const kernel::KObjectPtr<kernel::KConfigurationRoot> &co
   configRoot->file = KE_VFS_OpenFile(configRoot->filePath, kernel::KIOObject::OpenMode::ReadWrite);
   if (!configRoot->file) {
     // Unable to open file
-    early_print_fmt("ERROR: Unable to open configuration {}\r\n", configRoot->filePath);
+    KE_Print("ERROR: Unable to open configuration {}", configRoot->filePath);
     return false;
   }
 
   if (!LoadConfigurationIndex(configRoot->file, configRoot->roots, configRoot->numRoots)) {
     // Missing/invalid header, or the INDEX BLOCK chain couldn't be read:
     // the file must exist and already be a valid hive.
-    early_print_fmt("ERROR: Unable to read configuration header {}\r\n", configRoot->filePath);
+    KE_Print("ERROR: Unable to read configuration header {}", configRoot->filePath);
     KE_VFS_CloseFile(kstd::move(configRoot->file));
     configRoot->file = nullptr;
     return false;
@@ -655,7 +655,7 @@ void init() {
 bool RebindHiveFile(const kstd::string_view &hiveName, const kstd::string_view &newFilePath) {
   const auto configRoot = KE_OB_FindDirectChildOfType<KConfigurationRoot>(KE_OB_GetConfigDirectory(), hiveName);
   if (!configRoot) {
-    early_print_fmt("RebindHiveFile: hive '{}' is not registered\r\n", hiveName);
+    KE_Print("RebindHiveFile: hive '{}' is not registered", hiveName);
     return false;
   }
 
@@ -689,7 +689,7 @@ bool RebindHiveFile(const kstd::string_view &hiveName, const kstd::string_view &
                                      KIOObject::OpenMode::ReadWrite |
                                          KIOObject::OpenMode::Create);
   if (!configRoot->file) {
-    early_print_fmt("RebindHiveFile: failed to reopen hive '{}' at '{}'\r\n",
+    KE_Print("RebindHiveFile: failed to reopen hive '{}' at '{}'",
                     hiveName, newFilePath);
     return false;
   }
@@ -699,7 +699,7 @@ bool RebindHiveFile(const kstd::string_view &hiveName, const kstd::string_view &
 
 void PromoteBootHive() {
   if (!RebindHiveFile("LocalMachine", kConfigurationLocalMachine)) {
-    early_print_fmt("PromoteBootHive: failed to rebind LocalMachine onto the root mount\r\n");
+    KE_Print("PromoteBootHive: failed to rebind LocalMachine onto the root mount");
   }
 }
 }// namespace kernel::configuration_manager

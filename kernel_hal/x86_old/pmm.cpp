@@ -2,6 +2,7 @@
 #include <string_view.hpp>
 
 #include <kernel/boot/boot_info.hpp>
+#include <Kernel.hpp>
 
 using kernel::PhysicalAddress;
 using kernel::VirtualAddress;
@@ -57,18 +58,18 @@ uint64_t find_highest_physical_address(const kernel::BootInfoT &boot_info) {
 namespace hal::x86 {
 void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   uint64_t max_memory = 0;
-  early_print_fmt("Parsing system memory layout with page size {}...\n\r", boot_info.page_size);
+  KE_Print("Parsing system memory layout with page size {}...", boot_info.page_size);
 
   for (size_t i = 0; i < boot_info.memory_regions.size(); ++i) {
     const auto &map = boot_info.memory_regions[i];
     if (map.type == kernel::MemoryRegionType::None) continue;
-    early_print_fmt("Memory map region {} type: {}, base: 0x{:lx}, length: 0x{:lx}\n\r", i, map_type_to_string(map.type), static_cast<uintptr_t>(map.base), map.length);
+    KE_Print("Memory map region {} type: {}, base: 0x{:lx}, length: 0x{:lx}", i, map_type_to_string(map.type), static_cast<uintptr_t>(map.base), map.length);
   }
 
   // 1. Find the highest physical address to calculate total required frames
   max_memory = find_highest_physical_address(boot_info);
 
-  early_print_fmt("Total available memory: 0x{:lx}\n\r", max_memory);
+  KE_Print("Total available memory: 0x{:lx}", max_memory);
 
   // Explicitly cast the division result to size_t.
   total_frames = static_cast<size_t>(max_memory / PAGE_SIZE);
@@ -76,7 +77,7 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   if (total_frames % 32 != 0) bitmap_size_words++;
 
   if (bitmap_size_words > 4096) {
-    early_print("PMM: RAM exceeds bitmap capacity! Truncating to 512MB.\r\n");
+    KE_Print("PMM: RAM exceeds bitmap capacity! Truncating to 512MB.");
     bitmap_size_words = 4096;
     total_frames = 4096 * 32;
   }
@@ -106,12 +107,12 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
     }
   }
 
-  early_print("Physical Memory Mechanism online!\n\r");
+  KE_Print("Physical Memory Mechanism online!");
 }
 }// namespace hal::x86
 
 UNDOS_HAL_API_DEF void HAL_PMM_ReserveRegion(PhysicalAddress base, size_t length) noexcept {
-  early_print_fmt("Reserving region at 0x{:x} for 0x{:x} bytes\n\r", static_cast<uintptr_t>(base), length);
+  KE_Print("Reserving region at 0x{:x} for 0x{:x} bytes", static_cast<uintptr_t>(base), length);
 
   const size_t start_frame = static_cast<uintptr_t>(base) / PAGE_SIZE;
   size_t frame_count = length / PAGE_SIZE;
@@ -169,7 +170,7 @@ UNDOS_HAL_API_DEF PhysicalAddress HAL_PMM_AllocateFrames(size_t count) noexcept 
     }
   }
 
-  early_print_fmt("Fail to allocate {} frames!\n\r", count);
+  KE_Print("Fail to allocate {} frames!", count);
   return 0;
 }
 

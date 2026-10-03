@@ -33,7 +33,7 @@ bool Serial_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, c
   const auto fdo = KE_IO_CreateDeviceWithContext<SerialDeviceExtension>(
       driver, "Serial", kernel::device_type::Serial, CreateDeviceFlags::MultipleAllowed);
   if (!fdo) {
-    early_print("serial_uart: failed to create Serial device\r\n");
+    KE_Print("serial_uart: failed to create Serial device");
     return false;
   }
 
@@ -44,7 +44,7 @@ bool Serial_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, c
 void Serial_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto fdo = pdo->attachedDevice;
   if (!fdo) {
-    early_print("serial_uart: no attached FDO for PDO\r\n");
+    KE_Print("serial_uart: no attached FDO for PDO");
     return;
   }
 
@@ -59,7 +59,7 @@ void Serial_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
 
   InitUart(ext->ioBase);
 
-  early_print_fmt("serial_uart: Serial device started at I/O 0x{:x}, IRQ {} -> linked to VTTY\r\n",
+  KE_Print("serial_uart: Serial device started at I/O 0x{:x}, IRQ {} -> linked to VTTY",
                   ext->ioBase, ext->irq);
 }
 

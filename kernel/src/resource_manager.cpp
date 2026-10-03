@@ -39,8 +39,6 @@ void FreeCmDescriptors(kernel::common::DoubleList<CmPartialResourceDescriptor> &
 }
 
 void DestroyAssignment(ResourceAssignment *node) {
-  early_print_fmt("Destroying assignment {}.\r\n", node->device->Name());
-
   FreeCmDescriptors(node->granted.descriptors);
   node->~ResourceAssignment();
   KE_Free(node);
@@ -71,8 +69,6 @@ void init() {
     s_assignments.pop_front();
     DestroyAssignment(node);
   }
-
-  early_print_fmt("Resource Manager initialized.\r\n");
 }
 }// namespace kernel::resource
 

@@ -113,35 +113,35 @@ bool FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount
   size_t buffer_actual_transfer = 0;
 
   if (KE_IO_ReadDevice(mountPoint->volume, 0, sector, buffer_actual_transfer) != kernel::IoStatus::Success) {
-    early_print_fmt("FS_FAT: Failed to read BPB\r\n");
+    KE_Print("FS_FAT: Failed to read BPB");
     return false;
   }
 
   if (buffer_actual_transfer < sizeof(FAT_BPB_Common)) {
-    early_print_fmt("FS_FAT: Failed to read BPB\r\n");
+    KE_Print("FS_FAT: Failed to read BPB");
     return false;
   }
 
   const auto *bpb = reinterpret_cast<FAT_BPB_Common *>(sector);
 
-  early_print_fmt("FS_FAT: BPB Dump:\r\n");
-  early_print_fmt("  jmpBoot: 0x{:x} 0x{:x} 0x{:x}\r\n", bpb->jmpBoot[0], bpb->jmpBoot[1], bpb->jmpBoot[2]);
-  early_print_fmt("  oemName: {}\r\n", kstd::string_view(bpb->oemName, 8));
-  early_print_fmt("  bytesPerSector: {}\r\n", bpb->bytesPerSector);
-  early_print_fmt("  sectorsPerCluster: {}\r\n", bpb->sectorsPerCluster);
-  early_print_fmt("  reservedSectors: {}\r\n", bpb->reservedSectors);
-  early_print_fmt("  numFATs: {}\r\n", bpb->numFATs);
-  early_print_fmt("  rootEntryCount: {}\r\n", bpb->rootEntryCount);
-  early_print_fmt("  totalSectors16: {}\r\n", bpb->totalSectors16);
-  early_print_fmt("  media: 0x{:x}\r\n", bpb->media);
-  early_print_fmt("  fatSize16: {}\r\n", bpb->fatSize16);
-  early_print_fmt("  sectorsPerTrack: {}\r\n", bpb->sectorsPerTrack);
-  early_print_fmt("  numHeads: {}\r\n", bpb->numHeads);
-  early_print_fmt("  hiddenSectors: {}\r\n", bpb->hiddenSectors);
-  early_print_fmt("  totalSectors32: {}\r\n", bpb->totalSectors32);
+  KE_Print("FS_FAT: BPB Dump:");
+  KE_Print("  jmpBoot: 0x{:x} 0x{:x} 0x{:x}", bpb->jmpBoot[0], bpb->jmpBoot[1], bpb->jmpBoot[2]);
+  KE_Print("  oemName: {}", kstd::string_view(bpb->oemName, 8));
+  KE_Print("  bytesPerSector: {}", bpb->bytesPerSector);
+  KE_Print("  sectorsPerCluster: {}", bpb->sectorsPerCluster);
+  KE_Print("  reservedSectors: {}", bpb->reservedSectors);
+  KE_Print("  numFATs: {}", bpb->numFATs);
+  KE_Print("  rootEntryCount: {}", bpb->rootEntryCount);
+  KE_Print("  totalSectors16: {}", bpb->totalSectors16);
+  KE_Print("  media: 0x{:x}", bpb->media);
+  KE_Print("  fatSize16: {}", bpb->fatSize16);
+  KE_Print("  sectorsPerTrack: {}", bpb->sectorsPerTrack);
+  KE_Print("  numHeads: {}", bpb->numHeads);
+  KE_Print("  hiddenSectors: {}", bpb->hiddenSectors);
+  KE_Print("  totalSectors32: {}", bpb->totalSectors32);
 
   if (bpb->bytesPerSector == 0 || bpb->sectorsPerCluster == 0) {
-    early_print_fmt("FS_FAT: Invalid BPB\r\n");
+    KE_Print("FS_FAT: Invalid BPB");
     return false;
   }
 
@@ -155,7 +155,7 @@ bool FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount
         exfat_transfer >= exfatBuf.size()) {
       kstd::string_view fsName(reinterpret_cast<const char *>(exfat.fsName), 8);
       if (fsName == "EXFAT   ") {
-        early_print_fmt("FS_FAT: ExFAT Detected\r\n");
+        KE_Print("FS_FAT: ExFAT Detected");
         auto vol = kernel::DataBuffer::Create<FAT_Volume>();
         vol.as<FAT_Volume>()->type = FAT_Type::ExFAT;
         vol.as<FAT_Volume>()->bytesPerSector = 1u << exfat.bytesPerSectorShift;
@@ -197,18 +197,18 @@ bool FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount
     vol->rootDirSector = bpb->reservedSectors + bpb->numFATs * fatSize;
     vol->rootDirSectors = rootDirSectors;
     vol->dataStartSector = vol->rootDirSector + rootDirSectors;
-    early_print_fmt("FS_FAT: FAT12 Detected\r\n");
+    KE_Print("FS_FAT: FAT12 Detected");
   } else if (totalClusters < 65525) {
     vol->type = FAT_Type::FAT16;
     vol->rootDirSector = bpb->reservedSectors + bpb->numFATs * fatSize;
     vol->rootDirSectors = rootDirSectors;
     vol->dataStartSector = vol->rootDirSector + rootDirSectors;
-    early_print_fmt("FS_FAT: FAT16 Detected\r\n");
+    KE_Print("FS_FAT: FAT16 Detected");
   } else {
     vol->type = FAT_Type::FAT32;
     vol->rootCluster = fat32->rootCluster;
     vol->dataStartSector = bpb->reservedSectors + bpb->numFATs * fatSize;
-    early_print_fmt("FS_FAT: FAT32 Detected\r\n");
+    KE_Print("FS_FAT: FAT32 Detected");
   }
 
 

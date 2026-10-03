@@ -1,10 +1,5 @@
 
-#include <kernel/hal_interface.hpp>
-#include <kernel/pnp.hpp>
-#include <kernel/scheduler.hpp>
-#include <kernel/time.hpp>
-#include <kernel/virtual_memory.hpp>
-#include <kernel/kobject/KDispatcherHeader.hpp>
+#include <Kernel.hpp>
 
 #include "pnp_test_hooks.hpp"
 
@@ -12,15 +7,9 @@
 
 kernel::KDevicePtr<kernel::KDevice> g_lastReportedPdo;
 
-// KE_Malloc/KE_Free are now the real kernel/src/vmm.cpp implementation,
-// backed by fake RAM provided by kernel_host_vmm_stubs.cpp (see vmm_test.cpp).
-
-UNDOS_HAL_API_DEF void early_print(const char *str) noexcept {
-  fputs(str, stdout);
-}
-
-UNDOS_HAL_API_DEF void early_print_char(char c) noexcept {
-  fputc(c, stdout);
+UNDOS_KERNEL_API_DEF void KE_PrintBuffer(const char *str, size_t n) noexcept {
+  fwrite(str, 1, n, stdout);
+  fputc('\n', stdout);
 }
 
 // The PnP manager (pnp_manager.cpp) is out of scope for hosted tests; tests
@@ -37,6 +26,16 @@ UNDOS_KERNEL_API_DEF void KE_PNP_ReportNewDevice(const kernel::KDevicePtr<kernel
 // KE_PNP_ReportNewDevice above is already a synchronous no-op stub here,
 // there is never any queued work to wait for.
 UNDOS_KERNEL_API_DEF void KE_PNP_WaitForQuiescence() noexcept {
+}
+
+UNDOS_KERNEL_API_DEF const kernel::event::Category &KE_PNP_EventCategory() noexcept {
+  struct PnpEventCategory final : kernel::event::Category {
+    [[nodiscard]] const char *name() const noexcept override { return "PnP"; }
+    [[nodiscard]] kstd::string_view message(int) const noexcept override { return ""; }
+    [[nodiscard]] bool equivalent(const kernel::event::Code &code) const noexcept override { return &code.category() == this; }
+  };
+  static PnpEventCategory category;
+  return category;
 }
 
 UNDOS_KERNEL_API_DEF void KE_PNP_RegisterDeviceInterest(kernel::DeviceType type, const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
@@ -61,6 +60,18 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KThreadObject> KE_SCHED_GetCurre
 UNDOS_KERNEL_API_DEF void KE_SCHED_Yield() noexcept {
 }
 
+// event_broadcaster.cpp / pnp_manager.cpp create their pump threads in init(),
+// which hosted tests never call: they drive dispatch synchronously instead
+// (kernel::event::detail::pump_once()). This stub only needs to satisfy the
+// linker.
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KThreadObject> KE_SCHED_CreateThread(
+    kernel::cfunc<void(void *)> entry, void *arg, uint8_t priority) noexcept {
+  (void) entry;
+  (void) arg;
+  (void) priority;
+  return nullptr;
+}
+
 UNDOS_KERNEL_API_DEF kernel::WaitStatus KE_SCHED_WaitForHeader(kernel::KDispatcherHeader &header, kstd::chrono::milliseconds) noexcept {
   if (header.TryAcquire()) return kernel::WaitStatus::Signalled;
   return kernel::WaitStatus::Timeout;
@@ -71,8 +82,8 @@ UNDOS_KERNEL_API_DEF void KE_EVENT_Signal(kernel::KDispatcherHeader &header, boo
   header.Signal(wakeAll, wake);
 }
 
-UNDOS_KERNEL_API_DEF kstd::chrono::milliseconds KE_TIME_GetSystemTime() noexcept {
-  return kstd::chrono::milliseconds(0);
+UNDOS_KERNEL_API_DEF kstd::chrono::nanoseconds KE_TIME_GetSystemTime() noexcept {
+  return kstd::chrono::nanoseconds(0);
 }
 
 UNDOS_HAL_API_DEF void HAL_ATOMIC_Store32(kernel::VirtualAddress addr, uint32_t value, PlatformMemoryOrder order) noexcept {
@@ -112,7 +123,7 @@ UNDOS_HAL_API_DEF void HAL_INTR_DisconnectInterrupt(uint32_t irq) noexcept {
 namespace {
 kernel::InterruptRecordRing g_testRing;
 kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> g_testHandlers[16]{};
-}
+}// namespace
 
 namespace test_dispatch {
 
@@ -129,7 +140,7 @@ kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> GetHandler(uint32_t i
 
 void Reset() noexcept {
   g_testRing.Reset();
-  for (auto &h : g_testHandlers) {
+  for (auto &h: g_testHandlers) {
     h = nullptr;
   }
 }
@@ -146,7 +157,7 @@ void Pump() noexcept {
   }
 }
 
-} // namespace test_dispatch
+}// namespace test_dispatch
 
 UNDOS_KERNEL_API_DEF bool KE_DISPATCH_EnqueueInterrupt(const kernel::HalInterruptRecord &record) noexcept {
   return g_testRing.Push(record);

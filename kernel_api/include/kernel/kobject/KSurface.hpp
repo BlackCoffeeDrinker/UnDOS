@@ -13,6 +13,8 @@ enum class PixelFormat : uint8_t {
   RGB24,
   ARGB32,
   INDEX8,
+  RGB15,// 5-5-5, 2 bytes per pixel
+  RGB16,// 5-6-5, 2 bytes per pixel
 };
 
 enum class RasterOp : uint8_t {

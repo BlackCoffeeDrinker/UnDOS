@@ -49,7 +49,7 @@ void wake_locked(MessageQueue &queue) noexcept {
 
 bool post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept {
   const QueuedMessage m{hwnd, message, wParam, lParam,
-                        static_cast<uint32_t>(KE_TIME_GetSystemTime().count())};
+                        static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
   if (!queue.ring.Push(m)) return false;
   wake_locked(queue);
   return true;
@@ -68,7 +68,7 @@ bool get_message(QueuedMessage &out, bool block, bool remove) noexcept {
       return true;
     }
     if (auto *w = paint_candidate_locked(*q)) {
-      out = QueuedMessage{w->hwnd, kMsgPaint, 0, 0, static_cast<uint32_t>(KE_TIME_GetSystemTime().count())};
+      out = QueuedMessage{w->hwnd, kMsgPaint, 0, 0, static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
       unlock();
       return true;
     }

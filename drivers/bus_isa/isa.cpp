@@ -358,7 +358,7 @@ kernel::DmaOperation *Isa_GetDmaAdapter(const kernel::KDevicePtr<kernel::KDevice
 }
 
 void Probe_PnP(const kernel::KDevicePtr<kernel::KDevice> &busPdo, IsaBusContext *ctx) {
-  early_print("ISA PnP: Starting enumeration...\r\n");
+  KE_Print("ISA PnP: Starting enumeration...");
   SendInitiationKey();
 
   WriteConfigReg(PnpRegister::ConfigControl);
@@ -378,7 +378,7 @@ void Probe_PnP(const kernel::KDevicePtr<kernel::KDevice> &busPdo, IsaBusContext 
 
     uint8_t serial[9] = {0};
     if (Isolate(serial)) {
-      early_print_fmt("ISA PnP: Found card, ID: {x:02}{x:02}{x:02}{x:02} Serial: {x:02}{x:02}{x:02}{x:02}\r\n",
+      KE_Print("ISA PnP: Found card, ID: {x:02}{x:02}{x:02}{x:02} Serial: {x:02}{x:02}{x:02}{x:02}",
                       serial[0], serial[1], serial[2], serial[3],
                       serial[4], serial[5], serial[6], serial[7]);
 
@@ -400,7 +400,7 @@ void Probe_PnP(const kernel::KDevicePtr<kernel::KDevice> &busPdo, IsaBusContext 
 
       csn++;
     } else {
-      if (csn == 1) early_print("ISA PnP: No cards found.\r\n");
+      if (csn == 1) KE_Print("ISA PnP: No cards found.");
       break;
     }
   }
@@ -424,7 +424,7 @@ void Isa_EnumerateDevices(const kernel::KDevicePtr<kernel::KDevice> &busPdo) {
     if (ctx->childCount >= ctx->children.size()) break;
     if (HAL_IO_In8(static_cast<uint16_t>(channel.io + 7)) == 0xFF) continue;
 
-    early_print_fmt("ISA: Found legacy ATA controller at 0x{x} (ctrl 0x{x}, IRQ {})\r\n",
+    KE_Print("ISA: Found legacy ATA controller at 0x{x} (ctrl 0x{x}, IRQ {})",
                     channel.io, channel.ctrl, channel.irq);
 
     if (const auto child = KE_IO_CreateDevice(busPdo->driverObject,

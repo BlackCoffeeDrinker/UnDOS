@@ -147,6 +147,9 @@ void show_window_locked(KWindowObject &window, bool show) noexcept;
 void set_capture_locked(uint32_t hwnd) noexcept;
 uint32_t capture_locked() noexcept;
 
+// paint.cpp: fill a screen rectangle through the adapter (planar-safe), clipped to the screen.
+void fill_screen_locked(const URect &r, uint32_t color) noexcept;
+
 // nonclient.cpp (callers hold the lock)
 URect client_to_screen_locked(const KWindowObject &window, const URect &clientRect) noexcept;
 URect screen_to_client_locked(const KWindowObject &window, const URect &screenRect) noexcept;
@@ -170,6 +173,9 @@ void invalidate_locked(KWindowObject &window, const URect &windowRect) noexcept;
 void expose_locked(const URect &screenRect) noexcept;
 void visible_region_locked(const KWindowObject &window, URegion &out) noexcept;
 bool begin_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t &hdc, URect &paint) noexcept;
+// Hands the damaged screen rectangles to the adapter; one call per paint cycle.
+void present_locked(const URegion &region) noexcept;
+void present_locked(const URect &r) noexcept;
 
 // Destroys every window, class and queue owned by proc.
 void on_process_exit(KProcessObject &proc) noexcept;

@@ -119,13 +119,13 @@ bool Ata_ProbeDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo,
   }
 
   if (status & 0x80) {
-    early_print("ATA: BSY stuck, no device\n");
+    KE_Print("ATA: BSY stuck, no device");
     return false;
   }
 
   // 5. Check for floating bus / no device
   if (status == 0x00 || status == 0xFF) {
-    early_print("ATA: No device present\n");
+    KE_Print("ATA: No device present");
     return false;
   }
 
@@ -148,11 +148,11 @@ bool Ata_ProbeDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo,
   }
 
   if (status & 0x01) {
-    early_print("ATA: IDENTIFY ERR\n");
+    KE_Print("ATA: IDENTIFY ERR");
     return false;
   }
   if (!(status & 0x08)) {
-    early_print("ATA: IDENTIFY no DRQ\n");
+    KE_Print("ATA: IDENTIFY no DRQ");
     return false;
   }
 
@@ -166,7 +166,7 @@ bool Ata_ProbeDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo,
   auto model = Ata_ExtractString<41>(identify, 27, 20);
   auto serial = Ata_ExtractString<21>(identify, 10, 10);
 
-  early_print_fmt("ATA: Found disk: model='{}' serial='{}'\n", model, serial);
+  KE_Print("ATA: Found disk: model='{}' serial='{}'", model, serial);
 
   // 10. Create Disk PDO
   kstd::static_string<64> diskName;
@@ -177,7 +177,7 @@ bool Ata_ProbeDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo,
   if (disk) disk->deviceType = kernel::device_type::Disk;
 
   if (!disk) {
-    early_print("ATA: Failed to create Disk PDO\n");
+    KE_Print("ATA: Failed to create Disk PDO");
     return false;
   }
 
@@ -261,17 +261,17 @@ kernel::IoStatus Ata_Write([[maybe_unused]] const kernel::KDevicePtr<kernel::KDe
 }
 
 void Ata_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
-  early_print_fmt("Ata_StartDevice with PDO: {}\r\n", pdo->Name());
+  KE_Print("Ata_StartDevice with PDO: {}", pdo->Name());
 
   const auto fdo = pdo->attachedDevice.As<kernel::KDeviceBus>();
   if (!fdo) {
-    early_print("ATA: No FDO attached; cannot start\r\n");
+    KE_Print("ATA: No FDO attached; cannot start");
     return;
   }
 
   const auto ctx = fdo->deviceExtension.as<BusContext>();
   if (!ctx) {
-    early_print("ATA: Missing BusContext in deviceExtension\r\n");
+    KE_Print("ATA: Missing BusContext in deviceExtension");
     return;
   }
 
@@ -281,7 +281,7 @@ void Ata_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto *irqRes = KE_RES_FindAssigned(pdo, kernel::ResourceType::Interrupt, 0);
 
   if (!ioRes) {
-    early_print("ATA: No I/O resources assigned; cannot start\r\n");
+    KE_Print("ATA: No I/O resources assigned; cannot start");
     return;
   }
 
@@ -292,9 +292,9 @@ void Ata_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const uint16_t io = ctx->ioBase;
   const uint16_t ctrl = ctx->ctrlBase;
 
-  early_print_fmt("ATA: Using I/O base 0x{x}, control 0x{x}, IRQ {}\r\n",
+  KE_Print("ATA: Using I/O base 0x{x}, control 0x{x}, IRQ {}",
                   ctx->ioBase, ctx->ctrlBase, ctx->irq);
-  early_print("ATA: Starting device identification (master)...\r\n");
+  KE_Print("ATA: Starting device identification (master)...");
 
   // --- Optional: soft reset on the channel ---
   if (ctrl) {

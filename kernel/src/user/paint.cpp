@@ -21,10 +21,44 @@ void fill(const KObjectPtr<KDisplay> &display, const URect &r, uint32_t color) n
   const auto &adapter = display->adapter;
   const int w = r.right - r.left;
   const int h = r.bottom - r.top;
-  if (adapter && adapter->FillRect && adapter->FillRect(display->surface, r.left, r.top, w, h, color)) return;
+  if (adapter && adapter->FillRect && adapter->FillRect(display->adapter, display->surface, r.left, r.top, w, h, color)) return;
   KE_GFX_SoftwareFillRect(display->surface, r.left, r.top, w, h, color);
 }
+
+void present(const KObjectPtr<KDisplay> &display, const URect *rects, uint32_t count) noexcept {
+  const auto &adapter = display->adapter;
+  if (!adapter || !adapter->Present) return;
+  adapter->Present(display->adapter, display->surface, reinterpret_cast<const KClipRect *>(rects), count);
+}
 }// namespace
+
+void present_locked(const URegion &region) noexcept {
+  if (region.Empty()) return;
+  const auto display = primary_display();
+  if (!display) return;
+  if (region_merges_to_bounds(region)) {
+    const URect bounds = region.Bounds();
+    present(display, &bounds, 1);
+    return;
+  }
+  present(display, region.rects, region.count);
+}
+
+void present_locked(const URect &r) noexcept {
+  if (r.Empty()) return;
+  const auto display = primary_display();
+  if (!display) return;
+  present(display, &r, 1);
+}
+
+void fill_screen_locked(const URect &r, uint32_t color) noexcept {
+  const auto display = primary_display();
+  if (!display) return;
+  const URect c = r.Intersect(screen_rect());
+  if (c.Empty()) return;
+  fill(display, c, color);
+  present(display, &c, 1);
+}
 
 URect screen_rect() noexcept {
   const auto display = primary_display();
@@ -33,8 +67,13 @@ URect screen_rect() noexcept {
 }
 
 void invalidate_locked(KWindowObject &window, const URect &windowRect) noexcept {
-  const URect client{0, 0, window.rect.right - window.rect.left, window.rect.bottom - window.rect.top};
-  const URect r = windowRect.Intersect(client);
+  // windowRect is relative to the frame; window.invalid is kept in client coordinates.
+  const URect origin = client_to_screen_locked(window, {});
+  const int32_t ox = origin.left - window.rect.left;
+  const int32_t oy = origin.top - window.rect.top;
+  const int32_t b = (window.style & kStyleBorder) ? kBorderWidth : 0;
+  const URect clientInWindow{ox, oy, window.rect.right - window.rect.left - b, window.rect.bottom - window.rect.top - b};
+  const URect r = windowRect.Intersect(clientInWindow).Offset(-ox, -oy);
   if (r.Empty()) return;
   window.invalid = window.invalid.Union(r);
   if (window.queue && window.Visible()) wake_locked(*window.queue);
@@ -52,6 +91,7 @@ void expose_locked(const URect &screenRect) noexcept {
   const auto display = primary_display();
   if (!display) return;
   for (uint32_t i = 0; i < desktop.count; ++i) fill(display, desktop.rects[i], kDesktopColor);
+  present_locked(desktop);
 }
 
 void visible_region_locked(const KWindowObject &window, URegion &out) noexcept {
@@ -73,7 +113,7 @@ bool begin_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t &h
 
   visible_region_locked(window, window.paintClip);
   if (window.Visible()) {
-    window.paintClip.Intersect(paint.Offset(window.rect.left, window.rect.top));
+    window.paintClip.Intersect(client_to_screen_locked(window, paint));
   } else {
     window.paintClip.Clear();
   }
@@ -84,8 +124,9 @@ bool begin_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t &h
   slot->lock.lock();
   slot->display = display;
   slot->target = display->surface;
-  slot->originX = window.rect.left;
-  slot->originY = window.rect.top;
+  const URect origin = client_to_screen_locked(window, {});
+  slot->originX = origin.left;
+  slot->originY = origin.top;
   slot->clipped = true;
   slot->clipRects = reinterpret_cast<const KClipRect *>(window.paintClip.rects);
   slot->clipCount = window.paintClip.count;

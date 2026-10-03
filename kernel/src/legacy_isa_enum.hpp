@@ -10,5 +10,10 @@
 // device of the same type (e.g. a second NE2000 at a different I/O base) is
 // just another registry entry: no code change is needed here.
 namespace kernel::driver {
+// Reports every entry except those declaring Start=LastResort.
 void EnumerateLegacyISADevices();
+
+// Reports only the Start=LastResort entries: stand-ins for hardware that is
+// used when nothing better claimed the same job (e.g. the VGA display).
+void EnumerateLastResortLegacyISADevices();
 }// namespace kernel::driver

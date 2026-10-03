@@ -32,6 +32,6 @@ UNDOS_KERNEL_API_DEF void KE_TIME_UpdateSystemTime() noexcept {
 }
 
 // Public API for drivers/kernel to get the true elapsed time in milliseconds
-UNDOS_KERNEL_API_DEF kstd::chrono::milliseconds KE_TIME_GetSystemTime() noexcept {
-  return kstd::chrono::milliseconds(static_cast<int64_t>(g_system_time_ns / 1000000));
+UNDOS_KERNEL_API_DEF kstd::chrono::nanoseconds KE_TIME_GetSystemTime() noexcept {
+  return kstd::chrono::nanoseconds(static_cast<long long>(g_system_time_ns));
 }

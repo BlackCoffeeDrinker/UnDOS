@@ -5,13 +5,13 @@
 
 #include <Kernel.hpp>
 #include <kernel/input.hpp>
-#include <kernel/mutex.hpp>
-#include <kernel/scheduler.hpp>
-#include <kernel/time.hpp>
-#include <kernel/object_manager.hpp>
 #include <kernel/kobject/KDirectoryObject.hpp>
 #include <kernel/kobject/KDispatcherHeader.hpp>
 #include <kernel/kobject/KIOObject.hpp>
+#include <kernel/mutex.hpp>
+#include <kernel/object_manager.hpp>
+#include <kernel/scheduler.hpp>
+#include <kernel/time.hpp>
 
 #include <mutex.hpp>
 
@@ -20,13 +20,6 @@
 #include "mouse_packet.hpp"
 
 namespace {
-
-// Compile-time trace of decoded keyboard/mouse events, printed from the
-// pump thread as each event is queued. Gated per the plan's Step 7 design
-// (removed/flipped false once USER, Step 3 of the parent plan, is the real
-// consumer instead of serial).
-constexpr bool kInputTrace = true;
-
 // Single-producer/single-consumer byte ring. The producer (an ISR) only
 // ever writes `head`; the consumer (the input pump thread) only ever writes
 // `tail`. No locks: kernel::SpinLock is documented as not ISR-safe
@@ -113,7 +106,7 @@ kernel::input::MouseInputEvent BuildMouseEvent(const kernel::input::MousePacket 
 
   const int32_t proposedX = g_mouseX + packet.dx;
   const int32_t proposedY = g_mouseY + packet.dy;
-  const int32_t clampedX = ClampAxis(proposedX, 1600); // TODO Check the associated virtual desktop size
+  const int32_t clampedX = ClampAxis(proposedX, 1600);// TODO Check the associated virtual desktop size
   const int32_t clampedY = ClampAxis(proposedY, 1200);
 
   MouseInputEvent event;
@@ -163,26 +156,6 @@ void QueueEvent(kernel::input::AnyInputEvent &event) noexcept {
 
   if (g_consumer) {
     g_consumer(event.base);
-  }
-
-  if constexpr (kInputTrace) {
-    if (const auto *key = event.base.as<KeyboardInputEvent>()) {
-      early_print_fmt("INPUT: Key vk=0x{x} sc=0x{x} ch='{}' flags=0x{x} mods=0x{x} t={}\r\n",
-                      key->virtualKey, key->scanCode, key->character, key->keyFlags,
-                      key->modifiers, key->timestamp.count());
-    } else if (const auto *mouse = event.base.as<MouseInputEvent>()) {
-      // Rate-limit pure-motion traces (one in every N) so a continuously
-      // moving mouse cannot starve the boot log; clicks/wheel are never
-      // rate-limited since they are comparatively rare and always useful.
-      static uint32_t s_motionTraceCounter = 0;
-      constexpr uint32_t kMotionTraceEvery = 8;
-      const bool isPureMotion = mouse->buttonFlags == 0;
-      if (!isPureMotion || (++s_motionTraceCounter % kMotionTraceEvery) == 0) {
-        early_print_fmt("INPUT: Mouse dx={} dy={} btnFlags=0x{x} wheel={} t={}\r\n",
-                        mouse->lastX, mouse->lastY, mouse->buttonFlags, mouse->buttonData,
-                        mouse->timestamp.count());
-      }
-    }
   }
 }
 
@@ -264,7 +237,7 @@ void RegisterInputStream() noexcept {
   const auto dir = KE_OB_LookupObject("/Device").As<kernel::KDirectoryObject>();
   auto stream = kernel::CreateKObject<kernel::KIOObject>("Input");
   if (!dir || !stream) {
-    early_print_fmt("Input manager: cannot register \\Device\\Input\r\n");
+    KE_Print("Input manager: cannot register \\Device\\Input");
     return;
   }
   stream->ops = &InputOps;
@@ -293,8 +266,6 @@ void init() {
   RegisterInputStream();
 
   g_pumpThread = KE_SCHED_CreateThread(&InputPumpThread, nullptr, 0);
-
-  early_print_fmt("Input manager initialized.\r\n");
 }
 }// namespace kernel::input
 

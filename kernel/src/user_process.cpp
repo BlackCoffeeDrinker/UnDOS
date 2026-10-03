@@ -17,7 +17,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KProcessObject> KE_USER_CreatePr
   // Step 1 — Create an isolated address space for the process.
   const auto process = kernel::CreateKObject<kernel::KProcessObject>(exec_path);
   if (!process) {
-    early_print_fmt("KE_USER_CreateProcess: failed to allocate KProcessObject\r\n");
+    KE_Print("KE_USER_CreateProcess: failed to allocate KProcessObject");
     return nullptr;
   }
 
@@ -40,14 +40,9 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KProcessObject> KE_USER_CreatePr
   }
 
   if (!kernel::vmm::create_user_address_space(process->address_space)) {
-    early_print_fmt("KE_USER_CreateProcess: failed to create address space for {}\r\n", exec_path);
+    KE_Print("KE_USER_CreateProcess: failed to create address space for {}", exec_path);
     return nullptr;
   }
-  early_print_fmt("KE_USER_CreateProcess: created address space for {}: translation_root={}, current_base={}, limit={}\r\n",
-                  process->name,
-                  process->address_space.translation_root.value,
-                  process->address_space.current_base.as_ptr<>(),
-                  process->address_space.limit.as_ptr<>());
 
   // Look up the long-lived subsystem that owns this loader, so the process
   // can later be queried for which subsystem bootstrapped it.
@@ -55,11 +50,10 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KProcessObject> KE_USER_CreatePr
       KE_OB_GetSubsystemDirectory(), "NativeElfLoader");
 
   if (!subsystem) {
-    early_print_fmt("KE_USER_CreateProcess: failed to find NativeElfLoader subsystem for {}\r\n", exec_path);
+    KE_Print("KE_USER_CreateProcess: failed to find NativeElfLoader subsystem for {}", exec_path);
     kernel::vmm::destroy_user_address_space(process->address_space);
     return nullptr;
   }
-  early_print_fmt("KE_USER_CreateProcess: found {} subsystem for {}\r\n", subsystem->name, exec_path);
   process->subsystem = subsystem;
 
   // Step 2 — Load the Loader into the process's address space via the VFS.
@@ -69,30 +63,24 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KProcessObject> KE_USER_CreatePr
 
   const auto result = kernel::elf::LoadElfFromVfs(process->subsystem->loader_path, policy);
   if (!result.ok) {
-    early_print_fmt("KE_USER_CreateProcess: failed to load Loader for: {}\r\n", exec_path);
+    KE_Print("KE_USER_CreateProcess: failed to load Loader for: {}", exec_path);
     kernel::vmm::destroy_user_address_space(process->address_space);
     return nullptr;
   }
 
   const auto entry = result.entry_point;
 
-  early_print_fmt("KE_USER_CreateProcess: load_elf_from_vfs for {} @ {} (loader entry {})\r\n",
-                  process->subsystem->loader_path,
-                  entry.as_ptr<>(),
-                  process->subsystem->loader_entry.as_ptr<>());
-
   // A dedicated user-mode stack region, mapped USER|READ|WRITE.
   const void *user_stack = kernel::vmm::allocate_memory(
       process->address_space, USER_STACK_SIZE,
       kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
   if (!user_stack) {
-    early_print_fmt("KE_USER_CreateProcess: failed to allocate user stack for {}\r\n", exec_path);
+    KE_Print("KE_USER_CreateProcess: failed to allocate user stack for {}", exec_path);
     kernel::vmm::destroy_user_address_space(process->address_space);
     return nullptr;
   }
 
   auto user_stack_top = kernel::VirtualAddress::from_ptr(user_stack) + USER_STACK_SIZE;
-  early_print_fmt("KE_USER_CreateProcess: allocated user stack for {} @ {}\r\n", exec_path, user_stack_top.as_ptr<>());
 
   // Step 3 — Loader context: write the real executable path onto the new
   // process's stack so the (not-yet-running) loader can retrieve it once its
@@ -123,11 +111,9 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KProcessObject> KE_USER_CreatePr
   // Step 4 — Create the process's ring-3 main thread.
   const auto thread = KE_SCHED_CreateUserThread(process->address_space, entry, user_stack_top);
   if (!thread) {
-    early_print_fmt("KE_USER_CreateProcess: failed to create user thread for {}\r\n", exec_path);
     kernel::vmm::destroy_user_address_space(process->address_space);
     return nullptr;
   }
-  early_print_fmt("KE_USER_CreateProcess: created user thread for {} @ {}\r\n", exec_path, thread->name);
 
   thread->owner_process = process.get();
   process->main_thread = thread;
@@ -135,9 +121,6 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KProcessObject> KE_USER_CreatePr
   // Step 5 — Register the process under \Processes (the thread is already
   // registered under \Threads by KE_SCHED_CreateUserThread).
   KE_OB_InsertObject(KE_OB_GetProcessDirectory(), kernel::KObjectPtr<kernel::KObject>(process.get()));
-
-  early_print_fmt("KE_USER_CreateProcess: launched {} (entry={}, stack={})\r\n",
-                  exec_path, entry.as_ptr<>(), user_stack_top.as_ptr<>());
 
   // Step 6 — Ring-3 code can now reach the kernel via int 0x80 (see
   // kernel_hal/x86_old/intr.cpp's syscall_handler / kernel/src/syscall.cpp's

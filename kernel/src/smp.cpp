@@ -52,23 +52,23 @@ void start_secondary_cpus() noexcept {
   for (uint32_t id = 1; id < limit; ++id) {
     const VirtualAddress base = sched::alloc_kernel_stack(sched::KERNEL_STACK_SIZE);
     if (!base) {
-      early_print_fmt("SMP: no kernel stack for CPU {}, left offline\r\n", id);
+      KE_Print("SMP: no kernel stack for CPU {}, left offline", id);
       continue;
     }
 
     if (!HAL_SMP_StartProcessor(id,
                                 cfunc<void(uint32_t)>(&ap_entry),
                                 base + sched::KERNEL_STACK_SIZE)) {
-      early_print_fmt("SMP: HAL cannot start CPU {}, left offline\r\n", id);
+      KE_Print("SMP: HAL cannot start CPU {}, left offline", id);
       continue;
     }
 
     if (!wait_until_online(cpu::contexts()[id])) {
-      early_print_fmt("SMP: CPU {} never came online, left offline\r\n", id);
+      KE_Print("SMP: CPU {} never came online, left offline", id);
       continue;
     }
 
-    early_print_fmt("SMP: CPU {} online\r\n", id);
+    KE_Print("SMP: CPU {} online", id);
   }
 }
 

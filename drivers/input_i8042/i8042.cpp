@@ -94,98 +94,98 @@ void I8042_FlushOutputBuffer() {
 // boot; the aux port is left disabled here and enabled starting Task 14.
 bool I8042_InitController() {
   if (!I8042_WriteCommand(i8042_regs::command::DisableKeyboardPort)) {
-    early_print("i8042: WriteCommand(DisableKeyboardPort) timed out\r\n");
+    KE_Print("i8042: WriteCommand(DisableKeyboardPort) timed out");
     return false;
   }
   if (!I8042_WriteCommand(i8042_regs::command::DisableAuxPort)) {
-    early_print("i8042: WriteCommand(DisableAuxPort) timed out\r\n");
+    KE_Print("i8042: WriteCommand(DisableAuxPort) timed out");
     return false;
   }
 
   I8042_FlushOutputBuffer();
 
   if (!I8042_WriteCommand(i8042_regs::command::SelfTest)) {
-    early_print("i8042: WriteCommand(SelfTest) timed out\r\n");
+    KE_Print("i8042: WriteCommand(SelfTest) timed out");
     return false;
   }
   uint8_t selfTestResult = 0;
   if (!I8042_ReadData(selfTestResult)) {
-    early_print("i8042: self-test response timed out\r\n");
+    KE_Print("i8042: self-test response timed out");
     return false;
   }
-  early_print_fmt("i8042: self-test=0x{x}\r\n", selfTestResult);
+  KE_Print("i8042: self-test=0x{x}", selfTestResult);
   if (selfTestResult != 0x55) {
-    early_print("i8042: controller self-test failed\r\n");
+    KE_Print("i8042: controller self-test failed");
     return false;
   }
 
   if (!I8042_WriteCommand(i8042_regs::command::TestKeyboardPort)) {
-    early_print("i8042: WriteCommand(TestKeyboardPort) timed out\r\n");
+    KE_Print("i8042: WriteCommand(TestKeyboardPort) timed out");
     return false;
   }
   uint8_t kbdTestResult = 0;
   if (!I8042_ReadData(kbdTestResult)) {
-    early_print("i8042: keyboard interface test response timed out\r\n");
+    KE_Print("i8042: keyboard interface test response timed out");
     return false;
   }
-  early_print_fmt("i8042: keyboard interface test=0x{x}\r\n", kbdTestResult);
+  KE_Print("i8042: keyboard interface test=0x{x}", kbdTestResult);
   if (kbdTestResult != 0x00) {
-    early_print("i8042: keyboard interface test failed\r\n");
+    KE_Print("i8042: keyboard interface test failed");
     return false;
   }
 
   if (!I8042_WriteCommand(i8042_regs::command::ReadCommandByte)) {
-    early_print("i8042: WriteCommand(ReadCommandByte) timed out\r\n");
+    KE_Print("i8042: WriteCommand(ReadCommandByte) timed out");
     return false;
   }
   uint8_t ccb = 0;
   if (!I8042_ReadData(ccb)) {
-    early_print("i8042: read CCB timed out\r\n");
+    KE_Print("i8042: read CCB timed out");
     return false;
   }
-  early_print_fmt("i8042: CCB (before)=0x{x}\r\n", ccb);
+  KE_Print("i8042: CCB (before)=0x{x}", ccb);
 
   ccb |= i8042_regs::ccb::KeyboardInterruptEnable;
   ccb |= i8042_regs::ccb::KeyboardTranslation;
   ccb &= static_cast<uint8_t>(~i8042_regs::ccb::KeyboardClockDisable);
 
   if (!I8042_WriteCommand(i8042_regs::command::WriteCommandByte)) {
-    early_print("i8042: WriteCommand(WriteCommandByte) timed out\r\n");
+    KE_Print("i8042: WriteCommand(WriteCommandByte) timed out");
     return false;
   }
   if (!I8042_WriteData(ccb)) {
-    early_print("i8042: write CCB timed out\r\n");
+    KE_Print("i8042: write CCB timed out");
     return false;
   }
-  early_print_fmt("i8042: CCB (after)=0x{x}\r\n", ccb);
+  KE_Print("i8042: CCB (after)=0x{x}", ccb);
 
   if (!I8042_WriteCommand(i8042_regs::command::EnableKeyboardPort)) {
-    early_print("i8042: WriteCommand(EnableKeyboardPort) timed out\r\n");
+    KE_Print("i8042: WriteCommand(EnableKeyboardPort) timed out");
     return false;
   }
 
   if (!I8042_WriteData(i8042_regs::device::Reset)) {
-    early_print("i8042: keyboard reset write timed out\r\n");
+    KE_Print("i8042: keyboard reset write timed out");
     return false;
   }
   uint8_t ack = 0;
   if (!I8042_ReadData(ack)) {
-    early_print("i8042: keyboard reset ack timed out\r\n");
+    KE_Print("i8042: keyboard reset ack timed out");
     return false;
   }
-  early_print_fmt("i8042: reset ack=0x{x}\r\n", ack);
+  KE_Print("i8042: reset ack=0x{x}", ack);
   if (ack != i8042_regs::device::Ack) {
-    early_print("i8042: keyboard reset not acknowledged\r\n");
+    KE_Print("i8042: keyboard reset not acknowledged");
     return false;
   }
   uint8_t bat = 0;
   if (!I8042_ReadData(bat)) {
-    early_print("i8042: keyboard BAT timed out\r\n");
+    KE_Print("i8042: keyboard BAT timed out");
     return false;
   }
-  early_print_fmt("i8042: BAT=0x{x}\r\n", bat);
+  KE_Print("i8042: BAT=0x{x}", bat);
   if (bat != i8042_regs::device::BatPass) {
-    early_print("i8042: keyboard BAT failed\r\n");
+    KE_Print("i8042: keyboard BAT failed");
     return false;
   }
 
@@ -236,85 +236,85 @@ uint8_t I8042_ReadMouseDeviceId() {
 // I8042_InitController -- completely unaffected.
 bool I8042_InitMouse() {
   if (!I8042_WriteCommand(i8042_regs::command::EnableAuxPort)) {
-    early_print("i8042: WriteCommand(EnableAuxPort) timed out\r\n");
+    KE_Print("i8042: WriteCommand(EnableAuxPort) timed out");
     return false;
   }
   if (!I8042_WriteCommand(i8042_regs::command::TestAuxPort)) {
-    early_print("i8042: WriteCommand(TestAuxPort) timed out\r\n");
+    KE_Print("i8042: WriteCommand(TestAuxPort) timed out");
     return false;
   }
   uint8_t auxTestResult = 0;
   if (!I8042_ReadData(auxTestResult)) {
-    early_print("i8042: aux interface test response timed out; no mouse\r\n");
+    KE_Print("i8042: aux interface test response timed out; no mouse");
     return false;
   }
-  early_print_fmt("i8042: aux interface test=0x{x}\r\n", auxTestResult);
+  KE_Print("i8042: aux interface test=0x{x}", auxTestResult);
   if (auxTestResult != 0x00) {
-    early_print("i8042: aux interface test failed; no mouse\r\n");
+    KE_Print("i8042: aux interface test failed; no mouse");
     return false;
   }
 
   if (!I8042_WriteCommand(i8042_regs::command::ReadCommandByte)) {
-    early_print("i8042: WriteCommand(ReadCommandByte) [aux] timed out\r\n");
+    KE_Print("i8042: WriteCommand(ReadCommandByte) [aux] timed out");
     return false;
   }
   uint8_t ccb = 0;
   if (!I8042_ReadData(ccb)) {
-    early_print("i8042: read CCB [aux] timed out\r\n");
+    KE_Print("i8042: read CCB [aux] timed out");
     return false;
   }
   ccb |= i8042_regs::ccb::AuxInterruptEnable;
   ccb &= static_cast<uint8_t>(~i8042_regs::ccb::AuxClockDisable);
   if (!I8042_WriteCommand(i8042_regs::command::WriteCommandByte)) {
-    early_print("i8042: WriteCommand(WriteCommandByte) [aux] timed out\r\n");
+    KE_Print("i8042: WriteCommand(WriteCommandByte) [aux] timed out");
     return false;
   }
   if (!I8042_WriteData(ccb)) {
-    early_print("i8042: write CCB [aux] timed out\r\n");
+    KE_Print("i8042: write CCB [aux] timed out");
     return false;
   }
 
   if (!I8042_WriteAuxCommand(i8042_regs::device::Reset)) {
-    early_print("i8042: mouse reset write timed out; no mouse\r\n");
+    KE_Print("i8042: mouse reset write timed out; no mouse");
     return false;
   }
   if (!I8042_WaitAck()) {
-    early_print("i8042: mouse reset not acknowledged; no mouse\r\n");
+    KE_Print("i8042: mouse reset not acknowledged; no mouse");
     return false;
   }
   uint8_t bat = 0;
   if (!I8042_ReadData(bat)) {
-    early_print("i8042: mouse BAT response timed out; no mouse\r\n");
+    KE_Print("i8042: mouse BAT response timed out; no mouse");
     return false;
   }
-  early_print_fmt("i8042: mouse BAT=0x{x}\r\n", bat);
+  KE_Print("i8042: mouse BAT=0x{x}", bat);
   if (bat != i8042_regs::device::BatPass) {
-    early_print("i8042: mouse BAT failed; no mouse\r\n");
+    KE_Print("i8042: mouse BAT failed; no mouse");
     return false;
   }
   uint8_t deviceId = 0;
   if (!I8042_ReadData(deviceId)) {
-    early_print("i8042: mouse device-id read timed out; no mouse\r\n");
+    KE_Print("i8042: mouse device-id read timed out; no mouse");
     return false;
   }
-  early_print_fmt("i8042: mouse device id=0x{x}\r\n", deviceId);
+  KE_Print("i8042: mouse device id=0x{x}", deviceId);
 
   if (!I8042_WriteAuxCommand(i8042_regs::device::SetDefaults) || !I8042_WaitAck()) {
-    early_print("i8042: mouse set-defaults failed; no mouse\r\n");
+    KE_Print("i8042: mouse set-defaults failed; no mouse");
     return false;
   }
 
   if (!I8042_SetMouseSampleRate(100)) {
-    early_print("i8042: mouse sample-rate command failed; no mouse\r\n");
+    KE_Print("i8042: mouse sample-rate command failed; no mouse");
     return false;
   }
 
   if (!I8042_WriteAuxCommand(i8042_regs::device::EnableDataReporting) || !I8042_WaitAck()) {
-    early_print("i8042: mouse enable-reporting failed; no mouse\r\n");
+    KE_Print("i8042: mouse enable-reporting failed; no mouse");
     return false;
   }
 
-  early_print("i8042: mouse in streaming mode\r\n");
+  KE_Print("i8042: mouse in streaming mode");
   return true;
 }
 
@@ -326,28 +326,28 @@ bool I8042_InitMouse() {
 // Standard3Byte, which is always safe.
 void I8042_NegotiateMouseExtensions() {
   if (!I8042_SetMouseSampleRate(200) || !I8042_SetMouseSampleRate(100) || !I8042_SetMouseSampleRate(80)) {
-    early_print("i8042: mouse wheel knock sequence failed; mouse protocol = Standard3Byte\r\n");
+    KE_Print("i8042: mouse wheel knock sequence failed; mouse protocol = Standard3Byte");
     return;
   }
   const uint8_t wheelId = I8042_ReadMouseDeviceId();
-  early_print_fmt("i8042: mouse device id after wheel knock=0x{x}\r\n", wheelId);
+  KE_Print("i8042: mouse device id after wheel knock=0x{x}", wheelId);
   if (wheelId != 0x03) {
-    early_print("i8042: mouse protocol = Standard3Byte\r\n");
+    KE_Print("i8042: mouse protocol = Standard3Byte");
     return;
   }
   KE_INPUT_SetMousePacketMode(kernel::input::MousePacketMode::IntelliMouse4Byte);
 
   if (!I8042_SetMouseSampleRate(200) || !I8042_SetMouseSampleRate(200) || !I8042_SetMouseSampleRate(80)) {
-    early_print("i8042: mouse 5-button knock sequence failed; mouse protocol = IntelliMouse4Byte\r\n");
+    KE_Print("i8042: mouse 5-button knock sequence failed; mouse protocol = IntelliMouse4Byte");
     return;
   }
   const uint8_t explorerId = I8042_ReadMouseDeviceId();
-  early_print_fmt("i8042: mouse device id after 5-button knock=0x{x}\r\n", explorerId);
+  KE_Print("i8042: mouse device id after 5-button knock=0x{x}", explorerId);
   if (explorerId == 0x04) {
     KE_INPUT_SetMousePacketMode(kernel::input::MousePacketMode::IntelliMouseExplorer4Byte);
-    early_print("i8042: mouse protocol = IntelliMouseExplorer4Byte\r\n");
+    KE_Print("i8042: mouse protocol = IntelliMouseExplorer4Byte");
   } else {
-    early_print("i8042: mouse protocol = IntelliMouse4Byte\r\n");
+    KE_Print("i8042: mouse protocol = IntelliMouse4Byte");
   }
 }
 
@@ -356,7 +356,7 @@ void I8042_NegotiateMouseExtensions() {
 // draining logic serves both the keyboard (IRQ1) and aux (IRQ12) ISRs below,
 // since hardware tags the byte's origin in the status register regardless
 // of which line raised the interrupt. Bounded loop, port I/O only, no
-// allocation, no early_print -- ISR context.
+// allocation, no KE_Print -- ISR context.
 void I8042_DrainAndReport() {
   for (int i = 0; i < 16; ++i) {
     const uint8_t status = HAL_IO_In8(i8042_regs::kStatusPort);
@@ -392,7 +392,7 @@ void I8042_CreateNamedDevices(const kernel::KDevicePtr<kernel::KDeviceBus> &fdo,
     ctx.keyboardDevice->hardwareId = "input_i8042";
     KE_IO_AttachChildDevice(fdo, ctx.keyboardDevice);
   } else {
-    early_print("i8042: Failed to create Keyboard0 device\r\n");
+    KE_Print("i8042: Failed to create Keyboard0 device");
   }
 
   ctx.mouseDevice = KE_IO_CreateDevice(fdo->driverObject,
@@ -402,7 +402,7 @@ void I8042_CreateNamedDevices(const kernel::KDevicePtr<kernel::KDeviceBus> &fdo,
     ctx.mouseDevice->hardwareId = "input_i8042";
     KE_IO_AttachChildDevice(fdo, ctx.mouseDevice);
   } else {
-    early_print("i8042: Failed to create PointerPort0 device\r\n");
+    KE_Print("i8042: Failed to create PointerPort0 device");
   }
 }
 
@@ -444,7 +444,7 @@ kernel::IoStatus I8042_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &
   HAL_INTR_SetIrqMask(i8042_regs::kDefaultIrqMouse, false);
   HAL_INTR_SetIrqMask(i8042_regs::kDefaultIrqKeyboard, false);
 
-  early_print_fmt("i8042: DeviceControl MouseConfigure enable={} rate={} -> {}\r\n",
+  KE_Print("i8042: DeviceControl MouseConfigure enable={} rate={} -> {}",
                   config.enable, config.sampleRate, ok ? "ok" : "failed");
   return ok ? kernel::IoStatus::Success : kernel::IoStatus::DeviceError;
 }
@@ -452,7 +452,7 @@ kernel::IoStatus I8042_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &
 bool I8042_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto fdo = KE_IO_CreateBusWithContext<I8042Context>(driver, {});
   if (!fdo) {
-    early_print("i8042: Failed to create FDO\r\n");
+    KE_Print("i8042: Failed to create FDO");
     return false;
   }
 
@@ -463,19 +463,19 @@ bool I8042_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, co
 void I8042_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto fdo = pdo->attachedDevice.As<kernel::KDeviceBus>();
   if (!fdo) {
-    early_print("i8042: No FDO attached; cannot start\r\n");
+    KE_Print("i8042: No FDO attached; cannot start");
     return;
   }
 
   auto *ctx = fdo->deviceExtension.as<I8042Context>();
   if (!ctx) {
-    early_print("i8042: Missing I8042Context in deviceExtension\r\n");
+    KE_Print("i8042: Missing I8042Context in deviceExtension");
     return;
   }
 
   const auto *ioRes = KE_RES_FindAssigned(pdo, kernel::ResourceType::Port, 0);
   if (!ioRes) {
-    early_print("i8042: No I/O resource assigned; cannot start\r\n");
+    KE_Print("i8042: No I/O resource assigned; cannot start");
     return;
   }
   ctx->ioBase = static_cast<uint16_t>(ioRes->start);
@@ -484,12 +484,12 @@ void I8042_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
     ctx->irqKeyboard = irqRes->start;
   }
 
-  early_print_fmt("i8042: I/O base 0x{x}, IRQ {} / IRQ {}\r\n", ctx->ioBase, ctx->irqKeyboard, ctx->irqMouse);
+  KE_Print("i8042: I/O base 0x{x}, IRQ {} / IRQ {}", ctx->ioBase, ctx->irqKeyboard, ctx->irqMouse);
 
   // A missing/failing controller must not panic or hang boot -- just skip
   // creating the input devices and leave the rest of the system unaffected.
   if (!I8042_InitController()) {
-    early_print("i8042: controller initialisation failed; no input devices created\r\n");
+    KE_Print("i8042: controller initialisation failed; no input devices created");
     return;
   }
 
@@ -505,7 +505,7 @@ void I8042_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   if (I8042_InitMouse()) {
     I8042_NegotiateMouseExtensions();
   } else {
-    early_print("i8042: no mouse detected; pointer device inactive\r\n");
+    KE_Print("i8042: no mouse detected; pointer device inactive");
   }
 
   // Connect both ISRs now that every polled command/response exchange is
@@ -514,12 +514,12 @@ void I8042_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   // bit unset on any failure path).
   ctx->keyboardIsr = KE_IO_ConnectInterrupt(fdo, ctx->irqKeyboard, I8042_KeyboardIsr, ctx);
   if (!ctx->keyboardIsr) {
-    early_print_fmt("i8042: Failed to connect keyboard ISR to IRQ {}\r\n", ctx->irqKeyboard);
+    KE_Print("i8042: Failed to connect keyboard ISR to IRQ {}", ctx->irqKeyboard);
   }
 
   ctx->mouseIsr = KE_IO_ConnectInterrupt(fdo, ctx->irqMouse, I8042_AuxIsr, ctx);
   if (!ctx->mouseIsr) {
-    early_print_fmt("i8042: Failed to connect aux ISR to IRQ {}\r\n", ctx->irqMouse);
+    KE_Print("i8042: Failed to connect aux ISR to IRQ {}", ctx->irqMouse);
   }
 }
 

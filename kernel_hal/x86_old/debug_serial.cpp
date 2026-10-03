@@ -27,17 +27,21 @@ void init_serial() {
 
 }// namespace
 
-UNDOS_HAL_API_DEF void early_print(const char *str) noexcept {
-  while (*str) early_print_char(*str++);
-}
+UNDOS_HAL_API_DEF void HAL_Debug_FirmwarePrint(const char* str, size_t size) noexcept {
+  if (!str || size == 0) {
+    return;
+  }
 
-UNDOS_HAL_API_DEF void early_print_char(char c) noexcept {
+  // Ensure serial port is initialized once per boot
   if (!debug_serial_initialized) {
     debug_serial_initialized = true;
     init_serial();
   }
 
-  // Wait for transmit buffer empty
-  while ((inb(COM1 + 5) & 0x20) == 0) {}
-  outb(COM1, static_cast<uint8_t>(c));
+  // Write each character in the buffer to UART COM1
+  for (size_t i = 0; i < size; ++i) {
+    // Wait for Transmit Holding Register Empty (Line Status Register bit 5)
+    while ((inb(COM1 + 5) & 0x20) == 0) {}
+    outb(COM1, static_cast<uint8_t>(str[i]));
+  }
 }

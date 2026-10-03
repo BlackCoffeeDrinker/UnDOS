@@ -7,7 +7,7 @@ qemu-system-i386 -machine isapc -cpu 486 -m 32 \
   -hda "${SCRIPT_DIR}/bin/fat32.img" \
   -chardev stdio,id=ser0,signal=off \
   -nodefaults \
-  -vga std \
+  -vga cirrus \
   -drive file="${SCRIPT_DIR}/bin/os.iso",media=cdrom,readonly=on \
   -boot d &
 

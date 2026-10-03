@@ -26,4 +26,4 @@ UNDOS_KERNEL_PUBLIC_V1API(void, KE_TIME_UpdateSystemTime);
  * @brief Method KE_TIME_GetSystemTime
  *
  */
-UNDOS_KERNEL_PUBLIC_V1API([[nodiscard]] kstd::chrono::milliseconds, KE_TIME_GetSystemTime);
+UNDOS_KERNEL_PUBLIC_V1API([[nodiscard]] kstd::chrono::nanoseconds, KE_TIME_GetSystemTime);

@@ -23,6 +23,9 @@ size_t BytesPerPixel(kernel::PixelFormat format) {
       return 3;
     case kernel::PixelFormat::ARGB32:
       return 4;
+    case kernel::PixelFormat::RGB15:
+    case kernel::PixelFormat::RGB16:
+      return 2;
     case kernel::PixelFormat::INDEX8:
     default:
       return 1;
@@ -248,11 +251,17 @@ SyscallReturnCode handle_LineTo_V1(__KRN_GFX_LINETO_V1 &&args) {
       if (InClip(*slot, x, y)) KE_GFX_SoftwareFillRect(slot->target, x, y, 1, 1, slot->penColor);
       if (x == x1 && y == y1) break;
       const int32_t e2 = 2 * err;
-      if (e2 >= dy) { err += dy; x += sx; }
-      if (e2 <= dx) { err += dx; y += sy; }
+      if (e2 >= dy) {
+        err += dy;
+        x += sx;
+      }
+      if (e2 <= dx) {
+        err += dx;
+        y += sy;
+      }
     }
   } else {
-    ok = adapter->DrawLine(slot->target, x0, y0, x1, y1, slot->penColor);
+    ok = adapter->DrawLine(adapter, slot->target, x0, y0, x1, y1, slot->penColor);
     if (!ok) {
       ok = KE_GFX_SoftwareDrawLine(slot->target, x0, y0, x1, y1, slot->penColor);
     }
@@ -289,7 +298,7 @@ SyscallReturnCode handle_Rectangle_V1(__KRN_GFX_RECTANGLE_V1 &&args) {
   ForEachClip(*slot, args.left + slot->originX, args.top + slot->originY,
               args.right + slot->originX, args.bottom + slot->originY,
               [&](int32_t l, int32_t t, int32_t r, int32_t b) {
-                bool drawn = adapter->FillRect && adapter->FillRect(slot->target, l, t, r - l, b - t, slot->penColor);
+                bool drawn = adapter->FillRect && adapter->FillRect(adapter, slot->target, l, t, r - l, b - t, slot->penColor);
                 if (!drawn) drawn = KE_GFX_SoftwareFillRect(slot->target, l, t, r - l, b - t, slot->penColor);
                 ok = ok && drawn;
               });
@@ -351,7 +360,7 @@ SyscallReturnCode handle_BitBlt_V1(__KRN_GFX_BITBLT_V1 &&args) {
                 const int32_t csy = sy + (t - dy);
                 const auto w = static_cast<uint32_t>(r - l);
                 const auto h = static_cast<uint32_t>(b - t);
-                bool drawn = adapter->BitBlt && adapter->BitBlt(dstSlot->target, l, t, srcSlot->target, csx, csy, w, h, rop);
+                bool drawn = adapter->BitBlt && adapter->BitBlt(adapter, dstSlot->target, l, t, srcSlot->target, csx, csy, w, h, rop);
                 if (!drawn) drawn = KE_GFX_SoftwareBitBlt(dstSlot->target, l, t, srcSlot->target, csx, csy, w, h, rop);
                 ok = ok && drawn;
               });

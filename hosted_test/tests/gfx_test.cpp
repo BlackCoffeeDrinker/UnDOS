@@ -44,9 +44,10 @@ void ResetFakeAdapterState() {
   g_fakeAdapterState = FakeAdapterState{};
 }
 
-bool FakeSetMode(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
-                  const kernel::KObjectPtr<kernel::KSurface> &surface,
-                  size_t modeIndex) {
+bool FakeSetMode(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+                 const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
+                 const kernel::KObjectPtr<kernel::KSurface> &surface,
+                 size_t modeIndex) {
   g_fakeAdapterState.lastSetModeIndex = modeIndex;
   if (!g_fakeAdapterState.setModeShouldSucceed) {
     return false;
@@ -58,11 +59,11 @@ bool FakeSetMode(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
   return true;
 }
 
-size_t FakeGetModeCount() {
+size_t FakeGetModeCount(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
   return g_fakeAdapterState.modeCount;
 }
 
-bool FakeGetModeInfo(size_t modeIndex, kernel::KDisplayModeInfo &outInfo) {
+bool FakeGetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/, size_t modeIndex, kernel::KDisplayModeInfo &outInfo) {
   if (modeIndex >= g_fakeAdapterState.modeCount) {
     return false;
   }
@@ -70,8 +71,9 @@ bool FakeGetModeInfo(size_t modeIndex, kernel::KDisplayModeInfo &outInfo) {
   return true;
 }
 
-bool FakeFillRect(const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
-                   int x, int y, int w, int h, uint32_t colorIndex) {
+bool FakeFillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+                  const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
+                  int x, int y, int w, int h, uint32_t colorIndex) {
   g_fakeAdapterState.fillRectCalled = true;
   g_fakeAdapterState.lastX = x;
   g_fakeAdapterState.lastY = y;
@@ -81,8 +83,9 @@ bool FakeFillRect(const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
   return true;
 }
 
-bool FakeDrawLine(const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
-                   int x0, int y0, int /*x1*/, int /*y1*/, uint32_t colorIndex) {
+bool FakeDrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+                  const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
+                  int x0, int y0, int /*x1*/, int /*y1*/, uint32_t colorIndex) {
   g_fakeAdapterState.drawLineCalled = true;
   g_fakeAdapterState.lastX = x0;
   g_fakeAdapterState.lastY = y0;
@@ -90,12 +93,13 @@ bool FakeDrawLine(const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
   return true;
 }
 
-bool FakeBitBlt(const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
-                 int dstX, int dstY,
-                 const kernel::KObjectPtr<kernel::KSurface> & /*src*/,
-                 int /*srcX*/, int /*srcY*/,
-                 uint32_t /*width*/, uint32_t /*height*/,
-                 kernel::RasterOp /*rop*/) {
+bool FakeBitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+                const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
+                int dstX, int dstY,
+                const kernel::KObjectPtr<kernel::KSurface> & /*src*/,
+                int /*srcX*/, int /*srcY*/,
+                uint32_t /*width*/, uint32_t /*height*/,
+                kernel::RasterOp /*rop*/) {
   g_fakeAdapterState.bitBltCalled = true;
   g_fakeAdapterState.lastX = dstX;
   g_fakeAdapterState.lastY = dstY;
@@ -254,7 +258,7 @@ TEST_CASE("KGraphicsAdapter FillRect/DrawLine/BitBlt forward to the fake driver"
   const auto surface = KE_GFX_CreateSurfaceForMode(display, 0);
   REQUIRE(surface);
 
-  REQUIRE(display->adapter->FillRect(surface, 1, 2, 3, 4, 9));
+  REQUIRE(display->adapter->FillRect(display->adapter, surface, 1, 2, 3, 4, 9));
   REQUIRE(g_fakeAdapterState.fillRectCalled);
   REQUIRE(g_fakeAdapterState.lastX == 1);
   REQUIRE(g_fakeAdapterState.lastY == 2);
@@ -262,13 +266,13 @@ TEST_CASE("KGraphicsAdapter FillRect/DrawLine/BitBlt forward to the fake driver"
   REQUIRE(g_fakeAdapterState.lastH == 4);
   REQUIRE(g_fakeAdapterState.lastColor == 9);
 
-  REQUIRE(display->adapter->DrawLine(surface, 5, 6, 7, 8, 3));
+  REQUIRE(display->adapter->DrawLine(display->adapter, surface, 5, 6, 7, 8, 3));
   REQUIRE(g_fakeAdapterState.drawLineCalled);
   REQUIRE(g_fakeAdapterState.lastX == 5);
   REQUIRE(g_fakeAdapterState.lastY == 6);
   REQUIRE(g_fakeAdapterState.lastColor == 3);
 
-  REQUIRE(display->adapter->BitBlt(surface, 10, 11, surface, 0, 0, 4, 4, kernel::RasterOp::SRCCOPY));
+  REQUIRE(display->adapter->BitBlt(display->adapter, surface, 10, 11, surface, 0, 0, 4, 4, kernel::RasterOp::SRCCOPY));
   REQUIRE(g_fakeAdapterState.bitBltCalled);
   REQUIRE(g_fakeAdapterState.lastX == 10);
   REQUIRE(g_fakeAdapterState.lastY == 11);
@@ -353,4 +357,58 @@ TEST_CASE("DeviceContextTable slot fields round-trip through the SpinLock-guarde
   REQUIRE(resolved->penColor == 7);
   REQUIRE(resolved->currentX == 10);
   REQUIRE(resolved->currentY == 20);
+}
+
+TEST_CASE("Software fallbacks treat RGB15/RGB16 as two bytes per pixel", "[gfx][software_fallback]") {
+  EnsureObjectManagerInitialized();
+
+  constexpr uint32_t width = 8;
+  constexpr uint32_t height = 4;
+  constexpr uint32_t pitch = width * 2;
+  const size_t size = static_cast<size_t>(pitch) * height;
+
+  auto &as = KE_VMM_GetKernelAddressSpace();
+
+  auto make = [&](kernel::PixelFormat format, const char *name) {
+    void *region = KE_VMM_AllocateRegion(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+    REQUIRE(region != nullptr);
+    auto surface = kernel::CreateKObject<kernel::KSurface>(name);
+    REQUIRE(surface);
+    surface->backing = KE_VMM_CreateDirectBacking(kernel::VirtualAddress::from_ptr(region), size);
+    REQUIRE(surface->backing);
+    surface->width = width;
+    surface->height = height;
+    surface->pitch = pitch;
+    surface->pixelFormat = format;
+    return surface;
+  };
+
+  const auto src = make(kernel::PixelFormat::RGB16, "Rgb16Src");
+  REQUIRE(KE_GFX_SoftwareFillRect(src, 0, 0, 4, 2, 0xF81F));
+
+  auto *srcPixels = src->backing->directAddress.as_ptr<uint16_t>();
+  REQUIRE(srcPixels[0] == 0xF81F);
+  REQUIRE(srcPixels[3] == 0xF81F);
+  // The fifth pixel of row 0 is outside the filled rect, proving the two-byte stride.
+  REQUIRE(srcPixels[4] == 0);
+  REQUIRE(srcPixels[pitch / 2] == 0xF81F);
+
+  // Same-format blit takes the memcpy fast path.
+  const auto dst = make(kernel::PixelFormat::RGB16, "Rgb16Dst");
+  REQUIRE(KE_GFX_SoftwareBitBlt(dst, 1, 1, src, 0, 0, 4, 2, kernel::RasterOp::SRCCOPY));
+  auto *dstPixels = dst->backing->directAddress.as_ptr<uint16_t>();
+  REQUIRE(dstPixels[pitch / 2 + 1] == 0xF81F);
+  REQUIRE(dstPixels[pitch / 2 + 0] == 0);
+
+  // Converting path: 16bpp source read as a 16-bit value, written as one index byte.
+  const auto index = make(kernel::PixelFormat::INDEX8, "Index8Dst");
+  index->pitch = width;
+  REQUIRE(KE_GFX_SoftwareBitBlt(index, 0, 0, src, 0, 0, 4, 1, kernel::RasterOp::SRCCOPY));
+  auto *indexPixels = index->backing->directAddress.as_ptr<uint8_t>();
+  REQUIRE(indexPixels[0] == 0x1F);
+
+  // RGB15 shares the two-byte layout.
+  const auto rgb15 = make(kernel::PixelFormat::RGB15, "Rgb15Dst");
+  REQUIRE(KE_GFX_SoftwareFillRect(rgb15, 2, 0, 1, 1, 0x7C1F));
+  REQUIRE(rgb15->backing->directAddress.as_ptr<uint16_t>()[2] == 0x7C1F);
 }

@@ -1,6 +1,8 @@
 #include "pnp_manager.hpp"
+#include "event_broadcaster.hpp"
 #include "stdkrn.hpp"
 
+#include <kernel/kobject/KDispatcherHeader.hpp>
 #include <kernel/mutex.hpp>
 #include <list.hpp>
 #include <mutex.hpp>
@@ -33,6 +35,13 @@ kernel::Mutex s_queueLock;
 kstd::list<PnpWorkItem> s_workQueue;
 bool s_workerBusy = false;
 kernel::KObjectPtr<kernel::KThreadObject> s_pnpThread;
+
+// Auto-reset dispatcher header used to park the worker. The signal is sticky
+// (KDispatcherHeader::TryAcquire consumes it), so a KE_PNP_ReportNewDevice
+// that lands between the worker observing an empty queue and actually going to
+// sleep cannot be lost - which the old KE_SCHED_Block/Unblock pair could not
+// guarantee.
+kernel::KDispatcherHeader s_workAvailable{};
 }// namespace
 
 static kernel::KObjectPtr<kernel::KDriverObject> FindDriverForHardwareId(const kstd::string_view &hwid) {
@@ -49,6 +58,7 @@ static kernel::KObjectPtr<kernel::KDriverObject> FindDriverForHardwareId(const k
 static void ProcessDevice(
     const kernel::KDevicePtr<kernel::KDeviceBus> &parent,
     const kernel::KDevicePtr<kernel::KDevice> &pdo);
+static void TriggerDeviceStateChanged(const kernel::KDevicePtr<kernel::KDevice> &fdo);
 static void TriggerDeviceInterest(const kernel::KDevicePtr<kernel::KDevice> &fdo);
 
 namespace kernel::pnp {
@@ -78,7 +88,7 @@ void PnPThread(void *) {
         s_workerBusy = false;
       }
     } else {
-      KE_SCHED_Block();
+      KE_SCHED_WaitForHeader(s_workAvailable, kernel::WAIT_INFINITE);
     }
   }
 }
@@ -87,8 +97,8 @@ void init() {
   // Create the kernel-owned root enumerator (\Device\Root). It has no driver
   // object; its child PDOs are tracked in the PnpRootContext extension.
   s_rootDevice = KE_IO_CreateBus(nullptr, 0, "System");
-  early_print_fmt("PNP Manager initialized as {}.\r\n", s_rootDevice->Name());
-
+  s_workAvailable.manualReset = false;
+  s_workAvailable.signalled = false;
   s_pnpThread = KE_SCHED_CreateThread(&PnPThread, nullptr, 0);
 }
 }// namespace kernel::pnp
@@ -122,12 +132,18 @@ UNDOS_KERNEL_API_DEF void KE_PNP_RegisterDeviceInterest(
     const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
   if (!driver || type == kernel::device_type::Unknown) return;
   if (!driver->AddDevice) {
-    early_print_fmt("KE_PNP_RegisterDeviceInterest: ERROR Driver {} does not implement AddDevice, cannot register interest\n\r", driver->name);
+    KE_Print("KE_PNP_RegisterDeviceInterest: ERROR Driver {} does not implement AddDevice, cannot register interest", driver->name);
     return;
   }
 
   kstd::unique_lock guard(s_registryLock);
   s_deviceInterests.emplace_back(type, driver);
+}
+
+static void TriggerDeviceStateChanged(const kernel::KDevicePtr<kernel::KDevice> &fdo) {
+  if (fdo && fdo->pnpState == kernel::KPnpState::Started) {
+    kernel::event::broadcast(fdo, kernel::event::make_event_code(KE_PNP_EventCategory(), kernel::pnp::DeviceEvent::Started));
+  }
 }
 
 // Attaches every driver that registered interest in the given FDO's device type
@@ -137,7 +153,7 @@ static void TriggerDeviceInterest(const kernel::KDevicePtr<kernel::KDevice> &fdo
   if (!fdo) return;
 
   if (fdo->pnpState != kernel::KPnpState::Started) {
-    early_print_fmt("WARN: Device {} is not started: future versions will discard trigger\n\r", fdo->Name());
+    KE_Print("WARN: Device {} is not started: future versions will discard trigger", fdo->Name());
   }
 
   kstd::unique_lock guard(s_registryLock);
@@ -152,7 +168,7 @@ static void TriggerDeviceInterest(const kernel::KDevicePtr<kernel::KDevice> &fdo
     }
 
     if (driver->AddDevice(driver, fdo)) {
-      early_print_fmt("PnP: Attached interest driver {} to device (type hash 0x{x})\n\r", driver->name, fdo->deviceType.value);
+      KE_Print("PnP: Attached interest driver {} to device (type hash 0x{x})", driver->name, fdo->deviceType.value);
       if (driver->StartDevice) {
         driver->StartDevice(fdo);
       }
@@ -168,15 +184,26 @@ static void TriggerDeviceInterest(const kernel::KDevicePtr<kernel::KDevice> &fdo
   }
 }
 
-void KE_PNP_ReportNewDevice(
+UNDOS_KERNEL_API_DEF const kernel::event::Category &KE_PNP_EventCategory() noexcept {
+  struct PnpEventCategory final : kernel::event::Category {
+    [[nodiscard]] const char *name() const noexcept override { return "PnP"; }
+    [[nodiscard]] kstd::string_view message(int) const noexcept override { return ""; }
+    [[nodiscard]] bool equivalent(const kernel::event::Code &code) const noexcept override { return &code.category() == this; }
+  };
+  static PnpEventCategory category;
+
+  return category;
+}
+
+UNDOS_KERNEL_API_DEF void KE_PNP_ReportNewDevice(
     const kernel::KDevicePtr<kernel::KDeviceBus> &parent,
     const kernel::KDevicePtr<kernel::KDevice> &pdo) noexcept {
   if (!pdo) [[unlikely]] {
-    early_print_fmt("KE_PNP_ReportNewDevice: PDO is null.\n\r");
+    KE_Print("KE_PNP_ReportNewDevice: PDO is null.");
     return;
   }
 
-  early_print_fmt("KE_PNP_ReportNewDevice: PDO {} (type hash 0x{x})\n\r", pdo->Name(), pdo->deviceType.value);
+  KE_Print("KE_PNP_ReportNewDevice: PDO {} (type hash 0x{x})", pdo->Name(), pdo->deviceType.value);
 
   // Parent tracking: the tree shape must be visible immediately, so this part
   // stays synchronous. Everything else (identify, bind, resources, start,
@@ -190,9 +217,9 @@ void KE_PNP_ReportNewDevice(
     s_workQueue.emplace_back(PnpWorkItem{parent, pdo});
   }
 
-  if (s_pnpThread) {
-    KE_SCHED_Unblock(s_pnpThread);
-  }
+  // Sticky signal: safe even if the worker has not reached its wait yet, and
+  // safe before init() created the thread at all.
+  KE_EVENT_Signal(s_workAvailable, false);
 }
 
 UNDOS_KERNEL_API_DEF void KE_PNP_WaitForQuiescence() noexcept {
@@ -221,7 +248,7 @@ static void ProcessDevice(
   } else if (pdo->driverObject && pdo->driverObject->GetHardwareId) {
     hwid = pdo->driverObject->GetHardwareId(pdo);
   } else {
-    early_print_fmt("KE_PNP_ReportNewDevice: PDO {} has no hardware ID.\r\n", pdo->Name());
+    KE_Print("KE_PNP_ReportNewDevice: PDO {} has no hardware ID.", pdo->Name());
     return;
   }
 
@@ -240,15 +267,17 @@ static void ProcessDevice(
     if (driver->AddDevice) {
       if (driver->AddDevice(driver, pdo)) {
         pdo->driverObject = driver;
-        early_print_fmt("PnP: Bound driver {} to device {}\n\r", driver->name, hwid);
+        KE_Print("PnP: Bound driver {} to device {}", driver->name, hwid);
 
         // Reserve the device's fixed resources before starting it. A conflict
         // (an overlapping range already held by another device) leaves the
         // device un-started.
         if (!KE_RES_AssignResources(pdo, req)) {
-          early_print_fmt("PnP: resource conflict for {}; not starting\n\r", hwid);
-          pdo->pnpState = kernel::KPnpState::Stopped;
+          KE_Print("PnP: resource conflict for {}; not starting", hwid);
+          pdo->pnpState = kernel::KPnpState::StoppedConflicting;
         } else {
+          pdo->pnpState = kernel::KPnpState::Starting;
+
           // Start Device. The event/dispatch layer was removed in favour of raw
           // method calls (see note in pnp.hpp); StartDevice is invoked directly.
           if (pdo->driverObject && pdo->driverObject->StartDevice) {
@@ -269,6 +298,9 @@ static void ProcessDevice(
             KE_PNP_EnumerateBus(pdo->attachedDevice.As<kernel::KDeviceBus>());
           }
 
+          // Broadcast that this driver/device has started (things like the GFX subsystem want to execute things after)
+          TriggerDeviceStateChanged(fdo);
+
           // Class-trigger: attach any driver that registered interest in the
           // (just-started) function device object's type as an upper filter.
           TriggerDeviceInterest(fdo);
@@ -280,7 +312,7 @@ static void ProcessDevice(
     // once assignment is done (mirrors the ScatterGatherList lifecycle).
     KE_RES_FreeRequirementsList(req);
   } else {
-    early_print_fmt("PnP: No driver for {}; continuing with class triggers\n\r", hwid);
+    KE_Print("PnP: No driver for {}; continuing with class triggers", hwid);
     pdo->pnpState = kernel::KPnpState::Started;
     TriggerDeviceInterest(pdo);
   }

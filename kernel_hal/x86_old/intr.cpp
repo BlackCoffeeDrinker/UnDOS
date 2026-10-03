@@ -9,6 +9,7 @@
 #include <kernel/virtual_memory.hpp>
 
 #include "__tuple/ignore.hpp"
+#include "kernel/konsole.hpp"
 #include "strfmt.hpp"
 #include "structs.hpp"
 #include "v86.hpp"
@@ -113,7 +114,7 @@ template<uint8_t IRQ>
   // still formatting -- and preempt into the scheduler, corrupting whatever
   // we were in the middle of printing and never coming back.
   __asm__ volatile("cli");
-  early_print_fmt("Unhandled Interrupt/Exception at EIP: 0x{:x}\n\r", f->eip);
+  KE_Print("Unhandled Interrupt/Exception at EIP: 0x{:x}", f->eip);
   HAL_PLATFORM_Panic("Unhandled Interrupt/Exception", __FILE__, __LINE__);
 }
 // Writes "#VEC xx EIP xxxxxxxx" straight to COM1, without the formatter, so
@@ -154,7 +155,7 @@ static void set_vector_handlers(kstd::integer_sequence<uint8_t, V...>) {
 [[gnu::interrupt]] void exception_handler(stack_frame *frame, uword_t error_code) {
   kstd::ignore = frame;
   __asm__ volatile("cli");
-  early_print_fmt("Exception: 0x{:x}\n\r", error_code);
+  KE_Print("Exception: 0x{:x}", error_code);
   HAL_PLATFORM_Panic("Unhandled Exception", __FILE__, __LINE__);
 }
 

@@ -132,3 +132,7 @@ void reload_gdt() {
 UNDOS_HAL_API_DEF void HAL_CPU_SetKernelStack(kernel::VirtualAddress kernel_stack_top) noexcept {
   hal::x86::tss_set_esp0(static_cast<uint32_t>(kernel_stack_top.value));
 }
+
+UNDOS_HAL_API_DEF kernel::VirtualAddress HAL_CPU_GetKernelStack() noexcept {
+  return kernel::VirtualAddress(hal::x86::tss_get_esp0());
+}

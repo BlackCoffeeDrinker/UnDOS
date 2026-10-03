@@ -226,6 +226,17 @@ UNDOS_HAL_PUBLIC_V1API(void, HAL_CPU_SetKernelStack, kernel::VirtualAddress kern
 
 /**
  * @ingroup CPU
+ * @brief Method HAL_CPU_GetKernelStack
+ *
+ * Returns the ring-0 stack currently configured for ring-3/v86 -> ring-0
+ * transitions on this CPU. The scheduler saves it when switching a thread
+ * out so temporary per-thread overrides (e.g. a v86 BIOS call's private trap
+ * stack) survive preemption.
+ */
+UNDOS_HAL_PUBLIC_V1API(kernel::VirtualAddress, HAL_CPU_GetKernelStack);
+
+/**
+ * @ingroup CPU
  * @brief Method HAL_CPU_GetCurrentId
  *
  * Identifies the logical CPU executing the call. Must be valid everywhere,
@@ -290,13 +301,8 @@ UNDOS_HAL_PUBLIC_V1API(void, HAL_SMP_ShootdownTlb, kernel::VirtualAddress addr);
 // endregion
 
 // region Debug
-UNDOS_HAL_PUBLIC_V1API(void, early_print, const char *);//< Leave as const char* - EXCEPTION TO NO RAW POINTER RULE
-UNDOS_HAL_PUBLIC_V1API(void, early_print_char, char);
-
-template<typename... Args>
-void early_print_fmt(const kstd::string_view &fmt, Args &&...args) {
-  kstd::format_dst([](char c) { early_print_char(c); }, fmt, args...);
-}
+// This function is used to print debug messages to the firmware console. it should only be used for early boot stages.
+UNDOS_HAL_PUBLIC_V1API(void, HAL_Debug_FirmwarePrint, const char *, size_t);
 // endregion
 
 // region Physical Memory Manager API

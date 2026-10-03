@@ -95,4 +95,20 @@ struct URegion {
   }
 };
 
+// Presenting a fragmented region costs blitter setup per rectangle, so a
+// region whose bounding box is barely larger than the pixels it covers is
+// cheaper to transfer as one rectangle. True when the bounding box wastes
+// less than a quarter of the covered area.
+[[nodiscard]] inline bool region_merges_to_bounds(const URegion &region) noexcept {
+  if (region.count < 2) return true;
+  uint64_t covered = 0;
+  for (uint32_t i = 0; i < region.count; ++i) {
+    const URect &r = region.rects[i];
+    covered += static_cast<uint64_t>(r.right - r.left) * static_cast<uint64_t>(r.bottom - r.top);
+  }
+  const URect b = region.Bounds();
+  const uint64_t bounds = static_cast<uint64_t>(b.right - b.left) * static_cast<uint64_t>(b.bottom - b.top);
+  return bounds <= covered + covered / 4;
+}
+
 } // namespace kernel::user

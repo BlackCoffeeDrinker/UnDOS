@@ -5,8 +5,6 @@
 #include <kernel/memory/address.hpp>
 #include <kernel/virtual_memory.hpp>
 
-#include <stdint.h>
-
 namespace kernel {
 /**
  * @brief Wrapper for a raw data buffer (pointer + size).
@@ -32,9 +30,7 @@ struct DataBuffer {
   }
 
   constexpr DataBuffer(VirtualAddress p, size_t s) : ptr(p), size(s) {}
-  ~DataBuffer() {
-    *this = nullptr;
-  }
+  ~DataBuffer() { *this = nullptr; }
 
   DataBuffer &operator=(const DataBuffer &) = delete;
   DataBuffer &operator=(DataBuffer &&rhs) noexcept {

@@ -38,6 +38,10 @@ struct LoadPolicy {
   // temporary buffer. Callers that need the data (e.g. ".driver_name")
   // must copy it out before returning.
   cfunc<void(void *, kstd::string_view, const uint8_t *, size_t)> capture_section;
+  // When non-empty, only the section with this exact name is read and passed
+  // to capture_section, avoiding reading every section (including large
+  // debug sections) from disk.
+  kstd::string_view capture_section_name;
 };
 
 struct LoadResult {

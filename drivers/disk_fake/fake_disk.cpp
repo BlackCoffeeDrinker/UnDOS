@@ -16,7 +16,7 @@ diskfake::MemoryBackingStore g_backing;
 bool Fake_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto disk = KE_IO_CreateBusWithContext<diskfake::FakeDiskContext>(driver, "FakeDisk");
   if (!disk) {
-    early_print("disk_fake: Failed to create Disk PDO\r\n");
+    KE_Print("disk_fake: Failed to create Disk PDO");
     return false;
   }
 
@@ -32,7 +32,7 @@ bool Fake_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, con
 }
 
 void Fake_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
-  early_print_fmt("Fake_StartDevice with PDO: {}\r\n", pdo->Name());
+  KE_Print("Fake_StartDevice with PDO: {}", pdo->Name());
 }
 
 }// namespace

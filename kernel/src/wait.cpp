@@ -62,7 +62,7 @@ UNDOS_KERNEL_API_DEF WaitStatus KE_SCHED_WaitForHeader(KDispatcherHeader &header
   header.AddWaiter(wb);
   const bool timed = timeout.count() > 0;
   if (timed) {
-    wb.deadline_ms = static_cast<uint64_t>(KE_TIME_GetSystemTime().count()) +
+    wb.deadline_ms = static_cast<uint64_t>(KE_TIME_GetSystemTime().count()) / 1000000u +
                      static_cast<uint64_t>(timeout.count());
     wait::g_timed.Add(wb);
   }

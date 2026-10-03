@@ -23,6 +23,7 @@ add_executable(KernelTests
         mouse_packet_test.cpp
         input_queue_test.cpp
         dispatch_interrupt_test.cpp
+        event_broadcaster_test.cpp
 
         kernel_host_stubs.cpp
         kernel_host_vmm_stubs.cpp
@@ -39,6 +40,7 @@ add_executable(KernelTests
         ../../kernel/src/memory/Storage.cpp
         ../../kernel/src/configuration_manager.cpp
         ../../kernel/src/configuration_manager_io.cpp
+        ../../kernel/src/event_broadcaster.cpp
         ../../kernel/src/gfx/gfx_management.cpp
         ../../kernel/src/gfx/gfx_software_fallback.cpp
         ../../kernel/src/gfx/gfx_dc_table.cpp

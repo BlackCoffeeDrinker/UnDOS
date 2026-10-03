@@ -28,20 +28,20 @@ bool setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice> &device,
   // tree, exactly like Windows PDOs/FDOs, and cannot collide with siblings.
   if (!deviceName.empty()) {
     kstd::static_string<64> deviceNameStr;
-    
+
     if (flags & CreateDeviceFlags::MultipleAllowed) {
       const auto num = KE_OB_MakeUniqueName(KE_OB_GetDeviceDirectory(), deviceName);
       kstd::format(deviceNameStr, "{}{}", deviceName, num);
     } else {
       kstd::format(deviceNameStr, "{}", deviceName);
     }
-    
+
     const auto deviceObj = kernel::CreateKObject<kernel::KDeviceObject>(deviceNameStr);
     deviceObj->device = device;
     device->deviceObject = deviceObj;
 
     if (!KE_OB_InsertObject(KE_OB_GetDeviceDirectory(), deviceObj)) {
-      early_print_fmt("KE_OB_InsertObject failed for device {}\r\n", deviceName);
+      KE_Print("KE_OB_InsertObject failed for device {}", deviceName);
       // Collision ?
       return false;
     }
@@ -103,15 +103,14 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDevice> KE_IO_AttachChildDevice
 
   // Sanity checks
   if (child->parentBus != nullptr) [[unlikely]] {
-    early_print_fmt("KE_IO_AttachChildDevice: Device {} already has a parent bus ({}).\r\n", child->Name(), child->parentBus->Name());
+    KE_Print("KE_IO_AttachChildDevice: Device {} already has a parent bus ({}).", child->Name(), child->parentBus->Name());
     return nullptr;
   }
 
-  early_print_fmt("KE_IO_AttachChildDevice: Bus = {} Child = {}\r\n",
-                  bus->Name(), child->Name());
 
   bus->children.push_back(child);
   child->parentBus = bus;
+  KE_Print("KE_IO_AttachChildDevice: Bus = {} Child = {}", bus->Name(), child->Name());
 
   return child;
 }
@@ -300,15 +299,15 @@ IoStatus DeviceClose(KIOObject &io) {
   io.isClosed = true;
   return IoStatus::Success;
 }
-} // namespace
+}// namespace
 
 namespace io {
 const KIOOps TtySinkOps{TtySinkRead, TtySinkWrite, {}, TtySinkClose};
 const KIOOps TtySourceOps{TtySourceRead, TtySourceWrite, {}, TtySourceClose};
 const KIOOps DeviceOps{DeviceRead, DeviceWrite, DeviceControl, DeviceClose};
-} // namespace io
+}// namespace io
 
-} // namespace kernel
+}// namespace kernel
 
 
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_IO_CreateTtySinkStream(
@@ -316,8 +315,8 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_IO_CreateTtySinkSt
     const kstd::string_view &name) noexcept {
   if (!vtty) return nullptr;
   auto ioObj = name.empty()
-      ? kernel::CreateAnonymousKObject<kernel::KIOObject>()
-      : kernel::CreateKObject<kernel::KIOObject>(name);
+                   ? kernel::CreateAnonymousKObject<kernel::KIOObject>()
+                   : kernel::CreateKObject<kernel::KIOObject>(name);
   if (!ioObj) return nullptr;
 
   ioObj->ops = &kernel::io::TtySinkOps;
@@ -331,8 +330,8 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_IO_CreateTtySource
     const kstd::string_view &name) noexcept {
   if (!vtty) return nullptr;
   auto ioObj = name.empty()
-      ? kernel::CreateAnonymousKObject<kernel::KIOObject>()
-      : kernel::CreateKObject<kernel::KIOObject>(name);
+                   ? kernel::CreateAnonymousKObject<kernel::KIOObject>()
+                   : kernel::CreateKObject<kernel::KIOObject>(name);
   if (!ioObj) return nullptr;
 
   ioObj->ops = &kernel::io::TtySourceOps;
@@ -347,8 +346,8 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KIOObject> KE_IO_CreateDeviceStr
     const kstd::string_view &name) noexcept {
   if (!device) return nullptr;
   auto ioObj = name.empty()
-      ? kernel::CreateAnonymousKObject<kernel::KIOObject>()
-      : kernel::CreateKObject<kernel::KIOObject>(name);
+                   ? kernel::CreateAnonymousKObject<kernel::KIOObject>()
+                   : kernel::CreateKObject<kernel::KIOObject>(name);
   if (!ioObj) return nullptr;
 
   ioObj->ops = &kernel::io::DeviceOps;

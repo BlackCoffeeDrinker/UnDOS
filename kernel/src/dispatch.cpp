@@ -67,7 +67,6 @@ void init() noexcept {
   g_interruptRing.Reset();
   // Spawn dispatch thread at elevated priority (10), running ahead of normal threads (priority 1)
   g_dispatchThread = KE_SCHED_CreateThread(cfunc<void(void *)>(&InterruptDispatchThread), nullptr, 10);
-  early_print_fmt("Interrupt dispatch service initialized.\r\n");
 }
 
 InterruptRecordRing &get_ring() noexcept {

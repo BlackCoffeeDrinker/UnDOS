@@ -133,7 +133,7 @@ bool LoadLegacyReservation(
     kstd::string &outDriverImage,
     LegacyReservationContext &ctx) {
   if (!ReadStringValue(deviceKey, "HwID", outHwId) || outHwId.empty()) {
-    early_print_fmt("LegacyIsaEnum: '{}' has no HwID, skipping\r\n", childName);
+    KE_Print("LegacyIsaEnum: '{}' has no HwID, skipping", childName);
     return false;
   }
 
@@ -150,7 +150,7 @@ bool LoadLegacyReservation(
       ctx.portStart = start;
       ctx.portLength = end - start + 1;
     } else {
-      early_print_fmt("LegacyIsaEnum: '{}' has invalid IoPorts '{}'\r\n", childName, ioPorts);
+      KE_Print("LegacyIsaEnum: '{}' has invalid IoPorts '{}'", childName, ioPorts);
     }
   }
 
@@ -162,7 +162,7 @@ bool LoadLegacyReservation(
       ctx.memoryStart = start;
       ctx.memoryLength = end - start + 1;
     } else {
-      early_print_fmt("LegacyIsaEnum: '{}' has invalid Memory '{}'\r\n", childName, memory);
+      KE_Print("LegacyIsaEnum: '{}' has invalid Memory '{}'", childName, memory);
     }
   }
 
@@ -171,7 +171,7 @@ bool LoadLegacyReservation(
     if (ParseUInt32(irq, ctx.irq)) {
       ctx.hasIrq = true;
     } else {
-      early_print_fmt("LegacyIsaEnum: '{}' has invalid Irq '{}'\r\n", childName, irq);
+      KE_Print("LegacyIsaEnum: '{}' has invalid Irq '{}'", childName, irq);
     }
   }
 
@@ -180,26 +180,35 @@ bool LoadLegacyReservation(
     if (ParseUInt32(dma, ctx.dma)) {
       ctx.hasDma = true;
     } else {
-      early_print_fmt("LegacyIsaEnum: '{}' has invalid Dma '{}'\r\n", childName, dma);
+      KE_Print("LegacyIsaEnum: '{}' has invalid Dma '{}'", childName, dma);
     }
   }
 
   return true;
 }
 
-}// namespace
+// True when the entry opts out of the normal enumeration pass by declaring
+// Start=LastResort, mirroring the driver-level Start value: such an entry is
+// only reported if nothing else claimed the hardware it stands in for.
+bool IsLastResortEntry(const kernel::KConfigurationKeyPtr &deviceKey) {
+  kstd::string start;
+  if (!ReadStringValue(deviceKey, "Start", start)) return false;
+  return start == "LastResort";
+}
 
-namespace kernel::driver {
-void EnumerateLegacyISADevices() {
+// One enumeration pass. `lastResort` selects which half of the
+// LegacyISAReservations entries is considered, so the two passes together
+// cover every entry exactly once.
+void EnumerateLegacyEntries(bool lastResort) {
   const auto localMachine = KE_CM_OpenRoot("LocalMachine");
   if (!localMachine) {
-    early_print("LegacyIsaEnum: failed to open LocalMachine\r\n");
+    KE_Print("LegacyIsaEnum: failed to open LocalMachine");
     return;
   }
 
   const auto legacyKey = KE_CM_OpenKey(localMachine, "LegacyISAReservations");
   if (!legacyKey) {
-    early_print("LegacyIsaEnum: no LegacyISAReservations key, nothing to enumerate\r\n");
+    KE_Print("LegacyIsaEnum: no LegacyISAReservations key, nothing to enumerate");
     return;
   }
 
@@ -214,6 +223,10 @@ void EnumerateLegacyISADevices() {
       continue;
     }
 
+    if (IsLastResortEntry(deviceKey) != lastResort) {
+      continue;
+    }
+
     kstd::string hwid;
     kstd::string driverImage;
     LegacyReservationContext ctx;
@@ -222,7 +235,7 @@ void EnumerateLegacyISADevices() {
     }
 
     if (!ProbeLegacyDevice(ctx)) {
-      early_print_fmt("LegacyIsaEnum: '{}' (HwID={}) not detected\r\n", childName, hwid);
+      KE_Print("LegacyIsaEnum: '{}' (HwID={}) not detected", childName, hwid);
       continue;
     }
 
@@ -233,23 +246,34 @@ void EnumerateLegacyISADevices() {
       KE_DRIVER_Load(driverImage);
     }
 
-    const auto enumerator = kernel::CreateKObject<KDriverObject>("LegacyIsaEnum");
+    const auto enumerator = kernel::CreateKObject<kernel::KDriverObject>("LegacyIsaEnum");
     if (!enumerator) {
-      early_print_fmt("LegacyIsaEnum: failed to create enumerator driver object for '{}'\r\n", childName);
+      KE_Print("LegacyIsaEnum: failed to create enumerator driver object for '{}'", childName);
       continue;
     }
     enumerator->QueryResourceRequirements = LegacyIsaEnum_QueryResourceRequirements;
 
     auto pdo = KE_IO_CreateDeviceWithContext<LegacyReservationContext>(enumerator, {}, kernel::device_type::Unknown);
     if (!pdo) {
-      early_print_fmt("LegacyIsaEnum: failed to create PDO for '{}'\r\n", childName);
+      KE_Print("LegacyIsaEnum: failed to create PDO for '{}'", childName);
       continue;
     }
-    *pdo->deviceExtension.as<LegacyReservationContext>() = ctx;
+    *pdo->deviceExtension.template as<LegacyReservationContext>() = ctx;
     pdo->hardwareId = hwid;
 
-    early_print_fmt("LegacyIsaEnum: '{}' (HwID={}) detected, reporting PDO\r\n", childName, hwid);
+    KE_Print("LegacyIsaEnum: '{}' (HwID={}) detected, reporting PDO", childName, hwid);
     KE_PNP_ReportNewDevice(KE_PNP_GetRootDevice(), pdo);
   }
+}
+
+}// namespace
+
+namespace kernel::driver {
+void EnumerateLegacyISADevices() {
+  EnumerateLegacyEntries(false);
+}
+
+void EnumerateLastResortLegacyISADevices() {
+  EnumerateLegacyEntries(true);
 }
 }// namespace kernel::driver

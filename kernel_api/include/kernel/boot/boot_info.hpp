@@ -27,7 +27,8 @@ enum class MappedMemoryRegionType : uint8_t {
   KernelCore,  // The primary kernel binary segments (.text, .data, .bss)
   HalModule,   // The cross-stitched HAL binary segments
   BootStack,   // The initial execution stack space
-  BootInfo     // The boot_info_t structure and command line allocations
+  BootInfo,    // The boot_info_t structure and command line allocations
+  PagingStructures// Live page directory/page tables built by Stage 1.5 (identity-addressed)
 };
 
 struct MappedMemoryT {

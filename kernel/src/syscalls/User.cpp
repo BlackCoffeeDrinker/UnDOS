@@ -142,7 +142,10 @@ SyscallReturnCode handle_BeginPaint_V1(__KRN_USER_BEGINPAINT_V1 &&args) {
 SyscallReturnCode handle_EndPaint_V1(__KRN_USER_ENDPAINT_V1 &&args) {
   const auto proc = current_process();
   if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
-  // The area was validated by BeginPaint; only the DC is released here.
+  // The area was validated by BeginPaint; the painted region is flushed to the
+  // hardware here, once per paint cycle, and only the DC is released.
+  Guard guard;
+  if (const auto *w = own_window_locked(args.hwnd)) present_locked(w->paintClip);
   return proc->dcTable.Close(args.dc) ? SyscallReturnCode_OKAY : SyscallReturnCode_INVALID_ARGUMENT;
 }
 

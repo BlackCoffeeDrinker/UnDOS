@@ -22,7 +22,7 @@ struct KThreadObject : KObjectT<KThreadObject, 1, TYPE_THREAD> {
 
   VirtualAddress kernel_stack_top{0};  // saved kernel SP (mutates every switch)
   VirtualAddress kernel_stack_base{0}; // allocation base, for teardown / free
-  VirtualAddress kernel_stack_esp0{0}; // fixed top-of-stack; TSS esp0 on ring3->ring0
+  VirtualAddress kernel_stack_esp0{0}; // TSS esp0 restored when scheduled (saved live on switch-out)
   PhysicalAddress translation_root{0}; // 0 => kernel address space
 
   cfunc<void(void *)> entry;           // thread body

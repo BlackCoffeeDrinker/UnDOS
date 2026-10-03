@@ -33,10 +33,10 @@ struct alignas(8) InputEvent {
   InputEventType type;                 // Type identifier hash (e.g. "mouse"_evt)
   uint16_t unitId;                     // Device index (Keyboard0 -> 0, Mouse0 -> 0, ...)
   uint16_t flags;                      // Global event/delivery flags (reserved for USER, Step 3)
-  kstd::chrono::milliseconds timestamp;// KE_TIME_GetSystemTime() at decode
+  kstd::chrono::nanoseconds timestamp; // KE_TIME_GetSystemTime() at decode
 
   constexpr InputEvent(InputEventType t, uint16_t unit = 0) noexcept
-      : type(t), unitId(unit), flags(0), timestamp(kstd::chrono::milliseconds{0}) {}
+      : type(t), unitId(unit), flags(0), timestamp(kstd::chrono::nanoseconds{0}) {}
 
   // Static downcasting without RTTI.
   template<typename Derived>

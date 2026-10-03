@@ -16,4 +16,10 @@ void LoadBootDrivers();
 // until the real root fs is mounted and writable. Call this once, right
 // after the root mount + LocalMachine hive rebind in kernel_core_main.
 void LoadAutomaticStartDrivers();
+
+// Loads every driver declared with Start == "LastResort" and enumerates the
+// matching LegacyISAReservations entries. These stand in for a job nothing
+// else took (today: the VGA display driver), so the caller decides whether
+// the pass is needed at all, once the normal passes have settled.
+void LoadLastResortDrivers();
 }// namespace kernel::driver
