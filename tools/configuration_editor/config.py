@@ -111,6 +111,29 @@ def author_localmachine_hive(filename: str) -> None:
     for value_name, value in desktop_mode.items():
         cfg.set(f"/System/Console/Desktop/{value_name}", value, Config.VALUE_STRING)
 
+    # Monitors/Default: the monitor.inf analogue for a head with no EDID. The
+    # graphics subsystem filters every driver-reported mode against these
+    # timings and limits, so this is what a non-PnP monitor is assumed to be
+    # able to display. A Max* value of 0 (or an absent value) is unconstrained.
+    default_monitor_limits = {
+        "MaxHorizontalResolution": "1024",
+        "MaxVerticalResolution": "768",
+        "MaxRefreshRate": "60",
+    }
+    default_monitor_modes = [
+        "640x480@60",
+        "800x600@60",
+        "1024x768@60",
+    ]
+
+    cfg.ensure_key("/System/Monitors")
+    cfg.ensure_key("/System/Monitors/Default")
+    for value_name, value in default_monitor_limits.items():
+        cfg.set(f"/System/Monitors/Default/{value_name}", value, Config.VALUE_STRING)
+    cfg.ensure_key("/System/Monitors/Default/Modes")
+    for index, timing in enumerate(default_monitor_modes):
+        cfg.set(f"/System/Monitors/Default/Modes/{index}", timing, Config.VALUE_STRING)
+
     cfg.ensure_key("/LegacyISAReservations")
     for name, values in legacy_isa_devices:
         cfg.ensure_key(f"/LegacyISAReservations/{name}")

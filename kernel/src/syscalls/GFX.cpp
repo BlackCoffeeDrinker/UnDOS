@@ -63,6 +63,13 @@ void ForEachClip(const kernel::KDeviceContextSlot &slot, int32_t l, int32_t t, i
   }
 }
 
+// KSurface::pitch is the signed Win2k lDelta, so a bottom-up surface carries a
+// negative stride; the byte size of the pixel store uses its magnitude.
+size_t SurfaceSizeInBytes(const kernel::KSurface &surface) {
+  const auto stride = surface.pitch < 0 ? -surface.pitch : surface.pitch;
+  return static_cast<size_t>(stride) * static_cast<size_t>(surface.height);
+}
+
 bool InClip(const kernel::KDeviceContextSlot &slot, int32_t x, int32_t y) {
   if (!slot.clipped) return true;
   for (uint32_t i = 0; i < slot.clipCount; ++i) {
@@ -154,7 +161,7 @@ SyscallReturnCode handle_CreateBitmap_V1(__KRN_GFX_CREATEBITMAP_V1 &&args) {
   const auto pixelFormat = static_cast<kernel::PixelFormat>(args.format);
   const size_t bpp = BytesPerPixel(pixelFormat);
   const size_t pitch = args.width * bpp;
-  const size_t size = pitch * args.height;
+  const size_t size = args.width * bpp * args.height;
 
   auto &as = KE_VMM_GetKernelAddressSpace();
   void *region = KE_VMM_AllocateRegion(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
@@ -169,7 +176,7 @@ SyscallReturnCode handle_CreateBitmap_V1(__KRN_GFX_CREATEBITMAP_V1 &&args) {
   bitmap->backing = backing;
   bitmap->width = args.width;
   bitmap->height = args.height;
-  bitmap->pitch = static_cast<uint32_t>(pitch);
+  bitmap->pitch = static_cast<int32_t>(pitch);
   bitmap->pixelFormat = pixelFormat;
 
   if (args.pixels && args.pixels.size() > 0) {
@@ -419,7 +426,7 @@ SyscallReturnCode handle_GetBitmapBits_V1(__KRN_GFX_GETBITMAPBITS_V1 &&args) {
   if (!bitmap || !bitmap->backing || !bitmap->backing->directAddress) return SyscallReturnCode_INVALID_ARGUMENT;
   if (!args.buffer) return SyscallReturnCode_INVALID_ARGUMENT;
 
-  const size_t surfaceSize = bitmap->pitch * bitmap->height;
+  const size_t surfaceSize = SurfaceSizeInBytes(*bitmap);
   const size_t copySize = args.buffer.size() < surfaceSize ? args.buffer.size() : surfaceSize;
 
   kstd::memcpy(args.buffer.get(), bitmap->backing->directAddress.as_ptr<uint8_t>(), copySize);
@@ -436,7 +443,7 @@ SyscallReturnCode handle_SetBitmapBits_V1(__KRN_GFX_SETBITMAPBITS_V1 &&args) {
   if (!bitmap || !bitmap->backing || !bitmap->backing->directAddress) return SyscallReturnCode_INVALID_ARGUMENT;
   if (!args.buffer) return SyscallReturnCode_INVALID_ARGUMENT;
 
-  const size_t surfaceSize = bitmap->pitch * bitmap->height;
+  const size_t surfaceSize = SurfaceSizeInBytes(*bitmap);
   const size_t copySize = args.buffer.size() < surfaceSize ? args.buffer.size() : surfaceSize;
 
   kstd::memcpy(bitmap->backing->directAddress.as_ptr<uint8_t>(), args.buffer.get(), copySize);

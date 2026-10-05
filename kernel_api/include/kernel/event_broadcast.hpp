@@ -33,6 +33,24 @@ struct Source {
     if (type == Type::KObject) { return kobject.get() == other.kobject.get(); }
     return kdevice.get() == other.kdevice.get();
   }
+
+  template<typename T>
+    requires(kstd::is_base_of_v<KObject, T>)
+  KObjectPtr<T> As() const {
+    if (type == Type::KObject) {
+      return kobject.As<T>();
+    }
+    return nullptr;
+  }
+
+  template<typename T>
+    requires(kstd::is_base_of_v<KDevice, T>)
+  KDevicePtr<T> As() const {
+    if (type == Type::KDevice) {
+      return kdevice.As<T>();
+    }
+    return nullptr;
+  }
 };
 class Category;
 class Code;

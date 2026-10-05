@@ -27,7 +27,7 @@ public:
     iterator() : node(nullptr) {}
     explicit iterator(ItemType *n) : node(n) {}
 
-    reference operator*() const { return *node; }
+    pointer operator*() const { return node; }
     pointer operator->() const { return node; }
 
     iterator &operator++() {
@@ -68,7 +68,7 @@ public:
     explicit const_iterator(const ItemType *n) : node(n) {}
     const_iterator(const iterator &it) : node(it.node) {}
 
-    reference operator*() const { return *node; }
+    pointer operator*() const { return node; }
     pointer operator->() const { return node; }
 
     const_iterator &operator++() {

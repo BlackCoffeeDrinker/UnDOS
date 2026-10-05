@@ -5,6 +5,7 @@
 #include "dispatch.hpp"
 #include "driver_loader.hpp"
 #include "event_broadcaster.hpp"
+#include "gfx/gfx.hpp"
 #include "initial/boot_device_vfs.hpp"
 #include "input/input_manager.hpp"
 #include "object_manager.hpp"
@@ -141,7 +142,7 @@ kstd::string_view Indent(int depth) noexcept {
   return {kSpaces, n < kMax ? n : kMax};
 }
 
-void DumpObjectTree(const kernel::KObjectPtr<kernel::KObject> &obj, int depth = 0) {
+[[maybe_unused]] void DumpObjectTree(const kernel::KObjectPtr<kernel::KObject> &obj, int depth = 0) {
   if (!obj) return;
 
   kstd::string_view name = obj->name;
@@ -152,8 +153,8 @@ void DumpObjectTree(const kernel::KObjectPtr<kernel::KObject> &obj, int depth = 
   KE_Print("{}|-- {} ({})", Indent(depth), name, GetObjectTypeName(obj->type));
 
   if (const auto directory = obj.As<kernel::KDirectoryObject>()) {
-    for (auto &entry: directory->child_list) {
-      DumpObjectTree(&entry, depth + 1);
+    for (const auto entry: directory->child_list) {
+      DumpObjectTree(entry, depth + 1);
     }
   }
 }
@@ -204,7 +205,7 @@ void DumpDevice(const kernel::KDevicePtr<kernel::KDevice> &dev, int depth, bool 
   }
 }
 
-void DumpDeviceTree() {
+[[maybe_unused]] void DumpDeviceTree() {
   const auto root = KE_PNP_GetRootDevice();
   if (!root) return;
 
@@ -313,7 +314,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   // the last-resort pass can tell whether its job is still vacant. Today the
   // only such job is the console: load the fallback display driver (gfx_vga)
   // only when no accelerated driver registered a display.
-  if (KE_GFX_GetPrimaryDisplay()) {
+  if (kernel::gfx::wait_for_drivers(); KE_GFX_GetPrimaryDisplay()) {
     KE_Print("Last-resort drivers: a display is already registered, skipping");
   } else {
     KE_Print("Last-resort drivers: no display registered, loading fallbacks");
@@ -323,13 +324,12 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
 
   kernel::user::init_raw_input();
 
-  // Try and find the init
-  KE_Print("Loading init");
-  KE_USER_CreateProcess("/System/init.elf");
-  DumpObjectTree(KE_OB_GetRootDirectory());
-  DumpDeviceTree();
-  KE_Print("Done");
+  //DumpObjectTree(KE_OB_GetRootDirectory());
+  //DumpDeviceTree();
 
+  // Try and find the init
+  KE_Print("Loading init...");
+  KE_USER_CreateProcess("/System/init.elf");
 
   // Thread 0 becomes a low-noise heartbeat. It must never return or shut the
   // CPU down, which would tear down the threads now running on it.

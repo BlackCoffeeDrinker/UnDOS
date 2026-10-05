@@ -4,8 +4,8 @@
 
 #include <Kernel.hpp>
 #include <kernel/kobject/KEventObject.hpp>
-#include <kernel/kobject/KProcessObject.hpp>
 #include <kernel/kobject/KIOObject.hpp>
+#include <kernel/kobject/KProcessObject.hpp>
 #include <kernel/spinlock.hpp>
 #include <kernel/time.hpp>
 
@@ -28,21 +28,21 @@ KDispatcherHeader *header_of(const KObjectPtr<KObject> &object) noexcept {
 }
 
 void wake(KThreadObject *thread) noexcept { sched::ready_locked(thread); }
-} // namespace
+}// namespace
 
 SpinLock &lock() noexcept { return g_lock; }
 
-void tick(uint64_t now_ms) noexcept {
+void tick(kstd::chrono::nanoseconds now) noexcept {
   const uintptr_t state = g_lock.lock_irqsave();
-  g_timed.Expire(now_ms, wake);
+  g_timed.Expire(now, wake);
   g_lock.unlock_irqrestore(state);
 }
-} // namespace kernel::wait
+}// namespace kernel::wait
 
 using namespace kernel;
 
 UNDOS_KERNEL_API_DEF WaitStatus KE_SCHED_WaitForHeader(KDispatcherHeader &header,
-                                                      kstd::chrono::milliseconds timeout) noexcept {
+                                                       kstd::chrono::milliseconds timeout) noexcept {
   const auto self = KE_SCHED_GetCurrentThread();
   if (!self) return WaitStatus::Invalid;
 
@@ -62,8 +62,7 @@ UNDOS_KERNEL_API_DEF WaitStatus KE_SCHED_WaitForHeader(KDispatcherHeader &header
   header.AddWaiter(wb);
   const bool timed = timeout.count() > 0;
   if (timed) {
-    wb.deadline_ms = static_cast<uint64_t>(KE_TIME_GetSystemTime().count()) / 1000000u +
-                     static_cast<uint64_t>(timeout.count());
+    wb.deadline = kstd::chrono::duration_cast<decltype(wb.deadline)>(KE_TIME_GetSystemTime() + timeout);
     wait::g_timed.Add(wb);
   }
 
@@ -84,7 +83,7 @@ UNDOS_KERNEL_API_DEF WaitStatus KE_SCHED_WaitForHeader(KDispatcherHeader &header
 }
 
 UNDOS_KERNEL_API_DEF WaitStatus KE_SCHED_WaitForObject(const KObjectPtr<KObject> &object,
-                                                      kstd::chrono::milliseconds timeout) noexcept {
+                                                       kstd::chrono::milliseconds timeout) noexcept {
   auto *header = wait::header_of(object);
   if (!header) return WaitStatus::Invalid;
   // Hold a reference for the duration of the wait so a concurrent close

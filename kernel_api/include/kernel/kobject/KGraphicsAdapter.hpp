@@ -1,12 +1,14 @@
 #pragma once
 
+
 #include <kernel/__core.hpp>
 #include <kernel/cfunc.hpp>
+#include <kernel/event_broadcast.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
+#include <kernel/gfx/structs.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/KSurface.hpp>
 #include <kernel/kobject/ObjectType.hpp>
-#include <kernel/event_broadcast.hpp>
 
 namespace kernel {
 struct KDriverObject;
@@ -32,6 +34,10 @@ constexpr KGfxCaps operator&(KGfxCaps a, KGfxCaps b) noexcept {
 
 constexpr bool Any(KGfxCaps a) noexcept { return static_cast<uint32_t>(a) != 0; }
 
+struct KGraphicsAdapterDisplayEnumInfo {
+  size_t displayIndex;
+};
+
 // Adapter representing the driver in charge of a piece of graphics hardware (e.g. "VGA16")
 struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
   using KObjectT::KObjectT;
@@ -55,12 +61,24 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
   }
 
   // Called by kernel to probe and enumerate displays
-  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &)> Probe;            // optional: detect hardware
-  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &)> EnumerateDisplays;// populates child KDisplay objects (Call KE_GFX_RegisterDisplay for new displays and KE_GFX_UnregisterDisplay for displays that have been removed)
+  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &)> Probe;// optional: detect hardware
 
-  // Mode and surface management
-  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display, const KObjectPtr<KSurface> &, size_t modeIndex)> SetMode;
-  cfunc<void(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display)> UnsetMode;
+  /**
+   * The graphics subsystem will call this function to probe and enumerate displays until the index is out of bounds (returns false)
+   */
+  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &, const KGraphicsAdapterDisplayEnumInfo &, KGraphicsAdapterDisplayInfo &)> ProbeDisplay;
+
+  /**
+   * Called once per head the driver reported from ProbeDisplay, after the
+   * graphics subsystem has created the KDisplay for it and before the display
+   * is inserted into the object namespace.
+   *
+   * The driver binds its per-head entry points on the passed display here:
+   * GetModeInfo / SetMode / Enable / Disable / Validate / SetPowerState.
+   *
+   * Returning false discards the head.
+   */
+  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display)> ConfigureDisplay;
 
   // Basic 2D operations (driver may return false to indicate kernel fallback)
   cfunc<bool(const KObjectPtr<KGraphicsAdapter> &,

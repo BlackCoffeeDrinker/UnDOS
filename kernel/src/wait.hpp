@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono.hpp>
+
 #include <kernel/kobject/KDispatcherHeader.hpp>
 #include <kernel/spinlock.hpp>
 
@@ -35,12 +37,13 @@ struct TimedWaitList {
   // Flags every unsatisfied block whose deadline is <= now as timed out,
   // unlinks it and calls wake(KThreadObject*).
   template<typename Wake>
-  void Expire(uint64_t now_ms, Wake &&wake) noexcept {
+  void Expire(kstd::chrono::nanoseconds now, Wake &&wake) noexcept {
     KWaitBlock **it = &head;
     while (KWaitBlock *wb = *it) {
-      if (wb->deadline_ms <= now_ms) {
+      if (wb->deadline <= now) {
         *it = wb->timed_next;
         wb->timed_next = nullptr;
+
         if (!wb->satisfied) {
           wb->timed_out = true;
           wake(wb->thread);
@@ -53,6 +56,5 @@ struct TimedWaitList {
 };
 
 // Called from the timer interrupt with interrupts disabled. Takes lock().
-void tick(uint64_t now_ms) noexcept;
-
-} // namespace kernel::wait
+void tick(kstd::chrono::nanoseconds now) noexcept;
+}// namespace kernel::wait

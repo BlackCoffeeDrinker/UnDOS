@@ -11,7 +11,7 @@ namespace {
 // (1193182 Hz / 65536 ~= 18.2 Hz).
 uint64_t g_increment_ns = 54925439;
 uint64_t g_system_time_ns = 0;
-} // namespace
+}// namespace
 
 // Called by the HAL to tell the Executive how much time passes per tick
 UNDOS_KERNEL_API_DEF void KE_TIME_SetIncrement(kstd::chrono::nanoseconds nanoseconds) noexcept {
@@ -24,7 +24,7 @@ UNDOS_KERNEL_API_DEF void KE_TIME_UpdateSystemTime() noexcept {
   g_system_time_ns += g_increment_ns;
 
   // Release timed waits whose deadline passed (interrupts are off here).
-  kernel::wait::tick(g_system_time_ns / 1000000);
+  kernel::wait::tick(KE_TIME_GetSystemTime());
 
   // Drive preemption: decrement the running thread's quantum and rotate when it
   // expires. The scheduler is a no-op until it has been armed.

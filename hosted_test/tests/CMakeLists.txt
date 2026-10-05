@@ -44,6 +44,7 @@ add_executable(KernelTests
         ../../kernel/src/gfx/gfx_management.cpp
         ../../kernel/src/gfx/gfx_software_fallback.cpp
         ../../kernel/src/gfx/gfx_dc_table.cpp
+        ../../kernel/src/gfx/monitor_config.cpp
         ../../kernel/src/tty/tty.cpp
         ../../kernel/src/tty/tty_device.cpp
         ../../kernel/src/user/window.cpp

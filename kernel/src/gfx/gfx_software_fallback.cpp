@@ -31,7 +31,10 @@ uint8_t *PixelAddress(const kernel::KObjectPtr<kernel::KSurface> &surface, int x
   if (!base) {
     return nullptr;
   }
-  return base + static_cast<size_t>(y) * surface->pitch + static_cast<size_t>(x) * BytesPerPixel(surface->pixelFormat);
+  // KSurface::pitch is the signed Win2k lDelta, so the row offset is computed
+  // in signed pointer arithmetic to keep a bottom-up surface addressable.
+  return base + static_cast<ptrdiff_t>(y) * surface->pitch +
+         static_cast<ptrdiff_t>(x) * static_cast<ptrdiff_t>(BytesPerPixel(surface->pixelFormat));
 }
 
 void WritePixel(const kernel::KObjectPtr<kernel::KSurface> &surface, int x, int y, uint32_t colorIndex) {
@@ -138,16 +141,18 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
   }
 
   // 2. Cache invariant parameters locally
-  const uint32_t dstPitch = dst->pitch;
-  const uint32_t srcPitch = src->pitch;
+  const int32_t dstPitch = dst->pitch;
+  const int32_t srcPitch = src->pitch;
   const kernel::PixelFormat dstFmt = dst->pixelFormat;
   const kernel::PixelFormat srcFmt = src->pixelFormat;
   const size_t dstBpp = BytesPerPixel(dstFmt);
   const size_t srcBpp = BytesPerPixel(srcFmt);
 
   // Calculate starting byte offsets for the top-left of the blit region
-  uint8_t *dstRow = dstBase + static_cast<size_t>(dstY) * dstPitch + static_cast<size_t>(dstX) * dstBpp;
-  const uint8_t *srcRow = srcBase + static_cast<size_t>(srcY) * srcPitch + static_cast<size_t>(srcX) * srcBpp;
+  uint8_t *dstRow = dstBase + static_cast<ptrdiff_t>(dstY) * dstPitch +
+                    static_cast<ptrdiff_t>(dstX) * static_cast<ptrdiff_t>(dstBpp);
+  const uint8_t *srcRow = srcBase + static_cast<ptrdiff_t>(srcY) * srcPitch +
+                          static_cast<ptrdiff_t>(srcX) * static_cast<ptrdiff_t>(srcBpp);
 
   // --------------------------------------------------------------------------
   // FAST PATH: Matching Pixel Formats (Direct Memory Copy)
@@ -155,8 +160,11 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
   if (dstFmt == srcFmt) {
     const size_t bytesPerRow = width * dstBpp;
 
-    // Check if both source and destination rows are completely contiguous in memory
-    if (bytesPerRow == dstPitch && bytesPerRow == srcPitch) {
+    // Check if both source and destination rows are completely contiguous in
+    // memory. A negative (bottom-up) pitch is never contiguous.
+    if (dstPitch > 0 && srcPitch > 0 &&
+        bytesPerRow == static_cast<size_t>(dstPitch) &&
+        bytesPerRow == static_cast<size_t>(srcPitch)) {
       // Single bulk transfer for the entire region
       kstd::memmove(dstRow, srcRow, bytesPerRow * height);
       return true;

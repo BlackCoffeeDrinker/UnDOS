@@ -16,17 +16,6 @@ UNDOS_KERNEL_PUBLIC_V1API(
 
 /**
  * @ingroup GFX
- * @brief Method KE_GFX_RegisterDisplay
- *
- */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDisplay>,
-    KE_GFX_RegisterDisplay,
-    const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
-    const kstd::string_view &name);
-
-/**
- * @ingroup GFX
  * @brief Method KE_GFX_CreateSurface
  *
  */
@@ -37,10 +26,24 @@ UNDOS_KERNEL_PUBLIC_V1API(
 
 /**
  * @ingroup GFX
- * @brief Returns the first KDisplay ever registered via
- * KE_GFX_RegisterDisplay (module-level singleton), i.e. the display GDI-style
+ * @brief Programs `modeIndex` on `display`, rebinding display->surface in
+ * place so existing device contexts stay valid.
+ *
+ * The subsystem orchestrates the switch as display->Disable, display->SetMode,
+ * surface rebind, then display->Enable. Returns false and leaves the previously
+ * programmed mode untouched on failure.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    bool,
+    KE_GFX_SetDisplayMode,
+    const kernel::KObjectPtr<kernel::KDisplay> &display, size_t modeIndex);
+
+/**
+ * @ingroup GFX
+ * @brief Returns the first KDisplay the graphics subsystem created while
+ * probing adapters (module-level singleton), i.e. the display GDI-style
  * syscalls (CreateDC et al.) target when no specific device is requested.
- * Returns null if no display has been registered yet.
+ * Returns null if no display has been created yet.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KObjectPtr<kernel::KDisplay>,

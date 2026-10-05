@@ -239,11 +239,12 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     KE_Print("LoadElfFromVfs: Invalid ELF header");
     return result;
   }
-  KE_Print("LoadElfFromVfs: Valid ELF header");
-  KE_Print("  Entry point: 0x{:x}", header.e_entry);
-  KE_Print("  Program headers: {} at offset 0x{:x}", header.e_phnum, header.e_phoff);
-  KE_Print("  Section headers: {} at offset 0x{:x}", header.e_shnum, header.e_shoff);
-  KE_Print("  Machine type: 0x{:x}", header.e_machine);
+
+  // KE_Print("LoadElfFromVfs: Valid ELF header");
+  // KE_Print("  Entry point: 0x{:x}", header.e_entry);
+  // KE_Print("  Program headers: {} at offset 0x{:x}", header.e_phnum, header.e_phoff);
+  // KE_Print("  Section headers: {} at offset 0x{:x}", header.e_shnum, header.e_shoff);
+  // KE_Print("  Machine type: 0x{:x}", header.e_machine);
 
   // Step 2: read only the program header table.
   kstd::array<hal::Elf32_Phdr, MAX_PROGRAM_HEADERS> phdrs{};
@@ -253,7 +254,7 @@ kernel::elf::LoadResult kernel::elf::LoadElfFromVfs(const kstd::string_view &pat
     KE_Print("LoadElfFromVfs: Failed to read program header table");
     return result;
   }
-  KE_Print("  Program header table: {} entries at offset 0x{:x}", header.e_phnum, header.e_phoff);
+  //KE_Print("  Program header table: {} entries at offset 0x{:x}", header.e_phnum, header.e_phoff);
 
   // Step 3 (relocatable path only): read the section header table, then
   // let the caller capture any named sections it cares about (e.g. a

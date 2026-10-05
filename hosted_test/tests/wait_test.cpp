@@ -83,9 +83,9 @@ TEST_CASE("Timed waits expire only past their deadline", "[wait]") {
   KThreadObject a, b;
   KWaitBlock wa, wb;
   wa.thread = &a;
-  wa.deadline_ms = 100;
+  wa.deadline = kstd::chrono::milliseconds(100);
   wb.thread = &b;
-  wb.deadline_ms = 200;
+  wb.deadline = kstd::chrono::milliseconds(200);
   h.AddWaiter(wa);
   h.AddWaiter(wb);
   TimedWaitList list;
@@ -93,9 +93,9 @@ TEST_CASE("Timed waits expire only past their deadline", "[wait]") {
   list.Add(wb);
 
   WakeLog log;
-  list.Expire(99, log);
+  list.Expire(kstd::chrono::milliseconds(99), log);
   REQUIRE(log.count == 0);
-  list.Expire(150, log);
+  list.Expire(kstd::chrono::milliseconds(150), log);
   REQUIRE(log.count == 1);
   REQUIRE(log.woken[0] == &a);
   REQUIRE(wa.timed_out);
@@ -109,7 +109,7 @@ TEST_CASE("Timed waits expire only past their deadline", "[wait]") {
   WakeLog sig;
   h.Signal(false, sig);
   REQUIRE(wb.satisfied);
-  list.Expire(500, log);
+  list.Expire(kstd::chrono::milliseconds(500), log);
   REQUIRE(log.count == 1);
   REQUIRE(list.head == nullptr);
 }

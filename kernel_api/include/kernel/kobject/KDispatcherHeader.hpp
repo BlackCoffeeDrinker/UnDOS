@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include <__chrono/duration.hpp>
+
 namespace kernel {
 struct KThreadObject;
 
@@ -10,7 +12,7 @@ struct KWaitBlock {
   KThreadObject *thread{nullptr};
   KWaitBlock *next{nullptr};      // header waiter list
   KWaitBlock *timed_next{nullptr};// global timed-wait list (wait.cpp)
-  uint64_t deadline_ms{0};
+  kstd::chrono::milliseconds deadline{0};
   bool satisfied{false};
   bool timed_out{false};
 };

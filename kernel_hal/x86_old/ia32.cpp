@@ -5,6 +5,7 @@
 #include "cpuid.hpp"
 #include "gdt.hpp"
 #include "intr.hpp"
+#include "pit.hpp"
 #include "pmm.hpp"
 #include "vmm.hpp"
 
@@ -63,7 +64,6 @@ UNDOS_HAL_API_DEF void HAL_PLATFORM_Init(const kernel::BootInfoT &boot_info, ker
 
   kernel_address_space.limit = kernel::VirtualAddress(kernel::VirtualAddress::Invalid);
 }
-
 
 UNDOS_HAL_API_DEF uint32_t HAL_PLATFORM_GetCpuCount() noexcept {
   return 1;
@@ -124,6 +124,7 @@ UNDOS_HAL_API_DEF [[noreturn]] void HAL_PLATFORM_Panic(const kstd::string_view &
 }
 
 UNDOS_HAL_API_DEF void HAL_PLATFORM_InitializeSystemTimer() noexcept {
+  hal::x86::set_system_timer_frequency(100);
 }
 
 UNDOS_HAL_API_DEF [[noreturn]] void HAL_PLATFORM_Shutdown() noexcept {

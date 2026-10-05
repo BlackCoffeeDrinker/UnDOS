@@ -1,8 +1,8 @@
 
 #include <string_view.hpp>
 
-#include <kernel/boot/boot_info.hpp>
 #include <Kernel.hpp>
+#include <kernel/boot/boot_info.hpp>
 
 using kernel::PhysicalAddress;
 using kernel::VirtualAddress;
@@ -10,11 +10,7 @@ using kernel::VirtualAddress;
 #include "pmm.hpp"
 
 namespace {
-uint32_t bitmap_internal[4096];// Supports up to 512MB RAM
-uint32_t *bitmap = bitmap_internal;
-size_t total_frames = 0;
-size_t bitmap_size_words = 0;
-
+constexpr size_t BITMAP_MAX_SIZE = 4096;
 constexpr uint32_t PAGE_SIZE = 4096;
 constexpr uint32_t BITMAP_INIT = 0xFFFFFFFFu;
 constexpr size_t BITMAP_WORD_SIZE = 32;
@@ -23,6 +19,11 @@ constexpr size_t ISA_DMA_LIMIT = 0x1000000;// 16 MB
 // Helper inline functions for bit manipulation
 constexpr size_t frame_to_word(size_t frame) noexcept { return frame / BITMAP_WORD_SIZE; }
 constexpr size_t frame_to_bit(size_t frame) noexcept { return frame % BITMAP_WORD_SIZE; }
+
+uint32_t bitmap_internal[BITMAP_MAX_SIZE];// Supports up to 512MB RAM
+uint32_t *bitmap = bitmap_internal;
+size_t total_frames = 0;
+size_t bitmap_size_words = 0;
 
 void set_bit(size_t frame) noexcept { bitmap[frame_to_word(frame)] |= (1u << frame_to_bit(frame)); }
 void clear_bit(size_t frame) noexcept { bitmap[frame_to_word(frame)] &= ~(1u << frame_to_bit(frame)); }
@@ -52,7 +53,6 @@ uint64_t find_highest_physical_address(const kernel::BootInfoT &boot_info) {
 
   return max_memory;
 }
-
 }// namespace
 
 namespace hal::x86 {
@@ -63,7 +63,7 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   for (size_t i = 0; i < boot_info.memory_regions.size(); ++i) {
     const auto &map = boot_info.memory_regions[i];
     if (map.type == kernel::MemoryRegionType::None) continue;
-    KE_Print("Memory map region {} type: {}, base: 0x{:lx}, length: 0x{:lx}", i, map_type_to_string(map.type), static_cast<uintptr_t>(map.base), map.length);
+    KE_Print(" * Memory map region {} type: {}, base: 0x{:lx}, length: 0x{:lx}", i, map_type_to_string(map.type), static_cast<uintptr_t>(map.base), map.length);
   }
 
   // 1. Find the highest physical address to calculate total required frames
@@ -73,13 +73,13 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
 
   // Explicitly cast the division result to size_t.
   total_frames = static_cast<size_t>(max_memory / PAGE_SIZE);
-  bitmap_size_words = total_frames / 32;
-  if (total_frames % 32 != 0) bitmap_size_words++;
+  bitmap_size_words = total_frames / BITMAP_WORD_SIZE;
+  if (total_frames % BITMAP_WORD_SIZE != 0) bitmap_size_words++;
 
-  if (bitmap_size_words > 4096) {
+  if (bitmap_size_words > BITMAP_MAX_SIZE) {
     KE_Print("PMM: RAM exceeds bitmap capacity! Truncating to 512MB.");
-    bitmap_size_words = 4096;
-    total_frames = 4096 * 32;
+    bitmap_size_words = BITMAP_MAX_SIZE;
+    total_frames = PAGE_SIZE * BITMAP_WORD_SIZE;
   }
 
   // Initialize the entire bitmap as "fully reserved/used" for safety
@@ -106,8 +106,6 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
       HAL_PMM_ReserveRegion(region.physical_base, region.length);
     }
   }
-
-  KE_Print("Physical Memory Mechanism online!");
 }
 }// namespace hal::x86
 
@@ -126,7 +124,7 @@ UNDOS_HAL_API_DEF void HAL_PMM_ReserveRegion(PhysicalAddress base, size_t length
 UNDOS_HAL_API_DEF PhysicalAddress HAL_PMM_AllocateFrames(size_t count) noexcept {
   if (count == 0) return 0;
 
-  const size_t max_frames = bitmap_size_words * 32;
+  const size_t max_frames = bitmap_size_words * BITMAP_WORD_SIZE;
   constexpr size_t dma_frames = ISA_DMA_LIMIT / PAGE_SIZE;
 
   size_t continuous_free = 0;
@@ -134,9 +132,9 @@ UNDOS_HAL_API_DEF PhysicalAddress HAL_PMM_AllocateFrames(size_t count) noexcept 
 
   // Prefer allocation above ISA DMA region
   for (size_t frame = dma_frames; frame < max_frames; ++frame) {
-    if (continuous_free == 0 && (frame % 32 == 0)) {
-      if (bitmap[frame / 32] == BITMAP_INIT) {
-        frame += 31;
+    if (continuous_free == 0 && (frame % BITMAP_WORD_SIZE == 0)) {
+      if (bitmap[frame / BITMAP_WORD_SIZE] == BITMAP_INIT) {
+        frame += (BITMAP_WORD_SIZE - 1);
         continue;
       }
     }
@@ -177,7 +175,7 @@ UNDOS_HAL_API_DEF PhysicalAddress HAL_PMM_AllocateFrames(size_t count) noexcept 
 UNDOS_HAL_API_DEF PhysicalAddress HAL_PMM_AllocateFramesDMA(size_t count) noexcept {
   if (count == 0) return 0;
 
-  const size_t max_frames = bitmap_size_words * 32;
+  const size_t max_frames = bitmap_size_words * BITMAP_WORD_SIZE;
   constexpr size_t dma_frames = ISA_DMA_LIMIT / PAGE_SIZE;
 
   size_t continuous_free = 0;

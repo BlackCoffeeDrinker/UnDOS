@@ -18,6 +18,7 @@
 #include <kernel/entry.hpp>
 #include <kernel/event_broadcast.hpp>
 #include <kernel/gfx.hpp>
+#include <kernel/gfx/edid.hpp>
 #include <kernel/hal_interface.hpp>
 #include <kernel/mutex.hpp>
 #include <kernel/object_manager.hpp>

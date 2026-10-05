@@ -140,7 +140,7 @@ UNDOS_KERNEL_API_DEF uint32_t KE_OB_MakeUniqueName(const kernel::KObjectPtr<kern
   auto currentHash = kernel::ObjectNameHash::from_string(currentName);
 
   for (const auto &child: parent->child_list) {
-    if (child.name_hash == currentHash) {
+    if (child->name_hash == currentHash) {
       ret++;
       kstd::format(currentName, "{}{}", baseName, ret);
       currentHash = kernel::ObjectNameHash::from_string(currentName);

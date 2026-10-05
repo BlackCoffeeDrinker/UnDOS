@@ -1,10 +1,89 @@
 
 #include "stdkrn.hpp"
 
+#include "gfx/gfx.hpp"
+
 namespace {
-// First KDisplay ever registered via KE_GFX_RegisterDisplay; this is the
-// display GDI-style syscalls target when no specific device is requested.
+// First KDisplay the graphics subsystem created while probing adapters; this
+// is the display GDI-style syscalls target when no specific device is
+// requested. Election happens in StartAdapter, the sole creator of displays.
 kernel::KObjectPtr<kernel::KDisplay> g_primary_display;
+
+// Walks the driver's mode list, skipping anything the monitor cannot display,
+// and invokes `func(modeIndex, modeInfo)` for each survivor. Enumeration stops
+// at the first index the driver refuses.
+template<typename Func>
+void EachSupportedMode(const kernel::KObjectPtr<kernel::KDisplay> &display, Func &&func) {
+  if (!display || !display->GetModeInfo) {
+    return;
+  }
+
+  for (size_t modeIndex = 0;; ++modeIndex) {
+    kernel::KDisplayModeInfo modeInfo{};
+    if (!display->GetModeInfo(display, modeIndex, modeInfo)) {
+      break;
+    }
+
+    if (!display->monitorCaps.Supports(modeInfo)) {
+      KE_Print("GFX: Display {} mode {} ({}x{}x{}@{}) rejected by the monitor capabilities",
+               display->name, modeIndex, modeInfo.width, modeInfo.height, modeInfo.bpp, modeInfo.refreshRate);
+      continue;
+    }
+
+    func(modeIndex, modeInfo);
+  }
+}
+
+// Resolves \System\Console\Desktop against the filtered mode list. Falls back
+// to the first supported mode when nothing matches; returns false when the
+// display has no usable mode at all.
+bool PickBootMode(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t &outModeIndex) {
+  uint32_t prefWidth = 0, prefHeight = 0, prefBpp = 0, prefRefresh = 0;
+  const bool hasPreference = kernel::gfx::read_desktop_preference(prefWidth, prefHeight, prefBpp, prefRefresh);
+
+  bool haveFirst = false;
+  size_t firstIndex = 0;
+  bool haveMatch = false;
+  size_t matchIndex = 0;
+
+  EachSupportedMode(display, [&](const size_t modeIndex, const kernel::KDisplayModeInfo &modeInfo) {
+    if (!haveFirst) {
+      haveFirst = true;
+      firstIndex = modeIndex;
+    }
+
+    if (!hasPreference || haveMatch) {
+      return;
+    }
+
+    if (modeInfo.width != prefWidth || modeInfo.height != prefHeight || modeInfo.bpp != prefBpp) {
+      return;
+    }
+    if (prefRefresh != 0 && modeInfo.refreshRate != prefRefresh) {
+      return;
+    }
+
+    haveMatch = true;
+    matchIndex = modeIndex;
+  });
+
+  if (haveMatch) {
+    outModeIndex = matchIndex;
+    return true;
+  }
+
+  if (!haveFirst) {
+    return false;
+  }
+
+  if (hasPreference) {
+    KE_Print("GFX: Display {} offers no {}x{}x{} mode, using mode {} instead",
+             display->name, prefWidth, prefHeight, prefBpp, firstIndex);
+  }
+
+  outModeIndex = firstIndex;
+  return true;
+}
 
 void StartAdapter(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
   KE_Print("GFX: Adapter {} started", adapter->name);
@@ -17,15 +96,143 @@ void StartAdapter(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
   }
   adapter->state = kernel::KGraphicsAdapter::State::NeedsDisplayEnumerated;
 
-  if (adapter->EnumerateDisplays && !adapter->EnumerateDisplays(adapter)) {
-    KE_Print("GFX: Adapter {} display enumeration failed", adapter->name);
+  KE_Print("GFX: Adapter {} display enumeration started", adapter->name);
+  if (!adapter->ProbeDisplay) {
+    KE_Print("GFX: Adapter {} display enumeration failed - method not present", adapter->name);
     adapter->state = kernel::KGraphicsAdapter::State::Terminated;
     return;
   }
 
+  // Cap head enumeration at a reasonable upper bound (e.g., 16 physical heads per adapter)
+  constexpr uint32_t MaxDisplayHeads = 16;
+
+  for (uint32_t displayIndex = 0; displayIndex < MaxDisplayHeads; displayIndex++) {
+    kernel::KGraphicsAdapterDisplayEnumInfo displayInfo{};
+    displayInfo.displayIndex = displayIndex;
+
+    kernel::KGraphicsAdapterDisplayInfo outInfo{};
+    if (!adapter->ProbeDisplay(adapter, displayInfo, outInfo)) {
+      break;// Driver reported no more display heads
+    }
+
+    if (!outInfo.isPresent) {
+      continue;// Connector exists on hardware but no display attached
+    }
+
+    // Parse out the EDID if there's one so we have a fallback name
+    if (outInfo.edidSize > kernel::MaxEdidSize) {
+      outInfo.edidSize = kernel::MaxEdidSize;
+    }
+
+    kernel::Edid edid{};
+    if (outInfo.isPnP && kernel::Edid::ValidateHeader(kstd::span(outInfo.edid.data(), outInfo.edidSize))) {
+      edid.Assign(kstd::span(outInfo.edid.data(), outInfo.edidSize));
+    }
+
+    // Determine base friendly display name: EDID Name -> Adapter Name -> "Display"
+    kstd::static_string<64> baseName;
+    if (edid.IsValid() && !edid.MonitorName().empty()) {
+      baseName = edid.MonitorName();
+    } else if (!outInfo.name.empty()) {
+      baseName = outInfo.name;
+    } else {
+      // Make a name like "VgaDisplay" or "CirrusDisplay"
+      kstd::format(baseName, "{}Display", adapter->name);
+    }
+
+    // Disambiguate Object Manager name conflicts (e.g., Display -> Display0)
+    kstd::static_string<64> finalName;
+    if (KE_OB_FindDirectChild(KE_OB_GetGfxDirectory(), baseName)) {
+      kstd::format(finalName, "{}{}", baseName, KE_OB_MakeUniqueName(KE_OB_GetGfxDirectory(), baseName));
+    } else {
+      finalName = baseName;
+    }
+
+    // Instantiate and populate KDisplay object
+    auto display = kernel::CreateKObject<kernel::KDisplay>(finalName);
+    display->adapter = adapter;
+    display->headIndex = displayIndex;
+    display->isPresent = outInfo.isPresent;
+    display->isMonitor = outInfo.isMonitor;
+    display->edid = edid;
+
+    // Let the driver bind its per-head entry points on the display we just
+    // created. This is the only way a driver influences a KDisplay.
+    if (!adapter->ConfigureDisplay) {
+      KE_Print("GFX: Adapter {} has no ConfigureDisplay; display {} will be unusable", adapter->name, display->name);
+    } else if (!adapter->ConfigureDisplay(adapter, display)) {
+      KE_Print("GFX: Adapter {} discarded display head {}", adapter->name, displayIndex);
+      continue;
+    } else if (!display->GetModeInfo || !display->SetMode) {
+      KE_Print("GFX: Adapter {} left display {} without GetModeInfo/SetMode", adapter->name, display->name);
+    }
+
+    // Decide what the monitor on this head can display: the EDID when the
+    // head is PnP and the blob parsed, the registry-backed default monitor
+    // otherwise.
+    if (edid.IsValid()) {
+      display->monitorCaps = kernel::gfx::capabilities_from_edid(edid);
+      KE_Print("GFX: Display {} capabilities from EDID ({} timings)", display->name, display->monitorCaps.count);
+    } else {
+      display->monitorCaps = kernel::gfx::default_monitor_capabilities();
+      KE_Print("GFX: Display {} capabilities from the default monitor ({} timings)",
+               display->name, display->monitorCaps.count);
+    }
+
+    // Prime the current mode description from the first mode the monitor
+    // accepts so callers have something meaningful before anything is
+    // programmed.
+    bool primed = false;
+    EachSupportedMode(display, [&](size_t, const kernel::KDisplayModeInfo &modeInfo) {
+      if (!primed) {
+        primed = true;
+        display->currentMode = modeInfo;
+      }
+    });
+    if (!primed) {
+      KE_Print("GFX: Display {} reports no usable modes", display->name);
+    }
+
+    if (!KE_OB_InsertObject(KE_OB_GetGfxDirectory(), display)) {
+      KE_Print("GFX: Failed to register display {} for adapter {}", display->name, adapter->name);
+      continue;
+    }
+
+    // Designate primary display if none exists yet
+    if (!g_primary_display) {
+      g_primary_display = display;
+      display->isPrimary = true;
+      KE_Print("GFX: Display {} set as primary display", display->name);
+
+      // Program the configured desktop mode on the display the console will
+      // use. Mode selection is kernel policy, not a driver concern.
+      if (size_t bootMode = 0; PickBootMode(display, bootMode)) {
+        if (!KE_GFX_SetDisplayMode(display, bootMode)) {
+          KE_Print("GFX: Display {} refused the boot mode {}", display->name, bootMode);
+        }
+      }
+    }
+  }
+
   adapter->state = kernel::KGraphicsAdapter::State::Running;
 
-  // TODO: Bring up the display(s) with defaults ?
+  KE_Print("GFX: Adapter {} display enumeration complete", adapter->name);
+
+  // Log all registered displays for this adapter
+  KE_OB_GetGfxDirectory()->Each<kernel::KDisplay>([&](const kernel::KObjectPtr<kernel::KDisplay> &display) {
+    if (display->adapter == adapter) {
+      KE_Print("GFX: Found display {} for adapter {}", display->name, adapter->name);
+    }
+  });
+}
+
+template<typename Func>
+void FindAdaptersForDevice(const kernel::KDevicePtr<kernel::KDevice> &device, Func &&func) {
+  KE_OB_GetGfxDirectory()->Each<kernel::KGraphicsAdapter>([&](const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
+    if (adapter->device == device) {
+      func(adapter);
+    }
+  });
 }
 
 // Fired on the event pump thread whenever the adapter's backing device raises
@@ -36,16 +243,38 @@ void OnBackingDeviceEvent(const kernel::event::Source &source,
                           const kernel::DataBuffer &userBuffer) {
   (void) userBuffer;
 
-  if (source.type == kernel::event::Source::Type::KObject) {
-    if (const auto gfx = source.kobject.As<kernel::KGraphicsAdapter>()) {
-      if (gfx->state == kernel::KGraphicsAdapter::State::Uninitialized && code.is(KE_PNP_EventCategory(), kernel::pnp::DeviceEvent::Started)) {
-        StartAdapter(gfx);
-        return;
-      }
+  if (const auto gfx = source.As<kernel::KDevice>()) {
+    if (code.is(KE_PNP_EventCategory(), kernel::pnp::DeviceEvent::Started)) {
+      // Need to find the adapter for this device.
+      FindAdaptersForDevice(gfx, &StartAdapter);
     }
   }
 }
 }// namespace
+
+namespace kernel::gfx {
+void start_adapter(const KObjectPtr<KGraphicsAdapter> &adapter) noexcept {
+  StartAdapter(adapter);
+}
+
+void wait_for_drivers() noexcept {
+
+  while (true) {
+    bool all_adapters_running = true;
+
+    KE_OB_GetGfxDirectory()->Each<KGraphicsAdapter>([&](const KObjectPtr<KGraphicsAdapter> &adapter) {
+      if (adapter->state != KGraphicsAdapter::State::Running && adapter->state != KGraphicsAdapter::State::Terminated) {
+        all_adapters_running = false;
+      }
+    });
+
+    if (all_adapters_running)
+      break;
+
+    KE_SCHED_Yield();
+  }
+}
+}// namespace kernel::gfx
 
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KGraphicsAdapter> KE_GFX_RegisterGraphicsAdapter(
     const kernel::KObjectPtr<kernel::KDriverObject> &driver,
@@ -69,77 +298,100 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KGraphicsAdapter> KE_GFX_Registe
   return ret;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDisplay> KE_GFX_RegisterDisplay(
-    const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
-    const kstd::string_view &name) noexcept {
-  const auto next_display_id = KE_OB_MakeUniqueName(KE_OB_GetGfxDirectory(), name);
-
-  // Make unique name
-  kstd::static_string<64> realName;
-  kstd::format(realName, "{}{}", name, next_display_id);
-  auto ret = kernel::CreateKObject<kernel::KDisplay>(realName);
-  ret->adapter = adapter;
-
-  if (!KE_OB_InsertObject(KE_OB_GetGfxDirectory(), ret)) {
-    return nullptr;
-  }
-
-  if (!g_primary_display) {
-    g_primary_display = ret;
-  }
-
-  return ret;
-}
-
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDisplay> KE_GFX_GetPrimaryDisplay() noexcept {
   return g_primary_display;
+}
+
+UNDOS_KERNEL_API_DEF bool KE_GFX_SetDisplayMode(
+    const kernel::KObjectPtr<kernel::KDisplay> &display,
+    size_t modeIndex) noexcept {
+  if (!display) {
+    return false;
+  }
+
+  if (!display->GetModeInfo || !display->SetMode) {
+    KE_Print("KE_GFX_SetDisplayMode: Display {} has no mode programming hooks.", display->name);
+    return false;
+  }
+
+  // Range check: the driver reports false once modeIndex runs past its list.
+  kernel::KDisplayModeInfo modeInfo{};
+  if (!display->GetModeInfo(display, modeIndex, modeInfo)) {
+    KE_Print("KE_GFX_SetDisplayMode: Display {} does not have a mode {}.", display->name, modeIndex);
+    return false;
+  }
+
+  // The monitor, not the adapter, has the last word on what may be programmed.
+  if (!display->monitorCaps.Supports(modeInfo)) {
+    KE_Print("KE_GFX_SetDisplayMode: Display {} mode {} ({}x{}x{}@{}) is outside the monitor capabilities.",
+             display->name, modeIndex, modeInfo.width, modeInfo.height, modeInfo.bpp, modeInfo.refreshRate);
+    return false;
+  }
+
+  if (display->Disable) {
+    display->Disable(display);
+  }
+
+  kernel::KDisplaySurfaceBinding binding{};
+  if (!display->SetMode(display, modeIndex, binding)) {
+    KE_Print("KE_GFX_SetDisplayMode: Display {} refused mode {}.", display->name, modeIndex);
+    // Bring the previously programmed mode back up rather than leaving the
+    // screen blanked.
+    if (display->Enable) {
+      display->Enable(display);
+    }
+    return false;
+  }
+
+  // The surface object identity is kept stable across mode changes so device
+  // contexts already holding it stay valid; only its fields are rewritten.
+  if (!display->surface) {
+    const auto next_surface_id = KE_OB_MakeUniqueName(KE_OB_GetGfxDirectory(), "Surface");
+    kstd::static_string<64> name;
+    kstd::format(name, "Surface{}", next_surface_id);
+
+    auto surface = kernel::CreateKObject<kernel::KSurface>(name);
+    if (!surface) {
+      KE_Print("KE_GFX_SetDisplayMode: Failed to CreateKObject surface object.");
+      return false;
+    }
+
+    if (!KE_OB_InsertObject(KE_OB_GetGfxDirectory(), surface)) {
+      KE_Print("KE_GFX_SetDisplayMode: Failed to KE_OB_InsertObject surface object.");
+      return false;
+    }
+
+    display->surface = surface;
+  }
+
+  const auto &surface = display->surface;
+  surface->display = display;
+  surface->backing = binding.backing;
+  surface->type = binding.type;
+  surface->flags = binding.flags;
+
+  surface->width = modeInfo.width;
+  surface->height = modeInfo.height;
+  surface->pitch = static_cast<int32_t>(modeInfo.pitch);
+  surface->bpp = modeInfo.bpp;
+  surface->pixelFormat = modeInfo.pixelFormat;
+  surface->sizeInBytes = static_cast<size_t>(modeInfo.pitch) * modeInfo.height;
+
+  display->currentMode = modeInfo;
+
+  if (display->Enable) {
+    display->Enable(display);
+  }
+
+  return true;
 }
 
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KSurface> KE_GFX_CreateSurfaceForMode(
     const kernel::KObjectPtr<kernel::KDisplay> &display,
     size_t mode) noexcept {
-  if (!display || !display->adapter) {
+  if (!KE_GFX_SetDisplayMode(display, mode)) {
     return nullptr;
   }
 
-  if (!display->adapter->SetMode) {
-    KE_Print("KE_GFX_CreateSurfaceForMode: No driver bound to actually program a mode: nothing we can do.");
-    return nullptr;
-  }
-
-  if (display->GetModeCount && mode >= display->GetModeCount(display)) {
-    KE_Print("KE_GFX_CreateSurfaceForMode: Out-of-range mode index: don't even ask the driver about it.");
-    return nullptr;
-  }
-
-  const auto next_surface_id = KE_OB_MakeUniqueName(KE_OB_GetGfxDirectory(), "Surface");
-  kstd::static_string<64> name;
-  kstd::format(name, "Surface{}", next_surface_id);
-  auto ret = kernel::CreateKObject<kernel::KSurface>(name);
-  if (!ret) {
-    KE_Print("KE_GFX_CreateSurfaceForMode: Failed to CreateKObject surface object.");
-    return nullptr;
-  }
-
-  if (!display->adapter->SetMode(display->adapter, display, ret, mode)) {
-    KE_Print("KE_GFX_CreateSurfaceForMode: Failed to set mode.");
-    return nullptr;
-  }
-
-  // Populate the surface's shape from the display's mode description so
-  // callers (and drivers) don't need to fill these in themselves.
-  if (kernel::KDisplayModeInfo modeInfo; display->GetModeInfo && display->GetModeInfo(display, mode, modeInfo)) {
-    ret->width = modeInfo.width;
-    ret->height = modeInfo.height;
-    ret->pitch = modeInfo.pitch;
-    ret->pixelFormat = modeInfo.pixelFormat;
-  }
-
-  if (!KE_OB_InsertObject(KE_OB_GetGfxDirectory(), ret)) {
-    display->adapter->UnsetMode(display->adapter, display);
-    KE_Print("KE_GFX_CreateSurfaceForMode: Failed to KE_OB_InsertObject surface object.");
-    return nullptr;
-  }
-
-  return ret;
+  return display->surface;
 }

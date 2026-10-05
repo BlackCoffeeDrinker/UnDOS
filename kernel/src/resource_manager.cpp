@@ -24,8 +24,8 @@ struct ResourceAssignment : kernel::common::Link<ResourceAssignment> {
 kernel::common::DoubleList<ResourceAssignment> s_assignments;
 
 ResourceAssignment *FindAssignment(const kernel::KDevicePtr<kernel::KDevice> &device) {
-  for (auto &s_assignment: s_assignments) {
-    if (s_assignment.device.get() == device.get()) return &s_assignment;
+  for (auto s_assignment: s_assignments) {
+    if (s_assignment->device.get() == device.get()) return s_assignment;
   }
   return nullptr;
 }
@@ -156,11 +156,11 @@ UNDOS_KERNEL_API_DEF bool KE_RES_AssignResources(const kernel::KDevicePtr<kernel
         break;
       }
       new (copy) CmPartialResourceDescriptor();
-      copy->type = descriptor.type;
-      copy->share = descriptor.share;
-      copy->flags = descriptor.flags;
-      copy->start = descriptor.start;
-      copy->length = descriptor.length;
+      copy->type = descriptor->type;
+      copy->share = descriptor->share;
+      copy->flags = descriptor->flags;
+      copy->start = descriptor->start;
+      copy->length = descriptor->length;
       reserved.push_back(copy);
     }
   }
@@ -198,9 +198,9 @@ UNDOS_KERNEL_API_DEF const CmPartialResourceDescriptor *KE_RES_FindAssigned(cons
   auto *a = FindAssignment(device);
   if (!a) return nullptr;
   size_t seen = 0;
-  for (auto &descriptor: a->granted.descriptors) {
-    if (descriptor.type != type) continue;
-    if (seen == index) return &descriptor;
+  for (auto descriptor: a->granted.descriptors) {
+    if (descriptor->type != type) continue;
+    if (seen == index) return descriptor;
     ++seen;
   }
   return nullptr;

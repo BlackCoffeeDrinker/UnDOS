@@ -38,7 +38,7 @@ const CmPartialResourceDescriptor *FindAssigned(const CmResourceList &grant, Res
   size_t seen = 0;
   for (auto it = grant.descriptors.begin(); it != grant.descriptors.end(); ++it) {
     if (it->type != type) continue;
-    if (seen == index) return &*it;
+    if (seen == index) return *it;
     ++seen;
   }
   return nullptr;
@@ -142,7 +142,7 @@ TEST_CASE("Shared IRQ coexists but exclusive conflicts", "[resource]") {
     reserved.push_back(&held);
 
     IoResourceDescriptor shared = MakeDesc(ResourceType::Interrupt, 14, 1, ResourceShare::Shared);
-    REQUIRE_FALSE(ConflictsWithReserved(shared, reserved));
+    REQUIRE_FALSE(ConflictsWithReserved(&shared, reserved));
   }
 
   SECTION("An exclusive request on a shared-held vector conflicts") {
@@ -151,7 +151,7 @@ TEST_CASE("Shared IRQ coexists but exclusive conflicts", "[resource]") {
     reserved.push_back(&held);
 
     IoResourceDescriptor exclusive = MakeDesc(ResourceType::Interrupt, 14, 1, ResourceShare::DeviceExclusive);
-    REQUIRE(ConflictsWithReserved(exclusive, reserved));
+    REQUIRE(ConflictsWithReserved(&exclusive, reserved));
   }
 
   SECTION("A shared request on an exclusively-held vector conflicts") {
@@ -160,7 +160,7 @@ TEST_CASE("Shared IRQ coexists but exclusive conflicts", "[resource]") {
     reserved.push_back(&held);
 
     IoResourceDescriptor shared = MakeDesc(ResourceType::Interrupt, 14, 1, ResourceShare::Shared);
-    REQUIRE(ConflictsWithReserved(shared, reserved));
+    REQUIRE(ConflictsWithReserved(&shared, reserved));
   }
 
   SECTION("Different resource types never conflict") {
@@ -169,7 +169,7 @@ TEST_CASE("Shared IRQ coexists but exclusive conflicts", "[resource]") {
     reserved.push_back(&held);
 
     IoResourceDescriptor irq = MakeDesc(ResourceType::Interrupt, 14, 1);
-    REQUIRE_FALSE(ConflictsWithReserved(irq, reserved));
+    REQUIRE_FALSE(ConflictsWithReserved(&irq, reserved));
   }
 }
 

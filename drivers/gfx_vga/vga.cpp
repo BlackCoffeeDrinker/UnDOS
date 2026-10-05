@@ -15,15 +15,12 @@ constexpr uint32_t kModeWidth = 640;
 constexpr uint32_t kModeHeight = 480;
 constexpr uint32_t kModePitch = kModeWidth / 8;// bytes per scanline, per plane
 
-// Module-level state: this driver only ever handles a single, fixed VGA
-// adapter/display, so there is no per-instance device context to allocate.
+// Per-instance state, held in the function device object's extension (see
+// Vga_AddDevice); the driver keeps no mutable globals.
 struct VgaContext {
   kernel::KObjectPtr<kernel::KGraphicsAdapter> adapter;
-  kernel::KObjectPtr<kernel::KDisplay> display;
   kernel::VirtualAddress framebuffer;
 };
-
-VgaContext g_vga;
 
 // region Low-level register programming
 void Vga_ProgramMode12h() {
@@ -110,12 +107,21 @@ bool Vga_Probe(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/)
   return true;
 }
 
-bool Vga_EnumerateDisplays(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/) {
-  return static_cast<bool>(g_vga.display);
-}
+// The single, fixed head this adapter drives. Identity only: the entry
+// points are bound later, from Vga_ConfigureDisplay.
+bool Vga_ProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+                      const kernel::KGraphicsAdapterDisplayEnumInfo &enumInfo,
+                      kernel::KGraphicsAdapterDisplayInfo &outInfo) {
+  if (enumInfo.displayIndex != 0) {
+    return false;
+  }
 
-size_t Vga_GetModeCount(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
-  return 1;
+  outInfo.isPresent = true;
+  outInfo.isMonitor = true;
+  outInfo.isPnP = false;// No DDC/EDID on legacy VGA
+  outInfo.edidSize = 0;
+  outInfo.name = "VGA";
+  return true;
 }
 
 bool Vga_GetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/, size_t modeIndex, kernel::KDisplayModeInfo &outInfo) {
@@ -123,21 +129,30 @@ bool Vga_GetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/, s
     return false;
   }
 
+  outInfo.modeIndex = 0;
   outInfo.width = kModeWidth;
   outInfo.height = kModeHeight;
   outInfo.pitch = kModePitch;
+  outInfo.videoMemoryBitmapWidth = kModeWidth;
+  outInfo.videoMemoryBitmapHeight = kModeHeight;
   outInfo.bpp = 4;
+  outInfo.numberOfPlanes = 4;// Planar VGA: one bit of the index per plane
+  outInfo.bitsPerPlane = 1;
   outInfo.refreshRate = 60;
   outInfo.pixelFormat = kernel::PixelFormat::INDEX8;
-  outInfo.interlaced = false;
-  outInfo.hwAccelerated = false;
-  outInfo.textMode = false;
+  outInfo.attributeFlags = kernel::DisplayModeFlags::GraphicsMode |
+                           kernel::DisplayModeFlags::ColorMode |
+                           kernel::DisplayModeFlags::PaletteDriven;
   return true;
 }
 
-bool Vga_SetMode(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KDisplay> &display, const kernel::KObjectPtr<kernel::KSurface> &outSurface, size_t modeIndex) {
-  (void) display;
-  if (modeIndex != 0 || !outSurface || !g_vga.framebuffer) {
+bool Vga_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t modeIndex, kernel::KDisplaySurfaceBinding &outBinding) {
+  if (modeIndex != 0 || !display || !display->adapter) {
+    return false;
+  }
+
+  auto *ctx_vga = display->adapter->GetDeviceExtensionAs<VgaContext>();
+  if (!ctx_vga || !ctx_vga->framebuffer) {
     return false;
   }
 
@@ -151,27 +166,47 @@ bool Vga_SetMode(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*
   HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0x00);
   HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcBitMask);
   HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0xFF);
-  auto *fb = g_vga.framebuffer.as_ptr<volatile uint8_t>();
+  auto *fb = ctx_vga->framebuffer.as_ptr<volatile uint8_t>();
   for (size_t i = 0; i < static_cast<size_t>(kModePitch) * kModeHeight; ++i) {
     fb[i] = 0;
   }
 
-  outSurface->backing = KE_VMM_CreateDirectBacking(g_vga.framebuffer, kVgaFramebufferSize);
-  if (!outSurface->backing) {
+  outBinding.backing = KE_VMM_CreateDirectBacking(ctx_vga->framebuffer, kVgaFramebufferSize);
+  if (!outBinding.backing) {
     return false;
   }
 
-  outSurface->width = kModeWidth;
-  outSurface->height = kModeHeight;
-  outSurface->pitch = kModePitch;
-  outSurface->pixelFormat = kernel::PixelFormat::INDEX8;
+  outBinding.type = kernel::SurfaceType::Framebuffer;
+  outBinding.flags = kernel::SurfaceFlags::TopDown;
   return true;
 }
 
-void Vga_UnsetMode(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KDisplay> &display) {
-  (void) display;
-  // Nothing to tear down: the framebuffer window stays mapped for the
-  // lifetime of the driver.
+// Video output is gated by the Attribute Controller's Palette Address Source
+// bit (0x20 written to the index port): set means "display", clear means
+// "blank, registers accessible".
+bool Vga_Enable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
+  HAL_IO_In8(vga_regs::kInputStatus1);// Reset the index/data flip-flop
+  HAL_IO_Out8(vga_regs::kAttributeControllerIndexData, 0x20);
+  return true;
+}
+
+void Vga_Disable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
+  HAL_IO_In8(vga_regs::kInputStatus1);
+  HAL_IO_Out8(vga_regs::kAttributeControllerIndexData, 0x00);
+}
+
+// Binds this driver's per-head entry points on the display the graphics
+// subsystem created for the head Vga_ProbeDisplay reported.
+bool Vga_ConfigureDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KDisplay> &display) {
+  if (!display) {
+    return false;
+  }
+
+  display->GetModeInfo = Vga_GetModeInfo;
+  display->SetMode = Vga_SetMode;
+  display->Enable = Vga_Enable;
+  display->Disable = Vga_Disable;
+  return true;
 }
 
 bool Vga_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KSurface> &dst, int x, int y, int w, int h, uint32_t colorIndex) {
@@ -288,7 +323,7 @@ void Vga_Present(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*
 // endregion
 
 bool Vga_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
-  const auto fdo = KE_IO_CreateDevice(driver, 0, "VGA16", kernel::device_type::Video);
+  const auto fdo = KE_IO_CreateDeviceWithContext<VgaContext>(driver, "VGA16", kernel::device_type::Video);
   if (!fdo) {
     KE_Print("gfx_vga: Failed to create VGA16 device");
     return false;
@@ -316,6 +351,16 @@ kernel::IoStatus Vga_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &de
 void Vga_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto driver = pdo->driverObject;
 
+  // The context lives in the function device object Vga_AddDevice stacked on
+  // top of the PDO; that same device is the one the adapter points at, so the
+  // hooks resolve the very same state through GetDeviceExtensionAs.
+  const auto fdo = pdo->attachedDevice ? pdo->attachedDevice : pdo;
+  auto *ctx_vga = fdo->deviceExtension.as<VgaContext>();
+  if (!ctx_vga) {
+    KE_Print("gfx_vga: no device context");
+    return;
+  }
+
   // The framebuffer's physical address/length come from whatever the PnP
   // manager actually granted (via the Legacy VGA Enumerator's resource
   // requirements list), not from a hardcoded constant, mirroring
@@ -342,31 +387,21 @@ void Vga_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
         kernel::PhysicalAddress(fbRes->start) + (i * kPageSize),
         kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
   }
-  g_vga.framebuffer = virt;
+  ctx_vga->framebuffer = virt;
 
-  g_vga.adapter = KE_GFX_RegisterGraphicsAdapter(driver, pdo->attachedDevice, "VGA16");
-  if (!g_vga.adapter) {
+  ctx_vga->adapter = KE_GFX_RegisterGraphicsAdapter(driver, fdo, "VGA16");
+  if (!ctx_vga->adapter) {
     KE_Print("gfx_vga: Failed to register graphics adapter");
     return;
   }
 
-  g_vga.adapter->Probe = Vga_Probe;
-  g_vga.adapter->EnumerateDisplays = Vga_EnumerateDisplays;
-  g_vga.adapter->SetMode = Vga_SetMode;
-  g_vga.adapter->UnsetMode = Vga_UnsetMode;
-  g_vga.adapter->FillRect = Vga_FillRect;
-  g_vga.adapter->DrawLine = Vga_DrawLine;
-  g_vga.adapter->BitBlt = Vga_BitBlt;
-  g_vga.adapter->Present = Vga_Present;
-
-  g_vga.display = KE_GFX_RegisterDisplay(g_vga.adapter, "Display");
-  if (!g_vga.display) {
-    KE_Print("gfx_vga: Failed to register display");
-    return;
-  }
-
-  g_vga.display->GetModeCount = Vga_GetModeCount;
-  g_vga.display->GetModeInfo = Vga_GetModeInfo;
+  ctx_vga->adapter->Probe = Vga_Probe;
+  ctx_vga->adapter->ProbeDisplay = Vga_ProbeDisplay;
+  ctx_vga->adapter->ConfigureDisplay = Vga_ConfigureDisplay;
+  ctx_vga->adapter->FillRect = Vga_FillRect;
+  ctx_vga->adapter->DrawLine = Vga_DrawLine;
+  ctx_vga->adapter->BitBlt = Vga_BitBlt;
+  ctx_vga->adapter->Present = Vga_Present;
 
   KE_Print("gfx_vga: VGA16 (640x480x16) adapter registered");
 }

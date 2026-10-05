@@ -31,6 +31,7 @@ constexpr uint16_t kInputStatus1 = 0x3DA;
 // region Sequencer extension registers
 constexpr uint8_t kSrUnlockExtensions = 0x06;// write 0x12 to unlock, reads back 0x12
 constexpr uint8_t kSrUnlockMagic = 0x12;
+constexpr uint8_t kSr01ScreenOff = 0x20;          // SR01 bit 5: blank the display
 constexpr uint8_t kSrExtendedSequencerMode = 0x07;// SVGA enable + colour depth
 constexpr uint8_t kSrVclk0Numerator = 0x0E;
 constexpr uint8_t kSrVclk0Denominator = 0x1E;

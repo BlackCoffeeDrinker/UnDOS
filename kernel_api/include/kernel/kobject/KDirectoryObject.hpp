@@ -13,6 +13,15 @@ struct KDirectoryObject : KObjectT<KDirectoryObject, 1, TYPE_DIRECTORY> {
 
   common::DoubleList<KObject> child_list;
 
+  template<typename T, typename Func>
+  void Each(Func &&func) {
+    for (const auto obj: child_list) {
+      if (obj->type == T::Type) {
+        func(KObjectPtr{reinterpret_cast<T*>(obj)});
+      }
+    }
+  }
+
   ~KDirectoryObject() override {
     while (!child_list.empty()) {
       KObject *obj = &child_list.front();

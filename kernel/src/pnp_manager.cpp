@@ -180,6 +180,9 @@ static void TriggerDeviceInterest(const kernel::KDevicePtr<kernel::KDevice> &fdo
       if (fdo->attachedDevice) {
         fdo->attachedDevice->pnpState = kernel::KPnpState::Started;
       }
+
+      // Broadcast that this driver/device has started (things like the GFX subsystem want to execute things after)
+      TriggerDeviceStateChanged(fdo);
     }
   }
 }

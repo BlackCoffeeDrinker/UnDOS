@@ -12,6 +12,7 @@ namespace kernel::pnp {
 // Subscribers register interest in event::Source(fdo).
 enum class DeviceEvent : uint32_t {
   Started = 1,
+  Stopped = 2,
 };
 }// namespace kernel::pnp
 namespace kernel::event {
