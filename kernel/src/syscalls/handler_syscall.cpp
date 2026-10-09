@@ -37,6 +37,8 @@
 #include <undos/syscalls/__struct_PaintInfo.h>
 #include <undos/syscalls/__struct_IoctlDisplayMode.h>
 #include <undos/syscalls/__struct_IoctlMouseConfig.h>
+#include <undos/syscalls/__struct_IoctlGamepadState.h>
+#include <undos/syscalls/__struct_IoctlGamepadCaps.h>
 
 #include <undos/syscalls/__syscall_CreateDC_V1.h>
 #include <undos/syscalls/__syscall_DeleteDC_V1.h>

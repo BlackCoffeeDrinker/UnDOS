@@ -1,11 +1,12 @@
 #include "dispatch.hpp"
 
+#include "scheduler/Scheduler.hpp"
 #include <Kernel.hpp>
 #include <kernel/hal_interface.hpp>
+#include <kernel/kobject/KDispatcherHeader.hpp>
 #include <kernel/mutex.hpp>
 #include <kernel/scheduler.hpp>
 #include <mutex.hpp>
-#include "scheduler/Scheduler.hpp"
 
 namespace {
 
@@ -20,6 +21,13 @@ struct IrqSlot {
 
 IrqSlot g_irqHandlers[16]{};
 kernel::Mutex g_handlersLock;
+
+// Auto-reset dispatcher header the thread parks on. The signal is sticky
+// (KDispatcherHeader::TryAcquire consumes it), so an enqueue that lands
+// between the thread observing an empty ring and actually going to sleep
+// cannot be lost -- which the old check-then-block pair could not guarantee
+// against a producer on another CPU. Same pattern as pnp_manager.cpp.
+kernel::KDispatcherHeader g_recordAvailable{};
 
 void InterruptDispatchThread(void *) {
   for (;;) {
@@ -44,27 +52,18 @@ void InterruptDispatchThread(void *) {
       }
     }
 
-    // Check-then-block: mask interrupts (and restore whatever state we came
-    // in with) so an enqueue from an ISR on this CPU cannot land between the
-    // emptiness test and the switch away. The ring itself is safe against a
-    // producer on another CPU.
-    const uintptr_t state = HAL_CPU_SaveAndDisableInterrupts();
-    if (g_interruptRing.Empty()) {
-      if (const auto current = KE_SCHED_GetCurrentThread()) {
-        current->state = kernel::KThreadObject::State::Blocked;
-      }
-      kernel::sched::schedule_next();
-    }
-    HAL_CPU_RestoreInterrupts(state);
+    KE_SCHED_WaitForHeader(g_recordAvailable, kernel::WAIT_INFINITE);
   }
 }
 
-} // namespace
+}// namespace
 
 namespace kernel::dispatch {
 
 void init() noexcept {
   g_interruptRing.Reset();
+  g_recordAvailable.manualReset = false;
+  g_recordAvailable.signalled = false;
   // Spawn dispatch thread at elevated priority (10), running ahead of normal threads (priority 1)
   g_dispatchThread = KE_SCHED_CreateThread(cfunc<void(void *)>(&InterruptDispatchThread), nullptr, 10);
 }
@@ -75,8 +74,10 @@ InterruptRecordRing &get_ring() noexcept {
 
 bool enqueue(const HalInterruptRecord &record) noexcept {
   const bool pushed = g_interruptRing.Push(record);
-  if (pushed && g_dispatchThread) {
-    KE_SCHED_Unblock(g_dispatchThread);
+  if (pushed) {
+    // Sticky signal, usable from an interrupt gate: KE_EVENT_Signal masks
+    // interrupts itself and is safe before init() created the thread.
+    KE_EVENT_Signal(g_recordAvailable, false);
   }
   return pushed;
 }
@@ -109,7 +110,7 @@ void unregister_handler(uint32_t irq) noexcept {
   g_irqHandlers[irq].count = 0;
 }
 
-} // namespace kernel::dispatch
+}// namespace kernel::dispatch
 
 UNDOS_KERNEL_API_DEF bool KE_DISPATCH_EnqueueInterrupt(const kernel::HalInterruptRecord &record) noexcept {
   return kernel::dispatch::enqueue(record);

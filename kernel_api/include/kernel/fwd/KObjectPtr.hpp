@@ -23,8 +23,11 @@ struct KObjectPtrTraits {
   constexpr static void dec_ref(T *ref) { KE_OB_Release(ref); }
   template<typename T>
   constexpr static T *release(T *ptr) { return ptr; }
+  // A null pointer converts to nothing. Without this guard As<U>() on an
+  // empty KObjectPtr dereferences null, which the compiler is free to turn
+  // into a trap once it can prove the pointer is null.
   template<typename T, typename U>
-  constexpr static bool convertible_to(T *ptr) { return (U::Type == ptr->type); }
+  constexpr static bool convertible_to(T *ptr) { return ptr != nullptr && (U::Type == ptr->type); }
 };
 }// namespace detail
 

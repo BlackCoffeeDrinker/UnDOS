@@ -47,6 +47,7 @@ def author_localmachine_hive(filename: str) -> None:
         # fallback for longer names, so "input_i8042.elf" would never resolve.
         ("gfx_cirrus", "/System/Drivers/gfxcirr.elf"),
         ("input_i8042", "/System/Drivers/i8042.elf"),
+        ("input_gameport", "/System/Drivers/gameport.elf"),
         ("serial_uart", "/System/Drivers/serial.elf"),
     ]
 
@@ -92,6 +93,9 @@ def author_localmachine_hive(filename: str) -> None:
         ("VGA", {"HwID": "gfx_vga", "IoPorts": "0x3C0-0x3DF", "Memory": "0xA0000-0xAFFFF",
                  "Start": "LastResort"}),
         ("i8042", {"HwID": "input_i8042", "IoPorts": "0x60-0x64", "Irq": "1"}),
+        # The analog gameport has no interrupt at all -- the driver polls it
+        # from its own thread -- so the entry carries ports and nothing else.
+        ("GAMEPORT", {"HwID": "input_gameport", "IoPorts": "0x201-0x201"}),
         ("COM1", {"HwID": "serial_uart", "IoPorts": "0x3F8-0x3FF", "Irq": "4"}),
     ]
 

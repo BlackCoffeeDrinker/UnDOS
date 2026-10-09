@@ -22,6 +22,10 @@ add_executable(KernelTests
         input_scancode_test.cpp
         mouse_packet_test.cpp
         input_queue_test.cpp
+        hid_parser_test.cpp
+        ps2_byte_ring_test.cpp
+        gamepad_state_test.cpp
+        ../../drivers/input_hid/hid_parser.cpp
         dispatch_interrupt_test.cpp
         event_broadcaster_test.cpp
 
@@ -69,7 +73,8 @@ add_executable(KernelTests
         vfs_fat_integration_test.cpp
 )
 
-target_include_directories(KernelTests PRIVATE ../../kernel/src ../../drivers/disk_fake)
+target_include_directories(KernelTests PRIVATE ../../kernel/src ../../drivers/disk_fake
+        ../../drivers/input_hid ../../drivers/input_i8042 ../../drivers/input_gameport)
 
 # object_manager.cpp/io.cpp/vfs.cpp already work around the hosted
 # placement-new visibility gap via stdkrn.hpp; vmm.cpp and memory/*.cpp

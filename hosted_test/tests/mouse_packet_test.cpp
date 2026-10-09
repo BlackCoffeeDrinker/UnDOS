@@ -1,8 +1,9 @@
 
-#include "../../kernel/src/input/mouse_packet.hpp"
+#include "ps2_mouse_packet.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+using namespace ps2;
 using namespace kernel::input;
 
 TEST_CASE("MousePacketDecoder canonical right/down packet", "[mouse_packet]") {

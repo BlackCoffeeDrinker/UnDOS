@@ -82,8 +82,18 @@ UNDOS_KERNEL_API_DEF void KE_EVENT_Signal(kernel::KDispatcherHeader &header, boo
   header.Signal(wakeAll, wake);
 }
 
+// Settable rather than fixed at zero so dpc_test.cpp can walk simulated time
+// past a timer DPC's deadline without a real clock interrupt.
+namespace {
+kstd::chrono::nanoseconds g_hostSystemTime{0};
+}// namespace
+
+namespace test_time {
+void SetSystemTime(kstd::chrono::nanoseconds now) noexcept { g_hostSystemTime = now; }
+}// namespace test_time
+
 UNDOS_KERNEL_API_DEF kstd::chrono::nanoseconds KE_TIME_GetSystemTime() noexcept {
-  return kstd::chrono::nanoseconds(0);
+  return g_hostSystemTime;
 }
 
 UNDOS_HAL_API_DEF void HAL_ATOMIC_Store32(kernel::VirtualAddress addr, uint32_t value, PlatformMemoryOrder order) noexcept {

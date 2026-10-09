@@ -1,9 +1,10 @@
 #pragma once
 
 namespace kernel::input {
-// Initializes the kernel input manager's raw byte rings. Called once from
-// kernel_core_main, right after kernel::resource::init() and before drivers
-// (e.g. input_i8042) are loaded, so KE_INPUT_ReportKeyboardData/ReportAuxData
-// are always safe to call from an ISR by the time a driver connects one.
+// Initializes the kernel input manager's event ring, gamepad snapshot store
+// and \Device\Input stream. Called once from kernel_core_main, right after
+// kernel::resource::init() and before drivers (e.g. input_i8042) are loaded,
+// so KE_INPUT_PushEvent is always safe to call by the time a driver's worker
+// thread starts reporting.
 void init();
 }// namespace kernel::input

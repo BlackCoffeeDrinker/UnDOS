@@ -851,7 +851,6 @@ void Cirrus_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   ctx_cirrus->adapter->Present = Cirrus_Present;
   ctx_cirrus->adapter->caps = kernel::KGfxCaps::HwFill | kernel::KGfxCaps::HwBlt;
 }
-
 }// namespace
 
 UNDOS_DRIVER_ENTRY {

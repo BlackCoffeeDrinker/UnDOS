@@ -7,6 +7,7 @@
 #include <kernel/StaticIdentifier.hpp>
 #include <kernel/__core.hpp>
 #include <kernel/cfunc.hpp>
+#include <kernel/fwd/KDevicePtr.hpp>
 
 // Windows2000-style, RTTI-less input event hierarchy: a non-virtual
 // InputEvent base carries a StaticIdentifier-tagged type field (mirrors
@@ -83,8 +84,8 @@ constexpr uint32_t Alt = LAlt | RAlt;
 struct alignas(8) KeyboardInputEvent : public InputEvent {
   static constexpr auto TYPE_ID = "keyboard"_evt;
 
-  uint16_t virtualKey; // VK_* from scancode_tables.hpp
-  uint8_t scanCode;    // raw set-1 scancode (no E0 prefix / break bit)
+  uint16_t virtualKey; // VK_*, derived by drivers/input_hid/ from the HID usage
+  uint8_t scanCode;    // HID Keyboard/Keypad (page 0x07) usage ID, truncated to 8 bits
   uint16_t keyFlags;   // key_flags::*
   char character;      // 0 when not printable
   uint32_t modifiers;  // Shift/Ctrl/Alt/Caps/Num/Scroll bitmask at decode (KE_INPUT_GetModifierState)
@@ -113,8 +114,12 @@ constexpr uint16_t Wheel = 1 << 10;// buttonData holds a signed wheel delta
 struct alignas(8) MouseInputEvent : public InputEvent {
   static constexpr auto TYPE_ID = "mouse"_evt;
 
-  bool isMovementAbsolute;// always false for PS/2; reserved for a future absolute pointer device
-  int32_t lastX, lastY;   // relative dx/dy for this packet (screen-space; dy already sign-fixed)
+  // Set when lastX/lastY carry the device's own logical absolute coordinate
+  // (tablet/touchscreen/HID digitizer) rather than a relative delta. The
+  // input manager never scales or clamps either form -- mapping into a
+  // screen rectangle belongs to the GFX/USER layer that owns it.
+  bool isMovementAbsolute;
+  int32_t lastX, lastY;   // reported dx/dy (relative) or logical coordinate (absolute)
   uint16_t buttonFlags;   // mouse_button_flags::* transitions that occurred in this packet
   int16_t buttonData;     // signed wheel delta; valid only when buttonFlags has Wheel set
 
@@ -122,15 +127,54 @@ struct alignas(8) MouseInputEvent : public InputEvent {
       : InputEvent(TYPE_ID, unit), isMovementAbsolute(false), lastX(0), lastY(0), buttonFlags(0), buttonData(0) {}
 };
 
-// Mouse packet framing negotiated with the aux device (see
-// I8042_NegotiateMouseExtensions in drivers/input_i8042/i8042.cpp and the
-// MousePacketDecoder in kernel/src/input/mouse_packet.hpp). Standard3Byte is
-// always the safe default; upgraded only after the device confirms a
-// recognised device ID for the corresponding knock sequence.
-enum class MousePacketMode : uint8_t {
-  Standard3Byte,
-  IntelliMouse4Byte,
-  IntelliMouseExplorer4Byte,
+// Normalized button bitmask, reported by any pointer driver.
+namespace mouse_buttons {
+constexpr uint8_t Left = 1 << 0;
+constexpr uint8_t Right = 1 << 1;
+constexpr uint8_t Middle = 1 << 2;
+constexpr uint8_t Button4 = 1 << 3;
+constexpr uint8_t Button5 = 1 << 4;
+}// namespace mouse_buttons
+
+// One normalized pointer report. Relative by default; `isAbsolute` selects
+// coordinate semantics so tablets/touchscreens/HID digitizers report
+// natively instead of faking deltas.
+struct MousePacket {
+  // Relative: delta since the last report. Absolute: the device's own
+  // logical coordinate, NOT screen pixels -- the manager neither scales
+  // nor clamps these; mapping into a screen rectangle is GFX/USER's job.
+  int32_t dx = 0;
+  int32_t dy = 0;     // positive = downward
+  int8_t wheel = 0;
+  uint8_t buttons = 0;// mouse_buttons::*
+  bool isAbsolute = false;
+};
+
+// Normalized gamepad/joystick axes, named after their HID Generic Desktop
+// usages (X, Y, Rx, Ry, Z, Rz).
+namespace gamepad_axis {
+constexpr size_t LeftX = 0;
+constexpr size_t LeftY = 1;
+constexpr size_t RightX = 2;
+constexpr size_t RightY = 3;
+constexpr size_t LeftTrigger = 4;
+constexpr size_t RightTrigger = 5;
+constexpr size_t Count = 6;
+}// namespace gamepad_axis
+
+// Normalized gamepad/joystick snapshot. Axes are scaled to a fixed signed
+// range so an 8-bit USB HID pad and a timed analog gameport read are
+// directly comparable; unused axes stay 0 and unsupported buttons stay
+// clear. `sequence` is stamped by the manager on every push so a consumer
+// can tell it skipped samples.
+struct GamepadState {
+  static constexpr int16_t kAxisMin = -32767;
+  static constexpr int16_t kAxisMax = 32767;
+
+  int16_t axes[gamepad_axis::Count] = {};// normalized, centred on 0
+  uint32_t buttons = 0;                  // bit n = button n down
+  int8_t hatX = 0, hatY = 0;             // -1/0/+1 d-pad or POV hat
+  uint32_t sequence = 0;                 // stamped by the manager
 };
 
 // Fixed-size container for the event ring (added in a later Step 1 task):
@@ -146,7 +190,29 @@ union AnyInputEvent {
   constexpr AnyInputEvent() noexcept : base(InputEventType{0}) {}
 };
 
-using ConsumerFn = cfunc<void(const InputEvent &)>;
+// Which member of KInputReport is live.
+enum class InputReportKind : uint8_t {
+  Key = 0,    // one key transition, already translated to a virtual key
+  Pointer = 1,// one normalized pointer report, relative or absolute
+  Gamepad = 2,// full latest axis/button state of one pad
+};
+
+// The single record every input driver pushes. Adding a new input class
+// costs a tag plus a union member, not a new exported function. All three
+// members are trivially copyable PODs; the converting constructors are the
+// only way to build one, so the tag can never disagree with the payload.
+struct KInputReport {
+  InputReportKind kind = InputReportKind::Key;
+  union {
+    KeyboardInputEvent key;
+    MousePacket pointer;
+    GamepadState gamepad;
+  };
+
+  constexpr KInputReport(const KeyboardInputEvent &e) noexcept : kind(InputReportKind::Key), key(e) {}
+  constexpr KInputReport(const MousePacket &p) noexcept : kind(InputReportKind::Pointer), pointer(p) {}
+  constexpr KInputReport(const GamepadState &g) noexcept : kind(InputReportKind::Gamepad), gamepad(g) {}
+};
 
 }// namespace kernel::input
 
@@ -154,30 +220,48 @@ using ConsumerFn = cfunc<void(const InputEvent &)>;
  * @ingroup INPUT
  * @brief Method KE_INPUT_Initialize
  *
- * Initializes the kernel input manager's raw byte rings. Must be called
- * once at boot before any driver reports raw bytes.
+ * Initializes the kernel input manager's event ring, gamepad snapshot store
+ * and \Device\Input stream. Must be called once at boot before any driver
+ * pushes a report.
  */
 UNDOS_KERNEL_PUBLIC_V1API(void, KE_INPUT_Initialize);
 
 /**
  * @ingroup INPUT
- * @brief Method KE_INPUT_ReportKeyboardData
+ * @brief Method KE_INPUT_PushEvent
  *
- * Pushes one raw byte read from the keyboard (main PS/2) port into the
- * keyboard byte ring. ISR-safe: does only a lock-free ring push, no
- * allocation, no locking.
+ * The single input ingestion point. Every code it carries is a HID usage ID
+ * or derived from one, and drivers/input_hid/ is its intended sole caller:
+ * a transport's job stops at delivering HID report bytes.
+ *
+ * CONTEXT: PASSIVE LEVEL ONLY -- must not be called from an interrupt
+ * handler. Drivers buffer raw hardware data in their ISR and call this from
+ * a worker thread (see drivers/input_i8042/ps2_pump.cpp for the reference
+ * implementation). It takes an irqsave spinlock, walks small lookup tables
+ * and signals a dispatcher object, none of which belongs in an ISR.
+ *
+ * `device` is the reporting device and becomes the event's source identity;
+ * the manager derives the emitted event's unitId from it. Routing is by
+ * `report.kind`:
+ *   Key / Pointer -> normalized, stamped, queued on the event ring and
+ *                    \Device\Input signalled.
+ *   Gamepad       -> overwrites that device's snapshot slot and stamps
+ *                    `sequence`; the event ring is NOT touched.
  */
-UNDOS_KERNEL_PUBLIC_V1API(void, KE_INPUT_ReportKeyboardData, uint8_t data);
+UNDOS_KERNEL_PUBLIC_V1API(void, KE_INPUT_PushEvent,
+                          const kernel::KDevicePtr<kernel::KDevice> &device,
+                          const kernel::input::KInputReport &report);
 
 /**
  * @ingroup INPUT
- * @brief Method KE_INPUT_ReportAuxData
+ * @brief Method KE_INPUT_GetGamepadState
  *
- * Pushes one raw byte read from the aux (mouse) PS/2 port into the aux byte
- * ring. ISR-safe: does only a lock-free ring push, no allocation, no
- * locking.
+ * Reads the latest snapshot pushed by `device`. Returns false, leaving `out`
+ * untouched, if that device has never pushed a Gamepad report.
  */
-UNDOS_KERNEL_PUBLIC_V1API(void, KE_INPUT_ReportAuxData, uint8_t data);
+UNDOS_KERNEL_PUBLIC_V1API(bool, KE_INPUT_GetGamepadState,
+                          const kernel::KDevicePtr<kernel::KDevice> &device,
+                          kernel::input::GamepadState &out);
 
 /**
  * @ingroup INPUT
@@ -199,31 +283,9 @@ UNDOS_KERNEL_PUBLIC_V1API(bool, KE_INPUT_WaitEvent, kernel::input::AnyInputEvent
 
 /**
  * @ingroup INPUT
- * @brief Method KE_INPUT_SetConsumer
- *
- * Registers a callback invoked synchronously on the input pump thread for
- * every decoded event (the seam USER attaches to in Step 3 of the parent
- * plan). Populated starting with the decoder-pump task (Step 7).
- */
-UNDOS_KERNEL_PUBLIC_V1API(void, KE_INPUT_SetConsumer, kernel::input::ConsumerFn consumer);
-
-/**
- * @ingroup INPUT
  * @brief Method KE_INPUT_GetModifierState
  *
- * Returns the current Shift/Ctrl/Alt/Caps/Num/Scroll modifier bitmask.
- * Populated starting with the keyboard translation task (Step 5).
+ * Returns the current Shift/Ctrl/Alt/Caps/Num/Scroll modifier bitmask, taken
+ * from the most recently pushed keyboard report.
  */
 UNDOS_KERNEL_PUBLIC_V1API(void, KE_INPUT_GetModifierState, uint32_t &modifiers);
-
-/**
- * @ingroup INPUT
- * @brief Method KE_INPUT_SetMousePacketMode
- *
- * Switches the aux byte stream's packet framing (3-byte standard vs. 4-byte
- * IntelliMouse/IntelliMouse-Explorer). Called by the i8042 driver once it
- * has confirmed the corresponding device ID via the sample-rate knock
- * sequence (Task 15); a partial packet in flight is discarded rather than
- * misparsed. Defaults to Standard3Byte.
- */
-UNDOS_KERNEL_PUBLIC_V1API(void, KE_INPUT_SetMousePacketMode, kernel::input::MousePacketMode mode);

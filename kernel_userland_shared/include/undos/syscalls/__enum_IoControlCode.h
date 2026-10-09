@@ -11,4 +11,8 @@ enum IoControlCode {
     IoControlCode_DisplayQueryMode = 256,
     /** Pointer: input is struct<IoctlMouseConfig>. */
     IoControlCode_MouseConfigure = 512,
+    /** Gamepad: output is struct<IoctlGamepadState>. */
+    IoControlCode_GamepadReadState = 768,
+    /** Gamepad: output is struct<IoctlGamepadCaps>. */
+    IoControlCode_GamepadQueryCaps = 769,
 };

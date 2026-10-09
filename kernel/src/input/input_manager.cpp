@@ -4,81 +4,34 @@
 #include "stdkrn.hpp"
 
 #include <Kernel.hpp>
+#include <kernel/device.hpp>
 #include <kernel/input.hpp>
 #include <kernel/kobject/KDirectoryObject.hpp>
 #include <kernel/kobject/KDispatcherHeader.hpp>
 #include <kernel/kobject/KIOObject.hpp>
-#include <kernel/mutex.hpp>
 #include <kernel/object_manager.hpp>
-#include <kernel/scheduler.hpp>
+#include <kernel/spinlock.hpp>
 #include <kernel/time.hpp>
 
-#include <mutex.hpp>
-
 #include "event_ring.hpp"
-#include "key_translate.hpp"
-#include "mouse_packet.hpp"
 
+// Passive-level event multiplexer. No ISR may reach this translation unit:
+// every input driver buffers raw hardware data in its interrupt handler and
+// calls KE_INPUT_PushEvent from a worker thread, which is what makes it safe
+// for the functions below to take a lock and walk lookup tables. Decoding --
+// scancodes, packet framing, HID report descriptors -- lives entirely in the
+// drivers; nothing here knows about any particular hardware, and nothing here
+// knows about the screen either, so no coordinate is ever clamped or scaled.
 namespace {
-// Single-producer/single-consumer byte ring. The producer (an ISR) only
-// ever writes `head`; the consumer (the input pump thread) only ever writes
-// `tail`. No locks: kernel::SpinLock is documented as not ISR-safe
-// (kernel/spinlock.hpp), and this ring must be safe to push from interrupt
-// context.
-class ByteRing {
-  public:
-  static constexpr size_t kCapacity = 256;
 
-  // ISR-safe: only touches `head` (and reads `tail`), never blocks.
-  bool Push(uint8_t byte) noexcept {
-    const size_t head = m_head;
-    const size_t nextHead = (head + 1) % kCapacity;
-    if (nextHead == m_tail) {
-      // Ring full: drop the byte rather than overwrite unread data or spin.
-      return false;
-    }
-    m_buffer[head] = byte;
-    m_head = nextHead;
-    return true;
-  }
-
-  // Consumer-side only: touches `tail` (and reads `head`).
-  bool Pop(uint8_t &out) noexcept {
-    const size_t tail = m_tail;
-    if (tail == m_head) {
-      return false;
-    }
-    out = m_buffer[tail];
-    m_tail = (tail + 1) % kCapacity;
-    return true;
-  }
-
-  private:
-  volatile size_t m_head = 0;
-  volatile size_t m_tail = 0;
-  uint8_t m_buffer[kCapacity]{};
-};
-
-ByteRing g_keyboardRing;
-ByteRing g_auxRing;
-
-// Fed exclusively from the pump thread (InputPumpThread below); never
-// touched from ISR context.
-kernel::input::KeyTranslator g_keyTranslator;
-kernel::input::MousePacketDecoder g_mouseDecoder;
-
-int32_t g_mouseX = 0;
-int32_t g_mouseY = 0;
-uint8_t g_prevMouseButtons = 0;
-
-// Bounded event queue + the thread that owns pushing into it. Guarded by a
-// kernel::Mutex (not a ByteRing-style lock-free ring): unlike the byte
-// rings above, this queue is popped from an ordinary thread context
-// (KE_INPUT_DequeueEvent), never from an ISR, so a real lock is both safe
-// and necessary.
-kernel::Mutex g_eventRingLock;
+// Guards the event ring, the device->unit table and the gamepad snapshot
+// store. A spinlock rather than a kernel::Mutex: the critical sections are
+// a handful of index writes, blocking would let a producer be descheduled
+// while holding the queue, and ResetIfEmpty already runs with interrupts
+// disabled around the dispatcher header, which lock_irqsave() composes with
+// and a mutex does not.
+kernel::SpinLock g_eventLock;
 kernel::input::EventRing g_eventRing;
-kernel::KObjectPtr<kernel::KThreadObject> g_pumpThread;
 
 // Manual-reset: signalled while the event ring is non-empty. Readers reset
 // it with interrupts off only after seeing the ring empty, so a push that
@@ -86,37 +39,66 @@ kernel::KObjectPtr<kernel::KThreadObject> g_pumpThread;
 kernel::KDispatcherHeader g_eventHeader;
 kernel::KObjectPtr<kernel::KIOObject> g_inputStream;
 
-kernel::input::ConsumerFn g_consumer{nullptr};
 uint32_t g_modifiers = 0;
 
-int32_t ClampAxis(int32_t value, int32_t maxExclusive) noexcept {
-  if (value < 0) return 0;
-  if (value >= maxExclusive) return maxExclusive - 1;
-  return value;
+// Fixed-size device -> unitId table. The raw KDevice* is an identity key
+// only and is never dereferenced, so the push path does no refcount work.
+// Input devices are created once at boot and never torn down; a future
+// hot-unplug path (USB) must release the slot on device removal.
+constexpr size_t kMaxInputDevices = 16;
+struct UnitSlot {
+  const kernel::KDevice *device = nullptr;
+  uint8_t previousButtons = 0;
+};
+UnitSlot g_units[kMaxInputDevices];
+
+// Latest-state storage for gamepads/joysticks. A pad reporting continuous
+// axis state at 60 Hz would otherwise flood a ring shared with the keyboard,
+// so Gamepad reports overwrite a slot here and never touch the ring at all.
+constexpr size_t kMaxGamepads = 8;
+struct GamepadSlot {
+  const kernel::KDevice *device = nullptr;
+  kernel::input::GamepadState state{};
+};
+GamepadSlot g_gamepads[kMaxGamepads];
+
+// Finds or claims this device's unit slot. Bounded linear scan over a fixed
+// table, allocation-free. Returns nullptr when the table is full.
+UnitSlot *FindOrClaimUnit(const kernel::KDevice *device, uint16_t &unitId) noexcept {
+  for (size_t i = 0; i < kMaxInputDevices; ++i) {
+    if (g_units[i].device == device) {
+      unitId = static_cast<uint16_t>(i);
+      return &g_units[i];
+    }
+  }
+  for (size_t i = 0; i < kMaxInputDevices; ++i) {
+    if (g_units[i].device != nullptr) continue;
+    g_units[i].device = device;
+    g_units[i].previousButtons = 0;
+    unitId = static_cast<uint16_t>(i);
+    return &g_units[i];
+  }
+  return nullptr;
 }
 
-// Builds one MouseInputEvent from a single decoded aux packet (Task 16):
-// applies the scale factor and screen-edge clamp to the accumulated
-// position, reporting only the delta actually applied as lastX/lastY, diffs
-// button state into mouse_button_flags::*Down/*Up across all 5 buttons, and
-// OR-in Wheel with the signed delta when the packet carries one. Exactly
-// one event per packet, never split.
-kernel::input::MouseInputEvent BuildMouseEvent(const kernel::input::MousePacket &packet) noexcept {
+// Builds one MouseInputEvent from a normalized pointer report: diffs button
+// state into mouse_button_flags::*Down/*Up across all 5 buttons and OR-in
+// Wheel with the signed delta when the report carries one. Coordinates pass
+// through untouched -- relative deltas as-is, absolute coordinates unscaled
+// with isMovementAbsolute set. Cursor position, screen confinement and any
+// absolute->screen mapping belong to the GFX/USER layer that owns the screen
+// rectangle (kernel/src/user/rawinput.cpp).
+kernel::input::MouseInputEvent BuildMouseEvent(const kernel::input::MousePacket &packet,
+                                               UnitSlot &unit) noexcept {
   using namespace kernel::input;
 
-  const int32_t proposedX = g_mouseX + packet.dx;
-  const int32_t proposedY = g_mouseY + packet.dy;
-  const int32_t clampedX = ClampAxis(proposedX, 1600);// TODO Check the associated virtual desktop size
-  const int32_t clampedY = ClampAxis(proposedY, 1200);
-
   MouseInputEvent event;
-  event.lastX = clampedX - g_mouseX;
-  event.lastY = clampedY - g_mouseY;
-  g_mouseX = clampedX;
-  g_mouseY = clampedY;
+  event.isMovementAbsolute = packet.isAbsolute;
+  event.lastX = packet.dx;
+  event.lastY = packet.dy;
 
   const auto diffButton = [&](uint8_t bit, uint16_t downFlag, uint16_t upFlag) {
-    const bool wasDown = (g_prevMouseButtons & bit) != 0;
+    const bool wasDown = (unit.previousButtons & bit) != 0;
     const bool isDown = (packet.buttons & bit) != 0;
     if (isDown && !wasDown) event.buttonFlags |= downFlag;
     else if (!isDown && wasDown)
@@ -127,7 +109,7 @@ kernel::input::MouseInputEvent BuildMouseEvent(const kernel::input::MousePacket 
   diffButton(mouse_buttons::Middle, mouse_button_flags::MiddleDown, mouse_button_flags::MiddleUp);
   diffButton(mouse_buttons::Button4, mouse_button_flags::Button4Down, mouse_button_flags::Button4Up);
   diffButton(mouse_buttons::Button5, mouse_button_flags::Button5Down, mouse_button_flags::Button5Up);
-  g_prevMouseButtons = packet.buttons;
+  unit.previousButtons = packet.buttons;
 
   if (packet.wheel != 0) {
     event.buttonFlags |= mouse_button_flags::Wheel;
@@ -137,76 +119,12 @@ kernel::input::MouseInputEvent BuildMouseEvent(const kernel::input::MousePacket 
   return event;
 }
 
-// Common tail for both decoded event kinds: stamps the timestamp, queues
-// the event (subject to EventRing's drop policy) and, when registered,
-// invokes the consumer synchronously -- this is the seam USER attaches to
-// in Step 3 of the parent plan. `kInputTrace` prints a human-readable line
-// via is<T>()/as<T>() downcasting, with mouse motion traces rate-limited so
-// continuous movement does not flood the serial log.
-void QueueEvent(kernel::input::AnyInputEvent &event) noexcept {
-  using namespace kernel::input;
-
-  event.base.timestamp = KE_TIME_GetSystemTime();
-
-  {
-    kstd::unique_lock guard(g_eventRingLock);
-    g_eventRing.Push(event);
-  }
-  KE_EVENT_Signal(g_eventHeader, true);
-
-  if (g_consumer) {
-    g_consumer(event.base);
-  }
-}
-
-// Drains both byte rings outside interrupt context, feeding the decoders
-// and queueing whatever events they produce (Task 16). Blocks (rather than
-// spinning) once both rings are empty; KE_INPUT_ReportKeyboardData/
-// ReportAuxData unblock it again as soon as a new byte arrives.
-void InputPumpThread(void *) {
-  using namespace kernel::input;
-
-  for (;;) {
-    bool didWork = false;
-    uint8_t byte = 0;
-
-    while (g_keyboardRing.Pop(byte)) {
-      didWork = true;
-      KeyboardInputEvent keyEvent;
-      if (g_keyTranslator.Feed(byte, keyEvent)) {
-        g_modifiers = keyEvent.modifiers;
-        AnyInputEvent event;
-        event.keyboard = keyEvent;
-        QueueEvent(event);
-      }
-    }
-
-    while (g_auxRing.Pop(byte)) {
-      didWork = true;
-      MousePacket packet;
-      if (g_mouseDecoder.Feed(byte, packet)) {
-        AnyInputEvent event;
-        event.mouse = BuildMouseEvent(packet);
-        QueueEvent(event);
-      }
-    }
-
-    if (!didWork) {
-      KE_SCHED_Block();
-    }
-  }
-}
-
 // Resets the header if the ring is (still) empty. Returns true if empty.
 bool ResetIfEmpty() noexcept {
-  const uintptr_t irq_state = HAL_CPU_SaveAndDisableInterrupts();
-  bool empty;
-  {
-    kstd::unique_lock guard(g_eventRingLock);
-    empty = g_eventRing.Empty();
-  }
+  const uintptr_t irq_state = g_eventLock.lock_irqsave();
+  const bool empty = g_eventRing.Empty();
   if (empty) g_eventHeader.Reset();
-  HAL_CPU_RestoreInterrupts(irq_state);
+  g_eventLock.unlock_irqrestore(irq_state);
   return empty;
 }
 
@@ -234,7 +152,7 @@ kernel::IoStatus InputClose(kernel::KIOObject &) { return kernel::IoStatus::Succ
 const kernel::KIOOps InputOps{InputRead, {}, {}, InputClose};
 
 void RegisterInputStream() noexcept {
-  const auto dir = KE_OB_LookupObject("/Device").As<kernel::KDirectoryObject>();
+  const auto dir = KE_OB_LookupObject("\\Device").As<kernel::KDirectoryObject>();
   auto stream = kernel::CreateKObject<kernel::KIOObject>("Input");
   if (!dir || !stream) {
     KE_Print("Input manager: cannot register \\Device\\Input");
@@ -252,20 +170,12 @@ void RegisterInputStream() noexcept {
 
 namespace kernel::input {
 void init() {
-  g_keyboardRing = ByteRing();
-  g_auxRing = ByteRing();
-  g_keyTranslator = KeyTranslator();
-  g_mouseDecoder = MousePacketDecoder();
   g_eventRing = EventRing();
-  g_mouseX = 0;
-  g_mouseY = 0;
-  g_prevMouseButtons = 0;
-  g_consumer = nullptr;
+  for (auto &unit: g_units) unit = UnitSlot{};
+  for (auto &pad: g_gamepads) pad = GamepadSlot{};
   g_modifiers = 0;
   g_eventHeader = kernel::KDispatcherHeader();
   RegisterInputStream();
-
-  g_pumpThread = KE_SCHED_CreateThread(&InputPumpThread, nullptr, 0);
 }
 }// namespace kernel::input
 
@@ -273,23 +183,99 @@ UNDOS_KERNEL_API_DEF void KE_INPUT_Initialize() noexcept {
   kernel::input::init();
 }
 
-UNDOS_KERNEL_API_DEF void KE_INPUT_ReportKeyboardData(uint8_t data) noexcept {
-  g_keyboardRing.Push(data);
-  if (g_pumpThread) {
-    KE_SCHED_Unblock(g_pumpThread);
+// PASSIVE LEVEL ONLY -- see the contract in kernel/input.hpp. Routing is
+// decided here, by report kind, so a driver cannot accidentally push axis
+// state onto the event ring. There is deliberately no silent default: an
+// unknown kind is ignored without touching either the ring or the snapshot
+// store, but every known kind is handled explicitly.
+UNDOS_KERNEL_API_DEF void KE_INPUT_PushEvent(const kernel::KDevicePtr<kernel::KDevice> &device,
+                                             const kernel::input::KInputReport &report) noexcept {
+  using namespace kernel::input;
+
+  if (!device) return;
+  const kernel::KDevice *key = device.get();
+
+  AnyInputEvent event;
+  bool queued = false;
+
+  const uintptr_t irq_state = g_eventLock.lock_irqsave();
+  switch (report.kind) {
+    case InputReportKind::Key: {
+      uint16_t unitId = 0;
+      if (FindOrClaimUnit(key, unitId) != nullptr) {
+        event.keyboard = report.key;
+        event.keyboard.unitId = unitId;
+        g_modifiers = report.key.modifiers;
+        queued = true;
+      }
+      break;
+    }
+    case InputReportKind::Pointer: {
+      uint16_t unitId = 0;
+      if (UnitSlot *unit = FindOrClaimUnit(key, unitId)) {
+        event.mouse = BuildMouseEvent(report.pointer, *unit);
+        event.mouse.unitId = unitId;
+        queued = true;
+      }
+      break;
+    }
+    case InputReportKind::Gamepad: {
+      GamepadSlot *slot = nullptr;
+      for (auto &candidate: g_gamepads) {
+        if (candidate.device == key) {
+          slot = &candidate;
+          break;
+        }
+      }
+      if (slot == nullptr) {
+        for (auto &candidate: g_gamepads) {
+          if (candidate.device != nullptr) continue;
+          candidate.device = key;
+          slot = &candidate;
+          break;
+        }
+      }
+      // All slots taken: drop the report rather than evict another pad.
+      if (slot != nullptr) {
+        const uint32_t sequence = slot->state.sequence + 1;
+        slot->state = report.gamepad;
+        slot->state.sequence = sequence;
+      }
+      break;
+    }
   }
+
+  if (queued) {
+    event.base.timestamp = KE_TIME_GetSystemTime();
+    g_eventRing.Push(event);
+  }
+  g_eventLock.unlock_irqrestore(irq_state);
+
+  if (queued) KE_EVENT_Signal(g_eventHeader, true);
 }
 
-UNDOS_KERNEL_API_DEF void KE_INPUT_ReportAuxData(uint8_t data) noexcept {
-  g_auxRing.Push(data);
-  if (g_pumpThread) {
-    KE_SCHED_Unblock(g_pumpThread);
+UNDOS_KERNEL_API_DEF bool KE_INPUT_GetGamepadState(const kernel::KDevicePtr<kernel::KDevice> &device,
+                                                   kernel::input::GamepadState &out) noexcept {
+  if (!device) return false;
+  const kernel::KDevice *key = device.get();
+
+  bool found = false;
+  const uintptr_t irq_state = g_eventLock.lock_irqsave();
+  for (const auto &candidate: g_gamepads) {
+    if (candidate.device != key) continue;
+    out = candidate.state;
+    found = true;
+    break;
   }
+  g_eventLock.unlock_irqrestore(irq_state);
+  return found;
 }
 
 UNDOS_KERNEL_API_DEF bool KE_INPUT_DequeueEvent(kernel::input::AnyInputEvent &out) noexcept {
-  kstd::unique_lock guard(g_eventRingLock);
-  return g_eventRing.Pop(out);
+  const uintptr_t irq_state = g_eventLock.lock_irqsave();
+  const bool popped = g_eventRing.Pop(out);
+  g_eventLock.unlock_irqrestore(irq_state);
+  return popped;
 }
 
 UNDOS_KERNEL_API_DEF bool KE_INPUT_WaitEvent(kernel::input::AnyInputEvent &out,
@@ -301,16 +287,8 @@ UNDOS_KERNEL_API_DEF bool KE_INPUT_WaitEvent(kernel::input::AnyInputEvent &out,
   }
 }
 
-UNDOS_KERNEL_API_DEF void KE_INPUT_SetConsumer(kernel::input::ConsumerFn consumer) noexcept {
-  g_consumer = consumer;
-}
-
-// Reflects the last modifier bitmask stamped onto a decoded KeyboardInputEvent
-// by g_keyTranslator (kernel::input::modifier_flags::*).
+// Reflects the modifier bitmask carried by the most recently pushed keyboard
+// report (kernel::input::modifier_flags::*).
 UNDOS_KERNEL_API_DEF void KE_INPUT_GetModifierState(uint32_t &modifiers) noexcept {
   modifiers = g_modifiers;
-}
-
-UNDOS_KERNEL_API_DEF void KE_INPUT_SetMousePacketMode(kernel::input::MousePacketMode mode) noexcept {
-  g_mouseDecoder.SetMode(mode);
 }

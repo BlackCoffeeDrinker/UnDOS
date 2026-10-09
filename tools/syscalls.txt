@@ -198,6 +198,10 @@ enum IoControlCode {
     DisplayQueryMode = 0x0100,
     /** Pointer: input is struct<IoctlMouseConfig>. */
     MouseConfigure   = 0x0200,
+    /** Gamepad: output is struct<IoctlGamepadState>. */
+    GamepadReadState = 0x0300,
+    /** Gamepad: output is struct<IoctlGamepadCaps>. */
+    GamepadQueryCaps = 0x0301,
 };
 
 struct IoctlDisplayMode {
@@ -212,6 +216,45 @@ struct IoctlMouseConfig {
     enable: c<uint32_t>;
     /** Sample rate in reports per second (10-200), 0 keeps the current rate. */
     sampleRate: c<uint32_t>;
+};
+
+/**
+ * Latest axis/button snapshot of one gamepad or analog joystick. Axes are
+ * normalized to -32767..32767 and centred on 0, independent of the device's
+ * native resolution, and are named after their HID Generic Desktop usages.
+ * The axes are spelled out one field at a time rather than as an array
+ * because the IDL only supports array fields inside syscall bodies.
+ */
+struct IoctlGamepadState {
+    /** Generic Desktop X. */
+    leftX: c<int16_t>;
+    /** Generic Desktop Y. */
+    leftY: c<int16_t>;
+    /** Generic Desktop Rx. */
+    rightX: c<int16_t>;
+    /** Generic Desktop Ry. */
+    rightY: c<int16_t>;
+    /** Generic Desktop Z. */
+    leftTrigger: c<int16_t>;
+    /** Generic Desktop Rz. */
+    rightTrigger: c<int16_t>;
+    /** Bit n is set while button n is down. */
+    buttons: c<uint32_t>;
+    /** D-pad / POV hat, each -1, 0 or +1. */
+    hatX: c<int8_t>;
+    hatY: c<int8_t>;
+    /** Increments on every sample, so a reader can tell it skipped one. */
+    sequence: c<uint32_t>;
+};
+
+/** Static capabilities of one gamepad or analog joystick. */
+struct IoctlGamepadCaps {
+    /** Number of axes the device actually reports. */
+    axisCount: c<uint32_t>;
+    /** Number of buttons the device actually reports. */
+    buttonCount: c<uint32_t>;
+    /** Non-zero when the device has a d-pad / POV hat. */
+    hasHat: c<uint32_t>;
 };
 
 /** Sends a control code to the device behind an open handle. */

@@ -1,39 +1,37 @@
 #pragma once
 
+#include <stdint.h>
+
 #include <kernel/input.hpp>
 
 // Pure, header-only PS/2 aux byte-stream -> MousePacket state machine. No
-// kernel calls: the input manager (kernel/src/input/input_manager.cpp) feeds
-// it raw bytes drained from the aux byte ring. Freestanding, so it compiles
-// unchanged into KernelTests (see hosted_test/tests/mouse_packet_test.cpp),
-// exactly like key_translate.hpp / scancode_tables.hpp.
-namespace kernel::input {
+// kernel calls: the i8042 pump thread (drivers/input_i8042/ps2_pump.cpp)
+// feeds it raw bytes drained from the aux byte ring and packs the result
+// into a synthetic HID mouse report. Freestanding, so it compiles unchanged
+// into KernelTests (see hosted_test/tests/mouse_packet_test.cpp), exactly
+// like ps2_key_translate.hpp / ps2_scancode_tables.hpp.
+//
+// `MousePacket` and `mouse_buttons::*` are the hardware-agnostic contract
+// and come from <kernel/input.hpp>; only the wire framing lives here.
+namespace ps2 {
 
-// Button bits carried in MousePacket::buttons. Left/Right/Middle come from
-// byte 0 of every packet; Button4/Button5 only ever appear in
-// IntelliMouseExplorer4Byte mode (byte 3's high nibble).
-namespace mouse_buttons {
-constexpr uint8_t Left = 1 << 0;
-constexpr uint8_t Right = 1 << 1;
-constexpr uint8_t Middle = 1 << 2;
-constexpr uint8_t Button4 = 1 << 3;
-constexpr uint8_t Button5 = 1 << 4;
-}// namespace mouse_buttons
+using kernel::input::MousePacket;
+namespace mouse_buttons = kernel::input::mouse_buttons;
 
-// One decoded PS/2 aux packet. `wheel` is only meaningful in a 4-byte
-// PacketMode; it is always 0 when Standard3Byte is active.
-struct MousePacket {
-  int16_t dx = 0;
-  int16_t dy = 0;// screen-space: positive = downward (raw PS/2 Y is negated)
-  int8_t wheel = 0;
-  uint8_t buttons = 0;// mouse_buttons::*
+// Mouse packet framing negotiated with the aux device (see
+// I8042_NegotiateMouseExtensions in i8042.cpp). Standard3Byte is always the
+// safe default; upgraded only after the device confirms a recognised device
+// ID for the corresponding knock sequence.
+enum class MousePacketMode : uint8_t {
+  Standard3Byte,
+  IntelliMouse4Byte,
+  IntelliMouseExplorer4Byte,
 };
 
 class MousePacketDecoder {
   public:
   // Switches packet framing. Any partially-received packet is discarded
-  // rather than misparsed against the new length, per Task 13/15's
-  // "SetMode mid-stream" requirement.
+  // rather than misparsed against the new length.
   void SetMode(MousePacketMode mode) noexcept {
     m_mode = mode;
     m_byteIndex = 0;
@@ -86,6 +84,7 @@ class MousePacketDecoder {
     out.dy = static_cast<int16_t>(-rawDy);// raw PS/2 Y is inverted vs. screen space
     out.buttons = b0 & 0x07;              // Left/Right/Middle
     out.wheel = 0;
+    out.isAbsolute = false;
 
     if (m_mode == MousePacketMode::IntelliMouse4Byte) {
       // Full signed byte; devices only ever use the -8..7 range, but the
@@ -108,4 +107,4 @@ class MousePacketDecoder {
   int m_byteIndex = 0;
 };
 
-}// namespace kernel::input
+}// namespace ps2

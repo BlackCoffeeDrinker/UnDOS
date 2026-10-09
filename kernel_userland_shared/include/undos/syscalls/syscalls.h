@@ -29,6 +29,8 @@
 #include "__struct_PaintInfo.h"
 #include "__struct_IoctlDisplayMode.h"
 #include "__struct_IoctlMouseConfig.h"
+#include "__struct_IoctlGamepadState.h"
+#include "__struct_IoctlGamepadCaps.h"
 
 #include "__syscall_CreateDC_V1.h"
 #include "__syscall_DeleteDC_V1.h"

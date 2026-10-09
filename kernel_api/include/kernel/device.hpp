@@ -28,6 +28,7 @@ constexpr auto DiskController = "disk_controller"_dev;
 constexpr auto Disk = "disk"_dev;
 constexpr auto Keyboard = "keyboard"_dev;
 constexpr auto Mouse = "mouse"_dev;
+constexpr auto Gamepad = "gamepad"_dev;
 constexpr auto Video = "video"_dev;
 constexpr auto Serial = "serial"_dev;
 constexpr auto Parallel = "parallel"_dev;

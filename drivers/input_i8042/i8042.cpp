@@ -3,40 +3,17 @@
 #include <kernel/input.hpp>
 #include <kernel/resource.hpp>
 
+#include "hid_parser.hpp"
+#include "i8042_context.hpp"
 #include "i8042_registers.hpp"
+#include "ps2_pump.hpp"
+
+#include <span.hpp>
 
 #include <undos/syscalls/__enum_IoControlCode.h>
 #include <undos/syscalls/__struct_IoctlMouseConfig.h>
 
 namespace {
-
-// Per-controller state, held in the FDO's deviceExtension (mirrors
-// drivers/disk_ata/ata.cpp's BusContext). Aux enable and IRQ connection are
-// added in later Step 1 tasks; for now this stacks the FDO on the PDO,
-// resolves/logs the resources PnP assigned, runs controller/keyboard init
-// and registers the two named input devices.
-struct I8042Context {
-  uint16_t ioBase = 0;// data/status/command port base (0x60), resolved from the grant
-
-  // IRQ1 (keyboard) is normally granted through the same registry
-  // reservation as the port range (see config.py / legacy_isa_enum.cpp);
-  // IRQ12 (aux/mouse) has no registry-driven grant since a reservation only
-  // carries a single Irq value, so it stays at its hardcoded default.
-  uint32_t irqKeyboard = i8042_regs::kDefaultIrqKeyboard;
-  uint32_t irqMouse = i8042_regs::kDefaultIrqMouse;
-
-  // \Device\Keyboard0 / \Device\PointerPort0, created once controller init
-  // succeeds (Task 7). Kept here so later tasks (ISR wiring, mouse init)
-  // can find them without walking the FDO's child list.
-  kernel::KDevicePtr<kernel::KDevice> keyboardDevice{nullptr};
-  kernel::KDevicePtr<kernel::KDevice> mouseDevice{nullptr};
-
-  // Kept alive here so the connected ISRs stay attached for the lifetime of
-  // the FDO -- dropping a KObjectPtr<KInterruptServiceRoutineObject> frees a
-  // live ISR object (see KE_IO_ConnectInterrupt's contract in io.hpp).
-  kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> keyboardIsr{nullptr};
-  kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> mouseIsr{nullptr};
-};
 
 // Bounded-spin polled I/O primitives. A real 8042 (and QEMU's model) always
 // clears IBF/sets OBF within a handful of I/O accesses; a stuck bit means a
@@ -324,7 +301,12 @@ bool I8042_InitMouse() {
 // report a wider device ID (0x03 / 0x04) and switch to 4-byte packets. Any
 // other response -- including a timeout -- leaves the decoder on
 // Standard3Byte, which is always safe.
-void I8042_NegotiateMouseExtensions() {
+//
+// This runs before either ISR is connected, so the framing is settled before
+// the first interrupt and the pump can never observe a half-configured
+// decoder. The mode is written straight into the pointer device's own
+// context -- the kernel has no opinion on PS/2 framing.
+void I8042_NegotiateMouseExtensions(PointerDeviceContext &pointer) {
   if (!I8042_SetMouseSampleRate(200) || !I8042_SetMouseSampleRate(100) || !I8042_SetMouseSampleRate(80)) {
     KE_Print("i8042: mouse wheel knock sequence failed; mouse protocol = Standard3Byte");
     return;
@@ -335,7 +317,7 @@ void I8042_NegotiateMouseExtensions() {
     KE_Print("i8042: mouse protocol = Standard3Byte");
     return;
   }
-  KE_INPUT_SetMousePacketMode(kernel::input::MousePacketMode::IntelliMouse4Byte);
+  pointer.decoder.SetMode(ps2::MousePacketMode::IntelliMouse4Byte);
 
   if (!I8042_SetMouseSampleRate(200) || !I8042_SetMouseSampleRate(200) || !I8042_SetMouseSampleRate(80)) {
     KE_Print("i8042: mouse 5-button knock sequence failed; mouse protocol = IntelliMouse4Byte");
@@ -344,63 +326,108 @@ void I8042_NegotiateMouseExtensions() {
   const uint8_t explorerId = I8042_ReadMouseDeviceId();
   KE_Print("i8042: mouse device id after 5-button knock=0x{x}", explorerId);
   if (explorerId == 0x04) {
-    KE_INPUT_SetMousePacketMode(kernel::input::MousePacketMode::IntelliMouseExplorer4Byte);
+    pointer.decoder.SetMode(ps2::MousePacketMode::IntelliMouseExplorer4Byte);
     KE_Print("i8042: mouse protocol = IntelliMouseExplorer4Byte");
   } else {
     KE_Print("i8042: mouse protocol = IntelliMouse4Byte");
   }
 }
 
-// Drains the controller's output buffer and routes each byte to the input
-// manager by the AUX status bit, exactly as Task 9 specifies: the same
-// draining logic serves both the keyboard (IRQ1) and aux (IRQ12) ISRs below,
-// since hardware tags the byte's origin in the status register regardless
-// of which line raised the interrupt. Bounded loop, port I/O only, no
-// allocation, no KE_Print -- ISR context.
-void I8042_DrainAndReport() {
+// INTERRUPT CONTEXT. Drains the controller's output buffer into the owning
+// device's byte ring and wakes the pump; the same draining logic serves both
+// the keyboard (IRQ1) and aux (IRQ12) ISRs, since hardware tags the byte's
+// origin in the status register regardless of which line raised the
+// interrupt. Bounded loop, port I/O and a ring push only: no decoding, no
+// HID symbol, no kernel input call, no allocation, no KE_Print. A byte that
+// cannot be buffered is counted and dropped rather than making the ISR
+// block or spin.
+template<typename ContextT>
+bool I8042_PushByte(const kernel::KDevicePtr<kernel::KDevice> &device, uint8_t data) noexcept {
+  if (!device) return false;
+  auto *ctx = device->deviceExtension.as<ContextT>();
+  if (ctx == nullptr) return false;
+  if (!ctx->bytes.Push(data)) {
+    ++ctx->droppedBytes;
+    return false;
+  }
+  return true;
+}
+
+void I8042_DrainToRings(I8042Context *ctx) noexcept {
+  if (ctx == nullptr) return;
+
+  bool buffered = false;
   for (int i = 0; i < 16; ++i) {
     const uint8_t status = HAL_IO_In8(i8042_regs::kStatusPort);
     if (!(status & i8042_regs::status::OutputBufferFull)) break;
 
     const uint8_t data = HAL_IO_In8(i8042_regs::kDataPort);
     if (status & i8042_regs::status::AuxData) {
-      KE_INPUT_ReportAuxData(data);
+      buffered |= I8042_PushByte<PointerDeviceContext>(ctx->mouseDevice, data);
     } else {
-      KE_INPUT_ReportKeyboardData(data);
+      buffered |= I8042_PushByte<KeyboardDeviceContext>(ctx->keyboardDevice, data);
     }
   }
+
+  // KE_EVENT_Signal is documented as usable from interrupt context; this is
+  // the only thing that leaves the ISR.
+  if (buffered) KE_EVENT_Signal(ctx->wake, true);
 }
 
-void I8042_KeyboardIsr(const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *) {
-  I8042_DrainAndReport();
+void I8042_KeyboardIsr(const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *context) {
+  I8042_DrainToRings(static_cast<I8042Context *>(context));
 }
 
-void I8042_AuxIsr(const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *) {
-  I8042_DrainAndReport();
+void I8042_AuxIsr(const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *context) {
+  I8042_DrainToRings(static_cast<I8042Context *>(context));
 }
 
 // Registers \Device\Keyboard0 and \Device\PointerPort0 as children of the
 // i8042 FDO (mirroring drivers/gfx_vga/vga.cpp's named-device pattern) so
 // both are visible in the Object Manager namespace and the device-tree
-// dump. No device extension is needed yet -- the input manager (Task 8+)
-// owns all decode state -- so these are created with 0 extension size.
+// dump. Each now carries its own decode state -- byte ring, decoder, parsed
+// HID format -- in its device extension, and its synthetic report descriptor
+// is parsed exactly once, here at attach time. A descriptor that fails to
+// parse means the device cannot be decoded at all, so no device is created.
 void I8042_CreateNamedDevices(const kernel::KDevicePtr<kernel::KDeviceBus> &fdo, I8042Context &ctx) {
-  ctx.keyboardDevice = KE_IO_CreateDevice(fdo->driverObject,
-                                          0, "Keyboard", kernel::device_type::Keyboard,
-                                          CreateDeviceFlags::MultipleAllowed);
+  ctx.keyboardDevice = KE_IO_CreateDeviceWithContext<KeyboardDeviceContext>(
+      fdo->driverObject, "Keyboard", kernel::device_type::Keyboard,
+      CreateDeviceFlags::MultipleAllowed);
   if (ctx.keyboardDevice) {
-    ctx.keyboardDevice->hardwareId = "input_i8042";
-    KE_IO_AttachChildDevice(fdo, ctx.keyboardDevice);
+    auto *keyboard = ctx.keyboardDevice->deviceExtension.as<KeyboardDeviceContext>();
+    const bool parsed = keyboard != nullptr &&
+                        kernel::hid::ParseReportDescriptor(
+                            kstd::span(ps2::kKeyboardReportDescriptor,
+                                       sizeof(ps2::kKeyboardReportDescriptor)),
+                            keyboard->format);
+    if (parsed) {
+      ctx.keyboardDevice->hardwareId = "input_i8042";
+      KE_IO_AttachChildDevice(fdo, ctx.keyboardDevice);
+    } else {
+      KE_Print("i8042: keyboard HID descriptor rejected; no keyboard device");
+      ctx.keyboardDevice = nullptr;
+    }
   } else {
     KE_Print("i8042: Failed to create Keyboard0 device");
   }
 
-  ctx.mouseDevice = KE_IO_CreateDevice(fdo->driverObject,
-                                       0, "PointerPort", kernel::device_type::Mouse,
-                                       CreateDeviceFlags::MultipleAllowed);
+  ctx.mouseDevice = KE_IO_CreateDeviceWithContext<PointerDeviceContext>(
+      fdo->driverObject, "PointerPort", kernel::device_type::Mouse,
+      CreateDeviceFlags::MultipleAllowed);
   if (ctx.mouseDevice) {
-    ctx.mouseDevice->hardwareId = "input_i8042";
-    KE_IO_AttachChildDevice(fdo, ctx.mouseDevice);
+    auto *pointer = ctx.mouseDevice->deviceExtension.as<PointerDeviceContext>();
+    const bool parsed = pointer != nullptr &&
+                        kernel::hid::ParseReportDescriptor(
+                            kstd::span(ps2::kMouseReportDescriptor,
+                                       sizeof(ps2::kMouseReportDescriptor)),
+                            pointer->format);
+    if (parsed) {
+      ctx.mouseDevice->hardwareId = "input_i8042";
+      KE_IO_AttachChildDevice(fdo, ctx.mouseDevice);
+    } else {
+      KE_Print("i8042: mouse HID descriptor rejected; no pointer device");
+      ctx.mouseDevice = nullptr;
+    }
   } else {
     KE_Print("i8042: Failed to create PointerPort0 device");
   }
@@ -445,7 +472,7 @@ kernel::IoStatus I8042_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &
   HAL_INTR_SetIrqMask(i8042_regs::kDefaultIrqKeyboard, false);
 
   KE_Print("i8042: DeviceControl MouseConfigure enable={} rate={} -> {}",
-                  config.enable, config.sampleRate, ok ? "ok" : "failed");
+           config.enable, config.sampleRate, ok ? "ok" : "failed");
   return ok ? kernel::IoStatus::Success : kernel::IoStatus::DeviceError;
 }
 
@@ -495,6 +522,16 @@ void I8042_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
 
   I8042_CreateNamedDevices(fdo, *ctx);
 
+  // The decoding worker must exist before either ISR is connected, so the
+  // very first captured byte already has something to drain it.
+  ctx->wake.manualReset = false;
+  ctx->wake.signalled = false;
+  ctx->pumpThread = KE_SCHED_CreateThread(&ps2::I8042_PumpThread, ctx, 0);
+  if (!ctx->pumpThread) {
+    KE_Print("i8042: Failed to create pump thread; no input will be decoded");
+    return;
+  }
+
   // Run all polled controller/device init -- keyboard already done above,
   // mouse below -- before connecting either ISR. Once the keyboard IRQ is
   // connected, the CCB's kbd-interrupt-enable bit (set by
@@ -502,8 +539,9 @@ void I8042_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   // landing in the output buffer, including 0xA9's test response and every
   // byte of the mouse reset/negotiation handshake -- the ISR would race the
   // polled reads below and steal those bytes out from under them.
-  if (I8042_InitMouse()) {
-    I8042_NegotiateMouseExtensions();
+  auto *pointer = ctx->mouseDevice ? ctx->mouseDevice->deviceExtension.as<PointerDeviceContext>() : nullptr;
+  if (pointer != nullptr && I8042_InitMouse()) {
+    I8042_NegotiateMouseExtensions(*pointer);
   } else {
     KE_Print("i8042: no mouse detected; pointer device inactive");
   }

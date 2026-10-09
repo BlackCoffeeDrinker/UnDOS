@@ -35,6 +35,8 @@
 #include <undos/syscalls/__struct_PaintInfo.h>
 #include <undos/syscalls/__struct_IoctlDisplayMode.h>
 #include <undos/syscalls/__struct_IoctlMouseConfig.h>
+#include <undos/syscalls/__struct_IoctlGamepadState.h>
+#include <undos/syscalls/__struct_IoctlGamepadCaps.h>
 
 struct __KRN_GFX_CREATEDC_V1 {
     kstd::string driverName {};

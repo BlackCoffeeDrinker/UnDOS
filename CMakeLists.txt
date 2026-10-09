@@ -152,6 +152,7 @@ if (NOT TESTING_ONLY)
             # (<=8 chars) since drivers/fs_fat/fat_short_name.hpp's short-name
             # lookup has no truncation/tilde fallback for longer names.
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:input_i8042> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/i8042.elf
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:input_gameport> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/gameport.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:serial_uart> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/serial.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:term> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/term.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:init> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/init.elf
@@ -161,9 +162,9 @@ if (NOT TESTING_ONLY)
                     author-localmachine
             COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py ${PROJECT_SOURCE_DIR}/bin/fat32.img ${PROJECT_SOURCE_DIR}/bin/filesystem
 
-            DEPENDS native_elf_loader bus_isa disk_ata volmgr fs_fat gfx_vga gfx_cirrus input_i8042 serial_uart term init init_shared
+            DEPENDS native_elf_loader bus_isa disk_ata volmgr fs_fat gfx_vga gfx_cirrus input_i8042 input_gameport serial_uart term init init_shared
             $<TARGET_FILE:native_elf_loader>
-            $<TARGET_FILE:bus_isa> $<TARGET_FILE:disk_ata> $<TARGET_FILE:volmgr> $<TARGET_FILE:fs_fat> $<TARGET_FILE:gfx_vga> $<TARGET_FILE:gfx_cirrus> $<TARGET_FILE:input_i8042>
+            $<TARGET_FILE:bus_isa> $<TARGET_FILE:disk_ata> $<TARGET_FILE:volmgr> $<TARGET_FILE:fs_fat> $<TARGET_FILE:gfx_vga> $<TARGET_FILE:gfx_cirrus> $<TARGET_FILE:input_i8042> $<TARGET_FILE:input_gameport>
             $<TARGET_FILE:serial_uart>
             $<TARGET_FILE:term> $<TARGET_FILE:init> ${CMAKE_BINARY_DIR}/userland/apps/init/initlib.so
             ${PROJECT_SOURCE_DIR}/tools/configuration_editor/config.py
