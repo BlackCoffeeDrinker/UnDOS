@@ -10,7 +10,7 @@ namespace {
 void init_probe_device_control() {
   uint32_t mouse = 0;
   if (UD_SYS_OpenV1("\\Device\\PointerPort0", FileOpenMode_Read, &mouse) == SyscallReturnCode_OKAY) {
-    IoctlMouseConfig config{1, 60};
+    constexpr IoctlMouseConfig config{.enable = 1, .sampleRate = 60};
     uint32_t outLen = 0;
     const auto ret = UD_SYS_ControlV1(mouse, IoControlCode_MouseConfigure,
                                       reinterpret_cast<const uint8_t *>(&config), sizeof(config), nullptr, &outLen);
@@ -106,17 +106,6 @@ extern "C" int main(int argc, char **argv) {
   crt_printf("=================================================\n\n");
   crt_printf("%s", init_shared_message());
 
-  char line[128];
-  for (int prompt = 1; prompt <= 3; ++prompt) {
-    crt_printf("undos:%d> ", prompt);
-    if (crt_readline(line, sizeof(line))) {
-      crt_printf("Executed: %s", line);
-    } else {
-      break;
-    }
-  }
-
-  crt_printf("init: interactive session finished.\n");
   init_probe_device_control();
   init_probe_wait();
   init_probe_input();

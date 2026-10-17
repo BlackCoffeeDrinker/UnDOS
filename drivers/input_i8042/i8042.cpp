@@ -539,8 +539,8 @@ void I8042_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   // landing in the output buffer, including 0xA9's test response and every
   // byte of the mouse reset/negotiation handshake -- the ISR would race the
   // polled reads below and steal those bytes out from under them.
-  auto *pointer = ctx->mouseDevice ? ctx->mouseDevice->deviceExtension.as<PointerDeviceContext>() : nullptr;
-  if (pointer != nullptr && I8042_InitMouse()) {
+  if (auto *pointer = ctx->mouseDevice ? ctx->mouseDevice->deviceExtension.as<PointerDeviceContext>() : nullptr; 
+    pointer != nullptr && I8042_InitMouse()) {
     I8042_NegotiateMouseExtensions(*pointer);
   } else {
     KE_Print("i8042: no mouse detected; pointer device inactive");

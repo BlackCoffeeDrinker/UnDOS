@@ -23,11 +23,7 @@ class Mutex {
 
   Mutex(const Mutex &) = delete;
   Mutex &operator=(const Mutex &) = delete;
-
-  // Never callable from a DPC: a contended lock yields, and a DPC runs on the
-  // interrupted thread's borrowed kernel stack, so yielding there deadlocks
-  // that thread. Checked in debug builds only -- NDEBUG compiles the check
-  // out entirely, leaving the release fast path untouched.
+  
   void lock() noexcept {
     uint32_t expected = kUnlocked;
     while (!HAL_ATOMIC_CompareExchange32(
