@@ -8,6 +8,14 @@
 
 #include "ob_test_support.hpp"
 
+namespace {
+kernel::KObjectPtr<kernel::KDirectoryObject> CreateDirectory(const kstd::string_view &name) {
+  auto result = kernel::CreateKObject<kernel::KDirectoryObject>(name);
+  REQUIRE(result);
+  return *result;
+}
+}
+
 TEST_CASE("Object Manager well-known directories are non-null and distinct", "[ob]") {
   EnsureObjectManagerInitialized();
 
@@ -45,58 +53,58 @@ TEST_CASE("KE_OB_InsertObject / KE_OB_RemoveObject", "[ob]") {
   const auto device = KE_OB_GetDeviceDirectory();
 
   SECTION("Successful insert makes the object findable and retains it") {
-    auto dir = kernel::CreateKObject<kernel::KDirectoryObject>("ObTest_InsertOk");
+    auto dir = CreateDirectory("ObTest_InsertOk");
     const auto *rawPtr = dir.get();
 
-    REQUIRE(KE_OB_InsertObject(device, dir));
+    REQUIRE(KE_OB_InsertObject(device, dir) == kernel::KernelError::Success);
     REQUIRE(dir->parent == device.get());
     REQUIRE(KE_OB_FindDirectChild(device, "ObTest_InsertOk").get() == rawPtr);
 
-    REQUIRE(KE_OB_RemoveObject(device, dir));
+    REQUIRE(KE_OB_RemoveObject(device, dir) == kernel::KernelError::Success);
   }
 
   SECTION("Duplicate name insert is rejected") {
-    auto dir1 = kernel::CreateKObject<kernel::KDirectoryObject>("ObTest_Dup");
-    auto dir2 = kernel::CreateKObject<kernel::KDirectoryObject>("ObTest_Dup");
+    auto dir1 = CreateDirectory("ObTest_Dup");
+    auto dir2 = CreateDirectory("ObTest_Dup");
 
-    REQUIRE(KE_OB_InsertObject(device, dir1));
-    REQUIRE_FALSE(KE_OB_InsertObject(device, dir2));
+    REQUIRE(KE_OB_InsertObject(device, dir1) == kernel::KernelError::Success);
+    REQUIRE(KE_OB_InsertObject(device, dir2) == kernel::KernelError::AlreadyExists);
     REQUIRE(dir2->parent == nullptr);
 
-    REQUIRE(KE_OB_RemoveObject(device, dir1));
+    REQUIRE(KE_OB_RemoveObject(device, dir1) == kernel::KernelError::Success);
   }
 
   SECTION("Inserting an object that already has a parent is rejected") {
-    auto dir = kernel::CreateKObject<kernel::KDirectoryObject>("ObTest_AlreadyParented");
-    REQUIRE(KE_OB_InsertObject(device, dir));
+    auto dir = CreateDirectory("ObTest_AlreadyParented");
+    REQUIRE(KE_OB_InsertObject(device, dir) == kernel::KernelError::Success);
 
     const auto driver = KE_OB_GetDriverDirectory();
-    REQUIRE_FALSE(KE_OB_InsertObject(driver, dir));
+    REQUIRE(KE_OB_InsertObject(driver, dir) == kernel::KernelError::AlreadyAttached);
     REQUIRE(dir->parent == device.get());
 
-    REQUIRE(KE_OB_RemoveObject(device, dir));
+    REQUIRE(KE_OB_RemoveObject(device, dir) == kernel::KernelError::Success);
   }
 
   SECTION("Reference count changes across insert/remove") {
-    auto dir = kernel::CreateKObject<kernel::KDirectoryObject>("ObTest_Refcount");
+    auto dir = CreateDirectory("ObTest_Refcount");
     REQUIRE(dir->reference_count.load() == 1);
 
-    REQUIRE(KE_OB_InsertObject(device, dir));
+    REQUIRE(KE_OB_InsertObject(device, dir) == kernel::KernelError::Success);
     REQUIRE(dir->reference_count.load() == 2);
 
-    REQUIRE(KE_OB_RemoveObject(device, dir));
+    REQUIRE(KE_OB_RemoveObject(device, dir) == kernel::KernelError::Success);
     REQUIRE(dir->reference_count.load() == 1);
   }
 
   SECTION("Removing with a mismatched parent fails and leaves the object attached") {
-    auto dir = kernel::CreateKObject<kernel::KDirectoryObject>("ObTest_WrongParent");
-    REQUIRE(KE_OB_InsertObject(device, dir));
+    auto dir = CreateDirectory("ObTest_WrongParent");
+    REQUIRE(KE_OB_InsertObject(device, dir) == kernel::KernelError::Success);
 
     const auto driver = KE_OB_GetDriverDirectory();
-    REQUIRE_FALSE(KE_OB_RemoveObject(driver, dir));
+    REQUIRE(KE_OB_RemoveObject(driver, dir) == kernel::KernelError::ParentMismatch);
     REQUIRE(dir->parent == device.get());
 
-    REQUIRE(KE_OB_RemoveObject(device, dir));
+    REQUIRE(KE_OB_RemoveObject(device, dir) == kernel::KernelError::Success);
   }
 }
 
@@ -104,12 +112,12 @@ TEST_CASE("KE_OB_LookupObject / KE_OB_LookupObjectWithRoot / KE_OB_FindDirectChi
   EnsureObjectManagerInitialized();
   const auto device = KE_OB_GetDeviceDirectory();
 
-  auto level1 = kernel::CreateKObject<kernel::KDirectoryObject>("ObTest_Level1");
-  auto level2 = kernel::CreateKObject<kernel::KDirectoryObject>("ObTest_Level2");
+  auto level1 = CreateDirectory("ObTest_Level1");
+  auto level2 = CreateDirectory("ObTest_Level2");
   const auto *level2Ptr = level2.get();
 
-  REQUIRE(KE_OB_InsertObject(device, level1));
-  REQUIRE(KE_OB_InsertObject(level1, level2));
+  REQUIRE(KE_OB_InsertObject(device, level1) == kernel::KernelError::Success);
+  REQUIRE(KE_OB_InsertObject(level1, level2) == kernel::KernelError::Success);
 
   SECTION("Multi-level absolute path lookup") {
     const auto found = KE_OB_LookupObject("/Device/ObTest_Level1/ObTest_Level2");
@@ -140,16 +148,16 @@ TEST_CASE("KE_OB_LookupObject / KE_OB_LookupObjectWithRoot / KE_OB_FindDirectChi
     REQUIRE(found.get() == level2Ptr);
   }
 
-  REQUIRE(KE_OB_RemoveObject(level1, level2));
-  REQUIRE(KE_OB_RemoveObject(device, level1));
+  REQUIRE(KE_OB_RemoveObject(level1, level2) == kernel::KernelError::Success);
+  REQUIRE(KE_OB_RemoveObject(device, level1) == kernel::KernelError::Success);
 }
 
 TEST_CASE("KE_OB_FindDirectChildOfType filters by object type", "[ob]") {
   EnsureObjectManagerInitialized();
   const auto device = KE_OB_GetDeviceDirectory();
 
-  auto subDir = kernel::CreateKObject<kernel::KDirectoryObject>("ObTest_TypedChild");
-  REQUIRE(KE_OB_InsertObject(device, subDir));
+  const auto subDir = CreateDirectory("ObTest_TypedChild");
+  REQUIRE(KE_OB_InsertObject(device, subDir) == kernel::KernelError::Success);
 
   SECTION("Matching type returns the object") {
     const auto found = KE_OB_FindDirectChildOfType<kernel::KDirectoryObject>(device, "ObTest_TypedChild");
@@ -161,5 +169,5 @@ TEST_CASE("KE_OB_FindDirectChildOfType filters by object type", "[ob]") {
     REQUIRE(found == nullptr);
   }
 
-  REQUIRE(KE_OB_RemoveObject(device, subDir));
+  REQUIRE(KE_OB_RemoveObject(device, subDir) == kernel::KernelError::Success);
 }

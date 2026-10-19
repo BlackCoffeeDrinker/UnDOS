@@ -178,6 +178,7 @@ if (NOT TESTING_ONLY)
             COMMAND ${PYTHON3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/create-font-fixture.py
                     ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Fonts/FTEST.TTF
             COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/userland/apps/progman/PROGMAN.INI ${CMAKE_SOURCE_DIR}/bin/filesystem/System/PROGMAN.INI
+            COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/userland/apps/init/DISPLAY.CFG ${CMAKE_SOURCE_DIR}/bin/filesystem/System/DISPLAY.CFG
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:init> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/init.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:abi_test> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abitest.elf
             COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/userland/apps/abitest/abitest.so ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abitest.so
@@ -197,6 +198,7 @@ if (NOT TESTING_ONLY)
             $<TARGET_FILE:progman> $<TARGET_FILE:demo>
             $<TARGET_FILE:fontloader>
             ${CMAKE_SOURCE_DIR}/userland/apps/progman/PROGMAN.INI
+            ${CMAKE_SOURCE_DIR}/userland/apps/init/DISPLAY.CFG
             ${PROJECT_SOURCE_DIR}/tools/configuration_editor/config.py
             ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py
             ${PROJECT_SOURCE_DIR}/tools/create-font-fixture.py
@@ -216,6 +218,7 @@ if (NOT TESTING_ONLY)
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/fontload.elf
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Fonts/FTEST.TTF
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/PROGMAN.INI
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/DISPLAY.CFG
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/init.elf
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/initlib.so
 

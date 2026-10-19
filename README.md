@@ -185,6 +185,40 @@ recovery session rather than silently substituting successful-looking data.
 Run `/System/init.elf --diagnostic` to select the preserved subsystem probes
 instead of normal session supervision.
 
+### User-controlled primary display
+
+Adapter discovery does not select a graphics mode. `init` reads
+`/System/DISPLAY.CFG` before starting the shell. The file contains four
+whitespace-separated decimal values: `width height bpp refreshHz`, initially
+`640 480 8 60`; refresh zero accepts any refresh rate. Missing, unreadable or
+malformed configuration is an explicit startup error. If the requested mode
+is not supported, init logs the mismatch and selects the first enumerated
+mode (including the planar VGA fallback).
+
+`EnumDisplayModesV1` (350) enumerates monitor-approved modes; its zero-based
+ordinal is distinct from the returned opaque `modeId`. `available=0` marks
+the end. `GetDisplayModeV1` (351) reports active/inactive state, generation and
+current mode. `SetDisplayModeV1` (352) activates or switches the primary display.
+Any application, including a future Control Panel, may request a switch:
+there is no exclusive owner or authorization requirement yet. Mode changes
+do not save configuration. EDID/default-monitor limits remain kernel-enforced;
+the old `System\Console\Desktop` preference is no longer used.
+
+`CreateDC(Primary)` opens the active root drawing surface, not a mode-control
+lease. It returns `UNSUPPORTED` before activation rather than selecting mode
+zero implicitly. Firmware output may remain visible until activation. Memory
+DCs work independently. Existing screen DC handles survive mode changes, but
+pixels are lost: USER refreshes clipping, pointer position, window placement
+and desktop painting. Each window receives a coalesced `DisplayChange`
+notification even if its message ring is full. Program Manager refits its
+frame and workspace. Allocation failures preserve the previous mode; output
+enable failure is explicit and queryable as an inactive programmed mode.
+
+After building `BootIso`, `python3 tools/progman-smoke.py --scenario display
+--output /tmp/undos-display` exercises a second process switching resolutions
+and back while retaining a root DC. Repeat with `--vga std` for the single-mode
+VGA path. Both use the bounded QEMU wrapper.
+
 ### Split TrueType infrastructure
 
 The first part of [the split font plan](TTF_SPLIT_USER_KERNEL.md) is present:
@@ -207,6 +241,23 @@ remain unimplemented. Existing bitmap text is unchanged.
 * **Permissions:** Permissions model is intentionally minimal for now to mirror vintage single-user desktop experiences.
 
 ## Developer
+
+### Kernel error conventions
+
+Kernel operations report status with `kernel::KernelError`; operations producing a
+value use `kstd::expected<T, kernel::KernelError>`. Propagate the original error
+instead of replacing it with `false`, `nullptr`, a negative integer, or a
+successful zero-byte transfer. Predicates and optional lookup results still
+represent ordinary false/absent outcomes, and EOF remains a successful empty read.
+Subsystems own their domain validation, including size and format limits; syscall
+handlers adapt ABI arguments and resolve the caller's handles.
+
+Handwritten syscall handlers and generated internal dispatch functions return
+`KernelError`. Only the public dispatch boundary converts errors to the unchanged
+`SyscallReturnCode` ABI through `kernel::KErrorToSysReturnCode`. The
+`kstd::error_code` overload checks the category before interpreting its value;
+unrecognized categories or errors without a truthful ABI equivalent return
+`UNKNOWN`.
 
 ### Application ABI v1 (Phase 1)
 
@@ -739,9 +790,8 @@ Only read-only `fopen` is supported: write/append/update modes fail with
 `fseek`/`ftell` also fail with `ENOSYS`; filesystem mutation, seek semantics,
 and POSIX file descriptors/process APIs are not promised. Paths follow the
 existing VFS rules (including short filenames); the libc does not create a
-working-directory abstraction. The VFS itself currently conflates some
-lower-level read failures with zero-length reads; libc cannot recover error
-information absent from that backend.
+working-directory abstraction. VFS read failures propagate through the syscall
+status separately from successful EOF or short reads.
 
 The allocator reuses the CRT page arenas/free list, now with 16-byte alignment.
 Zero-size allocation returns null; failed growth preserves the original

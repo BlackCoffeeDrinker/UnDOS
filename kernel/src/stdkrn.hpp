@@ -4,7 +4,9 @@
 #include <new.hpp>
 #include <type_traits.hpp>
 #include <utility.hpp>
+#include <expected.hpp>
 
+#include <kernel/kerror.hpp>
 
 #if __STDC_HOSTED__
 // On a hosted build (e.g. the host test binary), placement new comes from the
@@ -37,20 +39,22 @@ struct KMallocDeleter {
 }// namespace kernel::detail
 
 template<typename T, typename... Args>
-kstd::unique_ptr<T, kernel::detail::KMallocDeleter<T>> KE_CreateObject(Args &&...args) {
+kstd::expected<kstd::unique_ptr<T, kernel::detail::KMallocDeleter<T>>, kernel::KernelError>
+KE_CreateObject(Args &&...args) {
   if (void *p = KE_Malloc(sizeof(T))) {
     return kstd::unique_ptr<T, kernel::detail::KMallocDeleter<T>>(new (p) T(kstd::forward<Args>(args)...));
   }
-  return nullptr;
+  return kstd::unexpected(kernel::KernelError::OutOfMemory);
 }
 
 template<typename T, typename... Args>
-auto KE_CreateKPtrObject(Args &&...args) -> typename kernel::detail::KPtrTypeOf<T>::type {
+auto KE_CreateKPtrObject(Args &&...args)
+    -> kstd::expected<typename kernel::detail::KPtrTypeOf<T>::type, kernel::KernelError> {
   if (void *p = KE_Malloc(sizeof(T))) {
     T *obj = new (p) T(kstd::forward<Args>(args)...);
     return typename kernel::detail::KPtrTypeOf<T>::type(obj);
   }
-  return nullptr;
+  return kstd::unexpected(kernel::KernelError::OutOfMemory);
 }
 
 UNDOS_KERNEL_PUBLIC_V1API(
@@ -63,23 +67,23 @@ using ::KE_CreateObject;
 
 template<typename T, typename... Args>
   requires(kstd::is_base_of_v<KObject, T>)
-KObjectPtr<T> CreateKObject(const kstd::static_string<64> &name, Args &&...args) {
+ kstd::expected<KObjectPtr<T>, KernelError> CreateKObject(const kstd::static_string<64> &name, Args &&...args) {
   if (void *p = KE_Malloc(sizeof(T))) {
     KObjectPtr<T> res(new (p) T(name, kstd::forward<Args>(args)...));
     return res;
   }
 
-  return nullptr;
+  return kstd::unexpected(KernelError::OutOfMemory);
 }
 
 template<typename T, typename... Args>
   requires(kstd::is_base_of_v<KObject, T>)
-KObjectPtr<T> CreateAnonymousKObject(Args &&...args) {
+ kstd::expected<KObjectPtr<T>, KernelError> CreateAnonymousKObject(Args &&...args) {
   if (void *p = KE_Malloc(sizeof(T))) {
     KObjectPtr<T> res(new (p) T(kstd::forward<Args>(args)...));
     return res;
   }
 
-  return nullptr;
+  return kstd::unexpected(KernelError::OutOfMemory);
 }
 }// namespace kernel

@@ -99,9 +99,8 @@ def author_localmachine_hive(filename: str) -> None:
         ("COM1", {"HwID": "serial_uart", "IoPorts": "0x3F8-0x3FF", "Irq": "4"}),
     ]
 
-    # Console/Desktop: display preferences, not driver-private settings, so
-    # they live in a generic key every graphics driver can read. An absent,
-    # unparsable or unsupported combination falls back to 640x480x8 at 60Hz.
+    # Legacy editor-visible desktop preferences; initial mode selection now
+    # belongs to init's /System/DISPLAY.CFG, not the kernel registry reader.
     desktop_mode = {
         "Width": "640",
         "Height": "480",

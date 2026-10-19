@@ -79,8 +79,6 @@ add_executable(kernel
         src/syscalls/GFX.cpp
         src/syscalls/User.cpp
         src/user/user.hpp
-        src/user/region.hpp
-        src/user/msgring.hpp
         src/user/window.cpp
         src/user/msgqueue.cpp
         src/user/paint.cpp
@@ -101,6 +99,9 @@ add_executable(kernel
         src/event_broadcaster.cpp
         src/event_broadcaster.hpp
         src/gfx/gfx.hpp
+        src/kerror.cpp
+        src/syscalls/KErrorToSysReturnCode.cpp
+        src/syscalls/KErrorToSysReturnCode.hpp
 )
 
 add_dependencies(kernel undos-syscalls-gen)

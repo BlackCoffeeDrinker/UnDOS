@@ -6,32 +6,46 @@
 #include <kernel/configuration_manager.hpp>
 
 namespace {
-// Parses a decimal unsigned integer; returns false on empty/malformed input.
-bool ParseUInt32(const kstd::string_view &text, uint32_t &out) {
-  if (text.empty()) return false;
+// Parses a decimal unsigned integer. Errors: InvalidFormat (empty/malformed),
+// ArithmeticOverflow (does not fit in 32 bits).
+kstd::expected<uint32_t, kernel::KernelError> ParseUInt32(const kstd::string_view &text) {
+  if (text.empty()) return kstd::unexpected(kernel::KernelError::InvalidFormat);
   uint32_t value = 0;
   for (const char c: text) {
-    if (c < '0' || c > '9') return false;
-    value = value * 10 + static_cast<uint32_t>(c - '0');
+    if (c < '0' || c > '9') return kstd::unexpected(kernel::KernelError::InvalidFormat);
+    const auto digit = static_cast<uint32_t>(c - '0');
+    if (value > (UINT32_MAX - digit) / 10) return kstd::unexpected(kernel::KernelError::ArithmeticOverflow);
+    value = value * 10 + digit;
   }
-  out = value;
-  return true;
+  return value;
 }
 
 // Reads the named value subkey under `key`, matching the "open a subkey
 // named after the value, then read its default value" pattern the registry
 // uses everywhere else (see kernel/src/legacy_isa_enum.cpp).
-bool ReadStringValue(const kernel::KConfigurationKeyPtr &key, const kstd::string_view &valueName, kstd::string &out) {
+kstd::expected<kstd::string, kernel::KernelError> ReadStringValue(const kernel::KConfigurationKeyPtr &key, const kstd::string_view &valueName) {
   const auto valueKey = KE_CM_OpenKey(key, valueName);
-  if (!valueKey) return false;
-  out.resize(KE_CM_GetKeyValueStringSize(valueKey));
-  return KE_CM_GetKeyValueString(valueKey, kstd::span(out.data(), out.size()));
+  if (!valueKey) return kstd::unexpected(valueKey.error());
+  const auto size = KE_CM_GetKeyValueStringSize(*valueKey);
+  if (!size) return kstd::unexpected(size.error());
+  kstd::string out;
+  out.resize(*size);
+  if (out.size() != *size) return kstd::unexpected(kernel::KernelError::OutOfMemory);
+  const auto copied = KE_CM_GetKeyValueString(*valueKey, kstd::span(out.data(), out.size()));
+  if (!copied) return kstd::unexpected(copied.error());
+  out.resize(*copied);
+  return out;
 }
 
-bool ReadUInt32Value(const kernel::KConfigurationKeyPtr &key, const kstd::string_view &valueName, uint32_t &out) {
-  kstd::string text;
-  if (!ReadStringValue(key, valueName, text)) return false;
-  return ParseUInt32(text, out);
+// Leaves `out` untouched when the value is missing or malformed.
+void ReadUInt32Value(const kernel::KConfigurationKeyPtr &key, const kstd::string_view &valueName, uint32_t &out) {
+  const auto text = ReadStringValue(key, valueName);
+  if (!text) return;
+  if (const auto value = ParseUInt32(*text)) {
+    out = *value;
+  } else {
+    KE_Print("GFX: default monitor value {} is malformed: {}", valueName, value.error());
+  }
 }
 
 // Opens \System\<name> in the LocalMachine hive, or null if any level is
@@ -39,8 +53,10 @@ bool ReadUInt32Value(const kernel::KConfigurationKeyPtr &key, const kstd::string
 kernel::KConfigurationKeyPtr OpenSystemKey(const kstd::string_view &name) {
   const auto localMachine = KE_CM_OpenRoot("LocalMachine");
   if (!localMachine) return nullptr;
-  const auto systemKey = KE_CM_OpenKey(localMachine, "System");
-  return systemKey ? KE_CM_OpenKey(systemKey, name) : nullptr;
+  const auto systemKey = KE_CM_OpenKey(*localMachine, "System");
+  if (!systemKey) return nullptr;
+  const auto key = KE_CM_OpenKey(*systemKey, name);
+  return key ? *key : nullptr;
 }
 
 // Reads the Max* limits and the Modes/N timing list out of
@@ -48,32 +64,41 @@ kernel::KConfigurationKeyPtr OpenSystemKey(const kstd::string_view &name) {
 // individual malformed entries are skipped and logged.
 bool ReadDefaultMonitorKey(kernel::KMonitorCapabilities &caps) {
   const auto monitorsKey = OpenSystemKey("Monitors");
-  const auto defaultKey = monitorsKey ? KE_CM_OpenKey(monitorsKey, "Default") : nullptr;
-  if (!defaultKey) {
+  if (!monitorsKey) {
+    KE_Print("GFX: no System\\Monitors key");
+    return false;
+  }
+  const auto opened = KE_CM_OpenKey(monitorsKey, "Default");
+  if (!opened) {
     KE_Print("GFX: no System\\Monitors\\Default key");
     return false;
   }
+  const kernel::KConfigurationKeyPtr &defaultKey = *opened;
 
   ReadUInt32Value(defaultKey, "MaxHorizontalResolution", caps.maxWidth);
   ReadUInt32Value(defaultKey, "MaxVerticalResolution", caps.maxHeight);
   ReadUInt32Value(defaultKey, "MaxRefreshRate", caps.maxRefreshRate);
 
-  if (const auto modesKey = KE_CM_OpenKey(defaultKey, "Modes")) {
+  if (const auto modes = KE_CM_OpenKey(defaultKey, "Modes")) {
+    const kernel::KConfigurationKeyPtr &modesKey = *modes;
     for (size_t index = 0; index < kernel::KMonitorCapabilities::MaxTimings; ++index) {
       kstd::static_string<16> valueName;
       kstd::format(valueName, "{}", index);
 
-      kstd::string text;
-      if (!ReadStringValue(modesKey, valueName, text)) {
+      const auto text = ReadStringValue(modesKey, valueName);
+      if (!text) {
         break;// Contiguous list: the first gap ends it
       }
 
-      kernel::KMonitorTiming timing{};
-      if (!kernel::gfx::parse_timing(text, timing)) {
-        KE_Print("GFX: default monitor timing {} ('{}') is malformed, skipped", index, text);
+      const auto timing = kernel::gfx::parse_timing(*text);
+      if (!timing) {
+        KE_Print("GFX: default monitor timing {} ('{}') is malformed ({}), skipped", index, *text, timing.error());
         continue;
       }
-      caps.Add(timing);
+      if (caps.Add(*timing) != kernel::KernelError::Success) {
+        KE_Print("GFX: default monitor timing list is full; timing {} and later ignored", index);
+        break;
+      }
     }
   }
 
@@ -82,28 +107,27 @@ bool ReadDefaultMonitorKey(kernel::KMonitorCapabilities &caps) {
 }// namespace
 
 namespace kernel::gfx {
-bool parse_timing(const kstd::string_view &text, KMonitorTiming &out) {
+kstd::expected<KMonitorTiming, KernelError> parse_timing(const kstd::string_view &text) {
   const auto xPos = text.find('x');
-  if (xPos == kstd::string_view::npos) return false;
+  if (xPos == kstd::string_view::npos) return kstd::unexpected(KernelError::InvalidFormat);
 
   const auto atPos = text.find('@');
   const auto heightEnd = atPos == kstd::string_view::npos ? text.size() : atPos;
-  if (heightEnd <= xPos + 1) return false;
+  if (heightEnd <= xPos + 1) return kstd::unexpected(KernelError::InvalidFormat);
 
-  uint32_t width = 0;
-  uint32_t height = 0;
-  if (!ParseUInt32(text.substr(0, xPos), width)) return false;
-  if (!ParseUInt32(text.substr(xPos + 1, heightEnd - xPos - 1), height)) return false;
+  const auto width = ParseUInt32(text.substr(0, xPos));
+  if (!width) return kstd::unexpected(width.error());
+  const auto height = ParseUInt32(text.substr(xPos + 1, heightEnd - xPos - 1));
+  if (!height) return kstd::unexpected(height.error());
 
   uint32_t refreshRate = 0;
-  if (atPos != kstd::string_view::npos && !ParseUInt32(text.substr(atPos + 1), refreshRate)) {
-    return false;
+  if (atPos != kstd::string_view::npos) {
+    const auto refresh = ParseUInt32(text.substr(atPos + 1));
+    if (!refresh) return kstd::unexpected(refresh.error());
+    refreshRate = *refresh;
   }
 
-  out.width = width;
-  out.height = height;
-  out.refreshRate = refreshRate;
-  return true;
+  return KMonitorTiming{.width = *width, .height = *height, .refreshRate = refreshRate};
 }
 
 const KMonitorCapabilities &default_monitor_capabilities() {
@@ -141,7 +165,8 @@ KMonitorCapabilities capabilities_from_edid(const Edid &edid) {
 
   for (const auto &mode: modes) {
     if (mode.width == 0 || mode.height == 0) continue;
-    if (!caps.Add(KMonitorTiming{.width = mode.width, .height = mode.height, .refreshRate = mode.refreshRate})) {
+    if (caps.Add(KMonitorTiming{.width = mode.width, .height = mode.height, .refreshRate = mode.refreshRate}) !=
+        KernelError::Success) {
       break;
     }
     if (mode.width > caps.maxWidth) caps.maxWidth = mode.width;

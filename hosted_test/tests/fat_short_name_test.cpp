@@ -11,7 +11,7 @@ TEST_CASE("FAT_ToShortName basic conversion") {
   kstd::static_string<12> shortName;
   shortName.append("           ");// 11 spaces, will be overwritten below
 
-  REQUIRE(FAT_ToShortName("readme.txt", kstd::string_view(shortName.data(), shortName.size())));
+  REQUIRE(FAT_ToShortName("readme.txt", kstd::string_view(shortName.data(), shortName.size())) == kernel::KernelError::Success);
   REQUIRE(shortName == "README  TXT");
 }
 
@@ -19,7 +19,7 @@ TEST_CASE("FAT_ToShortName uppercases mixed case names") {
   kstd::static_string<12> shortName;
   shortName.append("           ");
 
-  REQUIRE(FAT_ToShortName("Kernel.Bin", kstd::string_view(shortName.data(), shortName.size())));
+  REQUIRE(FAT_ToShortName("Kernel.Bin", kstd::string_view(shortName.data(), shortName.size())) == kernel::KernelError::Success);
   REQUIRE(shortName == "KERNEL  BIN");
 }
 
@@ -27,7 +27,7 @@ TEST_CASE("FAT_ToShortName pads short base and extension with spaces") {
   kstd::static_string<12> shortName;
   shortName.append("           ");
 
-  REQUIRE(FAT_ToShortName("a.c", kstd::string_view(shortName.data(), shortName.size())));
+  REQUIRE(FAT_ToShortName("a.c", kstd::string_view(shortName.data(), shortName.size())) == kernel::KernelError::Success);
   REQUIRE(shortName == "A       C  ");
 }
 
@@ -35,7 +35,7 @@ TEST_CASE("FAT_ToShortName without extension") {
   kstd::static_string<12> shortName;
   shortName.append("           ");
 
-  REQUIRE(FAT_ToShortName("noext", kstd::string_view(shortName.data(), shortName.size())));
+  REQUIRE(FAT_ToShortName("noext", kstd::string_view(shortName.data(), shortName.size())) == kernel::KernelError::Success);
   REQUIRE(shortName == "NOEXT      ");
 }
 
@@ -43,7 +43,7 @@ TEST_CASE("FAT_ToShortName with maximum-length base and extension") {
   kstd::static_string<12> shortName;
   shortName.append("           ");
 
-  REQUIRE(FAT_ToShortName("longname.ext", kstd::string_view(shortName.data(), shortName.size())));
+  REQUIRE(FAT_ToShortName("longname.ext", kstd::string_view(shortName.data(), shortName.size())) == kernel::KernelError::Success);
   REQUIRE(shortName == "LONGNAMEEXT");
 }
 
@@ -51,21 +51,21 @@ TEST_CASE("FAT_ToShortName rejects base name longer than 8 characters") {
   kstd::static_string<12> shortName;
   shortName.append("           ");
 
-  REQUIRE_FALSE(FAT_ToShortName("toolongname.txt", kstd::string_view(shortName.data(), shortName.size())));
+  REQUIRE(FAT_ToShortName("toolongname.txt", kstd::string_view(shortName.data(), shortName.size())) == kernel::KernelError::NameTooLong);
 }
 
 TEST_CASE("FAT_ToShortName rejects extension longer than 3 characters") {
   kstd::static_string<12> shortName;
   shortName.append("           ");
 
-  REQUIRE_FALSE(FAT_ToShortName("file.longext", kstd::string_view(shortName.data(), shortName.size())));
+  REQUIRE(FAT_ToShortName("file.longext", kstd::string_view(shortName.data(), shortName.size())) == kernel::KernelError::NameTooLong);
 }
 
 TEST_CASE("FAT_ToShortName treats a trailing dot as an empty extension") {
   kstd::static_string<12> shortName;
   shortName.append("           ");
 
-  REQUIRE(FAT_ToShortName("name.", kstd::string_view(shortName.data(), shortName.size())));
+  REQUIRE(FAT_ToShortName("name.", kstd::string_view(shortName.data(), shortName.size())) == kernel::KernelError::Success);
   REQUIRE(shortName == "NAME       ");
 }
 
@@ -73,7 +73,7 @@ TEST_CASE("FAT_ToShortName uses the last dot to split base and extension") {
   kstd::static_string<12> shortName;
   shortName.append("           ");
 
-  REQUIRE(FAT_ToShortName("a.b.c", kstd::string_view(shortName.data(), shortName.size())));
+  REQUIRE(FAT_ToShortName("a.b.c", kstd::string_view(shortName.data(), shortName.size())) == kernel::KernelError::Success);
   REQUIRE(shortName == "A.B     C  ");
 }
 
@@ -95,7 +95,7 @@ TEST_CASE("Raw 11-byte FAT directory entry name compares correctly without an ex
   RawEntry entry{};
   kstd::static_string<12> shortName;
   shortName.append("           ");
-  REQUIRE(FAT_ToShortName("SYSTEM", kstd::string_view(shortName.data(), shortName.size())));
+  REQUIRE(FAT_ToShortName("SYSTEM", kstd::string_view(shortName.data(), shortName.size())) == kernel::KernelError::Success);
 
   for (size_t i = 0; i < 11; i++) entry.name[i] = shortName[i];
   entry.attr = 0x20;// non-zero, non-space byte right after the name field

@@ -3,6 +3,7 @@
 #include <list.hpp>
 
 #include <kernel/__core.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/gfx/KDeviceContextTable.hpp>
 #include <kernel/gfx/KFontResourceTable.hpp>
 #include <kernel/kobject/KDispatcherHeader.hpp>
@@ -11,6 +12,7 @@
 #include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/kobject/ObjectType.hpp>
 #include <kernel/virtual_memory.hpp>
+#include <expected.hpp>
 
 namespace kernel {
 struct KSubsystemObject;
@@ -54,45 +56,50 @@ struct ProcessHandleTable {
   };
   StandardStreamHandle standard_streams[3]{};
 
-  bool GetStandardHandle(StandardStream stream, KHandle &handle) const {
+  KernelError GetStandardHandle(StandardStream stream, KHandle &handle) const {
     const auto index = static_cast<uint32_t>(stream);
-    if (index >= 3 || !standard_streams[index].available) return false;
+    if (index >= 3) return KernelError::InvalidArgument;
+    if (!standard_streams[index].available) return KernelError::StandardStreamUnavailable;
     for (const auto &entry : entries) {
       if (entry.handle == standard_streams[index].value && entry.object) {
         handle = entry.handle;
-        return true;
+        return KernelError::Success;
       }
     }
-    return false;
+    return KernelError::InvalidHandle;
   }
 
-  bool SetStandardHandle(StandardStream stream, KHandle handle) {
+  KernelError SetStandardHandle(StandardStream stream, KHandle handle) {
     const auto index = static_cast<uint32_t>(stream);
-    if (index >= 3) return false;
+    if (index >= 3) return KernelError::InvalidArgument;
     const auto *entry = Lookup(handle);
-    if (!entry || !entry->object) return false;
-    standard_streams[index] = {handle, true};
-    return true;
+    if (!entry || !entry->object) return KernelError::InvalidHandle;
+    standard_streams[index] = {.value = handle, .available = true};
+    return KernelError::Success;
   }
 
-  bool AllocateStandardHandle(StandardStream stream, const KObjectPtr<KObject> &object,
+  KernelError AllocateStandardHandle(StandardStream stream, const KObjectPtr<KObject> &object,
                               HandleAccess access) {
-    if (!object || static_cast<uint32_t>(stream) >= 3) return false;
-    const auto count = entries.size();
-    const auto handle = Allocate(object, access, HandleFlags::Inheritable);
-    if (entries.size() != count + 1) return false;
-    return SetStandardHandle(stream, handle);
+    if (!object) return KernelError::InvalidArgument;
+    if (static_cast<uint32_t>(stream) >= 3) return KernelError::InvalidArgument;
+    auto handle = Allocate(object, access, HandleFlags::Inheritable);
+    if (!handle) return handle.error();
+    const auto status = SetStandardHandle(stream, *handle);
+    if (status != KernelError::Success) Close(*handle);
+    return status;
   }
 
-  KHandle Allocate(KObjectPtr<KObject> obj,
+  kstd::expected<KHandle, KernelError> Allocate(const KObjectPtr<KObject> &obj,
                    HandleAccess access,
                    HandleFlags flags) {
+    if (!obj) return kstd::unexpected(KernelError::InvalidArgument);
     uint32_t raw;
 
     if (!free_list.empty()) {
       raw = static_cast<uint32_t>(free_list.front());
       free_list.pop_front();
     } else {
+      if (next_raw_handle == UINT32_MAX) return kstd::unexpected(KernelError::ResourceLimitExceeded);
       raw = next_raw_handle++;
     }
 
@@ -120,11 +127,11 @@ struct ProcessHandleTable {
     return entry && (static_cast<uint32_t>(entry->access) & static_cast<uint32_t>(required)) == static_cast<uint32_t>(required);
   }
 
-  bool Close(KHandle h) {
+  KernelError Close(KHandle h) {
     for (auto it = entries.begin(); it != entries.end(); ++it) {
       if (it->handle == h) {
         if ((static_cast<uint32_t>(it->flags) & static_cast<uint32_t>(HandleFlags::ProtectFromClose)) != 0)
-          return false;
+          return KernelError::AccessDenied;
 
         if (--it->refcount == 0) {
           for (auto &stream : standard_streams) {
@@ -133,10 +140,10 @@ struct ProcessHandleTable {
           free_list.push_back(h);
           entries.erase(it);
         }
-        return true;
+        return KernelError::Success;
       }
     }
-    return false;
+    return KernelError::InvalidHandle;
   }
 };
 
@@ -163,29 +170,60 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
   DeviceContextTable dcTable;
   font::ResourceTable fontResources;
 
-  bool AttachStandardStreams(const KObjectPtr<KObject> &sink) {
-    if (!handles.AllocateStandardHandle(StandardStream::Stdin, sink, ProcessHandleTable::HandleAccess::Read)) return false;
-    if (!handles.AllocateStandardHandle(StandardStream::Stdout, sink, ProcessHandleTable::HandleAccess::Write)) return false;
-    return handles.AllocateStandardHandle(StandardStream::Stderr, sink, ProcessHandleTable::HandleAccess::Write);
+  KernelError AttachStandardStreams(const KObjectPtr<KObject> &sink) {
+    if (!sink) return KernelError::InvalidArgument;
+    const auto input = handles.AllocateStandardHandle(StandardStream::Stdin, sink, ProcessHandleTable::HandleAccess::Read);
+    if (input != KernelError::Success) return input;
+    const auto output = handles.AllocateStandardHandle(StandardStream::Stdout, sink, ProcessHandleTable::HandleAccess::Write);
+    if (output != KernelError::Success) {
+      KHandle handle{};
+      if (handles.GetStandardHandle(StandardStream::Stdin, handle) == KernelError::Success) handles.Close(handle);
+      return output;
+    }
+    const auto error = handles.AllocateStandardHandle(StandardStream::Stderr, sink, ProcessHandleTable::HandleAccess::Write);
+    if (error != KernelError::Success) {
+      KHandle handle{};
+      if (handles.GetStandardHandle(StandardStream::Stdin, handle) == KernelError::Success) handles.Close(handle);
+      if (handles.GetStandardHandle(StandardStream::Stdout, handle) == KernelError::Success) handles.Close(handle);
+    }
+    return error;
   }
 
-  bool InheritHandlesFrom(ProcessHandleTable &parentHandles) {
+  KernelError InheritHandlesFrom(ProcessHandleTable &parentHandles) {
+    const auto rollback = [this]() {
+      while (!handles.entries.empty()) {
+        const KHandle handle = handles.entries.front().handle;
+        (void) handles.Close(handle);
+      }
+    };
     for (const auto &entry : parentHandles.entries) {
       if ((static_cast<uint32_t>(entry.flags) & static_cast<uint32_t>(ProcessHandleTable::HandleFlags::Inheritable)) != 0) {
         const auto count = handles.entries.size();
-        const auto inheritedHandle = handles.Allocate(entry.object, entry.access, entry.flags);
-        if (handles.entries.size() != count + 1 || !handles.Lookup(inheritedHandle)) return false;
+        auto inheritedHandle = handles.Allocate(entry.object, entry.access, entry.flags);
+        if (!inheritedHandle) {
+          rollback();
+          return inheritedHandle.error();
+        }
+        if (handles.entries.size() != count + 1 || !handles.Lookup(*inheritedHandle)) {
+          handles.Close(*inheritedHandle);
+          rollback();
+          return KernelError::OutOfMemory;
+        }
         for (uint32_t i = 0; i < 3; ++i) {
           const auto stream = static_cast<StandardStream>(i);
           KHandle parentStandardHandle{};
-          if (parentHandles.GetStandardHandle(stream, parentStandardHandle) &&
+          if (parentHandles.GetStandardHandle(stream, parentStandardHandle) == KernelError::Success &&
               parentStandardHandle == entry.handle) {
-            handles.SetStandardHandle(stream, inheritedHandle);
+            const auto status = handles.SetStandardHandle(stream, *inheritedHandle);
+            if (status != KernelError::Success) {
+              rollback();
+              return status;
+            }
           }
         }
       }
     }
-    return true;
+    return KernelError::Success;
   }
 };
 

@@ -14,7 +14,7 @@ int TestStruct::count = 0;
 TEST_CASE("unique_ptr basic", "[unique_ptr]") {
     TestStruct::count = 0;
     {
-        kstd::unique_ptr<TestStruct> p(new TestStruct(42));
+      const kstd::unique_ptr<TestStruct> p(new TestStruct(42));
         REQUIRE(p->value == 42);
         REQUIRE(TestStruct::count == 1);
     }
@@ -24,7 +24,7 @@ TEST_CASE("unique_ptr basic", "[unique_ptr]") {
 TEST_CASE("make_unique", "[unique_ptr]") {
     TestStruct::count = 0;
     {
-        auto p = kstd::make_unique<TestStruct>(10);
+      const auto p = kstd::make_unique<TestStruct>(10);
         REQUIRE(p->value == 10);
         REQUIRE(TestStruct::count == 1);
     }
@@ -81,7 +81,7 @@ TEST_CASE("make_unique_for_overwrite", "[unique_ptr]") {
 
 TEST_CASE("constexpr unique_ptr", "[unique_ptr]") {
     static_assert([]() {
-        kstd::unique_ptr<int> p(new int(42));
+    const kstd::unique_ptr<int> p(new int(42));
         return *p == 42;
     }());
 }

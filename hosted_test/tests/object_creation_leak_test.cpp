@@ -40,8 +40,8 @@ TEST_CASE("KE_CreateObject frees its memory back to the allocator", "[leak]") {
 
   {
     auto obj = KE_CreateObject<LeakTestPod>();
-    REQUIRE(obj != nullptr);
-    obj->value = 42;
+    REQUIRE(obj);
+    obj.value()->value = 42;
     REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(LeakTestPod)) > baseline);
     // obj destructs here, KMallocDeleter must call KE_Free on it.
   }
@@ -52,7 +52,7 @@ TEST_CASE("KE_CreateObject frees its memory back to the allocator", "[leak]") {
   // always return to the same baseline, never accumulate.
   for (int i = 0; i < 8; ++i) {
     auto obj = KE_CreateObject<LeakTestPod>();
-    REQUIRE(obj != nullptr);
+    REQUIRE(obj);
   }
   REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(LeakTestPod)) == baseline);
 }
@@ -64,8 +64,8 @@ TEST_CASE("KE_CreateKPtrObject (KObject-derived) frees its memory back to the al
 
   {
     auto dir = KE_CreateKPtrObject<kernel::KDirectoryObject>();
-    REQUIRE(dir != nullptr);
-    REQUIRE(dir->reference_count.load() == 1);
+    REQUIRE(dir);
+    REQUIRE(dir.value()->reference_count.load() == 1);
     REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(kernel::KDirectoryObject)) > baseline);
     // dir destructs here: reference_count reaches 0 and KE_Free must run.
   }
@@ -74,7 +74,7 @@ TEST_CASE("KE_CreateKPtrObject (KObject-derived) frees its memory back to the al
 
   for (int i = 0; i < 8; ++i) {
     auto dir = KE_CreateKPtrObject<kernel::KDirectoryObject>();
-    REQUIRE(dir != nullptr);
+    REQUIRE(dir);
   }
   REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(kernel::KDirectoryObject)) == baseline);
 }
@@ -86,8 +86,8 @@ TEST_CASE("KE_CreateKPtrObject (plain handle, KConfigurationKey) frees its memor
 
   {
     auto key = KE_CreateKPtrObject<kernel::KConfigurationKey>();
-    REQUIRE(key != nullptr);
-    REQUIRE(key->handle_references.load() == 1);
+    REQUIRE(key);
+    REQUIRE(key.value()->handle_references.load() == 1);
     REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(kernel::KConfigurationKey)) > baseline);
     // key destructs here: handle_references reaches 0 and KE_Free must run.
   }
@@ -96,7 +96,7 @@ TEST_CASE("KE_CreateKPtrObject (plain handle, KConfigurationKey) frees its memor
 
   for (int i = 0; i < 8; ++i) {
     auto key = KE_CreateKPtrObject<kernel::KConfigurationKey>();
-    REQUIRE(key != nullptr);
+    REQUIRE(key);
   }
   REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(kernel::KConfigurationKey)) == baseline);
 }
@@ -108,8 +108,8 @@ TEST_CASE("kernel::CreateKObject frees its memory back to the allocator", "[leak
 
   {
     auto dir = kernel::CreateKObject<kernel::KDirectoryObject>("LeakTest_CreateKObject");
-    REQUIRE(dir != nullptr);
-    REQUIRE(dir->reference_count.load() == 1);
+    REQUIRE(dir);
+    REQUIRE(dir.value()->reference_count.load() == 1);
     REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(kernel::KDirectoryObject)) > baseline);
     // dir destructs here: reference_count reaches 0 and KE_Free must run.
   }
@@ -118,7 +118,7 @@ TEST_CASE("kernel::CreateKObject frees its memory back to the allocator", "[leak
 
   for (int i = 0; i < 8; ++i) {
     auto dir = kernel::CreateKObject<kernel::KDirectoryObject>("LeakTest_CreateKObject");
-    REQUIRE(dir != nullptr);
+    REQUIRE(dir);
   }
   REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(kernel::KDirectoryObject)) == baseline);
 }
@@ -130,13 +130,14 @@ TEST_CASE("KE_CreateKPtrObject/CreateKObject don't leak when inserted into and r
   const size_t baseline = kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(kernel::KDirectoryObject));
 
   {
-    auto dir = kernel::CreateKObject<kernel::KDirectoryObject>("LeakTest_InsertRemove");
+    const auto dir = kernel::CreateKObject<kernel::KDirectoryObject>("LeakTest_InsertRemove");
 
-    REQUIRE(KE_OB_InsertObject(device, dir));
-    REQUIRE(dir->reference_count.load() == 2);
+    REQUIRE(dir);
+    REQUIRE(KE_OB_InsertObject(device, *dir) == kernel::KernelError::Success);
+    REQUIRE(dir.value()->reference_count.load() == 2);
 
-    REQUIRE(KE_OB_RemoveObject(device, dir));
-    REQUIRE(dir->reference_count.load() == 1);
+    REQUIRE(KE_OB_RemoveObject(device, *dir) == kernel::KernelError::Success);
+    REQUIRE(dir.value()->reference_count.load() == 1);
     // dir (the last remaining reference) destructs here.
   }
 

@@ -1,11 +1,13 @@
 #pragma once
 
 #include <kernel/__core.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/memory/page_fault.hpp>
 #include <kernel/memory/protect.hpp>
 #include <kernel/memory/vad.hpp>
 #include <utility.hpp>
+#include <expected.hpp>
 
 namespace kernel {
 struct KMemoryBackingObject;
@@ -31,6 +33,12 @@ struct AddressSpace {
 };
 }// namespace kernel::vmm
 
+namespace kernel {
+using VmmRegionResult = kstd::expected<void *, KernelError>;
+using VmmBackingObjectMapResult = kstd::expected<vmm::VirtualAddressDescriptor *, KernelError>;
+using VmmDirectBackingResult = kstd::expected<KObjectPtr<KMemoryBackingObject>, KernelError>;
+}// namespace kernel
+
 /**
  * @ingroup VMM
  * @brief Method KE_Malloc
@@ -51,7 +59,7 @@ UNDOS_KERNEL_PUBLIC_V1API(void, KE_Free, void *ptr);
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    void *,
+    kernel::VmmRegionResult,
     KE_VMM_AllocateRegion,
     kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags);
 
@@ -61,7 +69,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    void,
+    kernel::KernelError,
     KE_VMM_FreeRegion,
     kernel::vmm::AddressSpace &as, void *addr);
 
@@ -70,11 +78,11 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @brief Method KE_VMM_MapBackingObject
  *
  * Reserves a range of address space in `as` and creates a VAD mapping the
- * given backing object into it. Returns the created VAD, or nullptr if the
- * address space is exhausted.
+ * given backing object into it. Returns the created VAD or the reason the
+ * mapping could not be reserved.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::vmm::VirtualAddressDescriptor *,
+    kernel::VmmBackingObjectMapResult,
     KE_VMM_MapBackingObject,
     kernel::vmm::AddressSpace &as, const kernel::KObjectPtr<kernel::KMemoryBackingObject> &backing,
     size_t size, kernel::vmm::ProtectFlags flags);
@@ -85,7 +93,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    void *,
+    kernel::VmmRegionResult,
     KE_VMM_AllocateUserData,
     kernel::vmm::AddressSpace &as, size_t size);
 
@@ -95,7 +103,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    void *,
+    kernel::VmmRegionResult,
     KE_VMM_AllocateUserProcess,
     kernel::vmm::AddressSpace &as, size_t size);
 
@@ -105,7 +113,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_VMM_MapPhysical,
     kernel::vmm::AddressSpace &as, kernel::VirtualAddress virt, kernel::PhysicalAddress phys, kernel::vmm::ProtectFlags flags);
 
@@ -128,7 +136,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * gfx_vga) that need to expose such memory through a KSurface.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KMemoryBackingObject>,
+    kernel::VmmDirectBackingResult,
     KE_VMM_CreateDirectBacking,
     kernel::VirtualAddress directAddress, size_t size);
 
@@ -139,11 +147,11 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * Maps `size` bytes starting at `addr` (as seen from `as`) into the kernel's
  * address space, so kernel code can safely read/write memory that lives in
  * another (typically user-mode) address space. Returns the kernel-mapped
- * pointer, or nullptr on failure. Callers must release the mapping with
+ * pointer or the reason mapping failed. Callers must release the mapping with
  * KE_VMM_UnmapBorrowed once done.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    void *,
+    kernel::VmmRegionResult,
     KE_VMM_MapBorrowed,
     void *addr, size_t size, kernel::vmm::AddressSpace &as);
 
@@ -155,7 +163,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * and frees the kernel virtual region that was reserved for the borrow.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    void,
+    kernel::KernelError,
     KE_VMM_UnmapBorrowed,
     void *addr, size_t size, kernel::vmm::AddressSpace &as);
 

@@ -7,6 +7,8 @@
 #include <vector.hpp>
 
 #include <kernel/gfx/structs.hpp>
+#include <kernel/kerror.hpp>
+#include <kernel/kobject/KSurface.hpp>
 
 namespace kernel {
 class Edid {
@@ -54,13 +56,13 @@ class Edid {
       return false;// Not a DTD block (can be a display descriptor)
     }
 
-    uint32_t hactive = dtd[2] | ((static_cast<uint32_t>(dtd[4]) & 0xF0) << 4);
-    uint32_t vactive = dtd[5] | ((static_cast<uint32_t>(dtd[7]) & 0xF0) << 4);
-    uint32_t hblank = dtd[3] | ((static_cast<uint32_t>(dtd[4]) & 0x0F) << 8);
-    uint32_t vblank = dtd[6] | ((static_cast<uint32_t>(dtd[7]) & 0x0F) << 8);
+    const uint32_t hactive = dtd[2] | ((static_cast<uint32_t>(dtd[4]) & 0xF0) << 4);
+    const uint32_t vactive = dtd[5] | ((static_cast<uint32_t>(dtd[7]) & 0xF0) << 4);
+    const uint32_t hblank = dtd[3] | ((static_cast<uint32_t>(dtd[4]) & 0x0F) << 8);
+    const uint32_t vblank = dtd[6] | ((static_cast<uint32_t>(dtd[7]) & 0x0F) << 8);
 
-    uint32_t htotal = hactive + hblank;
-    uint32_t vtotal = vactive + vblank;
+    const uint32_t htotal = hactive + hblank;
+    const uint32_t vtotal = vactive + vblank;
 
     outMode.width = hactive;
     outMode.height = vactive;
@@ -79,8 +81,8 @@ class Edid {
 
   void ParseStandardTimings(kstd::vector<KDisplayModeInfo> &outModes) const {
     for (size_t i = 0x26; i <= 0x35; i += 2) {
-      uint8_t byte1 = _raw[i];
-      uint8_t byte2 = _raw[i + 1];
+      const uint8_t byte1 = _raw[i];
+      const uint8_t byte2 = _raw[i + 1];
 
       if (byte1 == 0x01 && byte2 == 0x01) continue;// Unused slot
 
@@ -120,34 +122,34 @@ class Edid {
 
   // Construct or assign from a contiguous hardware byte span
   explicit Edid(kstd::span<const uint8_t> data) {
-    Assign(data);
+    (void) Assign(data);
   }
 
   // Assigns raw EDID data and validates headers/checksums
-  bool Assign(kstd::span<const uint8_t> data) {
+  KernelError Assign(kstd::span<const uint8_t> data) {
     Clear();
 
     if (data.empty() || data.size() < BlockSize) {
-      return false;
+      return KernelError::InvalidSize;
     }
 
     // EDID blocks are always multiples of 128 bytes
     _size = static_cast<uint16_t>(kstd::min(data.size(), MaxEdidSize) & ~(BlockSize - 1));
     if (_size == 0) {
-      return false;
+      return KernelError::InvalidSize;
     }
 
     // Validate 8-byte EDID header (00 FF FF FF FF FF FF 00)
     if (!ValidateHeader(data)) {
       Clear();
-      return false;
+      return KernelError::InvalidData;
     }
 
     // Validate 128-byte block checksums
     for (size_t block = 0; block < (_size / BlockSize); ++block) {
       if (!VerifyBlockChecksum(data.subspan(block * BlockSize, BlockSize))) {
         Clear();
-        return false;
+        return KernelError::InvalidData;
       }
     }
 
@@ -158,7 +160,7 @@ class Edid {
 
     _valid = true;
     ParseMetadata();
-    return true;
+    return KernelError::Success;
   }
 
   void Clear() {

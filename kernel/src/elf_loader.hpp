@@ -6,6 +6,8 @@
 
 #include <kernel/cfunc.hpp>
 #include <kernel/elf.hpp>
+#include <kernel/kerror.hpp>
+#include <expected.hpp>
 #include <string_view.hpp>
 
 // Shared VFS-streaming ELF32 loader core, used by both the kernel driver
@@ -32,7 +34,7 @@ struct LoadPolicy {
   void *context = nullptr;
   // Resolves an undefined (SHN_UNDEF) symbol name to an address. Required
   // when relocatable is set; ignored otherwise.
-  cfunc<uintptr_t(kstd::string_view)> resolve_symbol;
+  cfunc<kstd::expected<uintptr_t, KernelError>(kstd::string_view)> resolve_symbol;
   // Invoked once per named section found in the section header table
   // (relocatable path only), with the section's bytes still resident in a
   // temporary buffer. Callers that need the data (e.g. ".driver_name")
@@ -48,7 +50,6 @@ struct LoadResult {
   VirtualAddress load_base{0};
   size_t total_size{0};
   VirtualAddress entry_point{0};
-  bool ok = false;
 };
 
 // Opens `path` via the VFS, parses it as an ELF32 image, allocates a region
@@ -56,17 +57,17 @@ struct LoadResult {
 // (when policy.relocatable) applies relocations and captures named
 // sections. Returns a LoadResult with ok == false on any VFS/ELF-format
 // failure.
-LoadResult LoadElfFromVfs(const kstd::string_view &path, const LoadPolicy &policy) noexcept;
+kstd::expected<LoadResult, KernelError> LoadElfFromVfs(const kstd::string_view &path, const LoadPolicy &policy) noexcept;
 
 // Applies a single ELF32 relocation record against symbol/string tables
 // already resident in memory, resolving SHN_UNDEF symbols via
 // `resolve_symbol`. Shared by the VFS-streaming loader above and the
 // physical-memory boot-driver loader (which parses an already-mapped blob).
-bool ApplyRelocation(const hal::Elf32_Rel &rel, const hal::Elf32_Sym *syms, const char *strings, uintptr_t delta, const cfunc<uintptr_t(kstd::string_view)> &resolve_symbol) noexcept;
+KernelError ApplyRelocation(const hal::Elf32_Rel &rel, const hal::Elf32_Sym *syms, const char *strings, uintptr_t delta, const cfunc<kstd::expected<uintptr_t, KernelError>(kstd::string_view)> &resolve_symbol) noexcept;
 
 // Applies every SHT_REL relocation section found in a fully in-memory
 // ELF32 blob (section headers, symbol table, and string table are all
 // already resident in `raw_blob`). Used by the physical-memory boot-driver
 // loader, which never streams from the VFS.
-bool ProcessRelocationsFromBlob(const uint8_t *raw_blob, uintptr_t delta, const cfunc<uintptr_t(kstd::string_view)> &resolve_symbol) noexcept;
+KernelError ProcessRelocationsFromBlob(const uint8_t *raw_blob, uintptr_t delta, const cfunc<kstd::expected<uintptr_t, KernelError>(kstd::string_view)> &resolve_symbol) noexcept;
 }// namespace kernel::elf

@@ -1,23 +1,24 @@
 #include <catch2/catch_test_macros.hpp>
 
 // HAL-free window manager helpers from the kernel source tree.
-#include "../../kernel/src/user/msgring.hpp"
-#include "../../kernel/src/user/region.hpp"
+#include <kernel/gfx/msgring.hpp>
 #include "../../kernel/src/user/user.hpp"
-#include <kernel/object_manager.hpp>
-#include "ob_test_support.hpp"
+#include "../../kernel_api/include/kernel/gfx/region.hpp"
 #include "gfx/gfx.hpp"
+#include "ob_test_support.hpp"
 #include <kernel/kobject/KDisplay.hpp>
 #include <kernel/kobject/KGraphicsAdapter.hpp>
 #include <kernel/kobject/KMemoryBackingObject.hpp>
 #include <kernel/kobject/KProcessObject.hpp>
+#include <kernel/object_manager.hpp>
+#include <undos/syscalls/__enum_WindowLongIndex.h>
 
 using kernel::user::MessageRing;
 using kernel::user::QueuedMessage;
 using kernel::user::URect;
 using kernel::user::URegion;
 using kernel::user::HitTest;
-using kernel::user::KWindowObject;
+using kernel::KWindowObject;
 using kernel::user::hit_test_locked;
 using kernel::user::client_to_screen_locked;
 using kernel::user::screen_to_client_locked;
@@ -65,8 +66,8 @@ TEST_CASE("URegion intersect clips to the paint rect", "[user]") {
 
 TEST_CASE("MessageRing reports overflow", "[user]") {
   Ring ring;
-  for (uint32_t i = 0; i < 4; ++i) REQUIRE(ring.Push({1, 0x400 + i}));
-  REQUIRE_FALSE(ring.Push({1, 0x500}));
+  for (uint32_t i = 0; i < 4; ++i) REQUIRE(ring.Push({1, 0x400 + i}) == kernel::KernelError::Success);
+  REQUIRE(ring.Push({1, 0x500}) == kernel::KernelError::QueueFull);
   QueuedMessage m;
   REQUIRE(ring.Pop(m));
   REQUIRE(m.message == 0x400);
@@ -74,10 +75,10 @@ TEST_CASE("MessageRing reports overflow", "[user]") {
 
 TEST_CASE("MessageRing coalesces consecutive mouse moves per window", "[user]") {
   Ring ring;
-  REQUIRE(ring.Push({1, kMove, 0, 1}));
-  REQUIRE(ring.Push({1, kMove, 0, 2}));
+  REQUIRE(ring.Push({1, kMove, 0, 1}) == kernel::KernelError::Success);
+  REQUIRE(ring.Push({1, kMove, 0, 2}) == kernel::KernelError::Success);
   REQUIRE(ring.count == 1);
-  REQUIRE(ring.Push({2, kMove, 0, 3}));
+  REQUIRE(ring.Push({2, kMove, 0, 3}) == kernel::KernelError::Success);
   REQUIRE(ring.count == 2);
   QueuedMessage m;
   REQUIRE(ring.Pop(m));
@@ -118,46 +119,61 @@ namespace {
 using namespace kernel;
 using namespace kernel::user;
 
-bool UserProbe(const KObjectPtr<KGraphicsAdapter> &, const KGraphicsAdapterDisplayEnumInfo &info,
-               KGraphicsAdapterDisplayInfo &out) {
-  if (info.displayIndex) return false;
+template<typename T>
+T TakeExpected(kstd::expected<T, kernel::KernelError> result) {
+  REQUIRE(result);
+  return kstd::move(*result);
+}
+
+bool BeginPaintInto(KProcessObject &process, KWindowObject &window, uint32_t &dc, URect &paint) {
+  const auto begun = kernel::user::begin_paint_locked(process, window);
+  if (!begun) return false;
+  dc = begun->dc;
+  paint = begun->paint;
+  return true;
+}
+
+KernelError UserProbe(const KObjectPtr<KGraphicsAdapter> &, const KGraphicsAdapterDisplayEnumInfo &info,
+                      KGraphicsAdapterDisplayInfo &out) {
+  if (info.displayIndex) return KernelError::OutOfRange;
   out.isPresent = true;
   out.name = "UserTestHead";
-  return true;
+  return KernelError::Success;
 }
 
-bool UserMode(const KObjectPtr<KDisplay> &, size_t index, KDisplayModeInfo &out) {
-  if (index) return false;
+kstd::expected<KDisplayModeInfo, KernelError> UserMode(const KObjectPtr<KDisplay> &, size_t index) {
+  if (index) return kstd::unexpected(KernelError::OutOfRange);
+  KDisplayModeInfo out{};
   out.width = 640; out.height = 480; out.pitch = 640;
   out.bpp = 8; out.refreshRate = 60; out.pixelFormat = PixelFormat::INDEX8;
-  return true;
+  return out;
 }
 
-bool UserSetMode(const KObjectPtr<KDisplay> &, size_t, KDisplaySurfaceBinding &binding) {
+kstd::expected<KDisplaySurfaceBinding, KernelError> UserSetMode(const KObjectPtr<KDisplay> &, size_t) {
+  KDisplaySurfaceBinding binding{};
   binding.type = SurfaceType::OffscreenBitmap;
   binding.flags = SurfaceFlags::Linear | SurfaceFlags::TopDown;
-  return true;
+  return binding;
 }
 
-bool UserConfigure(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display) {
+KernelError UserConfigure(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display) {
   display->GetModeInfo = UserMode;
   display->SetMode = UserSetMode;
-  return true;
+  return KernelError::Success;
 }
 
-bool UserReadPixel(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KSurface> &surface,
-                   int x, int y, uint32_t &color) {
-  color = surface->backing->directAddress.as_ptr<uint8_t>()[y * 640 + x];
-  return true;
+kstd::expected<uint32_t, KernelError> UserReadPixel(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KSurface> &surface,
+                                                    int x, int y) {
+  return surface->backing->directAddress.as_ptr<uint8_t>()[y * 640 + x];
 }
 
-bool UserPlanarFill(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KSurface> &surface,
+KernelError UserPlanarFill(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KSurface> &surface,
                     int x, int y, int width, int height, uint32_t color) {
   auto *pixels = surface->backing->directAddress.as_ptr<uint8_t>();
   for (int row = y; row < y + height; ++row)
     for (int column = x; column < x + width; ++column)
       pixels[row * 640 + column] = static_cast<uint8_t>(color);
-  return true;
+  return KernelError::Success;
 }
 
 uint8_t *g_presentedPixels{nullptr};
@@ -192,8 +208,7 @@ struct Scene {
     EnsureObjectManagerInitialized();
     display = KE_GFX_GetPrimaryDisplay();
     if (!display) {
-      auto adapter = KE_GFX_RegisterGraphicsAdapter(nullptr, KDevicePtr<KDevice>(), "UserTestAdapter");
-      REQUIRE(adapter);
+      auto adapter = TakeExpected(KE_GFX_RegisterGraphicsAdapter(nullptr, KDevicePtr<KDevice>(), "UserTestAdapter"));
       adapter->ProbeDisplay = UserProbe;
       adapter->ConfigureDisplay = UserConfigure;
       gfx::start_adapter(adapter);
@@ -203,12 +218,9 @@ struct Scene {
     oldSurface = display->surface;
     oldAttached = display->isAttachedToDesktop;
     oldAdapter = display->adapter;
-    surface = CreateKObject<KSurface>("user-test-surface");
-    process = CreateKObject<KProcessObject>("user-test-process");
-    auto backing = CreateKObject<KMemoryBackingObject>("user-test-pixels");
-    REQUIRE(surface);
-    REQUIRE(process);
-    REQUIRE(backing);
+    surface = TakeExpected(CreateKObject<KSurface>("user-test-surface"));
+    process = TakeExpected(CreateKObject<KProcessObject>("user-test-process"));
+    auto backing = TakeExpected(CreateKObject<KMemoryBackingObject>("user-test-pixels"));
     backing->directAddress = VirtualAddress(reinterpret_cast<uintptr_t>(pixels));
     backing->size = sizeof(pixels);
     surface->backing = backing;
@@ -223,15 +235,14 @@ struct Scene {
 
   KWindowObject &add(URect rect, uint32_t parent = 0, uint32_t style = kStyleVisible) {
     REQUIRE(count < 16);
-    auto window = CreateKObject<KWindowObject>("user-test-window");
-    REQUIRE(window);
+    auto window = TakeExpected(CreateKObject<KWindowObject>("user-test-window"));
     window->rect = rect;
     window->style = style | (parent ? kStyleChild : 0);
     window->parent = parent;
     window->queue = &queue;
     window->process = process.get();
     window->background = 7;
-    REQUIRE(insert_window_locked(window) != 0);
+    REQUIRE(insert_window_locked(window));
     windows[count++] = window;
     return *window;
   }
@@ -254,14 +265,14 @@ TEST_CASE("USER display changes refit roots and refresh outstanding paint DCs", 
   kernel::user::SceneDrawGuard drawing;
   auto &root = scene.add({450, 350, 630, 470});
   auto &maximized = scene.add({0, 0, 640, 480});
-  maximized.state = 3;
+  maximized.state = KWindowObject::State::Maximized;
   maximized.restoredRect = {400, 300, 600, 460};
   auto &child = scene.add({5, 5, 100, 100}, maximized.hwnd);
-  child.state = 3;
+  child.state = KWindowObject::State::Maximized;
   root.invalid = kernel::user::client_rect_locked(root);
   uint32_t dc = 0;
   URect paint{};
-  REQUIRE(kernel::user::begin_paint_locked(*scene.process, root, dc, paint));
+  REQUIRE(BeginPaintInto(*scene.process, root, dc, paint));
   auto *slot = scene.process->dcTable.Resolve(dc);
   REQUIRE(slot);
   slot->presentationDirty = true;
@@ -284,7 +295,7 @@ TEST_CASE("USER display changes refit roots and refresh outstanding paint DCs", 
     REQUIRE(slot->clipRects[i].right <= 320);
     REQUIRE(slot->clipRects[i].bottom <= 240);
   }
-  REQUIRE(kernel::user::end_paint_locked(*scene.process, root, dc));
+  REQUIRE(kernel::user::end_paint_locked(*scene.process, root, dc) == KernelError::Success);
 }
 
 TEST_CASE("USER display notifications coalesce outside a full message ring", "[user][scene][mode]") {
@@ -293,9 +304,9 @@ TEST_CASE("USER display notifications coalesce outside a full message ring", "[u
   kernel::user::SceneDrawGuard drawing;
   auto &window = scene.add({10, 10, 200, 150});
   scene.queue.ring = {};
-  for (uint32_t i = 0; i < kernel::user::kQueueSize; ++i)
-    REQUIRE(kernel::user::post_locked(scene.queue, window.hwnd, 0x400, i, 0));
-  REQUIRE_FALSE(kernel::user::post_locked(scene.queue, window.hwnd, 0x400, 0, 0));
+  for (uint32_t i = 0; i < kernel::kQueueSize; ++i)
+    REQUIRE(kernel::user::post_locked(scene.queue, window.hwnd, 0x400, i, 0) == KernelError::Success);
+  REQUIRE(kernel::user::post_locked(scene.queue, window.hwnd, 0x400, 0, 0) == KernelError::QueueFull);
   scene.surface->width = 320;
   scene.surface->height = 240;
   kernel::user::display_changed_locked(8);
@@ -310,7 +321,7 @@ TEST_CASE("USER display notifications coalesce outside a full message ring", "[u
   REQUIRE(window.pendingDisplayChange);
   REQUIRE(kernel::user::geometry_message_locked(scene.queue, message, true));
   REQUIRE_FALSE(window.pendingDisplayChange);
-  REQUIRE(scene.queue.ring.count == kernel::user::kQueueSize);
+  REQUIRE(scene.queue.ring.count == kernel::kQueueSize);
 }
 
 TEST_CASE("USER children use parent client placement and clip every ancestor", "[user][scene]") {
@@ -318,19 +329,19 @@ TEST_CASE("USER children use parent client placement and clip every ancestor", "
   kernel::user::Guard guard;
   auto &root = scene.add({100, 100, 400, 350}, 0,
                          kernel::user::kStyleVisible | kernel::user::kStyleBorder | kernel::user::kStyleCaption);
-  URect rect;
-  REQUIRE(kernel::user::placement_rect_locked(root, -10, -20, 100, 80, rect));
+  URect rect = TakeExpected(kernel::user::placement_rect_locked(root, -10, -20, 100, 80));
   REQUIRE(rect == URect{-10, -20, 90, 60});
   auto &child = scene.add({0, 0, 1, 1}, root.hwnd);
-  REQUIRE(kernel::user::placement_rect_locked(child, -10, -10, 100, 80, rect));
+  rect = TakeExpected(kernel::user::placement_rect_locked(child, -10, -10, 100, 80));
   REQUIRE(rect == URect{93, 111, 193, 191});
-  REQUIRE(kernel::user::move_window_locked(child, rect));
+  REQUIRE(kernel::user::move_window_locked(child, rect) == KernelError::Success);
   REQUIRE(kernel::user::clipped_rect_locked(child) == URect{103, 121, 193, 191});
   auto &grandchild = scene.add({90, 110, 220, 220}, child.hwnd);
   REQUIRE(kernel::user::clipped_rect_locked(grandchild) == URect{103, 121, 193, 191});
   REQUIRE(kernel::user::window_from_point_locked(95, 130) == nullptr);
   REQUIRE(kernel::user::window_from_point_locked(110, 130) == &grandchild);
-  REQUIRE_FALSE(kernel::user::placement_rect_locked(child, 32767, 0, 100, 10, rect));
+  REQUIRE(kernel::user::placement_rect_locked(child, 32767, 0, 100, 10).error() == KernelError::OutOfRange);
+  REQUIRE(kernel::user::placement_rect_locked(child, 0, 0, 0, 10).error() == KernelError::InvalidSize);
 }
 
 TEST_CASE("USER root z order keeps descendants grouped and focus is independent", "[user][scene]") {
@@ -346,7 +357,7 @@ TEST_CASE("USER root z order keeps descendants grouped and focus is independent"
   REQUIRE(second.below == &nested);
   REQUIRE(nested.below == &a);
   REQUIRE(a.below == &first);
-  REQUIRE(kernel::user::set_focus_locked(nested.hwnd));
+  REQUIRE(kernel::user::set_focus_locked(nested.hwnd) == KernelError::Success);
   REQUIRE(kernel::user::active_window_locked() == &first);
   REQUIRE(kernel::user::focused_window_locked() == &nested);
   REQUIRE(kernel::user::topmost_locked() == &nested);
@@ -367,9 +378,9 @@ TEST_CASE("USER hide move and recursive destruction preserve hierarchy lifetime"
   auto &root = scene.add({10, 10, 250, 250});
   auto &child = scene.add({20, 30, 100, 110}, root.hwnd);
   auto &nested = scene.add({25, 35, 75, 85}, child.hwnd);
-  REQUIRE(kernel::user::set_focus_locked(nested.hwnd));
+  REQUIRE(kernel::user::set_focus_locked(nested.hwnd) == KernelError::Success);
   kernel::user::set_capture_locked(nested.hwnd);
-  REQUIRE(kernel::user::move_window_locked(root, {30, 40, 270, 280}));
+  REQUIRE(kernel::user::move_window_locked(root, {30, 40, 270, 280}) == KernelError::Success);
   REQUIRE(child.rect == URect{40, 60, 120, 140});
   REQUIRE(nested.rect == URect{45, 65, 95, 115});
   kernel::user::show_window_locked(root, false);
@@ -377,7 +388,7 @@ TEST_CASE("USER hide move and recursive destruction preserve hierarchy lifetime"
   REQUIRE_FALSE(kernel::user::effectively_visible_locked(child));
   REQUIRE(kernel::user::capture_locked() == 0);
   REQUIRE(kernel::user::focused_window_locked() == nullptr);
-  REQUIRE_FALSE(kernel::user::set_focus_locked(child.hwnd));
+  REQUIRE(kernel::user::set_focus_locked(child.hwnd) == KernelError::InvalidState);
   kernel::user::show_window_locked(root, true);
   REQUIRE(kernel::user::effectively_visible_locked(nested));
   const auto stale = nested.hwnd;
@@ -398,23 +409,23 @@ TEST_CASE("USER invalidation and paint use client coordinates and exact DC pairi
   window.invalid = {};
   kernel::user::invalidate_locked(window, {-10, -10, 12, 14});
   REQUIRE(window.invalid == URect{0, 0, 12, 14});
-  uint32_t dc = 0, duplicate = 0;
+  uint32_t dc = 0;
   URect paint;
-  REQUIRE(kernel::user::begin_paint_locked(*scene.process, window, dc, paint));
+  REQUIRE(BeginPaintInto(*scene.process, window, dc, paint));
   REQUIRE(paint == URect{0, 0, 12, 14});
   REQUIRE(window.invalid.Empty());
   REQUIRE(window.paintClip.Bounds() == URect{103, 121, 115, 135});
-  REQUIRE_FALSE(kernel::user::begin_paint_locked(*scene.process, window, duplicate, paint));
+  REQUIRE(kernel::user::begin_paint_locked(*scene.process, window).error() == KernelError::InvalidState);
   auto &other = scene.add({350, 100, 450, 250});
-  REQUIRE_FALSE(kernel::user::end_paint_locked(*scene.process, other, dc));
+  REQUIRE(kernel::user::end_paint_locked(*scene.process, other, dc) == KernelError::InvalidHandle);
   REQUIRE(scene.process->dcTable.Resolve(dc) != nullptr);
-  REQUIRE(kernel::user::move_window_locked(window, {110, 110, 310, 260}));
+  REQUIRE(kernel::user::move_window_locked(window, {110, 110, 310, 260}) == KernelError::Success);
   const auto *slot = scene.process->dcTable.Resolve(dc);
   REQUIRE(slot->originX == 113);
   REQUIRE(slot->originY == 131);
-  REQUIRE(kernel::user::end_paint_locked(*scene.process, window, dc));
+  REQUIRE(kernel::user::end_paint_locked(*scene.process, window, dc) == KernelError::Success);
   REQUIRE(scene.process->dcTable.Resolve(dc) == nullptr);
-  REQUIRE_FALSE(kernel::user::end_paint_locked(*scene.process, window, dc));
+  REQUIRE(kernel::user::end_paint_locked(*scene.process, window, dc) == KernelError::InvalidHandle);
 }
 
 TEST_CASE("USER minimize maximize restore retain original child bounds", "[user][scene]") {
@@ -426,17 +437,17 @@ TEST_CASE("USER minimize maximize restore retain original child bounds", "[user]
   auto &child = scene.add(original, root.hwnd,
                           kernel::user::kStyleVisible | kernel::user::kStyleBorder | kernel::user::kStyleCaption);
   auto &nested = scene.add({50, 90, 100, 140}, child.hwnd);
-  REQUIRE(kernel::user::show_command_locked(child, 3));
+  REQUIRE(kernel::user::show_command_locked(child, 3) == KernelError::Success);
   REQUIRE(child.rect == kernel::user::client_to_screen_locked(root, kernel::user::client_rect_locked(root)));
-  REQUIRE(kernel::user::show_command_locked(child, 2));
-  REQUIRE(child.state == 2);
+  REQUIRE(kernel::user::show_command_locked(child, 2) == KernelError::Success);
+  REQUIRE(child.state == KWindowObject::State::Minimized);
   REQUIRE(kernel::user::client_rect_locked(child).Empty());
   REQUIRE_FALSE(kernel::user::effectively_visible_locked(nested));
-  REQUIRE(kernel::user::show_command_locked(child, 4));
+  REQUIRE(kernel::user::show_command_locked(child, 4) == KernelError::Success);
   REQUIRE(child.rect == original);
   REQUIRE(nested.rect == URect{50, 90, 100, 140});
   REQUIRE(kernel::user::focused_window_locked() == &child);
-  REQUIRE_FALSE(kernel::user::show_command_locked(child, 77));
+  REQUIRE(kernel::user::show_command_locked(child, 77) == KernelError::InvalidArgument);
 }
 
 TEST_CASE("USER exposure repaints captions and activation removes old highlight", "[user][scene]") {
@@ -444,10 +455,10 @@ TEST_CASE("USER exposure repaints captions and activation removes old highlight"
   kernel::user::Guard guard;
   const uint32_t style = kernel::user::kStyleVisible | kernel::user::kStyleCaption | kernel::user::kStyleBorder;
   auto &first = scene.add({10, 10, 250, 150}, 0, style);
-  REQUIRE(kernel::user::set_focus_locked(first.hwnd));
+  REQUIRE(kernel::user::set_focus_locked(first.hwnd) == KernelError::Success);
   REQUIRE(scene.pixels[15 * 640 + 60] == kernel::user::kActiveCaptionColor);
   auto &second = scene.add({300, 10, 550, 150}, 0, style);
-  REQUIRE(kernel::user::set_focus_locked(second.hwnd));
+  REQUIRE(kernel::user::set_focus_locked(second.hwnd) == KernelError::Success);
   REQUIRE(scene.pixels[15 * 640 + 60] == kernel::user::kInactiveCaptionColor);
   scene.pixels[15 * 640 + 60] = 0xEE;
   kernel::user::expose_locked({55, 14, 65, 17});
@@ -461,7 +472,7 @@ TEST_CASE("USER NT-style chrome has beveled frames and centered bold captions", 
   auto &window = scene.add({10, 10, 250, 150}, 0, kStyleVisible | kStyleCaption | kStyleBorder);
   window.title[0] = 'I';
   window.title[1] = 0;
-  REQUIRE(set_focus_locked(window.hwnd));
+  REQUIRE(set_focus_locked(window.hwnd) == KernelError::Success);
   draw_nonclient_locked(window);
   REQUIRE(scene.pixels[10 * 640 + 80] == kWindowFrameColor);
   REQUIRE(scene.pixels[11 * 640 + 80] == 15);
@@ -478,7 +489,7 @@ TEST_CASE("USER NT-style chrome has beveled frames and centered bold captions", 
   REQUIRE(scene.pixels[20 * 640 + 18] == 15);
   REQUIRE(scene.pixels[23 * 640 + 219] == 0);
   REQUIRE(scene.pixels[20 * 640 + 237] == 0);
-  REQUIRE(show_command_locked(window, 3));
+  REQUIRE(show_command_locked(window, 3) == KernelError::Success);
   const int32_t maxX = window.rect.right - kBorderWidth - kCaptionHeight;
   const int32_t captionY = window.rect.top + kBorderWidth;
   REQUIRE(scene.pixels[(captionY + 3) * 640 + maxX + 8] == 0);
@@ -487,14 +498,12 @@ TEST_CASE("USER NT-style chrome has beveled frames and centered bold captions", 
 
 TEST_CASE("USER identical class names are scoped to each process", "[user][classes]") {
   EnsureObjectManagerInitialized();
-  auto first = kernel::CreateKObject<kernel::KProcessObject>("user-class-first");
-  auto second = kernel::CreateKObject<kernel::KProcessObject>("user-class-second");
-  REQUIRE(first);
-  REQUIRE(second);
+  auto first = TakeExpected(kernel::CreateKObject<kernel::KProcessObject>("user-class-first"));
+  auto second = TakeExpected(kernel::CreateKObject<kernel::KProcessObject>("user-class-second"));
   {
     kernel::user::Guard guard;
-    REQUIRE(kernel::user::register_class_locked(*first, "GuiDialog", 10, 7));
-    REQUIRE(kernel::user::register_class_locked(*second, "GuiDialog", 20, 8));
+    REQUIRE(kernel::user::register_class_locked(*first, "GuiDialog", 10, 7) == KernelError::Success);
+    REQUIRE(kernel::user::register_class_locked(*second, "GuiDialog", 20, 8) == KernelError::Success);
     const auto a = kernel::user::find_class_locked("GuiDialog", first.get());
     const auto b = kernel::user::find_class_locked("GuiDialog", second.get());
     REQUIRE(a >= 0);
@@ -505,6 +514,157 @@ TEST_CASE("USER identical class names are scoped to each process", "[user][class
   }
   kernel::user::on_process_exit(*first);
   kernel::user::on_process_exit(*second);
+}
+
+TEST_CASE("USER subsystem operations validate ownership and arguments", "[user][classes][kernel-error]") {
+  Scene scene;
+  auto stranger = TakeExpected(kernel::CreateKObject<kernel::KProcessObject>("user-ops-stranger"));
+  KWindowObject *root = nullptr;
+  KWindowObject *child = nullptr;
+  {
+    kernel::user::Guard guard;
+    root = &scene.add({10, 10, 200, 200}, 0, kStyleVisible | kStyleCaption | kStyleBorder);
+    child = &scene.add({20, 40, 60, 80}, root->hwnd);
+  }
+  auto &caller = *scene.process;
+
+  REQUIRE(kernel::user::register_class(caller, "", 1, 0) == KernelError::InvalidArgument);
+  REQUIRE(kernel::user::register_class(caller, "ThisClassNameIsDefinitelyTooLongForUSER", 1, 0) ==
+          KernelError::NameTooLong);
+
+  REQUIRE(kernel::user::destroy_window(caller, 0xDEAD0001) == KernelError::InvalidHandle);
+  REQUIRE(kernel::user::show_window(*stranger, root->hwnd, 1) == KernelError::AccessDenied);
+  REQUIRE(kernel::user::show_window(caller, root->hwnd, 77) == KernelError::InvalidArgument);
+  REQUIRE(kernel::user::move_window(caller, root->hwnd, 0, 0, 0, 10) == KernelError::InvalidSize);
+  REQUIRE(kernel::user::move_window(caller, child->hwnd, 32767, 0, 10, 10) == KernelError::OutOfRange);
+
+  const URect inverted{10, 10, 5, 20};
+  REQUIRE(kernel::user::invalidate_rect(caller, root->hwnd, &inverted) == KernelError::InvalidArgument);
+  REQUIRE(kernel::user::invalidate_rect(caller, root->hwnd, nullptr) == KernelError::Success);
+
+  REQUIRE(kernel::user::get_window_rect(0xDEAD0001).error() == KernelError::InvalidHandle);
+  REQUIRE(kernel::user::get_window_rect(root->hwnd).value() == root->rect);
+  REQUIRE(kernel::user::get_window_long(root->hwnd, 99).error() == KernelError::InvalidArgument);
+  REQUIRE(kernel::user::get_window_long(child->hwnd, WindowLongIndex_Parent).value() == root->hwnd);
+  REQUIRE(kernel::user::set_window_long(caller, child->hwnd, WindowLongIndex_Parent, 0).error() ==
+          KernelError::InvalidArgument);
+  REQUIRE(kernel::user::set_window_long(caller, root->hwnd, WindowLongIndex_Style, root->style | kStyleChild).error() ==
+          KernelError::InvalidArgument);
+  REQUIRE(kernel::user::set_window_long(caller, root->hwnd, WindowLongIndex_UserData, 42).value() == 0);
+  REQUIRE(kernel::user::get_window_long(root->hwnd, WindowLongIndex_UserData).value() == 42);
+
+  REQUIRE(kernel::user::set_window_text(caller, root->hwnd,
+                                        "0123456789012345678901234567890123456789012345678901234567890123456789") ==
+          KernelError::InvalidSize);
+  REQUIRE(kernel::user::set_window_text(caller, root->hwnd, "Title") == KernelError::Success);
+  REQUIRE(root->title == kstd::string_view("Title"));
+
+  REQUIRE(kernel::user::set_capture(*stranger, root->hwnd) == KernelError::AccessDenied);
+  REQUIRE(kernel::user::set_capture(caller, root->hwnd) == KernelError::Success);
+  REQUIRE(kernel::user::release_capture(*stranger) == KernelError::Success);
+  {
+    kernel::user::Guard guard;
+    REQUIRE(kernel::user::capture_locked() == root->hwnd);
+  }
+  REQUIRE(kernel::user::release_capture(caller) == KernelError::Success);
+
+  REQUIRE(kernel::user::set_focus(caller, root->hwnd) == KernelError::Success);
+  REQUIRE(kernel::user::set_focus(*stranger, 0) == KernelError::AccessDenied);
+  REQUIRE(kernel::user::set_focus(caller, 0) == KernelError::Success);
+
+  REQUIRE(kernel::user::destroy_window(caller, child->hwnd) == KernelError::Success);
+  REQUIRE(kernel::user::destroy_window(caller, child->hwnd) == KernelError::InvalidHandle);
+  kernel::user::on_process_exit(*stranger);
+}
+
+TEST_CASE("USER facade validates class and title boundaries before creating a window", "[user][classes][kernel-error]") {
+  Scene scene;
+  auto &caller = *scene.process;
+  char className[kernel::kWindowClassNameLen];
+  char title[kernel::kWindowTitleLen];
+  for (auto &c : className) c = 'C';
+  for (auto &c : title) c = 'T';
+  const kstd::string_view validClass(className, sizeof(className) - 1);
+  const kstd::string_view oversizedClass(className, sizeof(className));
+  const kstd::string_view validTitle(title, sizeof(title) - 1);
+  const kstd::string_view oversizedTitle(title, sizeof(title));
+
+  REQUIRE(kernel::user::register_class(caller, validClass, 1, 0) == KernelError::Success);
+  REQUIRE(kernel::user::register_class(caller, oversizedClass, 1, 0) == KernelError::NameTooLong);
+
+  kernel::user::CreateWindowParams params{
+      .className = oversizedClass, .title = validTitle, .style = kStyleVisible,
+      .parent = 0, .x = 0, .y = 0, .width = 100, .height = 100, .userData = 0};
+  REQUIRE(kernel::user::create_window(caller, params).error() == KernelError::NameTooLong);
+  params.className = validClass;
+  params.title = oversizedTitle;
+  REQUIRE(kernel::user::create_window(caller, params).error() == KernelError::InvalidSize);
+  params.title = validTitle;
+  const int32_t invalidDimensions[] = {0, -1};
+  for (const int32_t invalid : invalidDimensions) {
+    params.width = invalid;
+    REQUIRE(kernel::user::create_window(caller, params).error() == KernelError::InvalidSize);
+    params.width = 100;
+    params.height = invalid;
+    REQUIRE(kernel::user::create_window(caller, params).error() == KernelError::InvalidSize);
+    params.height = 100;
+  }
+
+  KWindowObject *window = nullptr;
+  {
+    kernel::user::Guard guard;
+    window = &scene.add({10, 10, 110, 110});
+  }
+  REQUIRE(kernel::user::set_window_text(caller, window->hwnd, validTitle) == KernelError::Success);
+  REQUIRE(window->title == validTitle);
+  REQUIRE(kernel::user::set_window_text(caller, window->hwnd, oversizedTitle) == KernelError::InvalidSize);
+  REQUIRE(window->title == validTitle);
+  kernel::user::on_process_exit(caller);
+}
+
+TEST_CASE("USER facade distinguishes invalid handles from foreign ownership", "[user][handles][kernel-error]") {
+  Scene scene;
+  auto stranger = TakeExpected(CreateKObject<KProcessObject>("user-facade-foreign"));
+  KWindowObject *window = nullptr;
+  {
+    kernel::user::Guard guard;
+    window = &scene.add({10, 10, 110, 110});
+  }
+  const uint32_t hwnd = window->hwnd;
+  constexpr uint32_t invalid = 0xDEAD0001;
+  auto &caller = *scene.process;
+  REQUIRE(kernel::user::destroy_window(caller, invalid) == KernelError::InvalidHandle);
+  REQUIRE(kernel::user::destroy_window(*stranger, hwnd) == KernelError::AccessDenied);
+  REQUIRE(kernel::user::set_window_text(caller, invalid, "text") == KernelError::InvalidHandle);
+  REQUIRE(kernel::user::set_window_text(*stranger, hwnd, "text") == KernelError::AccessDenied);
+  REQUIRE(kernel::user::move_window(caller, invalid, 0, 0, 10, 10) == KernelError::InvalidHandle);
+  REQUIRE(kernel::user::move_window(*stranger, hwnd, 0, 0, 10, 10) == KernelError::AccessDenied);
+
+  kernel::user::CreateWindowParams params{
+      .className = "unused", .title = "", .style = kStyleChild,
+      .parent = invalid, .x = 0, .y = 0, .width = 10, .height = 10, .userData = 0};
+  REQUIRE(kernel::user::create_window(caller, params).error() == KernelError::InvalidHandle);
+  params.parent = hwnd;
+  REQUIRE(kernel::user::create_window(*stranger, params).error() == KernelError::AccessDenied);
+  REQUIRE(kernel::user::get_window_rect(hwnd).value() == URect{10, 10, 110, 110});
+}
+
+TEST_CASE("USER facade reports queue exhaustion without reporting allocation failure", "[user][queue][kernel-error]") {
+  Scene scene;
+  uint32_t hwnd = 0;
+  {
+    kernel::user::Guard guard;
+    hwnd = scene.add({10, 10, 110, 110}).hwnd;
+  }
+  for (uint32_t i = 0; i < kernel::kQueueSize; ++i)
+    REQUIRE(kernel::user::post_message(hwnd, 0x400 + i, i, 0) == KernelError::Success);
+  REQUIRE(kernel::user::post_message(hwnd, 0x500, 0, 0) == KernelError::QueueFull);
+  REQUIRE(scene.queue.ring.count == kernel::kQueueSize);
+  QueuedMessage first{};
+  REQUIRE(scene.queue.ring.Pop(first));
+  REQUIRE(first.message == 0x400);
+  REQUIRE(kernel::user::post_message(hwnd, 0x501, 0, 0) == KernelError::Success);
+  REQUIRE(kernel::user::post_message(0xDEAD0001, 0x400, 0, 0) == KernelError::InvalidHandle);
 }
 
 TEST_CASE("USER fragmented visibility never paints over an occluder", "[user][region]") {
@@ -547,8 +707,7 @@ TEST_CASE("USER cursor save-under restores pixels without invalidating applicati
 TEST_CASE("USER planar cursor uses adapter readback and restores native pixels", "[user][scene]") {
   Scene scene;
   kernel::user::Guard guard;
-  auto adapter = kernel::CreateKObject<kernel::KGraphicsAdapter>("user-planar-adapter");
-  REQUIRE(adapter);
+  auto adapter = TakeExpected(kernel::CreateKObject<kernel::KGraphicsAdapter>("user-planar-adapter"));
   adapter->ReadPixel = UserReadPixel;
   adapter->FillRect = UserPlanarFill;
   scene.surface->pitch = 80;
@@ -572,19 +731,19 @@ TEST_CASE("USER scene changes refresh live paint clips and recover deleted DC da
   auto &child = scene.add({40, 40, 180, 180}, root.hwnd);
   uint32_t dc = 0;
   URect paint;
-  REQUIRE(kernel::user::begin_paint_locked(*scene.process, child, dc, paint));
+  REQUIRE(BeginPaintInto(*scene.process, child, dc, paint));
   REQUIRE(scene.process->dcTable.Resolve(dc)->clipCount != 0);
   kernel::user::show_window_locked(root, false);
   REQUIRE(scene.process->dcTable.Resolve(dc)->clipCount == 0);
   kernel::user::show_window_locked(root, true);
   REQUIRE(scene.process->dcTable.Resolve(dc)->clipCount != 0);
-  REQUIRE(scene.process->dcTable.Close(dc));
+  REQUIRE(scene.process->dcTable.Close(dc) == KernelError::Success);
   child.invalid = {};
   uint32_t fresh = 0;
-  REQUIRE(kernel::user::begin_paint_locked(*scene.process, child, fresh, paint));
+  REQUIRE(BeginPaintInto(*scene.process, child, fresh, paint));
   REQUIRE(fresh != dc);
   REQUIRE(paint == URect{0, 0, 140, 140});
-  REQUIRE(kernel::user::end_paint_locked(*scene.process, child, fresh));
+  REQUIRE(kernel::user::end_paint_locked(*scene.process, child, fresh) == KernelError::Success);
 }
 
 TEST_CASE("USER rejected hierarchy moves are atomic and destruction selects a surviving root", "[user][scene]") {
@@ -594,10 +753,10 @@ TEST_CASE("USER rejected hierarchy moves are atomic and destruction selects a su
   auto &root = scene.add({100, 100, 300, 300});
   auto &child = scene.add({32700, 100, 32760, 160}, root.hwnd);
   const auto oldRoot = root.rect, oldChild = child.rect;
-  REQUIRE_FALSE(kernel::user::move_window_locked(root, {200, 100, 400, 300}));
+  REQUIRE(kernel::user::move_window_locked(root, {200, 100, 400, 300}) == KernelError::OutOfRange);
   REQUIRE(root.rect == oldRoot);
   REQUIRE(child.rect == oldChild);
-  REQUIRE(kernel::user::set_focus_locked(root.hwnd));
+  REQUIRE(kernel::user::set_focus_locked(root.hwnd) == KernelError::Success);
   kernel::user::destroy_window_locked(root);
   REQUIRE(kernel::user::active_window_locked() == &survivor);
   REQUIRE(kernel::user::focused_window_locked() == &survivor);
@@ -610,7 +769,7 @@ TEST_CASE("USER keyboard cycle visits all sibling groups in a stable order", "[u
   auto &one = scene.add({10, 10, 100, 100}, root.hwnd);
   auto &two = scene.add({20, 20, 120, 120}, root.hwnd);
   auto &three = scene.add({30, 30, 140, 140}, root.hwnd);
-  REQUIRE(kernel::user::set_focus_locked(one.hwnd));
+  REQUIRE(kernel::user::set_focus_locked(one.hwnd) == KernelError::Success);
   kernel::user::cycle_window_locked(true, false);
   REQUIRE(kernel::user::focused_window_locked() == &two);
   kernel::user::cycle_window_locked(true, false);
@@ -626,10 +785,10 @@ TEST_CASE("USER geometry notifications survive a full ring and coalesce latest c
   kernel::user::Guard guard;
   auto &window = scene.add({10, 10, 110, 110}, 0,
                            kernel::user::kStyleVisible | kernel::user::kStyleCaption | kernel::user::kStyleBorder);
-  for (uint32_t i = 0; i < kernel::user::kQueueSize; ++i)
-    REQUIRE(scene.queue.ring.Push({window.hwnd, 0x400 + i}));
-  REQUIRE(kernel::user::move_window_locked(window, {30, 40, 230, 240}));
-  REQUIRE(kernel::user::move_window_locked(window, {50, 60, 350, 360}));
+  for (uint32_t i = 0; i < kernel::kQueueSize; ++i)
+    REQUIRE(scene.queue.ring.Push({window.hwnd, 0x400 + i}) == KernelError::Success);
+  REQUIRE(kernel::user::move_window_locked(window, {30, 40, 230, 240}) == KernelError::Success);
+  REQUIRE(kernel::user::move_window_locked(window, {50, 60, 350, 360}) == KernelError::Success);
   QueuedMessage message;
   REQUIRE(kernel::user::geometry_message_locked(scene.queue, message, false));
   REQUIRE(message.message == kernel::user::kMsgMove);
@@ -647,33 +806,32 @@ TEST_CASE("USER shrinking a dirty window never erases its new nonclient border",
   kernel::user::Guard guard;
   auto &window = scene.add({10, 10, 400, 300}, 0,
                            kernel::user::kStyleVisible | kernel::user::kStyleCaption | kernel::user::kStyleBorder);
-  REQUIRE(kernel::user::move_window_locked(window, {10, 10, 200, 150}));
+  REQUIRE(kernel::user::move_window_locked(window, {10, 10, 200, 150}) == KernelError::Success);
   uint32_t dc = 0;
   URect paint;
-  REQUIRE(kernel::user::begin_paint_locked(*scene.process, window, dc, paint));
+  REQUIRE(BeginPaintInto(*scene.process, window, dc, paint));
   REQUIRE(paint == kernel::user::client_rect_locked(window));
   REQUIRE(window.paintClip.Bounds() == kernel::user::client_to_screen_locked(window, paint));
   REQUIRE(scene.pixels[100 * 640 + 199] == kernel::user::kWindowFrameColor);
   REQUIRE(scene.pixels[149 * 640 + 100] == kernel::user::kWindowFrameColor);
-  REQUIRE(kernel::user::end_paint_locked(*scene.process, window, dc));
+  REQUIRE(kernel::user::end_paint_locked(*scene.process, window, dc) == KernelError::Success);
 }
 
 TEST_CASE("USER EndPaint publishes raster damage independently of the final live clip", "[user][scene]") {
   Scene scene;
   kernel::user::Guard guard;
-  auto adapter = kernel::CreateKObject<kernel::KGraphicsAdapter>("user-present-adapter");
-  REQUIRE(adapter);
+  auto adapter = TakeExpected(kernel::CreateKObject<kernel::KGraphicsAdapter>("user-present-adapter"));
   adapter->Present = UserPresent;
   scene.display->adapter = adapter;
   auto &window = scene.add({20, 20, 300, 200});
   uint32_t dc = 0;
   URect paint;
-  REQUIRE(kernel::user::begin_paint_locked(*scene.process, window, dc, paint));
+  REQUIRE(BeginPaintInto(*scene.process, window, dc, paint));
   auto *slot = scene.process->dcTable.Resolve(dc);
   REQUIRE(slot);
   // Software glyphs live in the shadow until EndPaint, unlike accelerated
   // rectangle fills. GFX records their actual clipped damage in the DC.
-  REQUIRE(KE_GFX_SoftwareFillRect(scene.surface, 40, 40, 5, 7, 15));
+  REQUIRE(KE_GFX_SoftwareFillRect(scene.surface, 40, 40, 5, 7, 15) == KernelError::Success);
   slot->presentationDirty = true;
   slot->presentationBounds = {40, 40, 45, 47};
   // A concurrent visibility update is allowed to narrow the remaining clip.
@@ -682,17 +840,17 @@ TEST_CASE("USER EndPaint publishes raster damage independently of the final live
   uint8_t presented[640 * 480]{};
   g_presentedPixels = presented;
   g_presentedBounds = {};
-  REQUIRE(kernel::user::end_paint_locked(*scene.process, window, dc));
+  REQUIRE(kernel::user::end_paint_locked(*scene.process, window, dc) == KernelError::Success);
   g_presentedPixels = nullptr;
   REQUIRE(presented[40 * 640 + 40] == 15);
   REQUIRE(presented[46 * 640 + 44] == 15);
   REQUIRE(g_presentedBounds == URect{40, 40, 220, 120});
   // Reusing a slot must not republish damage from the prior paint.
-  REQUIRE(kernel::user::begin_paint_locked(*scene.process, window, dc, paint));
+  REQUIRE(BeginPaintInto(*scene.process, window, dc, paint));
   slot = scene.process->dcTable.Resolve(dc);
   REQUIRE(slot);
   REQUIRE_FALSE(slot->presentationDirty);
-  REQUIRE(kernel::user::end_paint_locked(*scene.process, window, dc));
+  REQUIRE(kernel::user::end_paint_locked(*scene.process, window, dc) == KernelError::Success);
 }
 
 TEST_CASE("USER minimized children paint selectable icons with labels and preserve restore bounds", "[user][scene]") {
@@ -705,14 +863,14 @@ TEST_CASE("USER minimized children paint selectable icons with labels and preser
                            kernel::user::kStyleVisible | kernel::user::kStyleCaption | kernel::user::kStyleBorder);
   first.title[0] = 'M'; first.title[1] = 'a'; first.title[2] = 'i'; first.title[3] = 'n';
   const auto restored = first.rect;
-  REQUIRE(kernel::user::show_command_locked(first, 2));
+  REQUIRE(kernel::user::show_command_locked(first, 2) == KernelError::Success);
   REQUIRE(first.rect.right - first.rect.left == 88);
   REQUIRE(first.rect.bottom - first.rect.top == 56);
   REQUIRE(kernel::user::client_rect_locked(first).Empty());
   const auto r = first.rect;
   REQUIRE(kernel::user::hit_test_locked(first, r.left + 44, r.top + 10) == HitTest::Caption);
   REQUIRE(scene.pixels[(r.top + 3) * 640 + r.left + 29] == 15);
-  REQUIRE(kernel::user::set_focus_locked(first.hwnd));
+  REQUIRE(kernel::user::set_focus_locked(first.hwnd) == KernelError::Success);
   REQUIRE(kernel::user::focused_window_locked() == &first);
   REQUIRE(kernel::user::active_window_locked() == &root);
   bool highlight = false;
@@ -720,14 +878,14 @@ TEST_CASE("USER minimized children paint selectable icons with labels and preser
     for (int32_t x = r.left; x < r.right; ++x)
       highlight = highlight || scene.pixels[y * 640 + x] == kernel::user::kActiveCaptionColor;
   REQUIRE(highlight);
-  REQUIRE(kernel::user::show_command_locked(second, 2));
+  REQUIRE(kernel::user::show_command_locked(second, 2) == KernelError::Success);
   REQUIRE(first.rect.Intersect(second.rect).Empty());
-  REQUIRE(kernel::user::set_focus_locked(root.hwnd));
+  REQUIRE(kernel::user::set_focus_locked(root.hwnd) == KernelError::Success);
   kernel::user::cycle_window_locked(true, false);
   REQUIRE(kernel::user::focused_window_locked() == &first);
-  REQUIRE(kernel::user::show_command_locked(first, 4));
+  REQUIRE(kernel::user::show_command_locked(first, 4) == KernelError::Success);
   REQUIRE(first.rect == restored);
-  REQUIRE(first.state == 0);
+  REQUIRE(first.state == KWindowObject::State::Restored);
 }
 
 TEST_CASE("USER raising the only root preserves all children above their parent", "[user][scene]") {
@@ -737,15 +895,15 @@ TEST_CASE("USER raising the only root preserves all children above their parent"
   auto &first = scene.add({30, 40, 200, 200}, root.hwnd);
   auto &second = scene.add({220, 40, 400, 200}, root.hwnd);
   auto &other = scene.add({50, 50, 450, 350});
-  REQUIRE(kernel::user::set_focus_locked(other.hwnd));
+  REQUIRE(kernel::user::set_focus_locked(other.hwnd) == KernelError::Success);
   kernel::user::destroy_window_locked(other);
-  REQUIRE(kernel::user::set_focus_locked(root.hwnd));
+  REQUIRE(kernel::user::set_focus_locked(root.hwnd) == KernelError::Success);
   REQUIRE(kernel::user::topmost_locked() == &second);
   REQUIRE(second.below == &first);
   REQUIRE(first.below == &root);
   for (uint32_t i = 0; i < 4; ++i) {
-    REQUIRE(kernel::user::set_focus_locked(first.hwnd));
-    REQUIRE(kernel::user::set_focus_locked(second.hwnd));
+    REQUIRE(kernel::user::set_focus_locked(first.hwnd) == KernelError::Success);
+    REQUIRE(kernel::user::set_focus_locked(second.hwnd) == KernelError::Success);
     URegion visible;
     kernel::user::visible_region_locked(first, visible);
     REQUIRE(visible.Bounds() == first.rect);

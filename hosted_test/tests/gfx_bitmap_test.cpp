@@ -1,7 +1,7 @@
-#include <catch2/catch_test_macros.hpp>
-#include <kernel/gfx/bitmap_font.hpp>
-#include <kernel/gfx/raster_helpers.hpp>
 #include "../../drivers/gfx_vga/vga_palette.hpp"
+#include <../../kernel/src/user/bitmap_font.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <kernel/gfx/raster_helpers.hpp>
 
 namespace {
 struct TextCanvas {
@@ -93,7 +93,7 @@ TEST_CASE("Palette16 matches USER colors and packed channel layouts", "[gfx][pal
 }
 
 TEST_CASE("Blit clipping keeps source and destination aligned", "[gfx][raster]") {
-  kernel::gfx::BlitRect r{-2, 1, 3, -1, 10, 9};
+  kernel::gfx::BlitRect r{.dstX = -2, .dstY = 1, .srcX = 3, .srcY = -1, .width = 10, .height = 9};
   REQUIRE(kernel::gfx::ClipBlit(r, 8, 8, 8, 8));
   REQUIRE(r.dstX == 0);
   REQUIRE(r.dstY == 2);
@@ -101,7 +101,7 @@ TEST_CASE("Blit clipping keeps source and destination aligned", "[gfx][raster]")
   REQUIRE(r.srcY == 0);
   REQUIRE(r.width == 3);
   REQUIRE(r.height == 6);
-  kernel::gfx::BlitRect outside{INT32_MIN, INT32_MIN, 0, 0, UINT32_MAX, UINT32_MAX};
+  kernel::gfx::BlitRect outside{.dstX = INT32_MIN, .dstY = INT32_MIN, .srcX = 0, .srcY = 0, .width = UINT32_MAX, .height = UINT32_MAX};
   REQUIRE_FALSE(kernel::gfx::ClipBlit(outside, 640, 480, 640, 480));
 }
 
@@ -113,7 +113,7 @@ TEST_CASE("Clipped line work is bounded by visible dimensions", "[gfx][raster]")
         REQUIRE(x < 8);
         REQUIRE(y == 2);
         ++points;
-      }));
+      }) == kernel::KernelError::Success);
   REQUIRE(points == 8);
   points = 0;
   REQUIRE(kernel::gfx::ForEachLinePixel(2, INT32_MAX, 2, INT32_MIN, 8, 8,
@@ -122,7 +122,7 @@ TEST_CASE("Clipped line work is bounded by visible dimensions", "[gfx][raster]")
         REQUIRE(y >= 0);
         REQUIRE(y < 8);
         ++points;
-      }));
+      }) == kernel::KernelError::Success);
   REQUIRE(points == 8);
 }
 

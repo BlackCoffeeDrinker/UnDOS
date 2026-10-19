@@ -1,6 +1,8 @@
 #pragma once
 
+#include <expected.hpp>
 #include <kernel/device.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/kobject/KDeviceObject.hpp>
 #include <kernel/kobject/KDriverObject.hpp>
 #include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
@@ -8,6 +10,13 @@
 #include <new.hpp>
 #include <span.hpp>
 #include <utility.hpp>
+
+namespace kernel {
+using KDeviceBusResult = kstd::expected<kernel::KDevicePtr<kernel::KDeviceBus>, KernelError>;
+using KDeviceResult = kstd::expected<kernel::KDevicePtr<kernel::KDevice>, KernelError>;
+using KInterruptRoutineResult = kstd::expected<kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject>, KernelError>;
+}// namespace kernel
+
 
 enum class CreateDeviceFlags : uint16_t {
   None = 0,
@@ -27,7 +36,7 @@ inline bool operator&(CreateDeviceFlags a, CreateDeviceFlags b) { return (static
  * that never enters the namespace and therefore cannot collide with siblings.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KDevicePtr<kernel::KDevice>,
+    kernel::KDeviceResult,
     KE_IO_CreateDevice,
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     size_t deviceExtensionSize, const kstd::string_view &baseDeviceName,
@@ -39,7 +48,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KDevicePtr<kernel::KDeviceBus>,
+    kernel::KDeviceBusResult,
     KE_IO_CreateBus,
     kernel::KObjectPtr<kernel::KDriverObject> driver, size_t deviceExtensionSize,
     const kstd::string_view &busName, CreateDeviceFlags flags = CreateDeviceFlags::None);
@@ -51,9 +60,10 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * Attaches sourceDevice on top of targetDevice's device stack, setting
  * targetDevice->attachedDevice = sourceDevice, and returns the device that
  * sourceDevice now sits on top of (assign it to sourceDevice->lowerDevice).
+ * InvalidArgument for null devices.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KDevicePtr<kernel::KDevice>,
+    kernel::KDeviceResult,
     KE_IO_AttachFilterDevice,
     const kernel::KDevicePtr<kernel::KDevice> &sourceDevice, const kernel::KDevicePtr<kernel::KDevice> &targetDevice);
 
@@ -61,9 +71,10 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @ingroup IO
  * @brief Method KE_IO_AttachChildDevice
  *
+ * AlreadyAttached if the child already has a parent bus.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KDevicePtr<kernel::KDevice>,
+    kernel::KernelError,
     KE_IO_AttachChildDevice,
     const kernel::KDevicePtr<kernel::KDeviceBus> &bus, kernel::KDevicePtr<kernel::KDevice> child);
 
@@ -74,10 +85,10 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * 
  * Synchronous byte-offset block read/write dispatch. Validates arguments and
  * delegates to the device's driver Read/Write handler. Returns
- * IoStatus::Unsupported when the device's driver has no handler.
+ * KernelError::Unsupported when the device's driver has no handler.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::IoStatus,
+    kernel::KernelError,
     KE_IO_ReadDevice,
     const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<uint8_t> buffer, size_t &transferred);
 
@@ -87,7 +98,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::IoStatus,
+    kernel::KernelError,
     KE_IO_WriteDevice,
     const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<const uint8_t> buffer, size_t &transferred);
 
@@ -96,10 +107,10 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @brief Method KE_IO_ControlDevice
  *
  * Synchronous control dispatch to the device's driver DeviceControl handler.
- * Returns IoStatus::Unsupported when the driver has no handler.
+ * Returns KernelError::Unsupported when the driver has no handler.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::IoStatus,
+    kernel::KernelError,
     KE_IO_ControlDevice,
     const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
     kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred);
@@ -114,10 +125,11 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * or StartDevice) MUST keep the returned KObjectPtr alive for as long as
  * the interrupt should stay connected -- e.g. by storing it in the
  * driver's device extension -- since dropping it frees a live ISR object.
- * Returns nullptr on allocation failure or if `irq` is already connected.
+ * Fails with OutOfMemory on allocation failure, or the registration error
+ * (e.g. ResourceConflict) if `irq` is already connected.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject>,
+    kernel::KInterruptRoutineResult,
     KE_IO_ConnectInterrupt,
     const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t irq,
     kernel::cfunc<void(const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *)> routine,
@@ -135,24 +147,22 @@ UNDOS_KERNEL_PUBLIC_V1API(void, KE_IO_DisconnectInterrupt, uint32_t irq);
 
 
 template<typename T>
-kernel::KDevicePtr<kernel::KDevice> KE_IO_CreateDeviceWithContext(
+kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kernel::KernelError> KE_IO_CreateDeviceWithContext(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     const kstd::string_view &deviceName,
     kernel::DeviceType deviceType, CreateDeviceFlags flags = CreateDeviceFlags::None) {
-  if (const auto dev = KE_IO_CreateDevice(kstd::move(driver), sizeof(T), deviceName, deviceType, flags)) {
-    new (dev->deviceExtension.as<T *>()) T();
-    return dev;
-  }
-  return nullptr;
+  auto dev = KE_IO_CreateDevice(kstd::move(driver), sizeof(T), deviceName, deviceType, flags);
+  if (!dev) return dev;
+  new ((*dev)->deviceExtension.template as<T *>()) T();
+  return dev;
 }
 
 template<typename T>
-kernel::KDevicePtr<kernel::KDeviceBus> KE_IO_CreateBusWithContext(
+kstd::expected<kernel::KDevicePtr<kernel::KDeviceBus>, kernel::KernelError> KE_IO_CreateBusWithContext(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     const kstd::string_view &busName = {}, CreateDeviceFlags flags = CreateDeviceFlags::None) {
-  if (auto dev = KE_IO_CreateBus(kstd::move(driver), sizeof(T), busName, flags)) {
-    new (dev->deviceExtension.as<T *>()) T();
-    return dev;
-  }
-  return nullptr;
+  auto dev = KE_IO_CreateBus(kstd::move(driver), sizeof(T), busName, flags);
+  if (!dev) return dev;
+  new ((*dev)->deviceExtension.template as<T *>()) T();
+  return dev;
 }

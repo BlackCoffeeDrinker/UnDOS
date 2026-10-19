@@ -4,6 +4,8 @@
 #include <kernel/data_buffer.hpp>
 #include <kernel/fwd/KDevicePtr.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
+#include <kernel/kerror.hpp>
+#include <expected.hpp>
 
 namespace kernel::event {
 /// Target event source tag and container for KObject / KDevice
@@ -112,13 +114,34 @@ template<typename Enum>
 
 using EventCallbackFn = cfunc<void, const Source &, const Code &, const DataBuffer &>;
 
-struct EventInterestToken;
+struct EventInterestToken {
+  uint64_t id{0};
+
+  EventInterestToken() = default;
+  explicit EventInterestToken(uint64_t tokenVal) : id(tokenVal) {}
+  ~EventInterestToken();
+
+  EventInterestToken(const EventInterestToken &) = delete;
+  EventInterestToken &operator=(const EventInterestToken &) = delete;
+
+  EventInterestToken(EventInterestToken &&other) noexcept : id(other.id) {
+    other.id = 0;
+  }
+
+  EventInterestToken &operator=(EventInterestToken &&other) noexcept;
+
+  explicit operator bool() const { return id != 0; }
+};
 
 struct RegistrationContext {
   EventCallbackFn fn;
   DataBuffer user_buffer;
 };
 }// namespace kernel::event
+
+namespace kernel {
+using EventInterestResult = kstd::expected<event::EventInterestToken, KernelError>;
+}// namespace kernel
 
 /**
  * @ingroup Events
@@ -131,7 +154,7 @@ struct RegistrationContext {
  *
  * @return A move-only token. Destroying it unregisters the interest.
  */
-UNDOS_KERNEL_PUBLIC_V1API(kernel::event::EventInterestToken,
+UNDOS_KERNEL_PUBLIC_V1API(kernel::EventInterestResult,
                           KE_EVENT_RegisterInterest,
                           const kernel::event::Source &target,
                           kernel::event::RegistrationContext &&context);
@@ -149,36 +172,22 @@ UNDOS_KERNEL_PUBLIC_V1API(kernel::event::EventInterestToken,
  * letting the token go out of scope): waiting there would deadlock, so the
  * subscriber is instead torn down as soon as the callback returns.
  */
-UNDOS_KERNEL_PUBLIC_V1API(void,
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError,
                           KE_EVENT_UnregisterInterest,
                           kernel::event::EventInterestToken &);
 
 namespace kernel::event {
-struct EventInterestToken {
-  uint64_t id{0};
+inline EventInterestToken::~EventInterestToken() {
+  if (id != 0) (void) KE_EVENT_UnregisterInterest(*this);
+}
 
-  EventInterestToken() = default;
-  explicit EventInterestToken(uint64_t tokenVal) : id(tokenVal) {}
-  ~EventInterestToken() {
-    if (id != 0) KE_EVENT_UnregisterInterest(*this);
-  }
-
-  EventInterestToken(const EventInterestToken &) = delete;
-  EventInterestToken &operator=(const EventInterestToken &) = delete;
-
-  EventInterestToken(EventInterestToken &&other) noexcept : id(other.id) {
+inline EventInterestToken &EventInterestToken::operator=(EventInterestToken &&other) noexcept {
+  if (this != &other) {
+    if (id != 0) (void) KE_EVENT_UnregisterInterest(*this);
+    id = other.id;
     other.id = 0;
   }
-
-  EventInterestToken &operator=(EventInterestToken &&other) noexcept {
-    if (this != &other) {
-      id = other.id;
-      other.id = 0;
-    }
-    return *this;
-  }
-
-  explicit operator bool() const { return id != 0; }
-};
+  return *this;
+}
 
 }// namespace kernel::event

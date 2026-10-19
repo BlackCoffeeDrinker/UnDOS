@@ -160,7 +160,11 @@ void EventThread(void *arg) {
   while (true) {
     BroadcastRecord record;
     if (!PopRecord(record)) {
-      KE_SCHED_WaitForHeader(s_pumpWake, kernel::WAIT_INFINITE);
+      const auto waitStatus = KE_SCHED_WaitForHeader(s_pumpWake, kernel::WAIT_INFINITE);
+      if (waitStatus != kernel::KernelError::Success) {
+        KE_Print("event pump wait failed: {}", kernel::make_error_code(waitStatus).message());
+        KE_SCHED_Yield();
+      }
       continue;
     }
 
@@ -197,21 +201,28 @@ public:
   return s_systemCategory;
 }
 
-void init() {
+KernelError init() {
   s_pumpWake.manualReset = false;
   s_pumpWake.signalled = false;
-  s_eventPumpThread = KE_SCHED_CreateThread(&EventThread, nullptr, 0);
+  auto thread = KE_SCHED_CreateThread(&EventThread, nullptr, 0);
+  if (!thread) return thread.error();
+  s_eventPumpThread = *thread;
 
   // Anything broadcast before now is already queued; make sure the freshly
   // created pump sees it.
   KE_EVENT_Signal(s_pumpWake, false);
+  return KernelError::Success;
 }
 
 // Safe to call from interrupt context and before init(): this only touches the
 // fixed-size ring under an IRQ-masking spinlock and signals a dispatcher
 // header. It never allocates, never yields and never walks the subscriber
 // list - the pump thread does the fan-out.
-void broadcast(const Source &target, Code event) {
+KernelError broadcast(const Source &target, Code event) {
+  if ((target.type == Source::Type::KObject && !target.kobject) ||
+      (target.type == Source::Type::KDevice && !target.kdevice)) {
+    return KernelError::InvalidArgument;
+  }
   {
     const IrqSpinLockGuard guard(s_queueLock);
     if (s_queueCount == kEventQueueCapacity) {
@@ -219,7 +230,7 @@ void broadcast(const Source &target, Code event) {
       // the oldest) avoids releasing a Source's object reference with
       // interrupts masked.
       ++s_droppedEvents;
-      return;
+      return KernelError::QueueFull;
     }
 
     const size_t tail = (s_queueHead + s_queueCount) % kEventQueueCapacity;
@@ -229,6 +240,7 @@ void broadcast(const Source &target, Code event) {
   }
 
   KE_EVENT_Signal(s_pumpWake, false);
+  return KernelError::Success;
 }
 
 namespace detail {
@@ -263,12 +275,16 @@ void reset() {
 }// namespace kernel::event
 
 // Public API Implementations
-UNDOS_KERNEL_API_DEF kernel::event::EventInterestToken KE_EVENT_RegisterInterest(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::event::EventInterestToken, kernel::KernelError> KE_EVENT_RegisterInterest(
     const kernel::event::Source &target,
     kernel::event::RegistrationContext &&context) noexcept {
 
   if (!context.fn) {
-    return kernel::event::EventInterestToken{};
+    return kstd::unexpected(kernel::KernelError::InvalidArgument);
+  }
+  if ((target.type == kernel::event::Source::Type::KObject && !target.kobject) ||
+      (target.type == kernel::event::Source::Type::KDevice && !target.kdevice)) {
+    return kstd::unexpected(kernel::KernelError::InvalidArgument);
   }
 
   EventSubscriber sub;
@@ -279,6 +295,7 @@ UNDOS_KERNEL_API_DEF kernel::event::EventInterestToken KE_EVENT_RegisterInterest
   uint64_t id = 0;
   {
     kstd::unique_lock guard(s_subscribersLock);
+    if (s_nextTokenId == 0) return kstd::unexpected(kernel::KernelError::ResourceLimitExceeded);
     id = s_nextTokenId++;
     sub.id = id;
     s_subscribers.push_back(kstd::move(sub));
@@ -287,9 +304,9 @@ UNDOS_KERNEL_API_DEF kernel::event::EventInterestToken KE_EVENT_RegisterInterest
   return kernel::event::EventInterestToken{id};
 }
 
-UNDOS_KERNEL_API_DEF void KE_EVENT_UnregisterInterest(kernel::event::EventInterestToken &token) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_EVENT_UnregisterInterest(kernel::event::EventInterestToken &token) noexcept {
   if (!token) {
-    return;
+    return kernel::KernelError::InvalidArgument;
   }
 
   // Zero the token ID immediately to prevent recursive unregistration during ~EventInterestToken()
@@ -299,7 +316,7 @@ UNDOS_KERNEL_API_DEF void KE_EVENT_UnregisterInterest(kernel::event::EventIntere
   kstd::unique_lock guard(s_subscribersLock);
 
   EventSubscriber *sub = FindSubscriberLocked(idToUnregister);
-  if (!sub) return;
+  if (!sub) return kernel::KernelError::NotFound;
 
   // From here on no new dispatch will pick this subscriber up.
   sub->dead = true;
@@ -310,7 +327,7 @@ UNDOS_KERNEL_API_DEF void KE_EVENT_UnregisterInterest(kernel::event::EventIntere
       // ~EventInterestToken). Waiting for activeCalls to reach zero would wait
       // on ourselves, so leave the node marked dead and let Dispatch's
       // ReleaseSubscriberLocked reap it when the callback returns.
-      return;
+      return kernel::KernelError::Success;
     }
 
     // Otherwise block until the in-flight callback finishes, so that once this
@@ -323,7 +340,7 @@ UNDOS_KERNEL_API_DEF void KE_EVENT_UnregisterInterest(kernel::event::EventIntere
       guard.lock();
 
       sub = FindSubscriberLocked(idToUnregister);
-      if (!sub) return;
+      if (!sub) return kernel::KernelError::NotFound;
       if (sub->activeCalls == 0) break;
     }
   }
@@ -331,7 +348,8 @@ UNDOS_KERNEL_API_DEF void KE_EVENT_UnregisterInterest(kernel::event::EventIntere
   for (auto it = s_subscribers.begin(); it != s_subscribers.end(); ++it) {
     if (it->id == idToUnregister) {
       s_subscribers.erase(it);
-      return;
+      return kernel::KernelError::Success;
     }
   }
+  return kernel::KernelError::NotFound;
 }

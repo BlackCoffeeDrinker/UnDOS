@@ -3,11 +3,13 @@
 #include <__memory/unique_ptr.hpp>
 #include <__utility/pair.hpp>
 #include <array.hpp>
+#include <expected.hpp>
 #include <list.hpp>
 #include <vector.hpp>
 
 #include <kernel/__core.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/spinlock.hpp>
 
 namespace kernel {
@@ -85,9 +87,10 @@ struct DeviceContextTable {
 
   // Allocates a fresh slot, growing by one Chunk (one kernel::New
   // allocation) only when the free list is empty and every existing chunk
-  // is full. Returns {slot pointer, HDC} or {nullptr, INVALID_HDC} on
-  // allocation failure.
-  kstd::pair<KDeviceContextSlot *, HDC> Allocate() noexcept;
+  // is full. Returns {slot pointer, HDC}; fails with OutOfMemory when a chunk
+  // cannot be allocated or ResourceLimitExceeded when the 16-bit index space
+  // is exhausted.
+  kstd::expected<kstd::pair<KDeviceContextSlot *, HDC>, KernelError> Allocate() noexcept;
 
   // Resolves a HDC to its slot. Bit-splits `index = hdc & 0xFFFF` /
   // `generation = (hdc >> 16) & 0xFFFF`; rejects an out-of-range index, an
@@ -95,9 +98,9 @@ struct DeviceContextTable {
   KDeviceContextSlot *Resolve(HDC hdc) noexcept;
 
   // Bumps the slot's generation (invalidating any outstanding HDC into it)
-  // and returns its index to the free list. Returns false if `hdc` didn't
-  // resolve to a live slot.
-  bool Close(HDC hdc) noexcept;
+  // and returns its index to the free list. Fails with InvalidHandle if `hdc`
+  // didn't resolve to a live slot.
+  KernelError Close(HDC hdc) noexcept;
 };
 
 }// namespace kernel

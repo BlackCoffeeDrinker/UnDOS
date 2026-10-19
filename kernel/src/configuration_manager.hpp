@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include <kernel/kerror.hpp>
 #include <string_view.hpp>
 
 namespace kernel {
@@ -12,9 +13,9 @@ void init();
 // keeping the existing in-memory KConfigurationRoot::roots index intact
 // (valid because the new path resolves to the exact same underlying bytes
 // on disk, just reached through a different VFS mount once the real root
-// filesystem is up). Returns false if the hive isn't registered or the new
+// filesystem is up). Returns NotFound if the hive isn't registered, or the VFS error if the new
 // file can't be opened (see implementation for the exact failure handling).
-bool RebindHiveFile(const kstd::string_view &hiveName, const kstd::string_view &newFilePath);
+kernel::KernelError RebindHiveFile(const kstd::string_view &hiveName, const kstd::string_view &newFilePath);
 
 // Once the real root filesystem is mounted, rebinds the "LocalMachine" hive
 // onto the same path "/System/Config/MACHI", now resolved through the

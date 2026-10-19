@@ -15,6 +15,12 @@ namespace {
 // Number of timer ticks a thread runs before it is rotated out (round-robin).
 constexpr uint32_t DEFAULT_QUANTUM = 5;
 
+void log_cleanup_failure(const char *operation, KernelError status) noexcept {
+  if (status != KernelError::Success) {
+    KE_Print("{} cleanup failed: {}", operation, make_error_code(status).message());
+  }
+}
+
 // Thread naming counter. Shared by every CPU, so bumped atomically.
 uint32_t g_next_id = 0;
 
@@ -49,20 +55,20 @@ void idle_entry(void *) {
 
 // Create an idle thread pinned to `cpu_id`: lowest priority, so it is only
 // picked when that CPU's queue holds nothing else.
-KObjectPtr<KThreadObject> create_idle_thread(const uint32_t cpu_id) noexcept {
+kstd::expected<KObjectPtr<KThreadObject>, KernelError> create_idle_thread(const uint32_t cpu_id) noexcept {
   auto idle = KE_SCHED_CreateThread(cfunc<void(void *)>(&idle_entry), nullptr, 0);
-  if (!idle) return nullptr;
+  if (!idle) return kstd::unexpected(idle.error());
 
   // KE_SCHED_CreateThread placed it via pick_target_cpu(); move it onto the
   // CPU it must idle for.
   for (size_t i = 0; i < cpu::contexts().size(); ++i) {
     auto &ctx = cpu::contexts()[i];
     const uintptr_t state = ctx.ready_lock.lock_irqsave();
-    ctx.ready.remove(idle.get());
+    ctx.ready.remove(idle->get());
     ctx.ready_lock.unlock_irqrestore(state);
   }
-  enqueue_on(cpu_id, idle.get());
-  return idle;
+  enqueue_on(cpu_id, idle->get());
+  return *idle;
 }
 
 } // namespace
@@ -70,8 +76,11 @@ KObjectPtr<KThreadObject> create_idle_thread(const uint32_t cpu_id) noexcept {
 // Allocate a fresh, page-backed kernel stack. Returns the allocation base, or a
 // null VirtualAddress on failure. Mirrors kernel::vmm::allocate_memory but
 // keeps the pages kernel-only (no USER flag).
-VirtualAddress alloc_kernel_stack(size_t size) noexcept {
+ kstd::expected<VirtualAddress, KernelError> alloc_kernel_stack(size_t size) noexcept {
   const size_t ps = g_page_size;
+  if (size == 0 || ps == 0 || size > SIZE_MAX - (ps - 1)) {
+    return kstd::unexpected(KernelError::InvalidSize);
+  }
   const size_t pages = (size + ps - 1) / ps;
   const size_t bytes = pages * ps;
 
@@ -83,23 +92,39 @@ VirtualAddress alloc_kernel_stack(size_t size) noexcept {
                HAL_ATOMIC_FetchAdd32(VirtualAddress::from_ptr(&g_next_stack_id), 1,
                                      PlatformMemoryOrder::Relaxed));
 
-  auto backing = kernel::CreateKObject<kernel::KMemoryBackingObject>(name);
-  if (!backing) return {0};
-  backing->kind = kernel::KMemoryBackingObject::Kind::Anonymous;
-  backing->size = bytes;
-  KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), backing);
+  const auto backing = kernel::CreateKObject<kernel::KMemoryBackingObject>(name);
+  if (!backing) return kstd::unexpected(backing.error());
+  backing.value()->kind = kernel::KMemoryBackingObject::Kind::Anonymous;
+  backing.value()->size = bytes;
+  const KernelError insert_status = KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), *backing);
+  if (insert_status != KernelError::Success) return kstd::unexpected(insert_status);
 
   auto &kas = KE_VMM_GetKernelAddressSpace();
-  auto *vad = KE_VMM_MapBackingObject(kas, backing, bytes, vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
-  if (!vad) return {0};
+  auto vad = KE_VMM_MapBackingObject(kas, *backing, bytes, vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
+  if (!vad) {
+    log_cleanup_failure("kernel stack backing removal", KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing));
+    return kstd::unexpected(vad.error());
+  }
 
   const PhysicalAddress phys = HAL_PMM_AllocateFrames(pages);
-  if (!phys) return {0};
+  if (!phys) {
+    log_cleanup_failure("kernel stack region release", KE_VMM_FreeRegion(kas, (*vad)->start.as_ptr()));
+    log_cleanup_failure("kernel stack backing removal", KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing));
+    return kstd::unexpected(KernelError::OutOfMemory);
+  }
 
-  const VirtualAddress base = vad->start;
+  const VirtualAddress base = (*vad)->start;
   for (size_t i = 0; i < pages; ++i) {
     if (!HAL_VMM_MapPage(base + i * ps, phys + i * ps, vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE)) {
-      return {0};
+      for (size_t mapped = 0; mapped < i; ++mapped) {
+        const auto page = base + mapped * ps;
+        HAL_VMM_UnmapPage(page);
+        HAL_SMP_ShootdownTlb(page);
+      }
+      HAL_PMM_FreeFrames(phys, pages);
+      log_cleanup_failure("kernel stack region release", KE_VMM_FreeRegion(kas, base.as_ptr()));
+      log_cleanup_failure("kernel stack backing removal", KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing));
+      return kstd::unexpected(KernelError::DeviceError);
     }
     HAL_SMP_ShootdownTlb(base + i * ps);
   }
@@ -217,21 +242,24 @@ void init_bsp() noexcept {
   // saved stack pointer is captured automatically by the first context switch,
   // so no stack needs to be framed here.
   if (const auto boot = CreateKObject<KThreadObject>("thread0")) {
-    boot->state = KThreadObject::State::Running;
-    boot->priority = 1;
-    boot->quantum_ticks = DEFAULT_QUANTUM;
-    boot->translation_root = PhysicalAddress(0);
-    ctx.current = boot;
+    (*boot)->state = KThreadObject::State::Running;
+    (*boot)->priority = 1;
+    (*boot)->quantum_ticks = DEFAULT_QUANTUM;
+    (*boot)->translation_root = PhysicalAddress(0);
+    ctx.current = *boot;
     HAL_ATOMIC_Store32(VirtualAddress::from_ptr(&g_next_id), 1, PlatformMemoryOrder::Relaxed);
 
     // Register the bootstrap thread now that its directory exists.
-    KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(ctx.current.get()));
+    const auto status = KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(ctx.current.get()));
+    if (status != KernelError::Success) HAL_PLATFORM_Panic("Failed to register bootstrap thread", __FILE__, __LINE__);
   } else {
     // Panic
     HAL_PLATFORM_Panic("Failed to create bootstrap thread", __FILE__, __LINE__);
   }
 
-  ctx.idle = create_idle_thread(ctx.id);
+  auto idle = create_idle_thread(ctx.id);
+  if (!idle) HAL_PLATFORM_Panic("Failed to create BSP idle thread", __FILE__, __LINE__);
+  ctx.idle = *idle;
 }
 
 void init_ap(const uint32_t cpu_id) noexcept {
@@ -243,17 +271,20 @@ void init_ap(const uint32_t cpu_id) noexcept {
   kstd::static_string<64> name;
   kstd::format(name, "cpu{}boot", cpu_id);
   if (const auto boot = CreateKObject<KThreadObject>(name)) {
-    boot->state = KThreadObject::State::Running;
-    boot->priority = 1;
-    boot->quantum_ticks = DEFAULT_QUANTUM;
-    boot->translation_root = PhysicalAddress(0);
-    ctx.current = boot;
-    KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(ctx.current.get()));
+    (*boot)->state = KThreadObject::State::Running;
+    (*boot)->priority = 1;
+    (*boot)->quantum_ticks = DEFAULT_QUANTUM;
+    (*boot)->translation_root = PhysicalAddress(0);
+    ctx.current = *boot;
+    const auto status = KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(ctx.current.get()));
+    if (status != KernelError::Success) HAL_PLATFORM_Panic("Failed to register AP bootstrap thread", __FILE__, __LINE__);
   } else {
     HAL_PLATFORM_Panic("Failed to create bootstrap thread for CPU", __FILE__, __LINE__);
   }
 
-  ctx.idle = create_idle_thread(cpu_id);
+  auto idle = create_idle_thread(cpu_id);
+  if (!idle) HAL_PLATFORM_Panic("Failed to create AP idle thread", __FILE__, __LINE__);
+  ctx.idle = *idle;
 }
 
 void tick() noexcept {
@@ -289,62 +320,86 @@ void ready_locked(KThreadObject *thread) noexcept {
 
 using namespace kernel;
 
-UNDOS_KERNEL_API_DEF KObjectPtr<KThreadObject>
+UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KThreadObject>, KernelError>
 KE_SCHED_CreateThread(cfunc<void(void *)> entry, void *arg, uint8_t priority) noexcept {
   kstd::static_string<64> name;
   kstd::format(name, "thread{}", sched::next_thread_id());
 
   auto t = CreateKObject<KThreadObject>(name);
-  if (!t) return nullptr;
+  if (!t) return kstd::unexpected(t.error());
 
-  const VirtualAddress base = sched::alloc_kernel_stack(sched::KERNEL_STACK_SIZE);
-  if (!base) return nullptr;
+  auto stack = sched::alloc_kernel_stack(sched::KERNEL_STACK_SIZE);
+  if (!stack) return kstd::unexpected(stack.error());
+  const VirtualAddress base = *stack;
 
   const VirtualAddress top = base + sched::KERNEL_STACK_SIZE;
 
-  t->entry = entry;
-  t->argument = arg;
-  t->priority = priority;
-  t->state = KThreadObject::State::Ready;
-  t->translation_root = PhysicalAddress(0);
-  t->kernel_stack_base = base;
-  t->kernel_stack_esp0 = top;
-  t->kernel_stack_top = HAL_CPU_InitThreadContext(top, cfunc<void()>(&sched::thread_trampoline));
+  t.value()->entry = entry;
+  t.value()->argument = arg;
+  t.value()->priority = priority;
+  t.value()->state = KThreadObject::State::Ready;
+  t.value()->translation_root = PhysicalAddress(0);
+  t.value()->kernel_stack_base = base;
+  t.value()->kernel_stack_esp0 = top;
+  t.value()->kernel_stack_top = HAL_CPU_InitThreadContext(top, cfunc<void()>(&sched::thread_trampoline));
 
-  KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t.get()));
+  const auto status = KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t->get()));
+  if (status != KernelError::Success) {
+    for (size_t i = 0; i < sched::KERNEL_STACK_SIZE / g_page_size; ++i) {
+      const auto page = base + i * g_page_size;
+      const auto phys = HAL_VMM_GetPhysicalAddress(page);
+      HAL_VMM_UnmapPage(page);
+      if (phys) HAL_PMM_FreeFrames(phys, 1);
+    }
+    sched::log_cleanup_failure("thread stack region release",
+                               KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), base.as_ptr()));
+    return kstd::unexpected(status);
+  }
 
-  sched::enqueue_on(sched::pick_target_cpu(), t.get());
+  sched::enqueue_on(sched::pick_target_cpu(), t->get());
 
-  return t;
+  return *t;
 }
 
-UNDOS_KERNEL_API_DEF KObjectPtr<KThreadObject>
+UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KThreadObject>, KernelError>
 KE_SCHED_CreateUserThread(const vmm::AddressSpace &as, VirtualAddress user_entry, VirtualAddress user_stack_top) noexcept {
   kstd::static_string<64> name;
   kstd::format(name, "uthread{}", sched::next_thread_id());
 
   auto t = CreateKObject<KThreadObject>(name);
-  if (!t) return nullptr;
+  if (!t) return kstd::unexpected(t.error());
 
   // The thread still needs its own kernel stack: ring-3 -> ring-0 transitions
   // (syscalls, IRQs, exceptions) land on it via the TSS's esp0.
-  const VirtualAddress base = sched::alloc_kernel_stack(sched::KERNEL_STACK_SIZE);
-  if (!base) return nullptr;
+  auto stack = sched::alloc_kernel_stack(sched::KERNEL_STACK_SIZE);
+  if (!stack) return kstd::unexpected(stack.error());
+  const VirtualAddress base = *stack;
 
   const VirtualAddress top = base + sched::KERNEL_STACK_SIZE;
 
-  t->priority = 1;
-  t->state = KThreadObject::State::Ready;
-  t->translation_root = as.translation_root;
-  t->kernel_stack_base = base;
-  t->kernel_stack_esp0 = top;
-  t->kernel_stack_top = HAL_CPU_InitUserThreadContext(top, user_entry, user_stack_top);
+  t.value()->priority = 1;
+  t.value()->state = KThreadObject::State::Ready;
+  t.value()->translation_root = as.translation_root;
+  t.value()->kernel_stack_base = base;
+  t.value()->kernel_stack_esp0 = top;
+  t.value()->kernel_stack_top = HAL_CPU_InitUserThreadContext(top, user_entry, user_stack_top);
 
-  KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t.get()));
+  const auto status = KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t->get()));
+  if (status != KernelError::Success) {
+    for (size_t i = 0; i < sched::KERNEL_STACK_SIZE / g_page_size; ++i) {
+      const auto page = base + i * g_page_size;
+      const auto phys = HAL_VMM_GetPhysicalAddress(page);
+      HAL_VMM_UnmapPage(page);
+      if (phys) HAL_PMM_FreeFrames(phys, 1);
+    }
+    sched::log_cleanup_failure("user thread stack region release",
+                               KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), base.as_ptr()));
+    return kstd::unexpected(status);
+  }
 
-  sched::enqueue_on(sched::pick_target_cpu(), t.get());
+  sched::enqueue_on(sched::pick_target_cpu(), t->get());
 
-  return t;
+  return *t;
 }
 
 UNDOS_KERNEL_API_DEF void KE_SCHED_Yield() noexcept {
@@ -359,17 +414,18 @@ UNDOS_KERNEL_API_DEF void KE_SCHED_Block() noexcept {
   HAL_CPU_RestoreInterrupts(state);
 }
 
-UNDOS_KERNEL_API_DEF void KE_SCHED_Unblock(const KObjectPtr<KThreadObject> &thread) noexcept {
-  if (!thread) return;
+UNDOS_KERNEL_API_DEF KernelError KE_SCHED_Unblock(const KObjectPtr<KThreadObject> &thread) noexcept {
+  if (!thread) return KernelError::InvalidArgument;
   const uintptr_t state = HAL_CPU_SaveAndDisableInterrupts();
   sched::ready_locked(thread.get());
   HAL_CPU_RestoreInterrupts(state);
+  return KernelError::Success;
 }
 
 UNDOS_KERNEL_API_DEF [[noreturn]] void KE_SCHED_Terminate() noexcept {
   // Nothing to restore: this thread never runs again.
   (void) HAL_CPU_SaveAndDisableInterrupts();
-  auto &ctx = cpu::current_context();
+  const auto &ctx = cpu::current_context();
   if (ctx.current) {
     ctx.current->state = KThreadObject::State::Terminated;
   }

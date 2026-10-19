@@ -6,10 +6,10 @@ namespace kernel::tty {
 
 KVtty::KVtty() = default;
 
-size_t KVtty::source_write(const uint8_t *src, size_t count) {
+kstd::expected<size_t, kernel::KernelError> KVtty::source_write(const uint8_t *src, size_t count) {
   kstd::unique_lock lock(m_lock);
   if (m_sourceClosed || m_sinkClosed) {
-    return 0;
+    return kstd::unexpected(kernel::KernelError::InvalidState);
   }
 
   size_t processed = 0;
@@ -119,10 +119,10 @@ bool KVtty::is_source_closed() const {
   return m_sourceClosed;
 }
 
-size_t KVtty::sink_write(const uint8_t *src, size_t count) {
+kstd::expected<size_t, kernel::KernelError> KVtty::sink_write(const uint8_t *src, size_t count) {
   kstd::unique_lock lock(m_lock);
   if (m_sinkClosed || m_sourceClosed) {
-    return 0;
+    return kstd::unexpected(kernel::KernelError::InvalidState);
   }
 
   size_t written = 0;
@@ -168,27 +168,28 @@ bool KVtty::sink_has_data() const {
   return !m_sinkInRing.empty();
 }
 
-bool KVtty::sink_read_wait(uint8_t *dst, size_t count, size_t &transferred) {
+kernel::KernelError KVtty::sink_read_wait(uint8_t *dst, size_t count, size_t &transferred) {
   transferred = 0;
-  if (!count) return true;
+  if (!count) return kernel::KernelError::Success;
   for (;;) {
     {
       kstd::unique_lock lock(m_lock);
       if (!m_sinkInRing.empty()) {
         transferred = m_sinkInRing.read(dst, count);
-        return true;
+        return kernel::KernelError::Success;
       }
+      // EOF: success with zero bytes transferred
       if (m_eofSignaled || m_sourceClosed || m_sinkClosed) {
         m_eofSignaled = false;
-        return true;
+        return kernel::KernelError::Success;
       }
       // Reset under the TTY lock; a writer after unlock leaves a sticky signal.
       const uintptr_t state = HAL_CPU_SaveAndDisableInterrupts();
       m_inputReady.Reset();
       HAL_CPU_RestoreInterrupts(state);
     }
-    if (KE_SCHED_WaitForHeader(m_inputReady, kernel::WAIT_INFINITE) != kernel::WaitStatus::Signalled)
-      return false;
+    if (const auto status = KE_SCHED_WaitForHeader(m_inputReady, kernel::WAIT_INFINITE); status != kernel::KernelError::Success)
+      return status;
   }
 }
 

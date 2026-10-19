@@ -121,7 +121,7 @@ struct Grid {
     int rows = height / 72;
     if (columns < 1) columns = 1;
     if (rows < 1) rows = 1;
-    return {columns, rows, columns * rows};
+    return {.columns = columns, .rows = rows, .page_size = columns * rows};
   }
   int page_start(int selection) const { return selection / page_size * page_size; }
 };

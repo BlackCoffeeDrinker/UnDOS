@@ -9,10 +9,18 @@
 
 #include "ob_test_support.hpp"
 
+namespace {
+template<typename T>
+T TakeExpected(kstd::expected<T, kernel::KernelError> result) {
+  REQUIRE(result.has_value());
+  return kstd::move(*result);
+}
+}
+
 TEST_CASE("KSubsystemObject can be created and its fields set/read", "[ob][subsystem]") {
   EnsureObjectManagerInitialized();
 
-  auto subsystem = kernel::CreateKObject<kernel::KSubsystemObject>("SubsystemTest_Basic");
+  auto subsystem = TakeExpected(kernel::CreateKObject<kernel::KSubsystemObject>("SubsystemTest_Basic"));
   REQUIRE(subsystem != nullptr);
 
   subsystem->loader_path = "/System/loader.elf";
@@ -28,27 +36,27 @@ TEST_CASE("KSubsystemObject can be registered under and looked up from \\Subsyst
   const auto subsystems = KE_OB_GetSubsystemDirectory();
   REQUIRE(subsystems != nullptr);
 
-  auto subsystem = kernel::CreateKObject<kernel::KSubsystemObject>("SubsystemTest_Lookup");
+  const auto subsystem = TakeExpected(kernel::CreateKObject<kernel::KSubsystemObject>("SubsystemTest_Lookup"));
   const auto *rawPtr = subsystem.get();
 
-  REQUIRE(KE_OB_InsertObject(subsystems, subsystem));
+  REQUIRE(KE_OB_InsertObject(subsystems, subsystem) == kernel::KernelError::Success);
 
   const auto found = KE_OB_LookupObjectOfTypeWithRoot<kernel::KSubsystemObject>(subsystems, "SubsystemTest_Lookup");
   REQUIRE(found.get() == rawPtr);
 
-  REQUIRE(KE_OB_RemoveObject(subsystems, subsystem));
+  REQUIRE(KE_OB_RemoveObject(subsystems, subsystem) == kernel::KernelError::Success);
 }
 
 TEST_CASE("Multiple KProcessObjects can share the same long-lived KSubsystemObject", "[ob][subsystem]") {
   EnsureObjectManagerInitialized();
   const auto subsystems = KE_OB_GetSubsystemDirectory();
 
-  auto subsystem = kernel::CreateKObject<kernel::KSubsystemObject>("SubsystemTest_Shared");
+  auto subsystem = TakeExpected(kernel::CreateKObject<kernel::KSubsystemObject>("SubsystemTest_Shared"));
   subsystem->loader_path = "/System/loader.elf";
-  REQUIRE(KE_OB_InsertObject(subsystems, subsystem));
+  REQUIRE(KE_OB_InsertObject(subsystems, subsystem) == kernel::KernelError::Success);
 
-  auto process1 = kernel::CreateKObject<kernel::KProcessObject>("SubsystemTest_Process1");
-  auto process2 = kernel::CreateKObject<kernel::KProcessObject>("SubsystemTest_Process2");
+  auto process1 = TakeExpected(kernel::CreateKObject<kernel::KProcessObject>("SubsystemTest_Process1"));
+  auto process2 = TakeExpected(kernel::CreateKObject<kernel::KProcessObject>("SubsystemTest_Process2"));
   REQUIRE(process1 != nullptr);
   REQUIRE(process2 != nullptr);
 
@@ -61,5 +69,5 @@ TEST_CASE("Multiple KProcessObjects can share the same long-lived KSubsystemObje
   REQUIRE(process1->subsystem.get() == process2->subsystem.get());
   REQUIRE(process1->subsystem.get() == subsystem.get());
 
-  REQUIRE(KE_OB_RemoveObject(subsystems, subsystem));
+  REQUIRE(KE_OB_RemoveObject(subsystems, subsystem) == kernel::KernelError::Success);
 }

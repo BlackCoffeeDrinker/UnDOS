@@ -2,10 +2,16 @@
 #pragma once
 
 #include <kernel/__core.hpp>
+#include <kernel/kerror.hpp>
+#include <expected.hpp>
 
 #include <kernel/kobject/KDriverObject.hpp>
 
 #include <string_view.hpp>
+
+namespace kernel {
+using DriverLoadResult = kstd::expected<KObjectPtr<KDriverObject>, KernelError>;
+}
 
 /**
  * @ingroup DRIVER
@@ -13,6 +19,6 @@
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDriverObject>,
+    kernel::DriverLoadResult,
     KE_DRIVER_Load,
     const kstd::string_view &path);

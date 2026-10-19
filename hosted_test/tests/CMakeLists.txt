@@ -12,6 +12,7 @@ add_executable(KernelTests
         list_test.cpp
         map_test.cpp
         expected_test.cpp
+        kernel_error_test.cpp
         unique_ptr_test.cpp
         unique_lock_test.cpp
         static_identifier_test.cpp
@@ -46,6 +47,8 @@ add_executable(KernelTests
         kernel_host_stubs.cpp
         kernel_host_vmm_stubs.cpp
         ../../kernel/src/object_manager.cpp
+        ../../kernel/src/kerror.cpp
+        ../../kernel/src/syscalls/KErrorToSysReturnCode.cpp
         ../../kernel/src/io.cpp
         ../../kernel/src/vfs.cpp
         ../../kernel/src/vmm.cpp

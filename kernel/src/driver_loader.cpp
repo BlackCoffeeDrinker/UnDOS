@@ -29,7 +29,7 @@ enum class ElfError {
 
 // Plain function pointer wrapping g_SymbolTable::Resolve, since cfunc only
 // wraps C-style function pointers (no captures).
-uintptr_t ResolveSymbol(kstd::string_view name) {
+ kstd::expected<uintptr_t, kernel::KernelError> ResolveSymbol(kstd::string_view name) {
   return g_SymbolTable.Resolve(name);
 }
 
@@ -53,42 +53,76 @@ void LoadDriversWithStart(const kstd::string_view &startFilter, const kstd::stri
 
   const auto localMachine = KE_CM_OpenRoot("LocalMachine");
   if (!localMachine) {
-    KE_Print("Loading {} drivers: failed to open LocalMachine", logLabel);
+    KE_Print("Loading {} drivers: failed to open LocalMachine: {}", logLabel,
+             kernel::make_error_code(localMachine.error()).message());
     KE_Print("Loading {} drivers complete.", logLabel);
     return;
   }
 
-  const auto driversKey = KE_CM_OpenKey(localMachine, "Drivers");
+  const auto driversKey = KE_CM_OpenKey(*localMachine, "Drivers");
   if (!driversKey) {
-    KE_Print("Loading {} drivers: no Drivers key under LocalMachine", logLabel);
+    if (driversKey.error() == kernel::KernelError::NotFound) {
+      KE_Print("Loading {} drivers: no Drivers key under LocalMachine", logLabel);
+    } else {
+      KE_Print("Loading {} drivers: failed to open Drivers key: {}", logLabel,
+               kernel::make_error_code(driversKey.error()).message());
+    }
     KE_Print("Loading {} drivers complete.", logLabel);
     return;
   }
 
   for (uint32_t index = 0;; ++index) {
-    kstd::string_view childName;
-    if (!KE_CM_EnumKey(driversKey, index, childName)) {
+    const auto childEntry = KE_CM_EnumKey(*driversKey, index);
+    if (!childEntry) {
+      KE_Print("Loading {} drivers: enumeration failed: {}", logLabel,
+               kernel::make_error_code(childEntry.error()).message());
       break;
     }
+    if (!childEntry->available) {
+      break;
+    }
+    const auto childName = childEntry->name;
 
-    if (const auto driverKey = KE_CM_OpenKey(driversKey, childName)) {
-      if (const auto startKey = KE_CM_OpenKey(driverKey, "Start")) {
+    if (const auto driverKey = KE_CM_OpenKey(*driversKey, childName)) {
+      if (const auto startKey = KE_CM_OpenKey(*driverKey, "Start")) {
         kstd::string startValue;
-        startValue.resize(KE_CM_GetKeyValueStringSize(startKey));
-        if (KE_CM_GetKeyValueString(startKey, kstd::span(startValue.data(), startValue.size())) &&
-            startValue == startFilter) {
-          if (const auto imagePathKey = KE_CM_OpenKey(driverKey, "ImagePath")) {
+        const auto startSize = KE_CM_GetKeyValueStringSize(*startKey);
+        if (!startSize) {
+          KE_Print("{}-start driver '{}' has invalid Start value: {}", logLabel, childName,
+                   kernel::make_error_code(startSize.error()).message());
+          continue;
+        }
+        startValue.resize(*startSize);
+        const auto startRead = KE_CM_GetKeyValueString(*startKey, kstd::span(startValue.data(), startValue.size()));
+        if (!startRead) {
+          KE_Print("{}-start driver '{}' failed to read Start value: {}", logLabel, childName,
+                   kernel::make_error_code(startRead.error()).message());
+          continue;
+        }
+        if (startValue == startFilter) {
+          if (const auto imagePathKey = KE_CM_OpenKey(*driverKey, "ImagePath")) {
             kstd::string imagePath;
-            imagePath.resize(KE_CM_GetKeyValueStringSize(imagePathKey));
+            const auto imagePathSize = KE_CM_GetKeyValueStringSize(*imagePathKey);
+            if (!imagePathSize) {
+              KE_Print("{}-start driver '{}' has invalid ImagePath: {}", logLabel, childName,
+                       kernel::make_error_code(imagePathSize.error()).message());
+              continue;
+            }
+            imagePath.resize(*imagePathSize);
+            const auto imagePathRead = KE_CM_GetKeyValueString(*imagePathKey, kstd::span(imagePath.data(), imagePath.size()));
 
-            if (KE_CM_GetKeyValueString(imagePathKey, kstd::span(imagePath.data(), imagePath.size())) &&
+            if (imagePathRead &&
                 !imagePath.empty()) {
               // Both "Boot"- and "Automatic"-start drivers' ImagePath now
               // resolve unmodified through "/": Boot-start drivers load
               // while BootDeviceVolume is still mounted at "/", Automatic-
               // start drivers load once the real root fs has replaced it.
               KE_Print("Loading {}-start driver '{}' from '{}'", logLabel, childName, imagePath);
-              KE_DRIVER_Load(imagePath);
+              const auto load_result = KE_DRIVER_Load(imagePath);
+              if (!load_result) {
+                KE_Print("{}-start driver '{}' failed: {}", logLabel, childName,
+                         kernel::make_error_code(load_result.error()).message());
+              }
             } else {
               KE_Print("{}-start driver '{}' has empty/invalid ImagePath, skipping", logLabel, childName);
             }
@@ -106,11 +140,13 @@ void LoadDriversWithStart(const kstd::string_view &startFilter, const kstd::stri
 }// namespace
 
 namespace kernel::driver {
-void init(const BootInfoT &boot_info) {
+KernelError init(const BootInfoT &boot_info) {
   for (const auto &sym: boot_info.boot_symbols) {
     if (sym.name.empty()) continue;
-    g_SymbolTable.Register(sym.name, static_cast<uintptr_t>(sym.address));
+    const auto status = g_SymbolTable.Register(sym.name, static_cast<uintptr_t>(sym.address));
+    if (status != KernelError::Success) return status;
   }
+  return KernelError::Success;
 }
 
 void LoadBootDrivers() {
@@ -141,29 +177,30 @@ void LoadLastResortDrivers() {
 }
 }// namespace kernel::driver
 
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(const kstd::string_view &path) noexcept {
-  if (path.empty()) { return nullptr; }
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KDriverObject>, kernel::KernelError>
+KE_DRIVER_Load(const kstd::string_view &path) noexcept {
+  if (path.empty()) return kstd::unexpected(kernel::KernelError::InvalidArgument);
 
   kstd::static_string<64> captured_name = "";
 
   kernel::elf::LoadPolicy policy;
   policy.relocatable = true;
   policy.context = &captured_name;
-  policy.resolve_symbol = kernel::cfunc<uintptr_t(kstd::string_view)>(ResolveSymbol);
+  policy.resolve_symbol = kernel::cfunc<kstd::expected<uintptr_t, kernel::KernelError>(kstd::string_view)>(ResolveSymbol);
   policy.capture_section = kernel::cfunc<void(void *, kstd::string_view, const uint8_t *, size_t)>(CaptureDriverName);
   policy.capture_section_name = ".driver_name";
 
   
   const auto result = kernel::elf::LoadElfFromVfs(path, policy);
-  if (!result.ok) {
+  if (!result) {
     KE_Print("KE_DRIVER_Load: Failed to load driver from path {}", path);
-    return nullptr;
+    return kstd::unexpected(result.error());
   }
   
   auto driver_object = kernel::CreateKObject<kernel::KDriverObject>(captured_name);
   if (!driver_object) {
     KE_Print("KE_DRIVER_Load: Failed to create driver object");
-    return nullptr;
+    return kstd::unexpected(driver_object.error());
   }
   
   // Give the driver its own configuration key under LocalMachine, e.g.
@@ -173,19 +210,40 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDriverObject> KE_DRIVER_Load(co
   // volatile "Boot" hive to target.
   kernel::KConfigurationKeyPtr driverConfig = nullptr;
   if (const auto driverConfigRoot = KE_CM_OpenRoot("LocalMachine")) {
-    if (const auto driversKey = KE_CM_CreateKey(driverConfigRoot, "Drivers", kernel::KConfigurationKeyAccess::ReadWrite)) {
-      driverConfig = KE_CM_CreateKey(driversKey, driver_object->name, kernel::KConfigurationKeyAccess::ReadWrite);
+    if (const auto driversKey = KE_CM_CreateKey(*driverConfigRoot, "Drivers", kernel::KConfigurationKeyAccess::ReadWrite)) {
+      const auto driverKey = KE_CM_CreateKey(*driversKey, (*driver_object)->name, kernel::KConfigurationKeyAccess::ReadWrite);
+      if (driverKey) {
+        driverConfig = *driverKey;
+      } else {
+        KE_Print("KE_DRIVER_Load: failed to create driver configuration key: {}",
+                 kernel::make_error_code(driverKey.error()).message());
+      }
+    } else {
+      KE_Print("KE_DRIVER_Load: failed to create Drivers configuration key: {}",
+               kernel::make_error_code(driversKey.error()).message());
     }
+  } else {
+    KE_Print("KE_DRIVER_Load: LocalMachine configuration unavailable: {}",
+             kernel::make_error_code(driverConfigRoot.error()).message());
   }
 
-  driver_object->load_base = result.load_base;
-  driver_object->total_size = result.total_size;
-  driver_object->entry_point = reinterpret_cast<void (*)(kernel::KObjectPtr<kernel::KDriverObject> &, const kernel::KConfigurationKeyPtr &)>(result.entry_point.value);
-  driver_object->entry_point(driver_object, driverConfig);
+  driver_object.value()->load_base = result->load_base;
+  driver_object.value()->total_size = result->total_size;
+  driver_object.value()->entry_point = reinterpret_cast<void (*)(kernel::KObjectPtr<kernel::KDriverObject> &, const kernel::KConfigurationKeyPtr &)>(result->entry_point.value);
+  driver_object.value()->entry_point(*driver_object, driverConfig);
 
   // TODO: Remove the entry point from memory once it's done executing
 
-  KE_OB_InsertObject(KE_OB_GetDriverDirectory(), driver_object);
-  KE_PNP_RegisterDriver(driver_object);
-  return driver_object;
+  const auto status = KE_OB_InsertObject(KE_OB_GetDriverDirectory(), *driver_object);
+  if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+  const auto pnp_status = KE_PNP_RegisterDriver(*driver_object);
+  if (pnp_status != kernel::KernelError::Success) {
+    const auto rollback_status = KE_OB_RemoveObject(KE_OB_GetDriverDirectory(), *driver_object);
+    if (rollback_status != kernel::KernelError::Success) {
+      KE_Print("KE_DRIVER_Load: failed to roll back driver registration: {}",
+               kernel::make_error_code(rollback_status).message());
+    }
+    return kstd::unexpected(pnp_status);
+  }
+  return *driver_object;
 }

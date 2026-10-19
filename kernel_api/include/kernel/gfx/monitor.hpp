@@ -3,6 +3,7 @@
 
 #include <array.hpp>
 
+#include <kernel/kerror.hpp>
 #include <kernel/kobject/KSurface.hpp>
 
 namespace kernel {
@@ -30,10 +31,10 @@ struct KMonitorCapabilities {
 
   bool isDefault{false};// Assumed defaults (registry/built-in), not read from EDID
 
-  bool Add(const KMonitorTiming &timing) {
-    if (count >= MaxTimings) return false;
+  KernelError Add(const KMonitorTiming &timing) {
+    if (count >= MaxTimings) return KernelError::ResourceLimitExceeded;
     timings[count++] = timing;
-    return true;
+    return KernelError::Success;
   }
 
   [[nodiscard]] bool Supports(const KDisplayModeInfo &mode) const {
@@ -61,7 +62,7 @@ struct KMonitorCapabilities {
     caps.maxWidth = 640;
     caps.maxHeight = 480;
     caps.maxRefreshRate = 60;
-    caps.Add(KMonitorTiming{.width = 640, .height = 480, .refreshRate = 60});
+    (void) caps.Add(KMonitorTiming{.width = 640, .height = 480, .refreshRate = 60});
     return caps;
   }
 };

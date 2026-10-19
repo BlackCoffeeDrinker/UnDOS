@@ -1,5 +1,7 @@
 #pragma once
 
+#include <expected.hpp>
+
 #include <kernel/__core.hpp>
 #include <kernel/device.hpp>
 #include <kernel/kobject/KDriverObject.hpp>
@@ -18,10 +20,10 @@ struct KIOObject;
 struct KDispatcherHeader;
 
 struct KIOOps {
-  cfunc<IoStatus(KIOObject &, kstd::span<uint8_t>, size_t &)> Read;
-  cfunc<IoStatus(KIOObject &, kstd::span<const uint8_t>, size_t &)> Write;
-  cfunc<IoStatus(KIOObject &, uint32_t, kstd::span<const uint8_t>, kstd::span<uint8_t>, size_t &)> Control;
-  cfunc<IoStatus(KIOObject &)> Close;
+  cfunc<KernelError(KIOObject &, kstd::span<uint8_t>, size_t &)> Read;
+  cfunc<KernelError(KIOObject &, kstd::span<const uint8_t>, size_t &)> Write;
+  cfunc<KernelError(KIOObject &, uint32_t, kstd::span<const uint8_t>, kstd::span<uint8_t>, size_t &)> Control;
+  cfunc<KernelError(KIOObject &)> Close;
 };
 
 namespace io {
@@ -67,11 +69,13 @@ struct KIOObject : KObjectT<KIOObject, 1, TYPE_IO> {
 
   ~KIOObject() override;
 
-  IoStatus Read(kstd::span<uint8_t> buffer, size_t &transferred);
-  IoStatus Write(kstd::span<const uint8_t> buffer, size_t &transferred);
-  IoStatus Control(uint32_t code, kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred);
-  IoStatus Close();
+  KernelError Read(kstd::span<uint8_t> buffer, size_t &transferred);
+  KernelError Write(kstd::span<const uint8_t> buffer, size_t &transferred);
+  KernelError Control(uint32_t code, kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred);
+  KernelError Close();
 };
+
+using KIOObjectResult = kstd::expected<KObjectPtr<KIOObject>, KernelError>;
 
 inline KIOObject::OpenMode operator|(KIOObject::OpenMode a, KIOObject::OpenMode b) {
   return static_cast<KIOObject::OpenMode>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
@@ -91,25 +95,25 @@ struct ObjectTypeOf<TYPE_IO> {
 // Factory / adapter functions at top-level
 
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KIOObject>,
+    kernel::KIOObjectResult,
     KE_IO_CreateTtySinkStream,
     const kernel::tty::VttyPtr &vtty,
     const kstd::string_view &name = {});
 
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KIOObject>,
+    kernel::KIOObjectResult,
     KE_IO_CreateTtySourceStream,
     const kernel::tty::VttyPtr &vtty,
     const kstd::string_view &name = {});
 
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KIOObject>,
+    kernel::KIOObjectResult,
     KE_IO_CreateDeviceStream,
     const kernel::KDevicePtr<kernel::KDevice> &device,
     kernel::KIOObject::OpenMode mode = kernel::KIOObject::OpenMode::ReadWrite,
     const kstd::string_view &name = {});
 
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KIOObject>,
+    kernel::KIOObjectResult,
     KE_IO_FromObject,
     const kernel::KObjectPtr<kernel::KObject> &obj);

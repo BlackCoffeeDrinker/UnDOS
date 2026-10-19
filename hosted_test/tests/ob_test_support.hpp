@@ -1,5 +1,7 @@
 #pragma once
 
+#include <catch2/catch_test_macros.hpp>
+
 // Shared test helper: object_manager::init() populates process-wide singleton
 // directories and is not safe to call more than once per test binary run (it
 // would recreate the singletons and orphan the previous ones). Since this is
@@ -35,7 +37,7 @@ inline void EnsureObjectManagerInitialized() {
     kernel_as.current_base = HAL_TEST_GetFakeRamBase();
     kernel_as.limit = kernel_as.current_base + HAL_TEST_GetFakeRamSize();
 
-    kernel::objectmanager::init();
+    REQUIRE(kernel::objectmanager::init() == kernel::KernelError::Success);
     kernel::vmm::late_init();
     initialized = true;
   }

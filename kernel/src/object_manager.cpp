@@ -75,88 +75,125 @@ bool is_initialized() {
   return g_root != nullptr;
 }
 
-void init() {
-  g_root = kernel::CreateKObject<KDirectoryObject>("<Root>");
-  g_device = kernel::CreateKObject<KDirectoryObject>(kOBDevicesPath);
-  g_driver = kernel::CreateKObject<KDirectoryObject>(kOBDriversPath);
-  g_memory = kernel::CreateKObject<KDirectoryObject>(kOBMemoryPath);
-  g_thread = kernel::CreateKObject<KDirectoryObject>(kOBThreadPath);
-  g_process = kernel::CreateKObject<KDirectoryObject>(kOBProcessesPath);
-  g_filesystem = kernel::CreateKObject<KDirectoryObject>(kOBFileSystemPath);
-  g_vfs = kernel::CreateKObject<KDirectoryObject>(kOBVFSPath);
-  g_file = kernel::CreateKObject<KDirectoryObject>(kOBFilePath);
-  g_subsystem = kernel::CreateKObject<KDirectoryObject>(kOBSubsystemsPath);
-  g_configroots = kernel::CreateKObject<KDirectoryObject>(kOBHivePath);
-  g_gfx = kernel::CreateKObject<KDirectoryObject>(kOBGfxPath);
-  const auto system = kernel::CreateKObject<KDirectoryObject>(kOBSystemPath);
+KernelError init() {
+  auto root = kernel::CreateKObject<KDirectoryObject>("<Root>");
+  if (!root) return root.error();
+  auto device = kernel::CreateKObject<KDirectoryObject>(kOBDevicesPath);
+  if (!device) return device.error();
+  auto driver = kernel::CreateKObject<KDirectoryObject>(kOBDriversPath);
+  if (!driver) return driver.error();
+  auto memory = kernel::CreateKObject<KDirectoryObject>(kOBMemoryPath);
+  if (!memory) return memory.error();
+  auto thread = kernel::CreateKObject<KDirectoryObject>(kOBThreadPath);
+  if (!thread) return thread.error();
+  auto process = kernel::CreateKObject<KDirectoryObject>(kOBProcessesPath);
+  if (!process) return process.error();
+  auto filesystem = kernel::CreateKObject<KDirectoryObject>(kOBFileSystemPath);
+  if (!filesystem) return filesystem.error();
+  auto vfs = kernel::CreateKObject<KDirectoryObject>(kOBVFSPath);
+  if (!vfs) return vfs.error();
+  auto file = kernel::CreateKObject<KDirectoryObject>(kOBFilePath);
+  if (!file) return file.error();
+  auto subsystem = kernel::CreateKObject<KDirectoryObject>(kOBSubsystemsPath);
+  if (!subsystem) return subsystem.error();
+  auto configroots = kernel::CreateKObject<KDirectoryObject>(kOBHivePath);
+  if (!configroots) return configroots.error();
+  auto gfx = kernel::CreateKObject<KDirectoryObject>(kOBGfxPath);
+  if (!gfx) return gfx.error();
+  auto system = kernel::CreateKObject<KDirectoryObject>(kOBSystemPath);
+  if (!system) return system.error();
 
-  KE_OB_InsertObject(g_root, g_device);
-  KE_OB_InsertObject(g_root, g_driver);
-  KE_OB_InsertObject(g_root, g_memory);
-  KE_OB_InsertObject(g_root, g_filesystem);
-  KE_OB_InsertObject(g_root, g_thread);
-  KE_OB_InsertObject(g_root, g_process);
-  KE_OB_InsertObject(g_root, g_vfs);
-  KE_OB_InsertObject(g_root, g_file);
-  KE_OB_InsertObject(g_root, g_subsystem);
-  KE_OB_InsertObject(g_root, g_configroots);
-  KE_OB_InsertObject(g_root, g_gfx);
-  KE_OB_InsertObject(g_root, system);
+  const kernel::KObjectPtr<kernel::KObject> children[] = {
+      *device, *driver, *memory, *filesystem, *thread, *process, *vfs,
+      *file, *subsystem, *configroots, *gfx, *system};
+  size_t inserted = 0;
+  for (const auto &child : children) {
+    const auto status = KE_OB_InsertObject(*root, child);
+    if (status != KernelError::Success) {
+      while (inserted != 0) {
+        --inserted;
+        const auto rollback_status = KE_OB_RemoveObject(*root, children[inserted]);
+        if (rollback_status != KernelError::Success) {
+          KE_Print("objectmanager::init: failed to roll back child insertion: {}",
+                   make_error_code(rollback_status).message());
+        }
+      }
+      return status;
+    }
+    ++inserted;
+  }
+
+  g_root = kstd::move(*root);
+  g_device = kstd::move(*device);
+  g_driver = kstd::move(*driver);
+  g_memory = kstd::move(*memory);
+  g_thread = kstd::move(*thread);
+  g_process = kstd::move(*process);
+  g_filesystem = kstd::move(*filesystem);
+  g_vfs = kstd::move(*vfs);
+  g_file = kstd::move(*file);
+  g_subsystem = kstd::move(*subsystem);
+  g_configroots = kstd::move(*configroots);
+  g_gfx = kstd::move(*gfx);
+  return KernelError::Success;
 }
 }// namespace kernel::objectmanager
 
-UNDOS_KERNEL_API_DEF bool KE_OB_InsertObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_OB_InsertObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
   if (!parent || !child) [[unlikely]] {
     KE_Print("KE_OB_InsertObject failed");
-    return false;
+    return kernel::KernelError::InvalidArgument;
   }
 
   if (child->parent != nullptr) [[unlikely]] {
     // Child already has a parent
     KE_Print("KE_OB_InsertObject failed for object {}: Object already has a parent", child->name);
-    return false;
+    return kernel::KernelError::AlreadyAttached;
   }
 
   // Check if name already exists
   if (parent->child_list.find(kstd::string_view(child->name))) {
     KE_Print("KE_OB_InsertObject failed for object {}", child->name);
-    return false;
+    return kernel::KernelError::AlreadyExists;
   }
 
   child->parent = parent.get();
   KE_OB_Retain(child.get());
   parent->child_list.push_back(child.get());
 
-  return true;
+  return kernel::KernelError::Success;
 }
 
-UNDOS_KERNEL_API_DEF uint32_t KE_OB_MakeUniqueName(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kstd::string_view &baseName) noexcept {
-  if (!parent) [[unlikely]] { return 0; }
-  if (baseName.empty()) [[unlikely]] { return 0; }
-
-  uint32_t ret = 0;
-  kstd::static_string<64> currentName;
-  kstd::format(currentName, "{}{}", baseName, ret);
-  auto currentHash = kernel::ObjectNameHash::from_string(currentName);
-
-  for (const auto &child: parent->child_list) {
-    if (child->name_hash == currentHash) {
-      ret++;
-      kstd::format(currentName, "{}{}", baseName, ret);
-      currentHash = kernel::ObjectNameHash::from_string(currentName);
+UNDOS_KERNEL_API_DEF kstd::expected<uint32_t, kernel::KernelError>
+KE_OB_MakeUniqueName(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kstd::string_view &baseName) noexcept {
+  if (!parent) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidArgument); }
+  if (baseName.empty()) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidArgument); }
+  for (uint32_t ret = 0;; ++ret) {
+    size_t digits = 1;
+    for (uint32_t value = ret; value >= 10; value /= 10) ++digits;
+    if (baseName.size() + digits > 63) return kstd::unexpected(kernel::KernelError::NameTooLong);
+    kstd::static_string<64> candidate;
+    kstd::format(candidate, "{}{}", baseName, ret);
+    const auto hash = kernel::ObjectNameHash::from_string(candidate);
+    bool exists = false;
+    for (const auto &child: parent->child_list) {
+      if (child->name_hash == hash) {
+        exists = true;
+        break;
+      }
     }
+    if (!exists) return ret;
+    if (ret == UINT32_MAX) return kstd::unexpected(kernel::KernelError::ResourceLimitExceeded);
   }
-
-  return ret;
 }
 
-UNDOS_KERNEL_API_DEF bool KE_OB_RemoveObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_OB_RemoveObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
   if (!parent || !child) [[unlikely]] {
-    return false;
+    return kernel::KernelError::InvalidArgument;
   }
 
   if (child->parent != parent.get()) [[unlikely]] {
-    return false;
+    return kernel::KernelError::ParentMismatch;
   }
 
   parent->child_list.remove(child.get());
@@ -165,7 +202,7 @@ UNDOS_KERNEL_API_DEF bool KE_OB_RemoveObject(const kernel::KObjectPtr<kernel::KD
   // Undo the retain KE_OB_InsertObject performed on insertion.
   KE_OB_Release(child.get());
 
-  return true;
+  return kernel::KernelError::Success;
 }
 
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KObject> KE_OB_LookupObject(const kstd::string_view &path) noexcept {
@@ -211,7 +248,11 @@ UNDOS_KERNEL_API_DEF void KE_OB_Release(kernel::KObject *obj) noexcept {
 
   const auto previous = obj->reference_count.fetch_sub(1, kstd::memory_order_acq_rel);
   if (previous == 2 && obj->type == kernel::TYPE_IO && obj->parent == KE_OB_GetFileDirectory().get()) {
-    KE_VFS_CloseFile(static_cast<kernel::KIOObject *>(obj));
+    const auto close_status = KE_VFS_CloseFile(static_cast<kernel::KIOObject *>(obj));
+    if (close_status != kernel::KernelError::Success) {
+      KE_Print("KE_OB_Release: failed to close file object: {}",
+               kernel::make_error_code(close_status).message());
+    }
     return;
   }
   if (previous == 1) {

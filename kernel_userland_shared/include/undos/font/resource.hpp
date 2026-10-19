@@ -85,7 +85,7 @@ public:
     const auto *entry = bytes_.data + HeaderSize + index * DirectoryEntrySize;
     const uint32_t offset = read_u32(entry + 4), size = read_u32(entry + 8);
     if (offset > bytes_.size || size > bytes_.size - offset) return {};
-    return {bytes_.data + offset, size};
+    return {.data = bytes_.data + offset, .size = size};
   }
 private:
   Bytes bytes_;

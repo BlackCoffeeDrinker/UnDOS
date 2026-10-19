@@ -2,7 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE("list default is empty", "[list]") {
-    kstd::list<int> l;
+  const kstd::list<int> l;
     REQUIRE(l.empty());
     REQUIRE(l.size() == 0);
 }
@@ -32,7 +32,7 @@ TEST_CASE("list initializer_list", "[list]") {
 }
 
 TEST_CASE("list copy and move", "[list]") {
-    kstd::list<int> l = {1, 2, 3};
+  const kstd::list<int> l = {1, 2, 3};
     kstd::list<int> copy(l);
     REQUIRE(copy.size() == 3);
     REQUIRE(copy.front() == 1);
@@ -65,9 +65,9 @@ TEST_CASE("list insert and erase", "[list]") {
     ++it;
     l.insert(it, 3);
 
-    int expected[] = {1, 2, 3, 4};
+    const int expected[] = {1, 2, 3, 4};
     size_t i = 0;
-    for (auto v : l) {
+    for (const auto v : l) {
         REQUIRE(v == expected[i]);
         ++i;
     }
@@ -82,7 +82,7 @@ TEST_CASE("list insert and erase", "[list]") {
 
 TEST_CASE("list reverse iteration", "[list]") {
     kstd::list<int> l = {1, 2, 3};
-    int expected[] = {3, 2, 1};
+  const int expected[] = {3, 2, 1};
     size_t i = 0;
     for (auto it = l.rbegin(); it != l.rend(); ++it) {
         REQUIRE(*it == expected[i]);

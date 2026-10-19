@@ -1,6 +1,7 @@
 #pragma once
 
 #include <kernel/__core.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
 
@@ -18,15 +19,15 @@ class InterruptRecordRing {
   static constexpr size_t kCapacity = 256;
 
   // Single-producer (ISR) safe: only touches m_head, reads m_tail, never blocks or allocates
-  bool Push(const HalInterruptRecord &record) noexcept {
+  KernelError Push(const HalInterruptRecord &record) noexcept {
     const size_t head = m_head;
     const size_t nextHead = (head + 1) % kCapacity;
     if (nextHead == m_tail) {
-      return false; // Queue full: drop record
+      return KernelError::QueueFull;
     }
     m_records[head] = record;
     m_head = nextHead;
-    return true;
+    return KernelError::Success;
   }
 
   // Single-consumer (thread) safe: touches m_tail, reads m_head
@@ -73,7 +74,7 @@ class InterruptRecordRing {
  * ISR-safe: non-blocking, no allocation, no CPU interrupt manipulation.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_DISPATCH_EnqueueInterrupt,
     const kernel::HalInterruptRecord &record);
 
@@ -84,7 +85,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * Registers an ISR object with the dispatch subsystem for the given IRQ line.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_DISPATCH_RegisterHandler,
     uint32_t irq,
     const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr);
@@ -96,6 +97,6 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * Unregisters any ISR object connected to the given IRQ line.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    void,
+    kernel::KernelError,
     KE_DISPATCH_UnregisterHandler,
     uint32_t irq);

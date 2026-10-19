@@ -15,13 +15,13 @@ TEST_CASE("InterruptRecordRing basic operations", "[dispatch]") {
   kernel::HalInterruptRecord rec{};
   REQUIRE_FALSE(ring.Pop(rec));
 
-  kernel::HalInterruptRecord in1{33, 1, 1000, 0};
-  REQUIRE(ring.Push(in1));
+  kernel::HalInterruptRecord in1{.vector = 33, .irq = 1, .timestamp = 1000, .flags = 0};
+  REQUIRE(ring.Push(in1) == kernel::KernelError::Success);
   REQUIRE_FALSE(ring.Empty());
   REQUIRE(ring.Size() == 1);
 
-  kernel::HalInterruptRecord in2{44, 12, 2000, 1};
-  REQUIRE(ring.Push(in2));
+  kernel::HalInterruptRecord in2{.vector = 44, .irq = 12, .timestamp = 2000, .flags = 1};
+  REQUIRE(ring.Push(in2) == kernel::KernelError::Success);
   REQUIRE(ring.Size() == 2);
 
   kernel::HalInterruptRecord out{};
@@ -49,8 +49,8 @@ TEST_CASE("InterruptRecordRing capacity and overflow handling", "[dispatch]") {
   // which holds (kCapacity - 1) = 255 elements.
   size_t pushedCount = 0;
   for (size_t i = 0; i < kernel::InterruptRecordRing::kCapacity; ++i) {
-    kernel::HalInterruptRecord rec{static_cast<uint32_t>(32 + i % 16), static_cast<uint32_t>(i % 16), i, 0};
-    if (ring.Push(rec)) {
+    kernel::HalInterruptRecord rec{.vector = static_cast<uint32_t>(32 + i % 16), .irq = static_cast<uint32_t>(i % 16), .timestamp = i, .flags = 0};
+    if (ring.Push(rec) == kernel::KernelError::Success) {
       pushedCount++;
     } else {
       break;
@@ -61,8 +61,8 @@ TEST_CASE("InterruptRecordRing capacity and overflow handling", "[dispatch]") {
   CHECK(ring.Size() == pushedCount);
 
   // Subsequent pushes must fail gracefully without crash
-  kernel::HalInterruptRecord overflowRec{99, 15, 9999, 0};
-  CHECK_FALSE(ring.Push(overflowRec));
+  kernel::HalInterruptRecord overflowRec{.vector = 99, .irq = 15, .timestamp = 9999, .flags = 0};
+  CHECK(ring.Push(overflowRec) == kernel::KernelError::QueueFull);
 
   // Drain all elements and verify FIFO integrity
   size_t poppedCount = 0;
@@ -76,15 +76,15 @@ TEST_CASE("InterruptRecordRing capacity and overflow handling", "[dispatch]") {
   CHECK(ring.Empty());
 
   // Ring can be reused after draining
-  CHECK(ring.Push(overflowRec));
+  CHECK(ring.Push(overflowRec) == kernel::KernelError::Success);
   CHECK(ring.Pop(out));
   CHECK(out.vector == 99);
 }
 
 TEST_CASE("InterruptRecordRing reset", "[dispatch]") {
   kernel::InterruptRecordRing ring;
-  ring.Push({33, 1, 100, 0});
-  ring.Push({34, 2, 200, 0});
+  ring.Push({.vector = 33, .irq = 1, .timestamp = 100, .flags = 0});
+  ring.Push({.vector = 34, .irq = 2, .timestamp = 200, .flags = 0});
   REQUIRE(ring.Size() == 2);
 
   ring.Reset();
@@ -128,10 +128,10 @@ TEST_CASE("Dispatch handler registration lifecycle and dispatch pump", "[dispatc
   REQUIRE(mouseIsr != nullptr);
 
   // Enqueue interleaved interrupts: IRQ 1, IRQ 12, IRQ 1, unregistered IRQ 7
-  CHECK(KE_DISPATCH_EnqueueInterrupt({33, 1, 10, 0}));
-  CHECK(KE_DISPATCH_EnqueueInterrupt({44, 12, 20, 0}));
-  CHECK(KE_DISPATCH_EnqueueInterrupt({33, 1, 30, 0}));
-  CHECK(KE_DISPATCH_EnqueueInterrupt({39, 7, 40, 0})); // Unregistered IRQ
+  CHECK(KE_DISPATCH_EnqueueInterrupt({33, 1, 10, 0}) == kernel::KernelError::Success);
+  CHECK(KE_DISPATCH_EnqueueInterrupt({44, 12, 20, 0}) == kernel::KernelError::Success);
+  CHECK(KE_DISPATCH_EnqueueInterrupt({33, 1, 30, 0}) == kernel::KernelError::Success);
+  CHECK(KE_DISPATCH_EnqueueInterrupt({39, 7, 40, 0}) == kernel::KernelError::Success); // Unregistered IRQ
 
   // Before pump, handlers have not run
   CHECK(kbdCtx.callCount == 0);
@@ -150,8 +150,8 @@ TEST_CASE("Dispatch handler registration lifecycle and dispatch pump", "[dispatc
   KE_IO_DisconnectInterrupt(1);
 
   // Enqueue new interrupts for IRQ 1 and IRQ 12
-  CHECK(KE_DISPATCH_EnqueueInterrupt({33, 1, 50, 0}));
-  CHECK(KE_DISPATCH_EnqueueInterrupt({44, 12, 60, 0}));
+  CHECK(KE_DISPATCH_EnqueueInterrupt({33, 1, 50, 0}) == kernel::KernelError::Success);
+  CHECK(KE_DISPATCH_EnqueueInterrupt({44, 12, 60, 0}) == kernel::KernelError::Success);
 
   test_dispatch::Pump();
 
@@ -169,8 +169,8 @@ TEST_CASE("Dispatch invalid registration parameters", "[dispatch]") {
   test_dispatch::Reset();
 
   // IRQ >= 16 out of bounds
-  CHECK_FALSE(KE_DISPATCH_RegisterHandler(16, nullptr));
-  CHECK_FALSE(KE_DISPATCH_RegisterHandler(32, nullptr));
+  CHECK(KE_DISPATCH_RegisterHandler(16, nullptr) == kernel::KernelError::InvalidArgument);
+  CHECK(KE_DISPATCH_RegisterHandler(32, nullptr) == kernel::KernelError::InvalidArgument);
 
   // Connect with null routine
   auto nullIsr = KE_IO_ConnectInterrupt(nullptr, 1, nullptr, nullptr);

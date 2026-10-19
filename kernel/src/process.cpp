@@ -31,10 +31,20 @@
     // Detach so releasing our KObjectPtrs below doesn't loop back here.
     thread->owner_process = nullptr;
 
-    KE_OB_RemoveObject(KE_OB_GetProcessDirectory(), KObjectPtr<KObject>(process.get()));
+    const auto processRemoval = KE_OB_RemoveObject(KE_OB_GetProcessDirectory(), KObjectPtr<KObject>(process.get()));
+    if (processRemoval != KernelError::Success) {
+      KE_Print("process::terminate_current: failed to remove process object: {}",
+               make_error_code(processRemoval).message());
+    }
   }
 
-  KE_OB_RemoveObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(thread.get()));
+  if (thread) {
+    const auto threadRemoval = KE_OB_RemoveObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(thread.get()));
+    if (threadRemoval != KernelError::Success) {
+      KE_Print("process::terminate_current: failed to remove thread object: {}",
+               make_error_code(threadRemoval).message());
+    }
+  }
 
   // Hands off to the scheduler; never returns to this thread.
   KE_SCHED_Terminate();

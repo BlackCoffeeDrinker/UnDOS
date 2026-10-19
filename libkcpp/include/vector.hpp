@@ -235,7 +235,7 @@ private:
 
   void __ensure_capacity_for_one_more() {
     if (__size < __capacity) return;
-    size_type new_capacity = __capacity == 0 ? 4 : __capacity * 2;
+    const size_type new_capacity = __capacity == 0 ? 4 : __capacity * 2;
     __grow_to(new_capacity);
   }
 

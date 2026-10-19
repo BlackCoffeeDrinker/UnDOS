@@ -29,16 +29,17 @@ void InitUart(uint16_t base) {
   HAL_IO_Out8(base + UART_MCR, 0x03); // RTS, DTR
 }
 
-bool Serial_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
+kernel::KernelError Serial_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto fdo = KE_IO_CreateDeviceWithContext<SerialDeviceExtension>(
       driver, "Serial", kernel::device_type::Serial, CreateDeviceFlags::MultipleAllowed);
   if (!fdo) {
     KE_Print("serial_uart: failed to create Serial device");
-    return false;
+    return fdo.error();
   }
 
-  KE_IO_AttachFilterDevice(fdo, pdo);
-  return true;
+  const auto attached = KE_IO_AttachFilterDevice(*fdo, pdo);
+  if (!attached) return attached.error();
+  return kernel::KernelError::Success;
 }
 
 void Serial_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
@@ -63,15 +64,15 @@ void Serial_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
                   ext->ioBase, ext->irq);
 }
 
-kernel::IoStatus Serial_Read(const kernel::KDevicePtr<kernel::KDevice> &device,
+kernel::KernelError Serial_Read(const kernel::KDevicePtr<kernel::KDevice> &device,
                              uint64_t /*offset*/,
                              kstd::span<uint8_t> buffer,
                              size_t &transferred) {
   transferred = 0;
-  if (!device || buffer.empty()) return kernel::IoStatus::Success;
+  if (!device || buffer.empty()) return kernel::KernelError::Success;
 
   const auto *ext = device->deviceExtension.as<SerialDeviceExtension>();
-  if (!ext) return kernel::IoStatus::DeviceError;
+  if (!ext) return kernel::KernelError::DeviceError;
 
   const uint16_t base = ext->ioBase;
   while (transferred < buffer.size()) {
@@ -81,18 +82,18 @@ kernel::IoStatus Serial_Read(const kernel::KDevicePtr<kernel::KDevice> &device,
     buffer[transferred++] = HAL_IO_In8(base + UART_DATA);
   }
 
-  return kernel::IoStatus::Success;
+  return kernel::KernelError::Success;
 }
 
-kernel::IoStatus Serial_Write(const kernel::KDevicePtr<kernel::KDevice> &device,
+kernel::KernelError Serial_Write(const kernel::KDevicePtr<kernel::KDevice> &device,
                               uint64_t /*offset*/,
                               kstd::span<const uint8_t> buffer,
                               size_t &transferred) {
   transferred = 0;
-  if (!device || buffer.empty()) return kernel::IoStatus::Success;
+  if (!device || buffer.empty()) return kernel::KernelError::Success;
 
   const auto *ext = device->deviceExtension.as<SerialDeviceExtension>();
-  if (!ext) return kernel::IoStatus::DeviceError;
+  if (!ext) return kernel::KernelError::DeviceError;
 
   const uint16_t base = ext->ioBase;
   while (transferred < buffer.size()) {
@@ -102,7 +103,7 @@ kernel::IoStatus Serial_Write(const kernel::KDevicePtr<kernel::KDevice> &device,
     HAL_IO_Out8(base + UART_DATA, buffer[transferred++]);
   }
 
-  return kernel::IoStatus::Success;
+  return kernel::KernelError::Success;
 }
 
 } // namespace

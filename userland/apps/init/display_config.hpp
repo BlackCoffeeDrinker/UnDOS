@@ -25,7 +25,7 @@ inline bool parse_display_config(const char *text, size_t length, DisplayPrefere
   while (offset < length && space(text[offset])) ++offset;
   if (offset != length || !values[0] || !values[1] || values[0] > 32767 ||
       values[1] > 32767 || !values[2] || values[2] > 32) return false;
-  out = {values[0], values[1], values[2], values[3]};
+  out = {.width = values[0], .height = values[1], .bpp = values[2], .refreshHz = values[3]};
   return true;
 }
 }

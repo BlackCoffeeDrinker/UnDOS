@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include "syscalls.hpp"
+#include "KErrorToSysReturnCode.hpp"
 
 #include <undos/syscalls/__enum_PixelFormat.h>
 #include <undos/syscalls/__enum_RasterOp.h>
@@ -126,101 +127,108 @@
 constexpr size_t UNDOS_MAX_COPY_SIZE = 4096;
 constexpr size_t UNDOS_MAX_MAPPED_BUFFER_SIZE = 64 * 1024 * 1024;
 
-static void KE_VMM_CopyToUserspace(kernel::vmm::AddressSpace &as, void *userPtr, const void *kernelPtr, size_t length) {
-  if (userPtr == nullptr || length == 0) [[unlikely]] return;
-  void *mapped = KE_VMM_MapBorrowed(userPtr, length, as);
-  if (mapped == nullptr) [[unlikely]] return;
-  kstd::memcpy(mapped, kernelPtr, length);
-  KE_VMM_UnmapBorrowed(mapped, length, as);
+static kernel::KernelError KE_VMM_CopyToUserspace(kernel::vmm::AddressSpace &as, void *userPtr, const void *kernelPtr, size_t length) {
+  if (length == 0) return kernel::KernelError::Success;
+  if (userPtr == nullptr) [[unlikely]] return kernel::KernelError::InvalidAddress;
+  const auto mapped = KE_VMM_MapBorrowed(userPtr, length, as);
+  if (!mapped) [[unlikely]] return mapped.error();
+  kstd::memcpy(*mapped, kernelPtr, length);
+  return KE_VMM_UnmapBorrowed(*mapped, length, as);
 }
 
-static uint32_t Dispatch_CreateDC_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_CREATEDC_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CreateDC_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_CREATEDC_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_CREATEDC_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_CREATEDC_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEDC_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_CREATEDC_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_CREATEDC_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEDC_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEDC_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEDC_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.driverName != nullptr) {
-    if (headerCopy.driverNameLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.driverNameLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   if (headerCopy.deviceName != nullptr) {
-    if (headerCopy.deviceNameLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.deviceNameLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   __KRN_GFX_CREATEDC_V1 args {};
   if (headerCopy.driverName != nullptr && headerCopy.driverNameLength > 0) {
     args.driverName.resize(headerCopy.driverNameLength);
-    if (args.driverName.data() == nullptr || args.driverName.size() != headerCopy.driverNameLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.driverName), headerCopy.driverNameLength, address_space)) {
-      kstd::memcpy(args.driverName.data(), mapped, headerCopy.driverNameLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.driverNameLength, address_space);
+    if (args.driverName.data() == nullptr || args.driverName.size() != headerCopy.driverNameLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.driverName), headerCopy.driverNameLength, address_space)) {
+      kstd::memcpy(args.driverName.data(), *mapped, headerCopy.driverNameLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.driverNameLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
   if (headerCopy.deviceName != nullptr && headerCopy.deviceNameLength > 0) {
     args.deviceName.resize(headerCopy.deviceNameLength);
-    if (args.deviceName.data() == nullptr || args.deviceName.size() != headerCopy.deviceNameLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.deviceName), headerCopy.deviceNameLength, address_space)) {
-      kstd::memcpy(args.deviceName.data(), mapped, headerCopy.deviceNameLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.deviceNameLength, address_space);
+    if (args.deviceName.data() == nullptr || args.deviceName.size() != headerCopy.deviceNameLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.deviceName), headerCopy.deviceNameLength, address_space)) {
+      kstd::memcpy(args.deviceName.data(), *mapped, headerCopy.deviceNameLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.deviceNameLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
   args.initFlags = headerCopy.initFlags;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CreateDC_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CreateDC_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_CREATEDC_V1, handle), &args.handle, sizeof(args.handle));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_CREATEDC_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_DeleteDC_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_DELETEDC_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_DeleteDC_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_DELETEDC_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_DELETEDC_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_DELETEDC_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_DELETEDC_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_DELETEDC_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_DELETEDC_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_DELETEDC_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_DELETEDC_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_DELETEDC_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_DELETEDC_V1 args {};
   args.dc = headerCopy.dc;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_DeleteDC_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_DeleteDC_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_SelectObject_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_SELECTOBJECT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SelectObject_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_SELECTOBJECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_SELECTOBJECT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_SELECTOBJECT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SELECTOBJECT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_SELECTOBJECT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_SELECTOBJECT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SELECTOBJECT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SELECTOBJECT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SELECTOBJECT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_SELECTOBJECT_V1 args {};
@@ -228,23 +236,25 @@ static uint32_t Dispatch_SelectObject_V1(void *userData, size_t size, uint32_t f
   args.object = headerCopy.object;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SelectObject_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SelectObject_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_CreatePen_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_CREATEPEN_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CreatePen_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_CREATEPEN_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_CREATEPEN_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_CREATEPEN_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEPEN_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_CREATEPEN_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_CREATEPEN_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEPEN_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEPEN_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEPEN_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_CREATEPEN_V1 args {};
@@ -253,23 +263,25 @@ static uint32_t Dispatch_CreatePen_V1(void *userData, size_t size, uint32_t flag
   args.color = headerCopy.color;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CreatePen_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CreatePen_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_CreateBrush_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_CREATEBRUSH_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CreateBrush_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_CREATEBRUSH_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_CREATEBRUSH_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_CREATEBRUSH_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEBRUSH_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_CREATEBRUSH_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_CREATEBRUSH_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEBRUSH_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEBRUSH_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEBRUSH_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_CREATEBRUSH_V1 args {};
@@ -277,27 +289,29 @@ static uint32_t Dispatch_CreateBrush_V1(void *userData, size_t size, uint32_t fl
   args.color = headerCopy.color;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CreateBrush_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CreateBrush_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_CreateFont_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_CREATEFONT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CreateFont_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_CREATEFONT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_CREATEFONT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_CREATEFONT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEFONT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_CREATEFONT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_CREATEFONT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEFONT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEFONT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEFONT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.name != nullptr) {
-    if (headerCopy.nameLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.nameLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   __KRN_GFX_CREATEFONT_V1 args {};
@@ -306,38 +320,40 @@ static uint32_t Dispatch_CreateFont_V1(void *userData, size_t size, uint32_t fla
   args.charset = headerCopy.charset;
   if (headerCopy.name != nullptr && headerCopy.nameLength > 0) {
     args.name.resize(headerCopy.nameLength);
-    if (args.name.data() == nullptr || args.name.size() != headerCopy.nameLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.name), headerCopy.nameLength, address_space)) {
-      kstd::memcpy(args.name.data(), mapped, headerCopy.nameLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.nameLength, address_space);
+    if (args.name.data() == nullptr || args.name.size() != headerCopy.nameLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.name), headerCopy.nameLength, address_space)) {
+      kstd::memcpy(args.name.data(), *mapped, headerCopy.nameLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.nameLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CreateFont_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CreateFont_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_CreateBitmap_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_CREATEBITMAP_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CreateBitmap_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_CREATEBITMAP_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_CREATEBITMAP_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_CREATEBITMAP_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEBITMAP_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_CREATEBITMAP_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_CREATEBITMAP_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEBITMAP_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEBITMAP_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEBITMAP_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.pixels != nullptr) {
-    if (headerCopy.pixelsLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.pixelsLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+    if (headerCopy.pixelsLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.pixelsLength == 0) return kernel::KernelError::InvalidArgument;
   }
 
   __KRN_GFX_CREATEBITMAP_V1 args {};
@@ -345,55 +361,59 @@ static uint32_t Dispatch_CreateBitmap_V1(void *userData, size_t size, uint32_t f
   args.height = headerCopy.height;
   args.format = headerCopy.format;
   if (headerCopy.pixels != nullptr) {
-    if (auto* mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.pixels), headerCopy.pixelsLength * sizeof(uint8_t), address_space)) {
-      args.pixels = kernel::borrowed_ptr<uint8_t>(const_cast<uint8_t *>(static_cast<const uint8_t *>(mapped)), headerCopy.pixelsLength, address_space);
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.pixels), headerCopy.pixelsLength * sizeof(uint8_t), address_space)) {
+      args.pixels = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(*mapped), headerCopy.pixelsLength, address_space);
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CreateBitmap_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CreateBitmap_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_CREATEBITMAP_V1, handle), &args.handle, sizeof(args.handle));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_CREATEBITMAP_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_DeleteObject_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_DELETEOBJECT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_DeleteObject_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_DELETEOBJECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_DELETEOBJECT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_DELETEOBJECT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_DELETEOBJECT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_DELETEOBJECT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_DELETEOBJECT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_DELETEOBJECT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_DELETEOBJECT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_DELETEOBJECT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_DELETEOBJECT_V1 args {};
   args.object = headerCopy.object;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_DeleteObject_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_DeleteObject_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_MoveTo_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_MOVETO_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_MoveTo_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_MOVETO_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_MOVETO_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_MOVETO_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_MOVETO_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_MOVETO_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_MOVETO_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_MOVETO_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_MOVETO_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_MOVETO_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_MOVETO_V1 args {};
@@ -402,23 +422,25 @@ static uint32_t Dispatch_MoveTo_V1(void *userData, size_t size, uint32_t flags) 
   args.y = headerCopy.y;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_MoveTo_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_MoveTo_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_LineTo_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_LINETO_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_LineTo_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_LINETO_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_LINETO_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_LINETO_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_LINETO_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_LINETO_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_LINETO_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_LINETO_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_LINETO_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_LINETO_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_LINETO_V1 args {};
@@ -427,23 +449,25 @@ static uint32_t Dispatch_LineTo_V1(void *userData, size_t size, uint32_t flags) 
   args.y = headerCopy.y;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_LineTo_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_LineTo_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_Rectangle_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_RECTANGLE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Rectangle_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_RECTANGLE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_RECTANGLE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_RECTANGLE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_RECTANGLE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_RECTANGLE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_RECTANGLE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_RECTANGLE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_RECTANGLE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_RECTANGLE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_RECTANGLE_V1 args {};
@@ -454,23 +478,25 @@ static uint32_t Dispatch_Rectangle_V1(void *userData, size_t size, uint32_t flag
   args.bottom = headerCopy.bottom;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Rectangle_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_Rectangle_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_Ellipse_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_ELLIPSE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Ellipse_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_ELLIPSE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_ELLIPSE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_ELLIPSE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_ELLIPSE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_ELLIPSE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_ELLIPSE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_ELLIPSE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_ELLIPSE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_ELLIPSE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_ELLIPSE_V1 args {};
@@ -481,27 +507,29 @@ static uint32_t Dispatch_Ellipse_V1(void *userData, size_t size, uint32_t flags)
   args.bottom = headerCopy.bottom;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Ellipse_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_Ellipse_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_TextOut_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_TEXTOUT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_TextOut_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_TEXTOUT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_TEXTOUT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_TEXTOUT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_TEXTOUT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_TEXTOUT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_TEXTOUT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_TEXTOUT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_TEXTOUT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_TEXTOUT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.text != nullptr) {
-    if (headerCopy.textLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.textLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   __KRN_GFX_TEXTOUT_V1 args {};
@@ -510,33 +538,35 @@ static uint32_t Dispatch_TextOut_V1(void *userData, size_t size, uint32_t flags)
   args.y = headerCopy.y;
   if (headerCopy.text != nullptr && headerCopy.textLength > 0) {
     args.text.resize(headerCopy.textLength);
-    if (args.text.data() == nullptr || args.text.size() != headerCopy.textLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.text), headerCopy.textLength, address_space)) {
-      kstd::memcpy(args.text.data(), mapped, headerCopy.textLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.textLength, address_space);
+    if (args.text.data() == nullptr || args.text.size() != headerCopy.textLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.text), headerCopy.textLength, address_space)) {
+      kstd::memcpy(args.text.data(), *mapped, headerCopy.textLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.textLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_TextOut_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_TextOut_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_BitBlt_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_BITBLT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_BitBlt_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_BITBLT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_BITBLT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_BITBLT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_BITBLT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_BITBLT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_BITBLT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_BITBLT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_BITBLT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_BITBLT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_BITBLT_V1 args {};
@@ -551,23 +581,25 @@ static uint32_t Dispatch_BitBlt_V1(void *userData, size_t size, uint32_t flags) 
   args.rop = headerCopy.rop;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_BitBlt_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_BitBlt_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_StretchBlt_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_STRETCHBLT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_StretchBlt_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_STRETCHBLT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_STRETCHBLT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_STRETCHBLT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_STRETCHBLT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_STRETCHBLT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_STRETCHBLT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_STRETCHBLT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_STRETCHBLT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_STRETCHBLT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_STRETCHBLT_V1 args {};
@@ -584,23 +616,25 @@ static uint32_t Dispatch_StretchBlt_V1(void *userData, size_t size, uint32_t fla
   args.rop = headerCopy.rop;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_StretchBlt_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_StretchBlt_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_AlphaBlend_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_ALPHABLEND_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_AlphaBlend_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_ALPHABLEND_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_ALPHABLEND_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_ALPHABLEND_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_ALPHABLEND_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_ALPHABLEND_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_ALPHABLEND_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_ALPHABLEND_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_ALPHABLEND_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_ALPHABLEND_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_ALPHABLEND_V1 args {};
@@ -611,57 +645,61 @@ static uint32_t Dispatch_AlphaBlend_V1(void *userData, size_t size, uint32_t fla
   args.alpha = headerCopy.alpha;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_AlphaBlend_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_AlphaBlend_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_CreateRegion_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_CREATEREGION_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CreateRegion_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_CREATEREGION_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_CREATEREGION_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_CREATEREGION_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEREGION_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_CREATEREGION_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_CREATEREGION_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEREGION_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEREGION_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEREGION_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.rects != nullptr) {
-    if (headerCopy.rectsLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.rectsLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+    if (headerCopy.rectsLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.rectsLength == 0) return kernel::KernelError::InvalidArgument;
   }
 
   __KRN_GFX_CREATEREGION_V1 args {};
   if (headerCopy.rects != nullptr) {
-    if (auto* mapped = KE_VMM_MapBorrowed(const_cast<struct Rect *>(headerCopy.rects), headerCopy.rectsLength * sizeof(struct Rect), address_space)) {
-      args.rects = kernel::borrowed_ptr<struct Rect>(const_cast<struct Rect *>(static_cast<const struct Rect *>(mapped)), headerCopy.rectsLength, address_space);
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<struct Rect *>(headerCopy.rects), headerCopy.rectsLength * sizeof(struct Rect), address_space)) {
+      args.rects = kernel::borrowed_ptr<struct Rect>(static_cast<struct Rect *>(*mapped), headerCopy.rectsLength, address_space);
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CreateRegion_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CreateRegion_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_SelectClipRegion_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_SELECTCLIPREGION_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SelectClipRegion_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_SELECTCLIPREGION_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_SELECTCLIPREGION_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_SELECTCLIPREGION_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SELECTCLIPREGION_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_SELECTCLIPREGION_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_SELECTCLIPREGION_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SELECTCLIPREGION_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SELECTCLIPREGION_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SELECTCLIPREGION_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_SELECTCLIPREGION_V1 args {};
@@ -669,23 +707,25 @@ static uint32_t Dispatch_SelectClipRegion_V1(void *userData, size_t size, uint32
   args.region = headerCopy.region;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SelectClipRegion_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SelectClipRegion_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_CombineRegion_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_COMBINEREGION_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CombineRegion_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_COMBINEREGION_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_COMBINEREGION_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_COMBINEREGION_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_COMBINEREGION_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_COMBINEREGION_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_COMBINEREGION_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_COMBINEREGION_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_COMBINEREGION_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_COMBINEREGION_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_COMBINEREGION_V1 args {};
@@ -695,23 +735,25 @@ static uint32_t Dispatch_CombineRegion_V1(void *userData, size_t size, uint32_t 
   args.mode = headerCopy.mode;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CombineRegion_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CombineRegion_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_SetViewportOrg_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_SETVIEWPORTORG_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SetViewportOrg_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_SETVIEWPORTORG_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_SETVIEWPORTORG_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_SETVIEWPORTORG_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETVIEWPORTORG_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_SETVIEWPORTORG_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_SETVIEWPORTORG_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETVIEWPORTORG_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SETVIEWPORTORG_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETVIEWPORTORG_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_SETVIEWPORTORG_V1 args {};
@@ -720,23 +762,25 @@ static uint32_t Dispatch_SetViewportOrg_V1(void *userData, size_t size, uint32_t
   args.y = headerCopy.y;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SetViewportOrg_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SetViewportOrg_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_SetWindowOrg_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_SETWINDOWORG_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SetWindowOrg_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_SETWINDOWORG_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_SETWINDOWORG_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_SETWINDOWORG_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETWINDOWORG_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_SETWINDOWORG_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_SETWINDOWORG_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETWINDOWORG_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SETWINDOWORG_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETWINDOWORG_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_SETWINDOWORG_V1 args {};
@@ -745,143 +789,155 @@ static uint32_t Dispatch_SetWindowOrg_V1(void *userData, size_t size, uint32_t f
   args.y = headerCopy.y;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SetWindowOrg_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SetWindowOrg_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_GetTextMetrics_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_GETTEXTMETRICS_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_GetTextMetrics_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_GETTEXTMETRICS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_GETTEXTMETRICS_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_GETTEXTMETRICS_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETTEXTMETRICS_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_GETTEXTMETRICS_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_GETTEXTMETRICS_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETTEXTMETRICS_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_GETTEXTMETRICS_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETTEXTMETRICS_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_GETTEXTMETRICS_V1 args {};
   args.dc = headerCopy.dc;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_GetTextMetrics_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_GetTextMetrics_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETTEXTMETRICS_V1, metrics), &args.metrics, sizeof(args.metrics));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETTEXTMETRICS_V1, metrics), &args.metrics, sizeof(args.metrics)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_GetBitmapBits_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_GETBITMAPBITS_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_GetBitmapBits_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_GETBITMAPBITS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_GETBITMAPBITS_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_GETBITMAPBITS_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETBITMAPBITS_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_GETBITMAPBITS_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_GETBITMAPBITS_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETBITMAPBITS_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_GETBITMAPBITS_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETBITMAPBITS_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.buffer != nullptr) {
-    if (headerCopy.bufferLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.bufferLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+    if (headerCopy.bufferLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.bufferLength == 0) return kernel::KernelError::InvalidArgument;
   }
 
   __KRN_GFX_GETBITMAPBITS_V1 args {};
   args.bitmap = headerCopy.bitmap;
   if (headerCopy.buffer != nullptr) {
-    args.buffer = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(KE_VMM_MapBorrowed(headerCopy.buffer, headerCopy.bufferLength * sizeof(uint8_t), address_space)), headerCopy.bufferLength, address_space);
+    const auto mapped = KE_VMM_MapBorrowed(headerCopy.buffer, headerCopy.bufferLength * sizeof(uint8_t), address_space);
+    if (!mapped) return mapped.error();
+    args.buffer = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(*mapped), headerCopy.bufferLength, address_space);
     args.buffer_len = headerCopy.bufferLength;
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_GetBitmapBits_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_GetBitmapBits_V1(kstd::move(args));
 
   // buffer was mapped and filled by the kernel directly; report actual length written.
   {
     const auto len = static_cast<uint32_t>(args.buffer_len);
-    KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETBITMAPBITS_V1, bufferLength), &len, sizeof(len));
+    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETBITMAPBITS_V1, bufferLength), &len, sizeof(len)); error != kernel::KernelError::Success) return error;
   }
   return ret;
 }
 
-static uint32_t Dispatch_SetBitmapBits_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_SETBITMAPBITS_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SetBitmapBits_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_SETBITMAPBITS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_SETBITMAPBITS_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_SETBITMAPBITS_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETBITMAPBITS_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_SETBITMAPBITS_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_SETBITMAPBITS_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETBITMAPBITS_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SETBITMAPBITS_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETBITMAPBITS_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.buffer != nullptr) {
-    if (headerCopy.bufferLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.bufferLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+    if (headerCopy.bufferLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.bufferLength == 0) return kernel::KernelError::InvalidArgument;
   }
 
   __KRN_GFX_SETBITMAPBITS_V1 args {};
   args.bitmap = headerCopy.bitmap;
   if (headerCopy.buffer != nullptr) {
-    if (auto* mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.buffer), headerCopy.bufferLength * sizeof(uint8_t), address_space)) {
-      args.buffer = kernel::borrowed_ptr<uint8_t>(const_cast<uint8_t *>(static_cast<const uint8_t *>(mapped)), headerCopy.bufferLength, address_space);
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.buffer), headerCopy.bufferLength * sizeof(uint8_t), address_space)) {
+      args.buffer = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(*mapped), headerCopy.bufferLength, address_space);
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SetBitmapBits_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SetBitmapBits_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_GetDeviceCaps_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_GETDEVICECAPS_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_GetDeviceCaps_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_GETDEVICECAPS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_GETDEVICECAPS_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_GETDEVICECAPS_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETDEVICECAPS_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_GETDEVICECAPS_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_GETDEVICECAPS_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETDEVICECAPS_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_GETDEVICECAPS_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETDEVICECAPS_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_GETDEVICECAPS_V1 args {};
   args.dc = headerCopy.dc;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_GetDeviceCaps_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_GetDeviceCaps_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETDEVICECAPS_V1, caps), &args.caps, sizeof(args.caps));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETDEVICECAPS_V1, caps), &args.caps, sizeof(args.caps)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_SetDrawColors_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_SETDRAWCOLORS_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SetDrawColors_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_SETDRAWCOLORS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_SETDRAWCOLORS_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_SETDRAWCOLORS_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETDRAWCOLORS_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_SETDRAWCOLORS_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_SETDRAWCOLORS_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETDRAWCOLORS_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SETDRAWCOLORS_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETDRAWCOLORS_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_SETDRAWCOLORS_V1 args {};
@@ -891,293 +947,313 @@ static uint32_t Dispatch_SetDrawColors_V1(void *userData, size_t size, uint32_t 
   args.opaque = headerCopy.opaque;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SetDrawColors_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SetDrawColors_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_QueryFontEngine_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_QUERYFONTENGINE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_QueryFontEngine_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_QUERYFONTENGINE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_QUERYFONTENGINE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_QUERYFONTENGINE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_QUERYFONTENGINE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_QUERYFONTENGINE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_QUERYFONTENGINE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_QUERYFONTENGINE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_QUERYFONTENGINE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_QUERYFONTENGINE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_QUERYFONTENGINE_V1 args {};
 
   (void)flags;
-  const SyscallReturnCode ret = handle_QueryFontEngine_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_QueryFontEngine_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_QUERYFONTENGINE_V1, version), &args.version, sizeof(args.version));
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_QUERYFONTENGINE_V1, capabilities), &args.capabilities, sizeof(args.capabilities));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_QUERYFONTENGINE_V1, version), &args.version, sizeof(args.version)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_QUERYFONTENGINE_V1, capabilities), &args.capabilities, sizeof(args.capabilities)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_BeginFontUpload_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_BeginFontUpload_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_BEGINFONTUPLOAD_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_BEGINFONTUPLOAD_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_BEGINFONTUPLOAD_V1 args {};
   args.totalBytes = headerCopy.totalBytes;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_BeginFontUpload_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_BeginFontUpload_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_BEGINFONTUPLOAD_V1, upload), &args.upload, sizeof(args.upload));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_BEGINFONTUPLOAD_V1, upload), &args.upload, sizeof(args.upload)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_AppendFontUpload_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_AppendFontUpload_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_APPENDFONTUPLOAD_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_APPENDFONTUPLOAD_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.data != nullptr) {
-    if (headerCopy.dataLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.dataLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+    if (headerCopy.dataLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.dataLength == 0) return kernel::KernelError::InvalidArgument;
   }
 
   __KRN_GFX_APPENDFONTUPLOAD_V1 args {};
   args.upload = headerCopy.upload;
   args.offset = headerCopy.offset;
   if (headerCopy.data != nullptr) {
-    if (auto* mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.data), headerCopy.dataLength * sizeof(uint8_t), address_space)) {
-      args.data = kernel::borrowed_ptr<uint8_t>(const_cast<uint8_t *>(static_cast<const uint8_t *>(mapped)), headerCopy.dataLength, address_space);
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.data), headerCopy.dataLength * sizeof(uint8_t), address_space)) {
+      args.data = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(*mapped), headerCopy.dataLength, address_space);
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_AppendFontUpload_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_AppendFontUpload_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_CommitFontUpload_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CommitFontUpload_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_COMMITFONTUPLOAD_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_COMMITFONTUPLOAD_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_COMMITFONTUPLOAD_V1 args {};
   args.upload = headerCopy.upload;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CommitFontUpload_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CommitFontUpload_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_COMMITFONTUPLOAD_V1, face), &args.face, sizeof(args.face));
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_COMMITFONTUPLOAD_V1, validationError), &args.validationError, sizeof(args.validationError));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_COMMITFONTUPLOAD_V1, face), &args.face, sizeof(args.face)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_COMMITFONTUPLOAD_V1, validationError), &args.validationError, sizeof(args.validationError)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_CloseFontResource_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CloseFontResource_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_CLOSEFONTRESOURCE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_CLOSEFONTRESOURCE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_CLOSEFONTRESOURCE_V1 args {};
   args.handle = headerCopy.handle;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CloseFontResource_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CloseFontResource_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_EnumDisplayModes_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_EnumDisplayModes_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_ENUMDISPLAYMODES_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_ENUMDISPLAYMODES_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_ENUMDISPLAYMODES_V1 args {};
   args.index = headerCopy.index;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_EnumDisplayModes_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_EnumDisplayModes_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_ENUMDISPLAYMODES_V1, mode), &args.mode, sizeof(args.mode));
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_ENUMDISPLAYMODES_V1, available), &args.available, sizeof(args.available));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_ENUMDISPLAYMODES_V1, mode), &args.mode, sizeof(args.mode)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_ENUMDISPLAYMODES_V1, available), &args.available, sizeof(args.available)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_GetDisplayMode_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_GETDISPLAYMODE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_GetDisplayMode_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_GETDISPLAYMODE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_GETDISPLAYMODE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_GETDISPLAYMODE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETDISPLAYMODE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_GETDISPLAYMODE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_GETDISPLAYMODE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETDISPLAYMODE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_GETDISPLAYMODE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETDISPLAYMODE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_GETDISPLAYMODE_V1 args {};
 
   (void)flags;
-  const SyscallReturnCode ret = handle_GetDisplayMode_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_GetDisplayMode_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETDISPLAYMODE_V1, state), &args.state, sizeof(args.state));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETDISPLAYMODE_V1, state), &args.state, sizeof(args.state)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_SetDisplayMode_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_GFX_SETDISPLAYMODE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SetDisplayMode_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_SETDISPLAYMODE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_GFX_SETDISPLAYMODE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_GFX_SETDISPLAYMODE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETDISPLAYMODE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_SETDISPLAYMODE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_SETDISPLAYMODE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETDISPLAYMODE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SETDISPLAYMODE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETDISPLAYMODE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_GFX_SETDISPLAYMODE_V1 args {};
   args.modeId = headerCopy.modeId;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SetDisplayMode_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SetDisplayMode_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_RegisterClass_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_REGISTERCLASS_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_RegisterClass_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_REGISTERCLASS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_REGISTERCLASS_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_REGISTERCLASS_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_REGISTERCLASS_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_REGISTERCLASS_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_REGISTERCLASS_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_REGISTERCLASS_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_REGISTERCLASS_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_REGISTERCLASS_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.name != nullptr) {
-    if (headerCopy.nameLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.nameLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   __KRN_USER_REGISTERCLASS_V1 args {};
   if (headerCopy.name != nullptr && headerCopy.nameLength > 0) {
     args.name.resize(headerCopy.nameLength);
-    if (args.name.data() == nullptr || args.name.size() != headerCopy.nameLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.name), headerCopy.nameLength, address_space)) {
-      kstd::memcpy(args.name.data(), mapped, headerCopy.nameLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.nameLength, address_space);
+    if (args.name.data() == nullptr || args.name.size() != headerCopy.nameLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.name), headerCopy.nameLength, address_space)) {
+      kstd::memcpy(args.name.data(), *mapped, headerCopy.nameLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.nameLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
   args.wndProc = headerCopy.wndProc;
   args.background = headerCopy.background;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_RegisterClass_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_RegisterClass_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_CreateWindow_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_CREATEWINDOW_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CreateWindow_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_CREATEWINDOW_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_CREATEWINDOW_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_CREATEWINDOW_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_CREATEWINDOW_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_CREATEWINDOW_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_CREATEWINDOW_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_CREATEWINDOW_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_CREATEWINDOW_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_CREATEWINDOW_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.className != nullptr) {
-    if (headerCopy.classNameLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.classNameLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   if (headerCopy.title != nullptr) {
-    if (headerCopy.titleLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.titleLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   __KRN_USER_CREATEWINDOW_V1 args {};
   if (headerCopy.className != nullptr && headerCopy.classNameLength > 0) {
     args.className.resize(headerCopy.classNameLength);
-    if (args.className.data() == nullptr || args.className.size() != headerCopy.classNameLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.className), headerCopy.classNameLength, address_space)) {
-      kstd::memcpy(args.className.data(), mapped, headerCopy.classNameLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.classNameLength, address_space);
+    if (args.className.data() == nullptr || args.className.size() != headerCopy.classNameLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.className), headerCopy.classNameLength, address_space)) {
+      kstd::memcpy(args.className.data(), *mapped, headerCopy.classNameLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.classNameLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
   if (headerCopy.title != nullptr && headerCopy.titleLength > 0) {
     args.title.resize(headerCopy.titleLength);
-    if (args.title.data() == nullptr || args.title.size() != headerCopy.titleLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.title), headerCopy.titleLength, address_space)) {
-      kstd::memcpy(args.title.data(), mapped, headerCopy.titleLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.titleLength, address_space);
+    if (args.title.data() == nullptr || args.title.size() != headerCopy.titleLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.title), headerCopy.titleLength, address_space)) {
+      kstd::memcpy(args.title.data(), *mapped, headerCopy.titleLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.titleLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
   args.style = headerCopy.style;
@@ -1189,47 +1265,51 @@ static uint32_t Dispatch_CreateWindow_V1(void *userData, size_t size, uint32_t f
   args.userData = headerCopy.userData;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CreateWindow_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CreateWindow_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_CREATEWINDOW_V1, hwnd), &args.hwnd, sizeof(args.hwnd));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_CREATEWINDOW_V1, hwnd), &args.hwnd, sizeof(args.hwnd)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_DestroyWindow_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_DESTROYWINDOW_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_DestroyWindow_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_DESTROYWINDOW_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_DESTROYWINDOW_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_DESTROYWINDOW_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_DESTROYWINDOW_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_DESTROYWINDOW_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_DESTROYWINDOW_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_DESTROYWINDOW_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_DESTROYWINDOW_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_DESTROYWINDOW_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_DESTROYWINDOW_V1 args {};
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_DestroyWindow_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_DestroyWindow_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_ShowWindow_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_SHOWWINDOW_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_ShowWindow_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_SHOWWINDOW_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_SHOWWINDOW_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_SHOWWINDOW_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SHOWWINDOW_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_SHOWWINDOW_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_SHOWWINDOW_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SHOWWINDOW_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_SHOWWINDOW_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SHOWWINDOW_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_SHOWWINDOW_V1 args {};
@@ -1237,23 +1317,25 @@ static uint32_t Dispatch_ShowWindow_V1(void *userData, size_t size, uint32_t fla
   args.command = headerCopy.command;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_ShowWindow_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_ShowWindow_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_MoveWindow_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_MOVEWINDOW_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_MoveWindow_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_MOVEWINDOW_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_MOVEWINDOW_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_MOVEWINDOW_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_MOVEWINDOW_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_MOVEWINDOW_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_MOVEWINDOW_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_MOVEWINDOW_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_MOVEWINDOW_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_MOVEWINDOW_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_MOVEWINDOW_V1 args {};
@@ -1264,47 +1346,51 @@ static uint32_t Dispatch_MoveWindow_V1(void *userData, size_t size, uint32_t fla
   args.height = headerCopy.height;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_MoveWindow_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_MoveWindow_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_GetWindowRect_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_GETWINDOWRECT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_GetWindowRect_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_GETWINDOWRECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_GETWINDOWRECT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_GETWINDOWRECT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETWINDOWRECT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_GETWINDOWRECT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_GETWINDOWRECT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETWINDOWRECT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_GETWINDOWRECT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETWINDOWRECT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_GETWINDOWRECT_V1 args {};
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_GetWindowRect_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_GetWindowRect_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETWINDOWRECT_V1, rect), &args.rect, sizeof(args.rect));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETWINDOWRECT_V1, rect), &args.rect, sizeof(args.rect)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_InvalidateRect_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_INVALIDATERECT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_InvalidateRect_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_INVALIDATERECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_INVALIDATERECT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_INVALIDATERECT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_INVALIDATERECT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_INVALIDATERECT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_INVALIDATERECT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_INVALIDATERECT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_INVALIDATERECT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_INVALIDATERECT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_INVALIDATERECT_V1 args {};
@@ -1313,48 +1399,52 @@ static uint32_t Dispatch_InvalidateRect_V1(void *userData, size_t size, uint32_t
   args.whole = headerCopy.whole;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_InvalidateRect_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_InvalidateRect_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_BeginPaint_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_BEGINPAINT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_BeginPaint_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_BEGINPAINT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_BEGINPAINT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_BEGINPAINT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_BEGINPAINT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_BEGINPAINT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_BEGINPAINT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_BEGINPAINT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_BEGINPAINT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_BEGINPAINT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_BEGINPAINT_V1 args {};
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_BeginPaint_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_BeginPaint_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_BEGINPAINT_V1, dc), &args.dc, sizeof(args.dc));
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_BEGINPAINT_V1, paint), &args.paint, sizeof(args.paint));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_BEGINPAINT_V1, dc), &args.dc, sizeof(args.dc)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_BEGINPAINT_V1, paint), &args.paint, sizeof(args.paint)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_EndPaint_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_ENDPAINT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_EndPaint_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_ENDPAINT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_ENDPAINT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_ENDPAINT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_ENDPAINT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_ENDPAINT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_ENDPAINT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_ENDPAINT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_ENDPAINT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_ENDPAINT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_ENDPAINT_V1 args {};
@@ -1362,70 +1452,76 @@ static uint32_t Dispatch_EndPaint_V1(void *userData, size_t size, uint32_t flags
   args.dc = headerCopy.dc;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_EndPaint_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_EndPaint_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_GetMessage_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_GETMESSAGE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_GetMessage_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_GETMESSAGE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_GETMESSAGE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_GETMESSAGE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETMESSAGE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_GETMESSAGE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_GETMESSAGE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETMESSAGE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_GETMESSAGE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETMESSAGE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_GETMESSAGE_V1 args {};
 
   (void)flags;
-  const SyscallReturnCode ret = handle_GetMessage_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_GetMessage_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETMESSAGE_V1, msg), &args.msg, sizeof(args.msg));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETMESSAGE_V1, msg), &args.msg, sizeof(args.msg)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_PeekMessage_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_PEEKMESSAGE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_PeekMessage_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_PEEKMESSAGE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_PEEKMESSAGE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_PEEKMESSAGE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_PEEKMESSAGE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_PEEKMESSAGE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_PEEKMESSAGE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_PEEKMESSAGE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_PEEKMESSAGE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_PEEKMESSAGE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_PEEKMESSAGE_V1 args {};
   args.remove = headerCopy.remove;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_PeekMessage_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_PeekMessage_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_PEEKMESSAGE_V1, msg), &args.msg, sizeof(args.msg));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_PEEKMESSAGE_V1, msg), &args.msg, sizeof(args.msg)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_PostMessage_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_POSTMESSAGE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_PostMessage_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_POSTMESSAGE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_POSTMESSAGE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_POSTMESSAGE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_POSTMESSAGE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_POSTMESSAGE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_POSTMESSAGE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_POSTMESSAGE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_POSTMESSAGE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_POSTMESSAGE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_POSTMESSAGE_V1 args {};
@@ -1435,23 +1531,25 @@ static uint32_t Dispatch_PostMessage_V1(void *userData, size_t size, uint32_t fl
   args.lParam = headerCopy.lParam;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_PostMessage_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_PostMessage_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_GetWindowLongPtr_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_GETWINDOWLONGPTR_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_GetWindowLongPtr_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_GETWINDOWLONGPTR_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_GETWINDOWLONGPTR_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_GETWINDOWLONGPTR_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETWINDOWLONGPTR_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_GETWINDOWLONGPTR_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_GETWINDOWLONGPTR_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETWINDOWLONGPTR_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_GETWINDOWLONGPTR_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETWINDOWLONGPTR_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_GETWINDOWLONGPTR_V1 args {};
@@ -1459,24 +1557,26 @@ static uint32_t Dispatch_GetWindowLongPtr_V1(void *userData, size_t size, uint32
   args.index = headerCopy.index;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_GetWindowLongPtr_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_GetWindowLongPtr_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETWINDOWLONGPTR_V1, value), &args.value, sizeof(args.value));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETWINDOWLONGPTR_V1, value), &args.value, sizeof(args.value)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_SetWindowLongPtr_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_SETWINDOWLONGPTR_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SetWindowLongPtr_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_SETWINDOWLONGPTR_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_SETWINDOWLONGPTR_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_SETWINDOWLONGPTR_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETWINDOWLONGPTR_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_SETWINDOWLONGPTR_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_SETWINDOWLONGPTR_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETWINDOWLONGPTR_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_SETWINDOWLONGPTR_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETWINDOWLONGPTR_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_SETWINDOWLONGPTR_V1 args {};
@@ -1485,294 +1585,312 @@ static uint32_t Dispatch_SetWindowLongPtr_V1(void *userData, size_t size, uint32
   args.value = headerCopy.value;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SetWindowLongPtr_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SetWindowLongPtr_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_SETWINDOWLONGPTR_V1, previous), &args.previous, sizeof(args.previous));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_SETWINDOWLONGPTR_V1, previous), &args.previous, sizeof(args.previous)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_SetCapture_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_SETCAPTURE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SetCapture_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_SETCAPTURE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_SETCAPTURE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_SETCAPTURE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETCAPTURE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_SETCAPTURE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_SETCAPTURE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETCAPTURE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_SETCAPTURE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETCAPTURE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_SETCAPTURE_V1 args {};
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SetCapture_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SetCapture_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_ReleaseCapture_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_RELEASECAPTURE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_ReleaseCapture_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_RELEASECAPTURE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_RELEASECAPTURE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_RELEASECAPTURE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_RELEASECAPTURE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_RELEASECAPTURE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_RELEASECAPTURE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_RELEASECAPTURE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_RELEASECAPTURE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_RELEASECAPTURE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_RELEASECAPTURE_V1 args {};
   args.unused = headerCopy.unused;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_ReleaseCapture_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_ReleaseCapture_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_GetClientRect_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_GETCLIENTRECT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_GetClientRect_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_GETCLIENTRECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_GETCLIENTRECT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_GETCLIENTRECT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETCLIENTRECT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_GETCLIENTRECT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_GETCLIENTRECT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETCLIENTRECT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_GETCLIENTRECT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETCLIENTRECT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_GETCLIENTRECT_V1 args {};
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_GetClientRect_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_GetClientRect_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETCLIENTRECT_V1, rect), &args.rect, sizeof(args.rect));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETCLIENTRECT_V1, rect), &args.rect, sizeof(args.rect)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_SetFocus_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_SETFOCUS_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SetFocus_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_SETFOCUS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_SETFOCUS_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_SETFOCUS_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETFOCUS_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_SETFOCUS_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_SETFOCUS_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETFOCUS_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_SETFOCUS_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETFOCUS_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_USER_SETFOCUS_V1 args {};
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SetFocus_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SetFocus_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_SetWindowText_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_USER_SETWINDOWTEXT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SetWindowText_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_SETWINDOWTEXT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_USER_SETWINDOWTEXT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_USER_SETWINDOWTEXT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETWINDOWTEXT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_SETWINDOWTEXT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_SETWINDOWTEXT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETWINDOWTEXT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_SETWINDOWTEXT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETWINDOWTEXT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.text != nullptr) {
-    if (headerCopy.textLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.textLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   __KRN_USER_SETWINDOWTEXT_V1 args {};
   args.hwnd = headerCopy.hwnd;
   if (headerCopy.text != nullptr && headerCopy.textLength > 0) {
     args.text.resize(headerCopy.textLength);
-    if (args.text.data() == nullptr || args.text.size() != headerCopy.textLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.text), headerCopy.textLength, address_space)) {
-      kstd::memcpy(args.text.data(), mapped, headerCopy.textLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.textLength, address_space);
+    if (args.text.data() == nullptr || args.text.size() != headerCopy.textLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.text), headerCopy.textLength, address_space)) {
+      kstd::memcpy(args.text.data(), *mapped, headerCopy.textLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.textLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SetWindowText_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SetWindowText_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_QueryFpu_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_ABI_QUERYFPU_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_QueryFpu_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_ABI_QUERYFPU_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_ABI_QUERYFPU_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_ABI_QUERYFPU_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_ABI_QUERYFPU_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_ABI_QUERYFPU_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_ABI_QUERYFPU_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_ABI_QUERYFPU_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_ABI_QUERYFPU_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_ABI_QUERYFPU_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_ABI_QUERYFPU_V1 args {};
 
   (void)flags;
-  const SyscallReturnCode ret = handle_QueryFpu_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_QueryFpu_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_ABI_QUERYFPU_V1, capability), &args.capability, sizeof(args.capability));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_ABI_QUERYFPU_V1, capability), &args.capability, sizeof(args.capability)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_Print_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_DEBUG_PRINT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Print_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_DEBUG_PRINT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_DEBUG_PRINT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_DEBUG_PRINT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_DEBUG_PRINT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_DEBUG_PRINT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_DEBUG_PRINT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_DEBUG_PRINT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_DEBUG_PRINT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_DEBUG_PRINT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.message != nullptr) {
-    if (headerCopy.messageLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.messageLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   __KRN_DEBUG_PRINT_V1 args {};
   if (headerCopy.message != nullptr && headerCopy.messageLength > 0) {
     args.message.resize(headerCopy.messageLength);
-    if (args.message.data() == nullptr || args.message.size() != headerCopy.messageLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.message), headerCopy.messageLength, address_space)) {
-      kstd::memcpy(args.message.data(), mapped, headerCopy.messageLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.messageLength, address_space);
+    if (args.message.data() == nullptr || args.message.size() != headerCopy.messageLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.message), headerCopy.messageLength, address_space)) {
+      kstd::memcpy(args.message.data(), *mapped, headerCopy.messageLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.messageLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Print_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_Print_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_CreateProcess_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_PROC_CREATEPROCESS_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CreateProcess_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_PROC_CREATEPROCESS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_PROC_CREATEPROCESS_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_PROC_CREATEPROCESS_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_CREATEPROCESS_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_PROC_CREATEPROCESS_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_PROC_CREATEPROCESS_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_CREATEPROCESS_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_CREATEPROCESS_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_CREATEPROCESS_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.path != nullptr) {
-    if (headerCopy.pathLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.pathLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   if (headerCopy.argument != nullptr) {
-    if (headerCopy.argumentLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.argumentLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   __KRN_PROC_CREATEPROCESS_V1 args {};
   if (headerCopy.path != nullptr && headerCopy.pathLength > 0) {
     args.path.resize(headerCopy.pathLength);
-    if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
-      kstd::memcpy(args.path.data(), mapped, headerCopy.pathLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.pathLength, address_space);
+    if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
+      kstd::memcpy(args.path.data(), *mapped, headerCopy.pathLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.pathLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
   if (headerCopy.argument != nullptr && headerCopy.argumentLength > 0) {
     args.argument.resize(headerCopy.argumentLength);
-    if (args.argument.data() == nullptr || args.argument.size() != headerCopy.argumentLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.argument), headerCopy.argumentLength, address_space)) {
-      kstd::memcpy(args.argument.data(), mapped, headerCopy.argumentLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.argumentLength, address_space);
+    if (args.argument.data() == nullptr || args.argument.size() != headerCopy.argumentLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.argument), headerCopy.argumentLength, address_space)) {
+      kstd::memcpy(args.argument.data(), *mapped, headerCopy.argumentLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.argumentLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CreateProcess_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CreateProcess_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEPROCESS_V1, handle), &args.handle, sizeof(args.handle));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEPROCESS_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_CreateProcess_V2(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_PROC_CREATEPROCESS_V2)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CreateProcess_V2(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_PROC_CREATEPROCESS_V2)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_PROC_CREATEPROCESS_V2 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_PROC_CREATEPROCESS_V2 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_CREATEPROCESS_V2), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_PROC_CREATEPROCESS_V2));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_PROC_CREATEPROCESS_V2), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_CREATEPROCESS_V2), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_CREATEPROCESS_V2));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_CREATEPROCESS_V2), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.path != nullptr) {
-    if (headerCopy.pathLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.pathLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   if (headerCopy.argument != nullptr) {
-    if (headerCopy.argumentLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.argumentLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   __KRN_PROC_CREATEPROCESS_V2 args {};
   if (headerCopy.path != nullptr && headerCopy.pathLength > 0) {
     args.path.resize(headerCopy.pathLength);
-    if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
-      kstd::memcpy(args.path.data(), mapped, headerCopy.pathLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.pathLength, address_space);
+    if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
+      kstd::memcpy(args.path.data(), *mapped, headerCopy.pathLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.pathLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
   if (headerCopy.argument != nullptr && headerCopy.argumentLength > 0) {
     args.argument.resize(headerCopy.argumentLength);
-    if (args.argument.data() == nullptr || args.argument.size() != headerCopy.argumentLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.argument), headerCopy.argumentLength, address_space)) {
-      kstd::memcpy(args.argument.data(), mapped, headerCopy.argumentLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.argumentLength, address_space);
+    if (args.argument.data() == nullptr || args.argument.size() != headerCopy.argumentLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.argument), headerCopy.argumentLength, address_space)) {
+      kstd::memcpy(args.argument.data(), *mapped, headerCopy.argumentLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.argumentLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
   args.flags = headerCopy.flags;
@@ -1781,85 +1899,93 @@ static uint32_t Dispatch_CreateProcess_V2(void *userData, size_t size, uint32_t 
   args.stderrHandle = headerCopy.stderrHandle;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CreateProcess_V2(kstd::move(args));
+  const kernel::KernelError ret = handle_CreateProcess_V2(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEPROCESS_V2, handle), &args.handle, sizeof(args.handle));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEPROCESS_V2, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_GetInfo_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_PROC_GETINFO_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_GetInfo_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_PROC_GETINFO_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_PROC_GETINFO_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_PROC_GETINFO_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_GETINFO_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_PROC_GETINFO_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_PROC_GETINFO_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_GETINFO_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_GETINFO_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_GETINFO_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.commandLine != nullptr) {
-    if (headerCopy.commandLineLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.commandLineLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+    if (headerCopy.commandLineLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.commandLineLength == 0) return kernel::KernelError::InvalidArgument;
   }
 
   __KRN_PROC_GETINFO_V1 args {};
   args.pid = headerCopy.pid;
   if (headerCopy.commandLine != nullptr) {
-    args.commandLine = kernel::borrowed_ptr<char>(static_cast<char *>(KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.commandLine), headerCopy.commandLineLength, address_space)), headerCopy.commandLineLength, address_space);
+    const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.commandLine), headerCopy.commandLineLength, address_space);
+    if (!mapped) return mapped.error();
+    args.commandLine = kernel::borrowed_ptr<char>(static_cast<char *>(*mapped), headerCopy.commandLineLength, address_space);
     args.commandLine_len = headerCopy.commandLineLength;
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_GetInfo_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_GetInfo_V1(kstd::move(args));
 
   // content was written directly into the mapped user buffer; report the actual/required length.
   {
     const auto len = static_cast<uint32_t>(args.commandLine_len);
-    KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_GETINFO_V1, commandLineLength), &len, sizeof(len));
+    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_GETINFO_V1, commandLineLength), &len, sizeof(len)); error != kernel::KernelError::Success) return error;
   }
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_GETINFO_V1, exitCode), &args.exitCode, sizeof(args.exitCode));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_GETINFO_V1, exitCode), &args.exitCode, sizeof(args.exitCode)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_Exit_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_PROC_EXIT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Exit_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_PROC_EXIT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_PROC_EXIT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_PROC_EXIT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_EXIT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_PROC_EXIT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_PROC_EXIT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_EXIT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_EXIT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_EXIT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_PROC_EXIT_V1 args {};
   args.exitCode = headerCopy.exitCode;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Exit_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_Exit_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_WaitForObject_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_PROC_WAITFOROBJECT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_WaitForObject_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_PROC_WAITFOROBJECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_PROC_WAITFOROBJECT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_PROC_WAITFOROBJECT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_WAITFOROBJECT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_PROC_WAITFOROBJECT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_PROC_WAITFOROBJECT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_WAITFOROBJECT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_WAITFOROBJECT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_WAITFOROBJECT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_PROC_WAITFOROBJECT_V1 args {};
@@ -1867,23 +1993,25 @@ static uint32_t Dispatch_WaitForObject_V1(void *userData, size_t size, uint32_t 
   args.timeoutMs = headerCopy.timeoutMs;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_WaitForObject_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_WaitForObject_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_WaitProcess_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_PROC_WAITPROCESS_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_WaitProcess_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_PROC_WAITPROCESS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_PROC_WAITPROCESS_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_PROC_WAITPROCESS_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_WAITPROCESS_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_PROC_WAITPROCESS_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_PROC_WAITPROCESS_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_WAITPROCESS_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_WAITPROCESS_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_WAITPROCESS_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_PROC_WAITPROCESS_V1 args {};
@@ -1891,71 +2019,77 @@ static uint32_t Dispatch_WaitProcess_V1(void *userData, size_t size, uint32_t fl
   args.timeoutMs = headerCopy.timeoutMs;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_WaitProcess_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_WaitProcess_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_WAITPROCESS_V1, exitCode), &args.exitCode, sizeof(args.exitCode));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_WAITPROCESS_V1, exitCode), &args.exitCode, sizeof(args.exitCode)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_CreateEvent_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_PROC_CREATEEVENT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_CreateEvent_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_PROC_CREATEEVENT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_PROC_CREATEEVENT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_PROC_CREATEEVENT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_CREATEEVENT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_PROC_CREATEEVENT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_PROC_CREATEEVENT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_CREATEEVENT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_CREATEEVENT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_CREATEEVENT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_PROC_CREATEEVENT_V1 args {};
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_CreateEvent_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_CreateEvent_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEEVENT_V1, handle), &args.handle, sizeof(args.handle));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEEVENT_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_SetEvent_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_PROC_SETEVENT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SetEvent_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_PROC_SETEVENT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_PROC_SETEVENT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_PROC_SETEVENT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_SETEVENT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_PROC_SETEVENT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_PROC_SETEVENT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_SETEVENT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_SETEVENT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_SETEVENT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_PROC_SETEVENT_V1 args {};
   args.handle = headerCopy.handle;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SetEvent_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SetEvent_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_AllocatePages_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_MEM_ALLOCATEPAGES_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_AllocatePages_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_MEM_ALLOCATEPAGES_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_MEM_ALLOCATEPAGES_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_MEM_ALLOCATEPAGES_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_ALLOCATEPAGES_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_MEM_ALLOCATEPAGES_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_MEM_ALLOCATEPAGES_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_ALLOCATEPAGES_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_MEM_ALLOCATEPAGES_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_ALLOCATEPAGES_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_MEM_ALLOCATEPAGES_V1 args {};
@@ -1963,24 +2097,26 @@ static uint32_t Dispatch_AllocatePages_V1(void *userData, size_t size, uint32_t 
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_AllocatePages_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_AllocatePages_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_MEM_ALLOCATEPAGES_V1, address), &args.address, sizeof(args.address));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_MEM_ALLOCATEPAGES_V1, address), &args.address, sizeof(args.address)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_FreePages_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_MEM_FREEPAGES_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_FreePages_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_MEM_FREEPAGES_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_MEM_FREEPAGES_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_MEM_FREEPAGES_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_FREEPAGES_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_MEM_FREEPAGES_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_MEM_FREEPAGES_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_FREEPAGES_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_MEM_FREEPAGES_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_FREEPAGES_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_MEM_FREEPAGES_V1 args {};
@@ -1988,23 +2124,25 @@ static uint32_t Dispatch_FreePages_V1(void *userData, size_t size, uint32_t flag
   args.size = headerCopy.size;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_FreePages_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_FreePages_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_Protect_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_MEM_PROTECT_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Protect_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_MEM_PROTECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_MEM_PROTECT_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_MEM_PROTECT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_PROTECT_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_MEM_PROTECT_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_MEM_PROTECT_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_PROTECT_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_MEM_PROTECT_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_PROTECT_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_MEM_PROTECT_V1 args {};
@@ -2013,23 +2151,25 @@ static uint32_t Dispatch_Protect_V1(void *userData, size_t size, uint32_t flags)
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Protect_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_Protect_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_MapFixedPages_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_MEM_MAPFIXEDPAGES_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_MapFixedPages_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_MEM_MAPFIXEDPAGES_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_MEM_MAPFIXEDPAGES_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_MEM_MAPFIXEDPAGES_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_MAPFIXEDPAGES_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_MEM_MAPFIXEDPAGES_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_MEM_MAPFIXEDPAGES_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_MAPFIXEDPAGES_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_MEM_MAPFIXEDPAGES_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_MAPFIXEDPAGES_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_MEM_MAPFIXEDPAGES_V1 args {};
@@ -2038,290 +2178,312 @@ static uint32_t Dispatch_MapFixedPages_V1(void *userData, size_t size, uint32_t 
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_MapFixedPages_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_MapFixedPages_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_Open_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_IO_OPEN_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Open_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_OPEN_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_IO_OPEN_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_IO_OPEN_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_OPEN_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_OPEN_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_OPEN_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_OPEN_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_OPEN_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_OPEN_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.path != nullptr) {
-    if (headerCopy.pathLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.pathLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
   }
 
   __KRN_IO_OPEN_V1 args {};
   if (headerCopy.path != nullptr && headerCopy.pathLength > 0) {
     args.path.resize(headerCopy.pathLength);
-    if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return SyscallReturnCode_OUT_OF_MEMORY;
-    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
-      kstd::memcpy(args.path.data(), mapped, headerCopy.pathLength);
-      KE_VMM_UnmapBorrowed(mapped, headerCopy.pathLength, address_space);
+    if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
+      kstd::memcpy(args.path.data(), *mapped, headerCopy.pathLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.pathLength, address_space); error != kernel::KernelError::Success) return error;
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
   args.mode = headerCopy.mode;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Open_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_Open_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_OPEN_V1, handle), &args.handle, sizeof(args.handle));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_OPEN_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_Close_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_IO_CLOSE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Close_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_CLOSE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_IO_CLOSE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_IO_CLOSE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_CLOSE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_CLOSE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_CLOSE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_CLOSE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_CLOSE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_CLOSE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_IO_CLOSE_V1 args {};
   args.handle = headerCopy.handle;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Close_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_Close_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_Read_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_IO_READ_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Read_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_READ_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_IO_READ_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_IO_READ_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_READ_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_READ_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_READ_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_READ_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_READ_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_READ_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.data != nullptr) {
-    if (headerCopy.dataLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.dataLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+    if (headerCopy.dataLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.dataLength == 0) return kernel::KernelError::InvalidArgument;
   }
 
   __KRN_IO_READ_V1 args {};
   args.handle = headerCopy.handle;
   if (headerCopy.data != nullptr) {
-    args.data = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(KE_VMM_MapBorrowed(headerCopy.data, headerCopy.dataLength * sizeof(uint8_t), address_space)), headerCopy.dataLength, address_space);
+    const auto mapped = KE_VMM_MapBorrowed(headerCopy.data, headerCopy.dataLength * sizeof(uint8_t), address_space);
+    if (!mapped) return mapped.error();
+    args.data = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(*mapped), headerCopy.dataLength, address_space);
     args.data_len = headerCopy.dataLength;
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Read_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_Read_V1(kstd::move(args));
 
   // buffer was mapped and filled by the kernel directly; report actual length written.
   {
     const auto len = static_cast<uint32_t>(args.data_len);
-    KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_READ_V1, dataLength), &len, sizeof(len));
+    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_READ_V1, dataLength), &len, sizeof(len)); error != kernel::KernelError::Success) return error;
   }
   return ret;
 }
 
-static uint32_t Dispatch_Write_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_IO_WRITE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Write_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_WRITE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_IO_WRITE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_IO_WRITE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_WRITE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_WRITE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_WRITE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_WRITE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_WRITE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_WRITE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.data != nullptr) {
-    if (headerCopy.dataLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.dataLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+    if (headerCopy.dataLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.dataLength == 0) return kernel::KernelError::InvalidArgument;
   }
 
   __KRN_IO_WRITE_V1 args {};
   args.handle = headerCopy.handle;
   if (headerCopy.data != nullptr) {
-    if (auto* mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.data), headerCopy.dataLength * sizeof(uint8_t), address_space)) {
-      args.data = kernel::borrowed_ptr<uint8_t>(const_cast<uint8_t *>(static_cast<const uint8_t *>(mapped)), headerCopy.dataLength, address_space);
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.data), headerCopy.dataLength * sizeof(uint8_t), address_space)) {
+      args.data = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(*mapped), headerCopy.dataLength, address_space);
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Write_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_Write_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_Write_V2(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_IO_WRITE_V2)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Write_V2(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_WRITE_V2)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_IO_WRITE_V2 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_IO_WRITE_V2 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_WRITE_V2), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_WRITE_V2));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_WRITE_V2), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_WRITE_V2), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_WRITE_V2));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_WRITE_V2), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.data != nullptr) {
-    if (headerCopy.dataLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.dataLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+    if (headerCopy.dataLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.dataLength == 0) return kernel::KernelError::InvalidArgument;
   }
 
   __KRN_IO_WRITE_V2 args {};
   args.handle = headerCopy.handle;
   if (headerCopy.data != nullptr) {
-    if (auto* mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.data), headerCopy.dataLength * sizeof(uint8_t), address_space)) {
-      args.data = kernel::borrowed_ptr<uint8_t>(const_cast<uint8_t *>(static_cast<const uint8_t *>(mapped)), headerCopy.dataLength, address_space);
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.data), headerCopy.dataLength * sizeof(uint8_t), address_space)) {
+      args.data = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(*mapped), headerCopy.dataLength, address_space);
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Write_V2(kstd::move(args));
+  const kernel::KernelError ret = handle_Write_V2(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_WRITE_V2, transferred), &args.transferred, sizeof(args.transferred));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_WRITE_V2, transferred), &args.transferred, sizeof(args.transferred)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_Control_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_IO_CONTROL_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Control_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_CONTROL_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_IO_CONTROL_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_IO_CONTROL_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_CONTROL_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_CONTROL_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_CONTROL_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_CONTROL_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_CONTROL_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_CONTROL_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   if (headerCopy.input != nullptr) {
-    if (headerCopy.inputLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.inputLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+    if (headerCopy.inputLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.inputLength == 0) return kernel::KernelError::InvalidArgument;
   }
 
   if (headerCopy.output != nullptr) {
-    if (headerCopy.outputLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.outputLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+    if (headerCopy.outputLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.outputLength == 0) return kernel::KernelError::InvalidArgument;
   }
 
   __KRN_IO_CONTROL_V1 args {};
   args.handle = headerCopy.handle;
   args.code = headerCopy.code;
   if (headerCopy.input != nullptr) {
-    if (auto* mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.input), headerCopy.inputLength * sizeof(uint8_t), address_space)) {
-      args.input = kernel::borrowed_ptr<uint8_t>(const_cast<uint8_t *>(static_cast<const uint8_t *>(mapped)), headerCopy.inputLength, address_space);
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.input), headerCopy.inputLength * sizeof(uint8_t), address_space)) {
+      args.input = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(*mapped), headerCopy.inputLength, address_space);
     } else {
-      return SyscallReturnCode_INVALID_ADDRESS;
+      return mapped.error();
     }
   }
   if (headerCopy.output != nullptr) {
-    args.output = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(KE_VMM_MapBorrowed(headerCopy.output, headerCopy.outputLength * sizeof(uint8_t), address_space)), headerCopy.outputLength, address_space);
+    const auto mapped = KE_VMM_MapBorrowed(headerCopy.output, headerCopy.outputLength * sizeof(uint8_t), address_space);
+    if (!mapped) return mapped.error();
+    args.output = kernel::borrowed_ptr<uint8_t>(static_cast<uint8_t *>(*mapped), headerCopy.outputLength, address_space);
     args.output_len = headerCopy.outputLength;
   }
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Control_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_Control_V1(kstd::move(args));
 
   // buffer was mapped and filled by the kernel directly; report actual length written.
   {
     const auto len = static_cast<uint32_t>(args.output_len);
-    KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_CONTROL_V1, outputLength), &len, sizeof(len));
+    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_CONTROL_V1, outputLength), &len, sizeof(len)); error != kernel::KernelError::Success) return error;
   }
   return ret;
 }
 
-static uint32_t Dispatch_GetStdHandle_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_IO_GETSTDHANDLE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_GetStdHandle_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_GETSTDHANDLE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_IO_GETSTDHANDLE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_IO_GETSTDHANDLE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_GETSTDHANDLE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_GETSTDHANDLE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_GETSTDHANDLE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_GETSTDHANDLE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_GETSTDHANDLE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_GETSTDHANDLE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_IO_GETSTDHANDLE_V1 args {};
   args.selector = headerCopy.selector;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_GetStdHandle_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_GetStdHandle_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_GETSTDHANDLE_V1, handle), &args.handle, sizeof(args.handle));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_GETSTDHANDLE_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_Create_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_TTY_CREATE_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_Create_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_TTY_CREATE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_TTY_CREATE_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_TTY_CREATE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_CREATE_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_TTY_CREATE_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_TTY_CREATE_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_CREATE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_TTY_CREATE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_TTY_CREATE_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_TTY_CREATE_V1 args {};
 
   (void)flags;
-  const SyscallReturnCode ret = handle_Create_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_Create_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_CREATE_V1, sourceHandle), &args.sourceHandle, sizeof(args.sourceHandle));
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_CREATE_V1, sinkHandle), &args.sinkHandle, sizeof(args.sinkHandle));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_CREATE_V1, sourceHandle), &args.sourceHandle, sizeof(args.sourceHandle)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_CREATE_V1, sinkHandle), &args.sinkHandle, sizeof(args.sinkHandle)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
-static uint32_t Dispatch_SetConfig_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_TTY_SETCONFIG_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_SetConfig_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_TTY_SETCONFIG_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_TTY_SETCONFIG_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_TTY_SETCONFIG_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_SETCONFIG_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_TTY_SETCONFIG_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_TTY_SETCONFIG_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_SETCONFIG_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_TTY_SETCONFIG_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_TTY_SETCONFIG_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_TTY_SETCONFIG_V1 args {};
@@ -2331,117 +2493,119 @@ static uint32_t Dispatch_SetConfig_V1(void *userData, size_t size, uint32_t flag
   args.cols = headerCopy.cols;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_SetConfig_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_SetConfig_V1(kstd::move(args));
 
   return ret;
 }
 
-static uint32_t Dispatch_GetConfig_V1(void *userData, size_t size, uint32_t flags) {
-  if (size < sizeof(__SYS_TTY_GETCONFIG_V1)) return SyscallReturnCode_INVALID_SIZE;
+static kernel::KernelError Dispatch_GetConfig_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_TTY_GETCONFIG_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
   auto &address_space = currentThread->owner_process->address_space;
 
   __SYS_TTY_GETCONFIG_V1 headerCopy {};
-  if (auto* mapped = static_cast<__SYS_TTY_GETCONFIG_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_GETCONFIG_V1), address_space))) {
-    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_TTY_GETCONFIG_V1));
-    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_TTY_GETCONFIG_V1), address_space);
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_GETCONFIG_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_TTY_GETCONFIG_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_TTY_GETCONFIG_V1), address_space); error != kernel::KernelError::Success) return error;
   } else {
-    return SyscallReturnCode_INVALID_ADDRESS;
+    return mapped.error();
   }
 
   __KRN_TTY_GETCONFIG_V1 args {};
   args.handle = headerCopy.handle;
 
   (void)flags;
-  const SyscallReturnCode ret = handle_GetConfig_V1(kstd::move(args));
+  const kernel::KernelError ret = handle_GetConfig_V1(kstd::move(args));
 
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, flags), &args.flags, sizeof(args.flags));
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, rows), &args.rows, sizeof(args.rows));
-  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, cols), &args.cols, sizeof(args.cols));
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, flags), &args.flags, sizeof(args.flags)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, rows), &args.rows, sizeof(args.rows)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, cols), &args.cols, sizeof(args.cols)); error != kernel::KernelError::Success) return error;
   return ret;
 }
 
 
 UNDOS_KERNEL_API_DEF uint32_t KE_SYSCALL_Dispatch(uint32_t number, uint32_t size, void *data, uint32_t flags) noexcept {
   switch (number) {
-    case 300: return Dispatch_CreateDC_V1(data, size, flags);
-    case 301: return Dispatch_DeleteDC_V1(data, size, flags);
-    case 302: return Dispatch_SelectObject_V1(data, size, flags);
-    case 303: return Dispatch_CreatePen_V1(data, size, flags);
-    case 304: return Dispatch_CreateBrush_V1(data, size, flags);
-    case 305: return Dispatch_CreateFont_V1(data, size, flags);
-    case 306: return Dispatch_CreateBitmap_V1(data, size, flags);
-    case 307: return Dispatch_DeleteObject_V1(data, size, flags);
-    case 310: return Dispatch_MoveTo_V1(data, size, flags);
-    case 311: return Dispatch_LineTo_V1(data, size, flags);
-    case 312: return Dispatch_Rectangle_V1(data, size, flags);
-    case 313: return Dispatch_Ellipse_V1(data, size, flags);
-    case 314: return Dispatch_TextOut_V1(data, size, flags);
-    case 320: return Dispatch_BitBlt_V1(data, size, flags);
-    case 321: return Dispatch_StretchBlt_V1(data, size, flags);
-    case 322: return Dispatch_AlphaBlend_V1(data, size, flags);
-    case 330: return Dispatch_CreateRegion_V1(data, size, flags);
-    case 331: return Dispatch_SelectClipRegion_V1(data, size, flags);
-    case 332: return Dispatch_CombineRegion_V1(data, size, flags);
-    case 333: return Dispatch_SetViewportOrg_V1(data, size, flags);
-    case 334: return Dispatch_SetWindowOrg_V1(data, size, flags);
-    case 340: return Dispatch_GetTextMetrics_V1(data, size, flags);
-    case 341: return Dispatch_GetBitmapBits_V1(data, size, flags);
-    case 342: return Dispatch_SetBitmapBits_V1(data, size, flags);
-    case 343: return Dispatch_GetDeviceCaps_V1(data, size, flags);
-    case 344: return Dispatch_SetDrawColors_V1(data, size, flags);
-    case 345: return Dispatch_QueryFontEngine_V1(data, size, flags);
-    case 346: return Dispatch_BeginFontUpload_V1(data, size, flags);
-    case 347: return Dispatch_AppendFontUpload_V1(data, size, flags);
-    case 348: return Dispatch_CommitFontUpload_V1(data, size, flags);
-    case 349: return Dispatch_CloseFontResource_V1(data, size, flags);
-    case 350: return Dispatch_EnumDisplayModes_V1(data, size, flags);
-    case 351: return Dispatch_GetDisplayMode_V1(data, size, flags);
-    case 352: return Dispatch_SetDisplayMode_V1(data, size, flags);
-    case 400: return Dispatch_RegisterClass_V1(data, size, flags);
-    case 401: return Dispatch_CreateWindow_V1(data, size, flags);
-    case 402: return Dispatch_DestroyWindow_V1(data, size, flags);
-    case 403: return Dispatch_ShowWindow_V1(data, size, flags);
-    case 404: return Dispatch_MoveWindow_V1(data, size, flags);
-    case 405: return Dispatch_GetWindowRect_V1(data, size, flags);
-    case 406: return Dispatch_InvalidateRect_V1(data, size, flags);
-    case 407: return Dispatch_BeginPaint_V1(data, size, flags);
-    case 408: return Dispatch_EndPaint_V1(data, size, flags);
-    case 409: return Dispatch_GetMessage_V1(data, size, flags);
-    case 410: return Dispatch_PeekMessage_V1(data, size, flags);
-    case 411: return Dispatch_PostMessage_V1(data, size, flags);
-    case 412: return Dispatch_GetWindowLongPtr_V1(data, size, flags);
-    case 413: return Dispatch_SetWindowLongPtr_V1(data, size, flags);
-    case 414: return Dispatch_SetCapture_V1(data, size, flags);
-    case 415: return Dispatch_ReleaseCapture_V1(data, size, flags);
-    case 416: return Dispatch_GetClientRect_V1(data, size, flags);
-    case 417: return Dispatch_SetFocus_V1(data, size, flags);
-    case 418: return Dispatch_SetWindowText_V1(data, size, flags);
-    case 207: return Dispatch_QueryFpu_V1(data, size, flags);
-    case 100: return Dispatch_Print_V1(data, size, flags);
-    case 200: return Dispatch_CreateProcess_V1(data, size, flags);
-    case 208: return Dispatch_CreateProcess_V2(data, size, flags);
-    case 201: return Dispatch_GetInfo_V1(data, size, flags);
-    case 202: return Dispatch_Exit_V1(data, size, flags);
-    case 203: return Dispatch_WaitForObject_V1(data, size, flags);
-    case 204: return Dispatch_WaitProcess_V1(data, size, flags);
-    case 205: return Dispatch_CreateEvent_V1(data, size, flags);
-    case 206: return Dispatch_SetEvent_V1(data, size, flags);
-    case 210: return Dispatch_AllocatePages_V1(data, size, flags);
-    case 211: return Dispatch_FreePages_V1(data, size, flags);
-    case 212: return Dispatch_Protect_V1(data, size, flags);
-    case 213: return Dispatch_MapFixedPages_V1(data, size, flags);
-    case 220: return Dispatch_Open_V1(data, size, flags);
-    case 221: return Dispatch_Close_V1(data, size, flags);
-    case 222: return Dispatch_Read_V1(data, size, flags);
-    case 223: return Dispatch_Write_V1(data, size, flags);
-    case 226: return Dispatch_Write_V2(data, size, flags);
-    case 224: return Dispatch_Control_V1(data, size, flags);
-    case 225: return Dispatch_GetStdHandle_V1(data, size, flags);
-    case 250: return Dispatch_Create_V1(data, size, flags);
-    case 251: return Dispatch_SetConfig_V1(data, size, flags);
-    case 252: return Dispatch_GetConfig_V1(data, size, flags);
+    case 300: return kernel::KErrorToSysReturnCode(Dispatch_CreateDC_V1(data, size, flags));
+    case 301: return kernel::KErrorToSysReturnCode(Dispatch_DeleteDC_V1(data, size, flags));
+    case 302: return kernel::KErrorToSysReturnCode(Dispatch_SelectObject_V1(data, size, flags));
+    case 303: return kernel::KErrorToSysReturnCode(Dispatch_CreatePen_V1(data, size, flags));
+    case 304: return kernel::KErrorToSysReturnCode(Dispatch_CreateBrush_V1(data, size, flags));
+    case 305: return kernel::KErrorToSysReturnCode(Dispatch_CreateFont_V1(data, size, flags));
+    case 306: return kernel::KErrorToSysReturnCode(Dispatch_CreateBitmap_V1(data, size, flags));
+    case 307: return kernel::KErrorToSysReturnCode(Dispatch_DeleteObject_V1(data, size, flags));
+    case 310: return kernel::KErrorToSysReturnCode(Dispatch_MoveTo_V1(data, size, flags));
+    case 311: return kernel::KErrorToSysReturnCode(Dispatch_LineTo_V1(data, size, flags));
+    case 312: return kernel::KErrorToSysReturnCode(Dispatch_Rectangle_V1(data, size, flags));
+    case 313: return kernel::KErrorToSysReturnCode(Dispatch_Ellipse_V1(data, size, flags));
+    case 314: return kernel::KErrorToSysReturnCode(Dispatch_TextOut_V1(data, size, flags));
+    case 320: return kernel::KErrorToSysReturnCode(Dispatch_BitBlt_V1(data, size, flags));
+    case 321: return kernel::KErrorToSysReturnCode(Dispatch_StretchBlt_V1(data, size, flags));
+    case 322: return kernel::KErrorToSysReturnCode(Dispatch_AlphaBlend_V1(data, size, flags));
+    case 330: return kernel::KErrorToSysReturnCode(Dispatch_CreateRegion_V1(data, size, flags));
+    case 331: return kernel::KErrorToSysReturnCode(Dispatch_SelectClipRegion_V1(data, size, flags));
+    case 332: return kernel::KErrorToSysReturnCode(Dispatch_CombineRegion_V1(data, size, flags));
+    case 333: return kernel::KErrorToSysReturnCode(Dispatch_SetViewportOrg_V1(data, size, flags));
+    case 334: return kernel::KErrorToSysReturnCode(Dispatch_SetWindowOrg_V1(data, size, flags));
+    case 340: return kernel::KErrorToSysReturnCode(Dispatch_GetTextMetrics_V1(data, size, flags));
+    case 341: return kernel::KErrorToSysReturnCode(Dispatch_GetBitmapBits_V1(data, size, flags));
+    case 342: return kernel::KErrorToSysReturnCode(Dispatch_SetBitmapBits_V1(data, size, flags));
+    case 343: return kernel::KErrorToSysReturnCode(Dispatch_GetDeviceCaps_V1(data, size, flags));
+    case 344: return kernel::KErrorToSysReturnCode(Dispatch_SetDrawColors_V1(data, size, flags));
+    case 345: return kernel::KErrorToSysReturnCode(Dispatch_QueryFontEngine_V1(data, size, flags));
+    case 346: return kernel::KErrorToSysReturnCode(Dispatch_BeginFontUpload_V1(data, size, flags));
+    case 347: return kernel::KErrorToSysReturnCode(Dispatch_AppendFontUpload_V1(data, size, flags));
+    case 348: return kernel::KErrorToSysReturnCode(Dispatch_CommitFontUpload_V1(data, size, flags));
+    case 349: return kernel::KErrorToSysReturnCode(Dispatch_CloseFontResource_V1(data, size, flags));
+    case 350: return kernel::KErrorToSysReturnCode(Dispatch_EnumDisplayModes_V1(data, size, flags));
+    case 351: return kernel::KErrorToSysReturnCode(Dispatch_GetDisplayMode_V1(data, size, flags));
+    case 352: return kernel::KErrorToSysReturnCode(Dispatch_SetDisplayMode_V1(data, size, flags));
+    case 400: return kernel::KErrorToSysReturnCode(Dispatch_RegisterClass_V1(data, size, flags));
+    case 401: return kernel::KErrorToSysReturnCode(Dispatch_CreateWindow_V1(data, size, flags));
+    case 402: return kernel::KErrorToSysReturnCode(Dispatch_DestroyWindow_V1(data, size, flags));
+    case 403: return kernel::KErrorToSysReturnCode(Dispatch_ShowWindow_V1(data, size, flags));
+    case 404: return kernel::KErrorToSysReturnCode(Dispatch_MoveWindow_V1(data, size, flags));
+    case 405: return kernel::KErrorToSysReturnCode(Dispatch_GetWindowRect_V1(data, size, flags));
+    case 406: return kernel::KErrorToSysReturnCode(Dispatch_InvalidateRect_V1(data, size, flags));
+    case 407: return kernel::KErrorToSysReturnCode(Dispatch_BeginPaint_V1(data, size, flags));
+    case 408: return kernel::KErrorToSysReturnCode(Dispatch_EndPaint_V1(data, size, flags));
+    case 409: return kernel::KErrorToSysReturnCode(Dispatch_GetMessage_V1(data, size, flags));
+    case 410: return kernel::KErrorToSysReturnCode(Dispatch_PeekMessage_V1(data, size, flags));
+    case 411: return kernel::KErrorToSysReturnCode(Dispatch_PostMessage_V1(data, size, flags));
+    case 412: return kernel::KErrorToSysReturnCode(Dispatch_GetWindowLongPtr_V1(data, size, flags));
+    case 413: return kernel::KErrorToSysReturnCode(Dispatch_SetWindowLongPtr_V1(data, size, flags));
+    case 414: return kernel::KErrorToSysReturnCode(Dispatch_SetCapture_V1(data, size, flags));
+    case 415: return kernel::KErrorToSysReturnCode(Dispatch_ReleaseCapture_V1(data, size, flags));
+    case 416: return kernel::KErrorToSysReturnCode(Dispatch_GetClientRect_V1(data, size, flags));
+    case 417: return kernel::KErrorToSysReturnCode(Dispatch_SetFocus_V1(data, size, flags));
+    case 418: return kernel::KErrorToSysReturnCode(Dispatch_SetWindowText_V1(data, size, flags));
+    case 207: return kernel::KErrorToSysReturnCode(Dispatch_QueryFpu_V1(data, size, flags));
+    case 100: return kernel::KErrorToSysReturnCode(Dispatch_Print_V1(data, size, flags));
+    case 200: return kernel::KErrorToSysReturnCode(Dispatch_CreateProcess_V1(data, size, flags));
+    case 208: return kernel::KErrorToSysReturnCode(Dispatch_CreateProcess_V2(data, size, flags));
+    case 201: return kernel::KErrorToSysReturnCode(Dispatch_GetInfo_V1(data, size, flags));
+    case 202: return kernel::KErrorToSysReturnCode(Dispatch_Exit_V1(data, size, flags));
+    case 203: return kernel::KErrorToSysReturnCode(Dispatch_WaitForObject_V1(data, size, flags));
+    case 204: return kernel::KErrorToSysReturnCode(Dispatch_WaitProcess_V1(data, size, flags));
+    case 205: return kernel::KErrorToSysReturnCode(Dispatch_CreateEvent_V1(data, size, flags));
+    case 206: return kernel::KErrorToSysReturnCode(Dispatch_SetEvent_V1(data, size, flags));
+    case 210: return kernel::KErrorToSysReturnCode(Dispatch_AllocatePages_V1(data, size, flags));
+    case 211: return kernel::KErrorToSysReturnCode(Dispatch_FreePages_V1(data, size, flags));
+    case 212: return kernel::KErrorToSysReturnCode(Dispatch_Protect_V1(data, size, flags));
+    case 213: return kernel::KErrorToSysReturnCode(Dispatch_MapFixedPages_V1(data, size, flags));
+    case 220: return kernel::KErrorToSysReturnCode(Dispatch_Open_V1(data, size, flags));
+    case 221: return kernel::KErrorToSysReturnCode(Dispatch_Close_V1(data, size, flags));
+    case 222: return kernel::KErrorToSysReturnCode(Dispatch_Read_V1(data, size, flags));
+    case 223: return kernel::KErrorToSysReturnCode(Dispatch_Write_V1(data, size, flags));
+    case 226: return kernel::KErrorToSysReturnCode(Dispatch_Write_V2(data, size, flags));
+    case 224: return kernel::KErrorToSysReturnCode(Dispatch_Control_V1(data, size, flags));
+    case 225: return kernel::KErrorToSysReturnCode(Dispatch_GetStdHandle_V1(data, size, flags));
+    case 250: return kernel::KErrorToSysReturnCode(Dispatch_Create_V1(data, size, flags));
+    case 251: return kernel::KErrorToSysReturnCode(Dispatch_SetConfig_V1(data, size, flags));
+    case 252: return kernel::KErrorToSysReturnCode(Dispatch_GetConfig_V1(data, size, flags));
   }
   return SyscallReturnCode_UNKNOWN;
 }

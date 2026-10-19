@@ -320,7 +320,7 @@ struct _PairT {
 
 _KSTD_API inline size_t __hash_combine(size_t __lhs, size_t __rhs) noexcept {
   typedef __scalar_hash<_PairT> _HashT;
-  const _PairT __p = {__lhs, __rhs};
+  const _PairT __p = {.first = __lhs, .second = __rhs};
   return _HashT()(__p);
 }
 

@@ -18,7 +18,7 @@ TEST_CASE("Static_String == ConstPTR") {
 }
 
 TEST_CASE("Static_String substr and find") {
-  kstd::static_string<32> a = "Hello World";
+  const kstd::static_string<32> a = "Hello World";
   auto sv = a.substr(6, 5);
   REQUIRE(sv == "World");
   REQUIRE(a.find('W') == 6);
@@ -84,7 +84,7 @@ TEST_CASE("string copy and move") {
 }
 
 TEST_CASE("String inheritance") {
-  kstd::static_string<32> a = "Hello";
+  const kstd::static_string<32> a = "Hello";
   kstd::string_view sv = a.substr();
   REQUIRE(sv == "Hello");
 }
@@ -104,7 +104,7 @@ TEST_CASE("string == String_View") {
 }
 
 TEST_CASE("Static_String conversion from String_View") {
-  kstd::string_view sv = "Hello";
+  const kstd::string_view sv = "Hello";
   kstd::static_string<32> s = sv; // implicit construction
   REQUIRE(s == "Hello");
   kstd::static_string<32> s2;
@@ -199,14 +199,14 @@ TEST_CASE("string_view constructed from char[] uses the array bound, not strlen"
     char name[11];
     uint8_t next;
   };
-  RawField raw{{'S', 'Y', 'S', 'T', 'E', 'M', ' ', ' ', ' ', ' ', ' '}, 0x20};
+  const RawField raw{.name = {'S', 'Y', 'S', 'T', 'E', 'M', ' ', ' ', ' ', ' ', ' '}, .next = 0x20};
 
   kstd::string_view sv = raw.name;// should bind the array overload, length == 11
   REQUIRE(sv.size() == 11);
   REQUIRE(sv == "SYSTEM     ");
 
   // A NUL-terminated array truncates at the terminator, matching normal string-literal semantics.
-  char terminated[16] = "Hi";
+  const char terminated[16] = "Hi";
   kstd::string_view sv2 = terminated;
   REQUIRE(sv2.size() == 2);
   REQUIRE(sv2 == "Hi");
@@ -217,7 +217,7 @@ TEST_CASE("Comparisons against char[] use the array bound across all string type
     char name[11];
     uint8_t next;
   };
-  RawField raw{{'S', 'Y', 'S', 'T', 'E', 'M', ' ', ' ', ' ', ' ', ' '}, 0x20};
+  RawField raw{.name = {'S', 'Y', 'S', 'T', 'E', 'M', ' ', ' ', ' ', ' ', ' '}, .next = 0x20};
 
   SECTION("string") {
     kstd::string s;

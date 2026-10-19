@@ -106,7 +106,7 @@ TEST_CASE("KeyTranslator pause sequence produces at most one event", "[key_trans
 
   int eventCount = 0;
   const uint8_t pauseSequence[] = {0xE1, 0x1D, 0x45, 0xE1, 0x9D, 0xC5};
-  for (uint8_t b: pauseSequence) {
+  for (const uint8_t b: pauseSequence) {
     if (translator.Feed(b, transition)) eventCount++;
   }
 

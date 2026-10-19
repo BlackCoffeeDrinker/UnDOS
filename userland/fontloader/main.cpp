@@ -60,14 +60,14 @@ extern "C" int main(int argc, char **argv) {
   (void)UD_SYS_CloseV1(fileHandle);
   lifecycle("fontloader: file read\n");
   kstd::vector<uint8_t> resource;
-  const auto decoded = loader::decode({file.data(), file.size()}, resource);
+  const auto decoded = loader::decode({.data = file.data(), .size = file.size()}, resource);
   if (decoded != loader::DecodeError::None) {
     crt_printf("fontloader: decode failed: %s\n", loader::error_message(decoded));
     (void)UD_SYS_PrintV1(loader::error_message(decoded));
     lifecycle("fontloader: decode rejected\n");
     return 1;
   }
-  const auto validation = validate({resource.data(), resource.size()});
+  const auto validation = validate({.data = resource.data(), .size = resource.size()});
   if (validation != Error::None) {
     crt_printf("fontloader: normalized validation failed: %s\n", error_message(validation));
     lifecycle("fontloader: normalized resource rejected\n");

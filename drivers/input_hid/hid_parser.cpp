@@ -141,7 +141,7 @@ bool ContainsUsage(const uint16_t *list, size_t count, uint16_t usage) noexcept 
 
 namespace kernel::hid {
 
-bool ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &out) {
+KernelError ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &out) {
   ReportFormat parsed{};
 
   uint16_t usagePage = 0;
@@ -163,14 +163,14 @@ bool ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &o
   size_t i = 0;
   while (i < descriptor.size()) {
     const uint8_t header = descriptor[i++];
-    if (header == 0xFE) return false;// long item: unsupported, never synthesized
+    if (header == 0xFE) return KernelError::Unsupported;// long item: unsupported, never synthesized
 
     const auto tag = static_cast<uint8_t>(header >> 4);
     const auto type = static_cast<uint8_t>((header >> 2) & 0x3);
     const auto sizeCode = static_cast<uint8_t>(header & 0x3);
     const uint8_t size = (sizeCode == 3) ? 4 : sizeCode;
 
-    if (i + size > descriptor.size()) return false;// truncated item
+    if (i + size > descriptor.size()) return KernelError::InvalidFormat;// truncated item
     const uint8_t *data = descriptor.data() + i;
     i += size;
 
@@ -190,7 +190,7 @@ bool ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &o
     if (type == kItemTypeLocal) {
       switch (tag) {
         case kLocalUsage:
-          if (localUsageCount >= kMaxLocalUsages) return false;
+          if (localUsageCount >= kMaxLocalUsages) return KernelError::ResourceLimitExceeded;
           localUsages[localUsageCount++] = static_cast<uint16_t>(UnsignedItemData(data, size));
           break;
         case kLocalUsageMin:
@@ -206,7 +206,7 @@ bool ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &o
       continue;
     }
 
-    if (type != kItemTypeMain) return false;// reserved item type
+    if (type != kItemTypeMain) return KernelError::InvalidFormat;// reserved item type
 
     switch (tag) {
       case kMainCollection: {
@@ -220,15 +220,15 @@ bool ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &o
         break;
       }
       case kMainEndCollection:
-        if (--collectionDepth < 0) return false;
+        if (--collectionDepth < 0) return KernelError::InvalidFormat;
         break;
       case kMainInput: {
         const uint32_t flags = UnsignedItemData(data, size);
-        if (reportSize == 0 || reportSize > 32) return false;
+        if (reportSize == 0 || reportSize > 32) return KernelError::InvalidFormat;
         for (uint32_t n = 0; n < reportCount; ++n) {
-          if (bitOffset + reportSize > 0xFFFFu) return false;
+          if (bitOffset + reportSize > 0xFFFFu) return KernelError::InvalidFormat;
           if ((flags & kInputConstant) == 0) {
-            if (parsed.fieldCount >= ReportFormat::kMaxFields) return false;
+            if (parsed.fieldCount >= ReportFormat::kMaxFields) return KernelError::ResourceLimitExceeded;
             ReportField &field = parsed.fields[parsed.fieldCount++];
             field.usagePage = usagePage;
             field.bitOffset = static_cast<uint16_t>(bitOffset);
@@ -261,12 +261,12 @@ bool ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &o
     usageMax = 0;
   }
 
-  if (collectionDepth != 0) return false;// unterminated collection
-  if (parsed.fieldCount == 0) return false;
+  if (collectionDepth != 0) return KernelError::InvalidFormat;// unterminated collection
+  if (parsed.fieldCount == 0) return KernelError::InvalidFormat;
 
   parsed.reportBytes = (bitOffset + 7) / 8;
   out = parsed;
-  return true;
+  return KernelError::Success;
 }
 
 int32_t ExtractField(const ReportField &field, kstd::span<const uint8_t> report) noexcept {

@@ -32,69 +32,71 @@ kstd::static_string<64> make_process_name(const kstd::string_view &exec_path) no
 }
 }// namespace
 
-static kernel::KObjectPtr<kernel::KProcessObject> create_process(
+kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> create_process(
     const kstd::string_view &exec_path, const kstd::string_view &arguments,
     const kernel::ProcessStreams *streams) noexcept {
   kernel::process_startup::Arguments startup;
-  if (!kernel::process_startup::parse(exec_path.data(), exec_path.size(),
-                                    arguments.data(), arguments.size(), startup)) return nullptr;
+  const auto parse_status = kernel::process_startup::parse(exec_path.data(), exec_path.size(),
+                                                           arguments.data(), arguments.size(), startup);
+  if (parse_status != kernel::KernelError::Success) return kstd::unexpected(parse_status);
   const auto startup_size = kernel::process_startup::stack_size(startup);
-  if (startup_size > USER_STACK_SIZE / 2) return nullptr;
+  if (startup_size > USER_STACK_SIZE / 2) return kstd::unexpected(kernel::KernelError::BufferTooSmall);
   // Step 1 — Create an isolated address space for the process.
   const auto process_name = make_process_name(exec_path);
   const auto process = kernel::CreateKObject<kernel::KProcessObject>(kstd::string_view(process_name));
   if (!process) {
     KE_Print("KE_USER_CreateProcess: failed to allocate KProcessObject");
-    return nullptr;
+    return kstd::unexpected(process.error());
   }
 
   // Inherit inheritable handles (e.g. standard streams) from parent process if present
   if (streams) {
-    if (!process->handles.AllocateStandardHandle(kernel::StandardStream::Stdin, streams->input,
-            kernel::ProcessHandleTable::HandleAccess::Read) ||
-        !process->handles.AllocateStandardHandle(kernel::StandardStream::Stdout, streams->output,
-            kernel::ProcessHandleTable::HandleAccess::Write) ||
-        !process->handles.AllocateStandardHandle(kernel::StandardStream::Stderr, streams->error,
-            kernel::ProcessHandleTable::HandleAccess::Write)) return nullptr;
+    auto status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stdin, streams->input,
+            kernel::ProcessHandleTable::HandleAccess::Read);
+    if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+    status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stdout, streams->output,
+            kernel::ProcessHandleTable::HandleAccess::Write);
+    if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+    status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stderr, streams->error,
+            kernel::ProcessHandleTable::HandleAccess::Write);
+    if (status != kernel::KernelError::Success) return kstd::unexpected(status);
   } else if (const auto currentThread = KE_SCHED_GetCurrentThread()) {
     if (currentThread->owner_process) {
-      if (!process->InheritHandlesFrom(currentThread->owner_process->handles)) {
+      const auto status = process.value()->InheritHandlesFrom(currentThread->owner_process->handles);
+      if (status != kernel::KernelError::Success) {
         KE_Print("KE_USER_CreateProcess: failed to inherit handles");
-        return nullptr;
+        return kstd::unexpected(status);
       }
     }
   }
 
   // If no handles were inherited, attach default console streams if available
-  if (!streams && process->handles.entries.empty()) {
-    if (auto defaultSink = KE_TTY_GetDefaultConsoleSink()) {
-      if (auto ioObj = KE_IO_FromObject(defaultSink)) {
-        if (!process->AttachStandardStreams(ioObj)) {
-          KE_Print("KE_USER_CreateProcess: failed to attach standard streams");
-          return nullptr;
-        }
-      } else {
-        if (!process->AttachStandardStreams(defaultSink)) {
-          KE_Print("KE_USER_CreateProcess: failed to attach standard streams");
-          return nullptr;
-        }
+  if (!streams && process.value()->handles.entries.empty()) {
+    if (const auto defaultSink = KE_TTY_GetDefaultConsoleSink()) {
+      const auto ioObj = KE_IO_FromObject(defaultSink);
+      if (!ioObj) return kstd::unexpected(ioObj.error());
+      const auto status = process.value()->AttachStandardStreams(*ioObj);
+      if (status != kernel::KernelError::Success) {
+        KE_Print("KE_USER_CreateProcess: failed to attach standard streams");
+        return kstd::unexpected(status);
       }
     }
   }
 
-  process->startupEvent = KE_EVENT_Create(true, false);
-  if (!process->startupEvent) return nullptr;
-  const auto handle_count = process->handles.entries.size();
-  const auto startup_handle = process->handles.Allocate(
-      kernel::KObjectPtr<kernel::KObject>(process->startupEvent.get()),
+  auto startup_event = KE_EVENT_Create(true, false);
+  if (!startup_event) return kstd::unexpected(startup_event.error());
+  process.value()->startupEvent = *startup_event;
+  auto startup_handle = process.value()->handles.Allocate(
+      kernel::KObjectPtr<kernel::KObject>(process.value()->startupEvent.get()),
       kernel::ProcessHandleTable::HandleAccess::Write,
       kernel::ProcessHandleTable::HandleFlags::None);
-  if (process->handles.entries.size() != handle_count + 1 ||
-      !process->handles.Lookup(startup_handle)) return nullptr;
+  if (!startup_handle) return kstd::unexpected(startup_handle.error());
+  if (!process.value()->handles.Lookup(*startup_handle)) return kstd::unexpected(kernel::KernelError::OutOfMemory);
 
-  if (!kernel::vmm::create_user_address_space(process->address_space)) {
+  const auto as_status = kernel::vmm::create_user_address_space(process.value()->address_space);
+  if (as_status != kernel::KernelError::Success) {
     KE_Print("KE_USER_CreateProcess: failed to create address space for {}", exec_path);
-    return nullptr;
+    return kstd::unexpected(as_status);
   }
 
   // Look up the long-lived subsystem that owns this loader, so the process
@@ -104,87 +106,93 @@ static kernel::KObjectPtr<kernel::KProcessObject> create_process(
 
   if (!subsystem) {
     KE_Print("KE_USER_CreateProcess: failed to find NativeElfLoader subsystem for {}", exec_path);
-    kernel::vmm::destroy_user_address_space(process->address_space);
-    return nullptr;
+    kernel::vmm::destroy_user_address_space(process.value()->address_space);
+    return kstd::unexpected(kernel::KernelError::NotFound);
   }
-  process->subsystem = subsystem;
+  process.value()->subsystem = subsystem;
 
   // Step 2 — Load the Loader into the process's address space via the VFS.
   kernel::elf::LoadPolicy policy;
   policy.user_mode = true;
-  policy.target_as = &process->address_space;
+  policy.target_as = &process.value()->address_space;
 
-  const auto result = kernel::elf::LoadElfFromVfs(process->subsystem->loader_path, policy);
-  if (!result.ok) {
+  const auto result = kernel::elf::LoadElfFromVfs(process.value()->subsystem->loader_path, policy);
+  if (!result) {
     KE_Print("KE_USER_CreateProcess: failed to load Loader for: {}", exec_path);
-    kernel::vmm::destroy_user_address_space(process->address_space);
-    return nullptr;
+    kernel::vmm::destroy_user_address_space(process.value()->address_space);
+    return kstd::unexpected(result.error());
   }
 
-  const auto entry = result.entry_point;
+  const auto entry = result->entry_point;
 
   // A dedicated user-mode stack region, mapped USER|READ|WRITE.
-  const void *user_stack = kernel::vmm::allocate_memory(
-      process->address_space, USER_STACK_SIZE,
+  auto user_stack = kernel::vmm::allocate_memory(
+      process.value()->address_space, USER_STACK_SIZE,
       kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
   if (!user_stack) {
     KE_Print("KE_USER_CreateProcess: failed to allocate user stack for {}", exec_path);
-    kernel::vmm::destroy_user_address_space(process->address_space);
-    return nullptr;
+    kernel::vmm::destroy_user_address_space(process.value()->address_space);
+    return kstd::unexpected(user_stack.error());
   }
 
-  auto user_stack_top = kernel::VirtualAddress::from_ptr(user_stack) + USER_STACK_SIZE;
+  auto user_stack_top = kernel::VirtualAddress::from_ptr(*user_stack) + USER_STACK_SIZE;
 
   // The immutable startup block is above the loader's downward-growing stack.
   user_stack_top = (user_stack_top - startup_size).align_down(16);
   {
     const kernel::PhysicalAddress caller_root = HAL_VMM_GetCurrentTranslationRoot();
     const uintptr_t irq_state = HAL_CPU_SaveAndDisableInterrupts();
-    HAL_VMM_SwitchAddressSpace(process->address_space.translation_root);
+    HAL_VMM_SwitchAddressSpace(process.value()->address_space.translation_root);
 
-    const bool written = kernel::process_startup::write_stack(
+    const auto written = kernel::process_startup::write_stack(
         user_stack_top.as_ptr(), startup_size, user_stack_top.value, startup,
-        static_cast<uint32_t>(startup_handle));
+        static_cast<uint32_t>(*startup_handle));
 
     HAL_VMM_SwitchAddressSpace(caller_root);
     HAL_CPU_RestoreInterrupts(irq_state);
-    if (!written) {
-      kernel::vmm::destroy_user_address_space(process->address_space);
-      return nullptr;
+    if (written != kernel::KernelError::Success) {
+      kernel::vmm::destroy_user_address_space(process.value()->address_space);
+      return kstd::unexpected(written);
     }
   }
 
   // Step 4 — Register the process under \Processes before the thread can
   // run. This entry owns the process once the creator closes its handle.
-  if (!KE_OB_InsertObject(KE_OB_GetProcessDirectory(), kernel::KObjectPtr<kernel::KObject>(process.get()))) {
-    kernel::vmm::destroy_user_address_space(process->address_space);
-    return nullptr;
+  const auto insert_status = KE_OB_InsertObject(KE_OB_GetProcessDirectory(), kernel::KObjectPtr<kernel::KObject>(process.value().get()));
+  if (insert_status != kernel::KernelError::Success) {
+    kernel::vmm::destroy_user_address_space(process.value()->address_space);
+    return kstd::unexpected(insert_status);
   }
 
   // Step 5 — Create the process's ring-3 main thread (registered under
   // \Threads by KE_SCHED_CreateUserThread).
-  const auto thread = KE_SCHED_CreateUserThread(process->address_space, entry, user_stack_top);
+  const auto thread = KE_SCHED_CreateUserThread(process.value()->address_space, entry, user_stack_top);
   if (!thread) {
-    KE_OB_RemoveObject(KE_OB_GetProcessDirectory(), kernel::KObjectPtr<kernel::KObject>(process.get()));
-    kernel::vmm::destroy_user_address_space(process->address_space);
-    return nullptr;
+    const auto rollback_status = KE_OB_RemoveObject(
+        KE_OB_GetProcessDirectory(), kernel::KObjectPtr<kernel::KObject>(process.value().get()));
+    if (rollback_status != kernel::KernelError::Success) {
+      KE_Print("KE_USER_CreateProcess: failed to roll back process registration: {}",
+               kernel::make_error_code(rollback_status).message());
+    }
+    kernel::vmm::destroy_user_address_space(process.value()->address_space);
+    return kstd::unexpected(thread.error());
   }
 
-  thread->owner_process = process.get();
-  process->main_thread = thread;
+  thread.value()->owner_process = process.value().get();
+  process.value()->main_thread = *thread;
 
   // Step 6 — Ring-3 code can now reach the kernel via int 0x80 (see
   // kernel_hal/x86_old/intr.cpp's syscall_handler / kernel/src/syscall.cpp's
   // dispatcher for SYS_EXIT/SYS_WRITE).
-  return process;
+  return *process;
 }
 
-extern "C" UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KProcessObject> KE_USER_CreateProcess(
+extern "C" UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> KE_USER_CreateProcess(
     const kstd::string_view &exec_path, const kstd::string_view &arguments) noexcept {
   return create_process(exec_path, arguments, nullptr);
 }
 
-extern "C" UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KProcessObject> KE_USER_CreateProcessWithStreams(
+extern "C" UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> KE_USER_CreateProcessWithStreams(
     const kstd::string_view &exec_path, const kstd::string_view &arguments,
     const kernel::ProcessStreams &streams) noexcept {
   return create_process(exec_path, arguments, &streams);

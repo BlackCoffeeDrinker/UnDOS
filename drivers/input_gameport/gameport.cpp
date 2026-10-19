@@ -131,20 +131,21 @@ void Gameport_PollThread(void *arg) {
   }
 }
 
-kernel::IoStatus Gameport_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
+kernel::KernelError Gameport_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
                                         kstd::span<const uint8_t> input, kstd::span<uint8_t> output,
                                         size_t &transferred) {
   (void) input;
   transferred = 0;
 
   auto *ctx = device ? device->deviceExtension.as<GameportContext>() : nullptr;
-  if (ctx == nullptr) return kernel::IoStatus::Unsupported;
+  if (ctx == nullptr) return kernel::KernelError::Unsupported;
 
   switch (code) {
     case IoControlCode_GamepadReadState: {
-      if (output.size() < sizeof(IoctlGamepadState)) return kernel::IoStatus::InvalidSize;
-      kernel::input::GamepadState state;
-      if (!KE_INPUT_GetGamepadState(device, state)) return kernel::IoStatus::DeviceError;
+      if (output.size() < sizeof(IoctlGamepadState)) return kernel::KernelError::InvalidSize;
+      const auto gamepad = KE_INPUT_GetGamepadState(device);
+      if (!gamepad) return gamepad.error();
+      const auto &state = *gamepad;
 
       IoctlGamepadState out{};
       out.leftX = state.axes[kernel::input::gamepad_axis::LeftX];
@@ -160,10 +161,10 @@ kernel::IoStatus Gameport_DeviceControl(const kernel::KDevicePtr<kernel::KDevice
 
       __builtin_memcpy(output.data(), &out, sizeof(out));
       transferred = sizeof(out);
-      return kernel::IoStatus::Success;
+      return kernel::KernelError::Success;
     }
     case IoControlCode_GamepadQueryCaps: {
-      if (output.size() < sizeof(IoctlGamepadCaps)) return kernel::IoStatus::InvalidSize;
+      if (output.size() < sizeof(IoctlGamepadCaps)) return kernel::KernelError::InvalidSize;
 
       IoctlGamepadCaps caps{};
       for (const bool present: ctx->axisPresent) {
@@ -174,23 +175,24 @@ kernel::IoStatus Gameport_DeviceControl(const kernel::KDevicePtr<kernel::KDevice
 
       __builtin_memcpy(output.data(), &caps, sizeof(caps));
       transferred = sizeof(caps);
-      return kernel::IoStatus::Success;
+      return kernel::KernelError::Success;
     }
     default:
-      return kernel::IoStatus::Unsupported;
+      return kernel::KernelError::Unsupported;
   }
 }
 
-bool Gameport_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver,
+kernel::KernelError Gameport_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver,
                         const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto fdo = KE_IO_CreateBusWithContext<GameportContext>(driver, {});
   if (!fdo) {
     KE_Print("gameport: Failed to create FDO");
-    return false;
+    return fdo.error();
   }
 
-  KE_IO_AttachFilterDevice(fdo, pdo);
-  return true;
+  const auto attached = KE_IO_AttachFilterDevice(*fdo, pdo);
+  if (!attached) return attached.error();
+  return kernel::KernelError::Success;
 }
 
 void Gameport_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
@@ -217,13 +219,14 @@ void Gameport_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
     return;
   }
 
-  const auto device = KE_IO_CreateDeviceWithContext<GameportContext>(
+  const auto createdDevice = KE_IO_CreateDeviceWithContext<GameportContext>(
       fdo->driverObject, "Gamepad", kernel::device_type::Gamepad,
       CreateDeviceFlags::MultipleAllowed);
-  if (!device) {
+  if (!createdDevice) {
     KE_Print("gameport: Failed to create Gamepad device");
     return;
   }
+  const auto &device = *createdDevice;
 
   auto *ctx = device->deviceExtension.as<GameportContext>();
   if (ctx == nullptr) return;
@@ -232,24 +235,28 @@ void Gameport_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   for (auto &max: ctx->axisMax) max = kSeedAxisMax;
   ctx->device = device;
 
-  if (!kernel::hid::ParseReportDescriptor(
+  if (kernel::hid::ParseReportDescriptor(
           kstd::span<const uint8_t>(gameport::kJoystickReportDescriptor,
                                     sizeof(gameport::kJoystickReportDescriptor)),
-          ctx->format)) {
+          ctx->format) != kernel::KernelError::Success) {
     KE_Print("gameport: joystick HID descriptor rejected; no device created");
     return;
   }
 
   device->hardwareId = "input_gameport";
-  KE_IO_AttachChildDevice(fdo, device);
+  if (KE_IO_AttachChildDevice(fdo, device) != kernel::KernelError::Success) {
+    KE_Print("gameport: Failed to attach Gamepad device");
+    return;
+  }
 
   ctx->idle.manualReset = false;
   ctx->idle.signalled = false;
-  ctx->pollThread = KE_SCHED_CreateThread(&Gameport_PollThread, ctx, 0);
-  if (!ctx->pollThread) {
+  auto thread = KE_SCHED_CreateThread(&Gameport_PollThread, ctx, 0);
+  if (!thread) {
     KE_Print("gameport: Failed to create poll thread; joystick inactive");
     return;
   }
+  ctx->pollThread = kstd::move(*thread);
 
   KE_Print("gameport: analog joystick at 0x{x} polling at ~60 Hz", ioBase);
 }

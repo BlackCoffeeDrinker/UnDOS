@@ -72,7 +72,7 @@ TEST_CASE("A single controller reserves its fixed ranges cleanly", "[resource]")
   };
 
   CmResourceList grant;
-  REQUIRE(TryReserveAlternative(alt, reserved, grant, alloc));
+  REQUIRE(TryReserveAlternative(alt, reserved, grant, alloc) == kernel::KernelError::Success);
   REQUIRE(grant.descriptors.size() == 3);
 
   const auto *port0 = FindAssigned(grant, ResourceType::Port, 0);
@@ -100,7 +100,7 @@ TEST_CASE("Two non-overlapping controllers both reserve", "[resource]") {
   size_t usedA = 0;
   auto allocA = [&]() -> CmPartialResourceDescriptor * { return usedA < 4 ? &poolA[usedA++] : nullptr; };
   CmResourceList grantA;
-  REQUIRE(TryReserveAlternative(primary, reserved, grantA, allocA));
+  REQUIRE(TryReserveAlternative(primary, reserved, grantA, allocA) == kernel::KernelError::Success);
 
   // Secondary reserved against the primary's grant.
   IoResourceList secondary;
@@ -113,7 +113,7 @@ TEST_CASE("Two non-overlapping controllers both reserve", "[resource]") {
   size_t usedB = 0;
   auto allocB = [&]() -> CmPartialResourceDescriptor * { return usedB < 4 ? &poolB[usedB++] : nullptr; };
   CmResourceList grantB;
-  REQUIRE(TryReserveAlternative(secondary, grantA.descriptors, grantB, allocB));
+  REQUIRE(TryReserveAlternative(secondary, grantA.descriptors, grantB, allocB) == kernel::KernelError::Success);
   REQUIRE(grantB.descriptors.size() == 2);
 }
 
@@ -130,7 +130,7 @@ TEST_CASE("Overlapping I/O range is refused and reserves nothing", "[resource]")
   size_t used = 0;
   auto alloc = [&]() -> CmPartialResourceDescriptor * { return used < 4 ? &pool[used++] : nullptr; };
   CmResourceList grant;
-  REQUIRE_FALSE(TryReserveAlternative(alt, reserved, grant, alloc));
+  REQUIRE(TryReserveAlternative(alt, reserved, grant, alloc) != kernel::KernelError::Success);
   REQUIRE(grant.descriptors.empty());
   REQUIRE(used == 0);
 }
@@ -174,10 +174,10 @@ TEST_CASE("Shared IRQ coexists but exclusive conflicts", "[resource]") {
 }
 
 TEST_CASE("Empty alternative reserves an empty grant", "[resource]") {
-  IoResourceList alt;// no descriptors
-  common::DoubleList<CmPartialResourceDescriptor> reserved;
+  const IoResourceList alt;// no descriptors
+  const common::DoubleList<CmPartialResourceDescriptor> reserved;
   auto alloc = []() -> CmPartialResourceDescriptor * { return nullptr; };
   CmResourceList grant;
-  REQUIRE(TryReserveAlternative(alt, reserved, grant, alloc));
+  REQUIRE(TryReserveAlternative(alt, reserved, grant, alloc) == kernel::KernelError::Success);
   REQUIRE(grant.descriptors.empty());
 }

@@ -97,7 +97,7 @@ DecodeError Decoder::directory() {
       if (id == u32(previous) || (size && length && offset < begin + length && begin < offset + size))
         return DecodeError::InvalidDirectory;
     }
-    Bytes b{file.data + offset, size};
+    const Bytes b{.data = file.data + offset, .size = size};
     switch (id) {
       case tag('h','e','a','d'): head = b; break;
       case tag('m','a','x','p'): maxp = b; break;
@@ -146,7 +146,7 @@ DecodeError Decoder::simple(Glyph &g, Cursor &cursor) {
   if (!cursor.take(2, p)) return DecodeError::InvalidGlyph;
   g.programs = u16(p);
   if (g.programs > limits[10] || !cursor.take(g.programs, p)) return DecodeError::InvalidGlyph;
-  if (!copy(sections[6], {p, g.programs})) return DecodeError::ResourceLimit;
+  if (!copy(sections[6], {.data = p, .size = g.programs})) return DecodeError::ResourceLimit;
   Buffer flags;
   flags.reserve(g.points);
   while (flags.size() < g.points) {
@@ -233,7 +233,7 @@ DecodeError Decoder::composite(Glyph &g, Cursor &cursor) {
     if (!cursor.take(2, p)) return DecodeError::InvalidGlyph;
     g.programs = u16(p);
     if (g.programs > limits[10] || !cursor.take(g.programs, p)) return DecodeError::InvalidGlyph;
-    if (!copy(sections[6], {p, g.programs})) return DecodeError::ResourceLimit;
+    if (!copy(sections[6], {.data = p, .size = g.programs})) return DecodeError::ResourceLimit;
   }
   return DecodeError::None;
 }
@@ -250,7 +250,7 @@ DecodeError Decoder::glyph(uint32_t index, Bytes bytes) {
   if (contours < -1) return DecodeError::InvalidGlyph;
   for (uint32_t i = 0; i < 4; ++i) g.bounds[i] = s16(bytes.data + 2 + i * 2);
   if (g.bounds[0] > g.bounds[2] || g.bounds[1] > g.bounds[3]) return DecodeError::InvalidGlyph;
-  Cursor cursor{bytes, 10};
+  Cursor cursor{.bytes = bytes, .at = 10};
   g.kind = contours < 0 ? 2 : 1;
   g.contours = contours < 0 ? 0 : uint32_t(contours);
   const DecodeError error = contours < 0 ? composite(g, cursor) : simple(g, cursor);
@@ -347,7 +347,7 @@ DecodeError Decoder::map() {
     const uint32_t size = candidate == 12 ? u32(cmap.data + offset + 4) : u16(cmap.data + offset + 2);
     if (!has(cmap, offset, size)) return DecodeError::InvalidCmap;
     if (candidateRank > rank) {
-      chosen = {cmap.data + offset, size}; rank = candidateRank; format = candidate;
+      chosen = {.data = cmap.data + offset, .size = size}; rank = candidateRank; format = candidate;
     }
   }
   if (!chosen.data) return DecodeError::UnsupportedFormat;
@@ -414,7 +414,7 @@ DecodeError Decoder::run(Buffer &out) {
     const uint32_t offset = locFormat ? u32(loca.data + i * 4) : uint32_t(u16(loca.data + i * 2)) * 2;
     if (offset < previous || offset > glyf.size || (!i && offset != 0)) return DecodeError::InvalidLoca;
     if (i) {
-      error = glyph(i - 1, {glyf.data + previous, offset - previous});
+      error = glyph(i - 1, {.data = glyf.data + previous, .size = offset - previous});
       if (error != DecodeError::None) return error;
     }
     previous = offset;
@@ -455,7 +455,7 @@ DecodeError Decoder::run(Buffer &out) {
     if (length > MaxResourceBytes) return DecodeError::ResourceLimit;
   }
   out.resize(length);
-  uint32_t header[] = {Magic, Version, HeaderSize, length, SectionCount, glyphCount,
+  const uint32_t header[] = {Magic, Version, HeaderSize, length, SectionCount, glyphCount,
     units, uint32_t(s16(hhea.data + 4)), uint32_t(s16(hhea.data + 6)),
     uint32_t(s16(hhea.data + 8)), weight, style};
   for (uint32_t i = 0; i < 12; ++i) write_u32(out.data() + i * 4, header[i]);

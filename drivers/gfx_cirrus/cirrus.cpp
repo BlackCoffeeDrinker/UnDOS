@@ -255,8 +255,8 @@ void Cirrus_ProgramBlitGeometry(uint32_t widthBytes, uint32_t height, uint32_t d
 // Pushes one rectangle of the shadow buffer into VRAM with the blitter's
 // system-memory-source mode: the engine consumes the source pixels written
 // into the 0xA0000 window, so the CPU never bank-switches per row.
-bool Cirrus_FlushRectAccelerated(CirrusContext *const ctx_cirrus, int32_t x, int32_t y, uint32_t width, uint32_t height) {
-  if (!Cirrus_WaitForBlitter()) return false;
+kernel::KernelError Cirrus_FlushRectAccelerated(CirrusContext *const ctx_cirrus, int32_t x, int32_t y, uint32_t width, uint32_t height) {
+  if (!Cirrus_WaitForBlitter()) return kernel::KernelError::Timeout;
 
   const uint32_t bytesPerPixel = BytesPerPixel(ctx_cirrus->depth->bpp);
   const uint32_t widthBytes = width * bytesPerPixel;
@@ -287,7 +287,7 @@ bool Cirrus_FlushRectAccelerated(CirrusContext *const ctx_cirrus, int32_t x, int
     }
   }
 
-  return Cirrus_WaitForBlitter();
+  return Cirrus_WaitForBlitter() ? kernel::KernelError::Success : kernel::KernelError::Timeout;
 }
 
 // Plain bank-switched row copy, used when the blitter does not settle.
@@ -312,7 +312,7 @@ void Cirrus_FlushRect(CirrusContext *const ctx_cirrus, int32_t left, int32_t top
 
   const auto width = static_cast<uint32_t>(right - left);
   const auto height = static_cast<uint32_t>(bottom - top);
-  if (!Cirrus_FlushRectAccelerated(ctx_cirrus, left, top, width, height)) {
+  if (Cirrus_FlushRectAccelerated(ctx_cirrus, left, top, width, height) != kernel::KernelError::Success) {
     // Reset the engine before falling back, so a stuck operation does not
     // consume the CPU-written bytes instead of VRAM.
     Cirrus_ResetBlitter();
@@ -396,13 +396,16 @@ void Cirrus_FillShadow(CirrusContext *const ctx_cirrus, int x, int y, int w, int
   }
 }
 
-bool Cirrus_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
-                     const kernel::KObjectPtr<kernel::KSurface> &dst, int x, int y, int w, int h, uint32_t colour) {
-  if (!adapter) return false;
+// Unsupported asks the caller to use the software fallback; Timeout means the
+// blit engine stalled and was reset.
+kernel::KernelError Cirrus_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
+                                const kernel::KObjectPtr<kernel::KSurface> &dst, int x, int y, int w, int h, uint32_t colour) {
+  if (!adapter) return kernel::KernelError::InvalidArgument;
   const auto ctx_cirrus = adapter->GetDeviceExtensionAs<CirrusContext>();
-  if (!ctx_cirrus) return false;
+  if (!ctx_cirrus) return kernel::KernelError::NotInitialized;
 
-  if (!IsPrimary(ctx_cirrus, dst) || w <= 0 || h <= 0) return false;
+  if (!IsPrimary(ctx_cirrus, dst)) return kernel::KernelError::Unsupported;
+  if (w <= 0 || h <= 0) return kernel::KernelError::InvalidSize;
   if (x < 0) {
     w += x;
     x = 0;
@@ -413,11 +416,11 @@ bool Cirrus_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter
   }
   if (x + w > static_cast<int>(ctx_cirrus->timing->width)) w = static_cast<int>(ctx_cirrus->timing->width) - x;
   if (y + h > static_cast<int>(ctx_cirrus->timing->height)) h = static_cast<int>(ctx_cirrus->timing->height) - y;
-  if (w <= 0 || h <= 0) return true;
+  if (w <= 0 || h <= 0) return kernel::KernelError::Success;
 
   if (!Cirrus_WaitForBlitter()) {
     Cirrus_ResetBlitter();
-    return false;
+    return kernel::KernelError::Timeout;
   }
 
   const uint32_t bytesPerPixel = BytesPerPixel(ctx_cirrus->depth->bpp);
@@ -436,43 +439,44 @@ bool Cirrus_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter
   if (!Cirrus_WaitForBlitter()) {
     Cirrus_ResetBlitter();
     WriteGraphics(cirrus_regs::kGrBltModeExtension, 0x00);
-    return false;
+    return kernel::KernelError::Timeout;
   }
   WriteGraphics(cirrus_regs::kGrBltModeExtension, 0x00);
 
   // VRAM is already correct, so this produces no transfer: only the shadow
   // still needs the same pixels.
   Cirrus_FillShadow(ctx_cirrus, x, y, w, h, colour);
-  return true;
+  return kernel::KernelError::Success;
 }
 
-bool Cirrus_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
-                   const kernel::KObjectPtr<kernel::KSurface> &dst,
-                   int dstX, int dstY,
-                   const kernel::KObjectPtr<kernel::KSurface> &src,
-                   int srcX, int srcY,
-                   uint32_t width, uint32_t height,
-                   kernel::RasterOp rop) {
+kernel::KernelError Cirrus_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
+                              const kernel::KObjectPtr<kernel::KSurface> &dst,
+                              int dstX, int dstY,
+                              const kernel::KObjectPtr<kernel::KSurface> &src,
+                              int srcX, int srcY,
+                              uint32_t width, uint32_t height,
+                              kernel::RasterOp rop) {
 
-  if (!adapter) return false;
+  if (!adapter) return kernel::KernelError::InvalidArgument;
   const auto ctx_cirrus = adapter->GetDeviceExtensionAs<CirrusContext>();
-  if (!ctx_cirrus) return false;
+  if (!ctx_cirrus) return kernel::KernelError::NotInitialized;
 
   // Anything other than a straight copy, or a surface that isn't in VRAM,
   // is left to the kernel's software fallback.
-  if (rop != kernel::RasterOp::SRCCOPY || !IsPrimary(ctx_cirrus, dst) || !IsPrimary(ctx_cirrus, src)) return false;
-  if (width == 0 || height == 0) return true;
-  if (dstX < 0 || dstY < 0 || srcX < 0 || srcY < 0) return false;
+  // Partially off-screen copies are also left to the clipping fallback.
+  if (rop != kernel::RasterOp::SRCCOPY || !IsPrimary(ctx_cirrus, dst) || !IsPrimary(ctx_cirrus, src)) return kernel::KernelError::Unsupported;
+  if (width == 0 || height == 0) return kernel::KernelError::Success;
+  if (dstX < 0 || dstY < 0 || srcX < 0 || srcY < 0) return kernel::KernelError::Unsupported;
   if (dstX + static_cast<int>(width) > static_cast<int>(ctx_cirrus->timing->width) ||
       srcX + static_cast<int>(width) > static_cast<int>(ctx_cirrus->timing->width) ||
       dstY + static_cast<int>(height) > static_cast<int>(ctx_cirrus->timing->height) ||
       srcY + static_cast<int>(height) > static_cast<int>(ctx_cirrus->timing->height)) {
-    return false;
+    return kernel::KernelError::Unsupported;
   }
 
   if (!Cirrus_WaitForBlitter()) {
     Cirrus_ResetBlitter();
-    return false;
+    return kernel::KernelError::Timeout;
   }
 
   const uint32_t bytesPerPixel = BytesPerPixel(ctx_cirrus->depth->bpp);
@@ -502,7 +506,7 @@ bool Cirrus_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
 
   if (!Cirrus_WaitForBlitter()) {
     Cirrus_ResetBlitter();
-    return false;
+    return kernel::KernelError::Timeout;
   }
 
   // Mirror the copy into the shadow buffer, row by row, so both copies of
@@ -523,19 +527,19 @@ bool Cirrus_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
       for (uint32_t b = 0; b < widthBytes; ++b) to[b] = from[b];
     }
   }
-  return true;
+  return kernel::KernelError::Success;
 }
 
 // The engine has no line primitive, so lines are walked in the shadow
 // buffer; the swept area is covered by the caller's paint region, which
 // reaches VRAM at EndPaint.
-bool Cirrus_DrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
-                     const kernel::KObjectPtr<kernel::KSurface> &dst, int x0, int y0, int x1, int y1, uint32_t colour) {
-  if (!adapter) return false;
+kernel::KernelError Cirrus_DrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
+                                const kernel::KObjectPtr<kernel::KSurface> &dst, int x0, int y0, int x1, int y1, uint32_t colour) {
+  if (!adapter) return kernel::KernelError::InvalidArgument;
   const auto ctx_cirrus = adapter->GetDeviceExtensionAs<CirrusContext>();
-  if (!ctx_cirrus) return false;
+  if (!ctx_cirrus) return kernel::KernelError::NotInitialized;
 
-  if (!IsPrimary(ctx_cirrus, dst)) return false;
+  if (!IsPrimary(ctx_cirrus, dst)) return kernel::KernelError::Unsupported;
 
   const int dx = x1 > x0 ? x1 - x0 : x0 - x1;
   const int sx = x0 < x1 ? 1 : -1;
@@ -558,7 +562,7 @@ bool Cirrus_DrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter
       y0 += sy;
     }
   }
-  return true;
+  return kernel::KernelError::Success;
 }
 // endregion
 
@@ -618,11 +622,13 @@ void Cirrus_FillColourFormat(const cirrus_regs::CirrusDepth &depth, kernel::KDis
   }
 }
 
-bool Cirrus_GetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/, size_t modeIndex, kernel::KDisplayModeInfo &outInfo) {
+kstd::expected<kernel::KDisplayModeInfo, kernel::KernelError> Cirrus_GetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
+                                                                          size_t modeIndex) {
   const cirrus_regs::CirrusModeTiming *timing = nullptr;
   const cirrus_regs::CirrusDepth *depth = nullptr;
-  if (!Cirrus_ResolveMode(modeIndex, timing, depth)) return false;
+  if (!Cirrus_ResolveMode(modeIndex, timing, depth)) return kstd::unexpected(kernel::KernelError::OutOfRange);
 
+  kernel::KDisplayModeInfo outInfo{};
   outInfo.modeIndex = modeIndex;
   outInfo.width = timing->width;
   outInfo.height = timing->height;
@@ -643,30 +649,30 @@ bool Cirrus_GetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/
     outInfo.attributeFlags |= kernel::DisplayModeFlags::PaletteDriven;
   }
 
-  return true;
+  return outInfo;
 }
 
-bool Cirrus_Probe(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
+kernel::KernelError Cirrus_Probe(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
   if (!adapter) {
     KE_Print("gfx_cirrus: No adapter to probe");
-    return false;
+    return kernel::KernelError::InvalidArgument;
   }
   if (const auto ctx_cirrus = adapter->GetDeviceExtensionAs<CirrusContext>(); 
     !ctx_cirrus) {
     KE_Print("gfx_cirrus: No Cirrus context");
-    return false;
+    return kernel::KernelError::NotInitialized;
   }
 
-  return true;
+  return kernel::KernelError::Success;
 }
 
 // The single head this adapter drives. Identity only: the entry points are
 // bound later, from Cirrus_ConfigureDisplay.
-bool Cirrus_ProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
-                         const kernel::KGraphicsAdapterDisplayEnumInfo &enumInfo,
-                         kernel::KGraphicsAdapterDisplayInfo &outInfo) {
+kernel::KernelError Cirrus_ProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+                                    const kernel::KGraphicsAdapterDisplayEnumInfo &enumInfo,
+                                    kernel::KGraphicsAdapterDisplayInfo &outInfo) {
   if (enumInfo.displayIndex != 0) {
-    return false;
+    return kernel::KernelError::OutOfRange;
   }
 
   outInfo.isPresent = true;
@@ -674,21 +680,22 @@ bool Cirrus_ProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*
   outInfo.isPnP = false;// The ISA Cirrus model exposes no DDC channel
   outInfo.edidSize = 0;
   outInfo.name = "VGA";
-  return true;
+  return kernel::KernelError::Success;
 }
 
 // Programs `modeIndex` and reports where its pixels live. This is the only
 // place a shadow buffer is allocated: the new buffer is taken before any
 // register is touched, so a failed allocation leaves the previous mode
 // running untouched.
-bool Cirrus_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t modeIndex, kernel::KDisplaySurfaceBinding &outBinding) {
-  if (!display || !display->adapter) return false;
+kstd::expected<kernel::KDisplaySurfaceBinding, kernel::KernelError> Cirrus_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
+                                                                            size_t modeIndex) {
+  if (!display || !display->adapter) return kstd::unexpected(kernel::KernelError::InvalidArgument);
   const auto ctx_cirrus = display->adapter->GetDeviceExtensionAs<CirrusContext>();
-  if (!ctx_cirrus || !ctx_cirrus->window) return false;
+  if (!ctx_cirrus || !ctx_cirrus->window) return kstd::unexpected(kernel::KernelError::DeviceNotReady);
 
   const cirrus_regs::CirrusModeTiming *timing = nullptr;
   const cirrus_regs::CirrusDepth *depth = nullptr;
-  if (!Cirrus_ResolveMode(modeIndex, timing, depth)) return false;
+  if (!Cirrus_ResolveMode(modeIndex, timing, depth)) return kstd::unexpected(kernel::KernelError::OutOfRange);
 
   const uint32_t pitch = PitchFor(timing->width, depth->bpp);
   const size_t size = static_cast<size_t>(pitch) * timing->height;
@@ -696,15 +703,15 @@ bool Cirrus_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t 
   if (!buffer) {
     KE_Print("gfx_cirrus: {}KiB shadow for {}x{}x{} could not be allocated, keeping the current mode",
              size / 1024, timing->width, timing->height, depth->bpp);
-    return false;
+    return kstd::unexpected(kernel::KernelError::OutOfMemory);
   }
   __builtin_memset(buffer, 0, size);
 
   auto backing = KE_VMM_CreateDirectBacking(kernel::VirtualAddress::from_ptr(buffer), size);
   if (!backing) {
     KE_Free(buffer);
-    KE_Print("gfx_cirrus: could not allocate mode backing, keeping the current mode");
-    return false;
+    KE_Print("gfx_cirrus: could not allocate mode backing, keeping the current mode: {}", backing.error());
+    return kstd::unexpected(backing.error());
   }
 
   const auto previousShadow = ctx_cirrus->shadow;
@@ -722,20 +729,21 @@ bool Cirrus_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t 
     KE_Free(previousShadow.as_ptr<void>());
   }
 
-  outBinding.backing = backing;
+  kernel::KDisplaySurfaceBinding outBinding{};
+  outBinding.backing = kstd::move(*backing);
 
   outBinding.type = kernel::SurfaceType::Framebuffer;
   outBinding.flags = kernel::SurfaceFlags::TopDown | kernel::SurfaceFlags::Linear;
   KE_Print("gfx_cirrus: mode {} -> {}x{}x{}, shadow {}KiB",
            modeIndex, ctx_cirrus->timing->width, ctx_cirrus->timing->height, ctx_cirrus->depth->bpp, size / 1024);
-  return true;
+  return outBinding;
 }
 
 // Video output is gated by the sequencer's screen-off bit (SR01 bit 5):
 // set blanks the display without disturbing the programmed timing.
-bool Cirrus_Enable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
+kernel::KernelError Cirrus_Enable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
   WriteSequencer(0x01, static_cast<uint8_t>(ReadSequencer(0x01) & ~cirrus_regs::kSr01ScreenOff));
-  return true;
+  return kernel::KernelError::Success;
 }
 
 void Cirrus_Disable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
@@ -744,55 +752,58 @@ void Cirrus_Disable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
 
 // Binds this driver's per-head entry points on the display the graphics
 // subsystem created for the head Cirrus_ProbeDisplay reported.
-bool Cirrus_ConfigureDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KDisplay> &display) {
+kernel::KernelError Cirrus_ConfigureDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KDisplay> &display) {
   if (!display) {
-    return false;
+    return kernel::KernelError::InvalidArgument;
   }
 
   display->GetModeInfo = Cirrus_GetModeInfo;
   display->SetMode = Cirrus_SetMode;
   display->Enable = Cirrus_Enable;
   display->Disable = Cirrus_Disable;
-  return true;
+  return kernel::KernelError::Success;
 }
 // endregion
 
-bool Cirrus_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
+kernel::KernelError Cirrus_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   // The generic ISA presence check also sees standard VGA at these ports.
   // Reject it before PnP reserves the shared VGA aperture for this driver,
   // otherwise the real VGA fallback cannot acquire its exclusive resources.
   if (!Cirrus_UnlockExtensions()) {
     KE_Print("gfx_cirrus: no Cirrus chip detected (SR06 unlock failed)");
-    return false;
+    return kernel::KernelError::NotFound;
   }
   const auto fdo = KE_IO_CreateDeviceWithContext<CirrusContext>(driver, "Cirrus", kernel::device_type::Video);
   if (!fdo) {
-    KE_Print("gfx_cirrus: Failed to create Cirrus device");
-    return false;
+    KE_Print("gfx_cirrus: Failed to create Cirrus device: {}", fdo.error());
+    return fdo.error();
   }
 
-  KE_IO_AttachFilterDevice(fdo, pdo);
-  return true;
+  if (const auto attached = KE_IO_AttachFilterDevice(*fdo, pdo); !attached) {
+    KE_Print("gfx_cirrus: Failed to attach Cirrus device: {}", attached.error());
+    return attached.error();
+  }
+  return kernel::KernelError::Success;
 }
 
-kernel::IoStatus Cirrus_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
+kernel::KernelError Cirrus_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
                                       kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred) {
   (void) input;
   transferred = 0;
 
   const auto ctx_cirrus = device->deviceExtension.as<CirrusContext>();
 
-  if (code != IoControlCode_DisplayQueryMode) return kernel::IoStatus::Unsupported;
-  if (output.size() < sizeof(IoctlDisplayMode)) return kernel::IoStatus::InvalidSize;
-  if (!ctx_cirrus) return kernel::IoStatus::Unsupported;
+  if (code != IoControlCode_DisplayQueryMode) return kernel::KernelError::Unsupported;
+  if (output.size() < sizeof(IoctlDisplayMode)) return kernel::KernelError::BufferTooSmall;
+  if (!ctx_cirrus) return kernel::KernelError::NotInitialized;
   // No mode has been programmed yet: there is nothing to report.
-  if (!ctx_cirrus->shadow || !ctx_cirrus->depth) return kernel::IoStatus::Unsupported;
+  if (!ctx_cirrus->shadow || !ctx_cirrus->depth) return kernel::KernelError::DeviceNotReady;
 
   const IoctlDisplayMode mode{.width = ctx_cirrus->timing->width, .height = ctx_cirrus->timing->height, .bpp = ctx_cirrus->depth->bpp, .pitch = ctx_cirrus->pitch};
   __builtin_memcpy(output.data(), &mode, sizeof(mode));
   transferred = sizeof(mode);
   KE_Print("gfx_cirrus: DeviceControl QueryMode -> {}x{}x{}", mode.width, mode.height, mode.bpp);
-  return kernel::IoStatus::Success;
+  return kernel::KernelError::Success;
 }
 
 void Cirrus_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
@@ -825,20 +836,24 @@ void Cirrus_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   ctx_cirrus->chipId = static_cast<uint8_t>((ReadCrtc(cirrus_regs::kCrChipId) >> 2) & 0x3F);
 
   auto &as = KE_VMM_GetKernelAddressSpace();
-  const void *region = KE_VMM_AllocateRegion(as, windowRes->length, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+  const auto region = KE_VMM_AllocateRegion(as, windowRes->length, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
   if (!region) {
-    KE_Print("gfx_cirrus: Failed to reserve virtual address space for the bank window");
+    KE_Print("gfx_cirrus: Failed to reserve virtual address space for the bank window: {}", region.error());
     return;
   }
 
-  const auto virt = kernel::VirtualAddress::from_ptr(region);
+  const auto virt = kernel::VirtualAddress::from_ptr(*region);
   const size_t pageCount = windowRes->length / kPageSize;
   for (size_t i = 0; i < pageCount; ++i) {
-    KE_VMM_MapPhysical(
-        as,
-        virt + (i * kPageSize),
-        kernel::PhysicalAddress(windowRes->start) + (i * kPageSize),
-        kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+    if (const auto mapped = KE_VMM_MapPhysical(
+            as,
+            virt + (i * kPageSize),
+            kernel::PhysicalAddress(windowRes->start) + (i * kPageSize),
+            kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+        mapped != kernel::KernelError::Success) {
+      KE_Print("gfx_cirrus: Failed to map the bank window: {}", mapped);
+      return;
+    }
   }
   ctx_cirrus->window = virt;
   ctx_cirrus->activeBank = 0;
@@ -846,11 +861,12 @@ void Cirrus_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   KE_Print("gfx_cirrus: Cirrus chip id 0x{x} detected, {}KiB window mapped",
            ctx_cirrus->chipId, windowRes->length / 1024);
 
-  ctx_cirrus->adapter = KE_GFX_RegisterGraphicsAdapter(driver, fdo, "Cirrus");
-  if (!ctx_cirrus->adapter) {
-    KE_Print("gfx_cirrus: Failed to register graphics adapter");
+  auto adapter = KE_GFX_RegisterGraphicsAdapter(driver, fdo, "Cirrus");
+  if (!adapter) {
+    KE_Print("gfx_cirrus: Failed to register graphics adapter: {}", adapter.error());
     return;
   }
+  ctx_cirrus->adapter = kstd::move(*adapter);
 
   // No shadow buffer is committed here: memory is only taken once the
   // graphics subsystem actually programs a mode through SetMode.

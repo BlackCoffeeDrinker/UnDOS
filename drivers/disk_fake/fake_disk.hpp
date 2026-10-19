@@ -15,10 +15,10 @@ namespace diskfake {
 struct IBackingStore {
   virtual ~IBackingStore() = default;
 
-  [[nodiscard]] virtual size_t Size() const = 0;
-  virtual bool Resize(size_t newSize) = 0;
-  virtual bool ReadAt(uint64_t offset, kstd::span<uint8_t> buffer) = 0;
-  virtual bool WriteAt(uint64_t offset, kstd::span<const uint8_t> buffer) = 0;
+  [[nodiscard]] virtual kstd::expected<size_t, kernel::KernelError> Size() const = 0;
+  virtual kernel::KernelError Resize(size_t newSize) = 0;
+  virtual kernel::KernelError ReadAt(uint64_t offset, kstd::span<uint8_t> buffer) = 0;
+  virtual kernel::KernelError WriteAt(uint64_t offset, kstd::span<const uint8_t> buffer) = 0;
 };
 
 // Device extension for a disk_fake PDO. `backing` is owned externally (by the
@@ -30,46 +30,55 @@ struct FakeDiskContext {
 };
 
 // Pre-loads `content` into the backing store, growing it if necessary.
-inline bool Seed(const FakeDiskContext &context, kstd::span<const uint8_t> content) {
-  if (!context.backing) return false;
-  if (context.backing->Size() < content.size() && !context.backing->Resize(content.size())) {
-    return false;
+inline kernel::KernelError Seed(const FakeDiskContext &context, kstd::span<const uint8_t> content) {
+  if (!context.backing) return kernel::KernelError::InvalidState;
+  const auto size = context.backing->Size();
+  if (!size) return size.error();
+  if (*size < content.size()) {
+    const auto status = context.backing->Resize(content.size());
+    if (status != kernel::KernelError::Success) return status;
   }
   return context.backing->WriteAt(0, content);
 }
 
-inline kernel::IoStatus Read(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<uint8_t> buffer, size_t &transferred) {
+inline kernel::KernelError Read(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<uint8_t> buffer, size_t &transferred) {
   transferred = 0;
-  if (device->deviceType != kernel::device_type::Disk) return kernel::IoStatus::Unsupported;
+  if (!device) return kernel::KernelError::InvalidArgument;
+  if (device->deviceType != kernel::device_type::Disk) return kernel::KernelError::Unsupported;
 
   const auto *ctx = device->deviceExtension.as<FakeDiskContext>();
-  if (!ctx || !ctx->backing) return kernel::IoStatus::DeviceError;
+  if (!ctx || !ctx->backing) return kernel::KernelError::DeviceError;
 
-  if (offset > ctx->backing->Size() || buffer.size() > ctx->backing->Size() - offset) {
-    return kernel::IoStatus::OutOfRange;
+  const auto size = ctx->backing->Size();
+  if (!size) return size.error();
+  if (offset > *size || buffer.size() > *size - offset) {
+    return kernel::KernelError::OutOfRange;
   }
 
-  if (!ctx->backing->ReadAt(offset, buffer)) return kernel::IoStatus::DeviceError;
+  if (const auto status = ctx->backing->ReadAt(offset, buffer); status != kernel::KernelError::Success) return status;
 
   transferred = buffer.size();
-  return kernel::IoStatus::Success;
+  return kernel::KernelError::Success;
 }
 
-inline kernel::IoStatus Write(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<const uint8_t> buffer, size_t &transferred) {
+inline kernel::KernelError Write(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<const uint8_t> buffer, size_t &transferred) {
   transferred = 0;
-  if (device->deviceType != kernel::device_type::Disk) return kernel::IoStatus::Unsupported;
+  if (!device) return kernel::KernelError::InvalidArgument;
+  if (device->deviceType != kernel::device_type::Disk) return kernel::KernelError::Unsupported;
 
   const auto *ctx = device->deviceExtension.as<FakeDiskContext>();
-  if (!ctx || !ctx->backing) return kernel::IoStatus::DeviceError;
+  if (!ctx || !ctx->backing) return kernel::KernelError::DeviceError;
 
-  if (offset > ctx->backing->Size() || buffer.size() > ctx->backing->Size() - offset) {
-    return kernel::IoStatus::OutOfRange;
+  const auto size = ctx->backing->Size();
+  if (!size) return size.error();
+  if (offset > *size || buffer.size() > *size - offset) {
+    return kernel::KernelError::OutOfRange;
   }
 
-  if (!ctx->backing->WriteAt(offset, buffer)) return kernel::IoStatus::DeviceError;
+  if (const auto status = ctx->backing->WriteAt(offset, buffer); status != kernel::KernelError::Success) return status;
 
   transferred = buffer.size();
-  return kernel::IoStatus::Success;
+  return kernel::KernelError::Success;
 }
 
 }// namespace diskfake

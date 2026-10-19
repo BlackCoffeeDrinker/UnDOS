@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include <kernel/kerror.hpp>
 #include <kernel/resource.hpp>
 
 // Allocation-agnostic reservation/conflict core. Everything here operates over
@@ -39,15 +40,16 @@ bool ConflictsWithReserved(const IoResourceDescriptor *desc, const Reserved &res
 // descriptors must be free of conflicts. On success emits one
 // CmPartialResourceDescriptor per descriptor into `out` via `alloc` (a functor
 // returning CmPartialResourceDescriptor* or nullptr on failure) and returns
-// true; on any conflict returns false without emitting anything.
+// Success; ResourceConflict on any conflict (nothing emitted) or OutOfMemory
+// if the allocator fails.
 template<typename Reserved, typename Allocator>
-bool TryReserveAlternative(const IoResourceList &alt, const Reserved &reserved, CmResourceList &out, Allocator alloc) {
+KernelError TryReserveAlternative(const IoResourceList &alt, const Reserved &reserved, CmResourceList &out, Allocator alloc) {
   for (const auto desc: alt.descriptors) {
-    if (ConflictsWithReserved(desc, reserved)) return false;
+    if (ConflictsWithReserved(desc, reserved)) return KernelError::ResourceConflict;
   }
   for (const auto &desc: alt.descriptors) {
     CmPartialResourceDescriptor *node = alloc();
-    if (!node) return false;
+    if (!node) return KernelError::OutOfMemory;
     node->type = desc->type;
     node->share = desc->share;
     node->flags = 0;
@@ -55,7 +57,7 @@ bool TryReserveAlternative(const IoResourceList &alt, const Reserved &reserved, 
     node->length = desc->length ? desc->length : 1;
     out.descriptors.push_back(node);
   }
-  return true;
+  return KernelError::Success;
 }
 
 }// namespace kernel::resource

@@ -19,45 +19,40 @@ kernel::Mutex s_attachLock;
 kernel::KObjectPtr<kernel::KVttySinkObject> s_defaultConsoleSink{nullptr};
 }// namespace
 
-UNDOS_KERNEL_API_DEF bool KE_TTY_CreatePair(
-    kernel::tty::VttyPtr &outVtty,
-    kernel::KObjectPtr<kernel::KVttySourceObject> &outSource,
-    kernel::KObjectPtr<kernel::KVttySinkObject> &outSink,
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::tty::TtyPair, kernel::KernelError> KE_TTY_CreatePair(
     const kstd::string_view &namePrefix) noexcept {
 
-  outVtty = kernel::tty::VttyPtr(new kernel::tty::KVtty());
-  if (!outVtty) return false;
+  kernel::tty::TtyPair pair;
+  pair.vtty = kernel::tty::VttyPtr(new kernel::tty::KVtty());
+  if (!pair.vtty) return kstd::unexpected(kernel::KernelError::OutOfMemory);
 
   kstd::static_string<64> sourceName;
   kstd::static_string<64> sinkName;
   kstd::format(sourceName, "{}Source", namePrefix);
   kstd::format(sinkName, "{}Sink", namePrefix);
 
-  outSource = kernel::CreateKObject<kernel::KVttySourceObject>(sourceName);
-  outSink = kernel::CreateKObject<kernel::KVttySinkObject>(sinkName);
+  auto source = kernel::CreateKObject<kernel::KVttySourceObject>(sourceName);
+  if (!source) return kstd::unexpected(source.error());
+  auto sink = kernel::CreateKObject<kernel::KVttySinkObject>(sinkName);
+  if (!sink) return kstd::unexpected(sink.error());
 
-  if (!outSource || !outSink) {
-    outSource = nullptr;
-    outSink = nullptr;
-    outVtty = nullptr;
-    return false;
-  }
-
-  outSource->vtty = outVtty;
-  outSink->vtty = outVtty;
-  return true;
+  pair.source = kstd::move(*source);
+  pair.sink = kstd::move(*sink);
+  pair.source->vtty = pair.vtty;
+  pair.sink->vtty = pair.vtty;
+  return pair;
 }
 
-UNDOS_KERNEL_API_DEF bool KE_TTY_AttachDevice(const kernel::tty::VttyPtr &vtty,
-                                              const kernel::KDevicePtr<kernel::KDevice> &device) noexcept {
-  if (!vtty || !device) return false;
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_TTY_AttachDevice(const kernel::tty::VttyPtr &vtty,
+                                                             const kernel::KDevicePtr<kernel::KDevice> &device) noexcept {
+  if (!vtty || !device) return kernel::KernelError::InvalidArgument;
   kstd::unique_lock lock(s_attachLock);
 
   // Check if already attached
   for (auto &s_attachedPair: s_attachedPairs) {
     if (s_attachedPair.vtty.get() == vtty.get()) {
       s_attachedPair.device = device;
-      return true;
+      return kernel::KernelError::Success;
     }
   }
 
@@ -66,11 +61,11 @@ UNDOS_KERNEL_API_DEF bool KE_TTY_AttachDevice(const kernel::tty::VttyPtr &vtty,
     if (s_attachedPair.vtty == nullptr) {
       s_attachedPair.vtty = vtty;
       s_attachedPair.device = device;
-      return true;
+      return kernel::KernelError::Success;
     }
   }
 
-  return false;
+  return kernel::KernelError::ResourceLimitExceeded;
 }
 
 UNDOS_KERNEL_API_DEF void KE_TTY_DetachDevice(const kernel::tty::VttyPtr &vtty) noexcept {
@@ -126,7 +121,7 @@ UNDOS_KERNEL_API_DEF size_t KE_TTY_PumpDevice(const kernel::tty::VttyPtr &vtty) 
 
     size_t written = 0;
     if (const auto status = KE_IO_WriteDevice(device, 0, kstd::span<const uint8_t>(txBuf, nRead), written);
-      status != kernel::IoStatus::Success || written == 0) {
+      status != kernel::KernelError::Success || written == 0) {
       break;
     }
     totalActivity += written;
@@ -136,8 +131,9 @@ UNDOS_KERNEL_API_DEF size_t KE_TTY_PumpDevice(const kernel::tty::VttyPtr &vtty) 
   uint8_t rxBuf[128];
   size_t readBytes = 0;
   if (const auto status = KE_IO_ReadDevice(device, 0, kstd::span(rxBuf, sizeof(rxBuf)), readBytes);
-      status == kernel::IoStatus::Success && readBytes > 0) {
-    vtty->source_write(rxBuf, readBytes);
+      status == kernel::KernelError::Success && readBytes > 0) {
+    // A closed endpoint just drops the input.
+    (void) vtty->source_write(rxBuf, readBytes);
     totalActivity += readBytes;
 
     // Immediately drain any echo produced by source_write back to the device
@@ -148,7 +144,7 @@ UNDOS_KERNEL_API_DEF size_t KE_TTY_PumpDevice(const kernel::tty::VttyPtr &vtty) 
 
       size_t written = 0;
       if (const auto st = KE_IO_WriteDevice(device, 0, kstd::span<const uint8_t>(txBuf, nRead), written);
-          st != kernel::IoStatus::Success || written == 0) {
+          st != kernel::KernelError::Success || written == 0) {
         break;
       }
       totalActivity += written;
@@ -164,7 +160,7 @@ UNDOS_KERNEL_API_DEF void KE_TTY_PumpAllAttachedDevices() noexcept {
 
   {
     kstd::unique_lock lock(s_attachLock);
-    for (auto &s_attachedPair: s_attachedPairs) {
+    for (const auto &s_attachedPair: s_attachedPairs) {
       if (s_attachedPair.vtty && s_attachedPair.device) {
         activeVttys[count++] = s_attachedPair.vtty;
       }

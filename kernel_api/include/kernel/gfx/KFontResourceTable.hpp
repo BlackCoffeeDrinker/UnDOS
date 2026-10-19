@@ -1,5 +1,7 @@
 #pragma once
 
+#include <expected.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/mutex.hpp>
 #include <vector.hpp>
 
@@ -11,17 +13,13 @@ constexpr uint32_t ResourceSlots = 4;
 
 class ResourceBudget {
 public:
-  bool reserve(uint32_t size) noexcept;
+  // Fails with ResourceLimitExceeded when the system-wide budget is exhausted.
+  KernelError reserve(uint32_t size) noexcept;
   void release(uint32_t size) noexcept;
   uint32_t used() const noexcept;
 private:
   mutable Mutex mutex_;
   uint32_t bytes_{0};
-};
-
-enum class Result : uint32_t {
-  Okay, InvalidHandle, InvalidSize, InvalidState, InvalidOffset, Limit,
-  OutOfMemory, InvalidResource
 };
 
 // Separate handle namespace: high 24 bits generation, low byte slot+1.
@@ -33,10 +31,19 @@ public:
   ResourceTable(const ResourceTable &) = delete;
   ResourceTable &operator=(const ResourceTable &) = delete;
 
-  Result begin(ResourceBudget &budget, uint32_t size, uint32_t &handle);
-  Result append(uint32_t handle, uint32_t offset, const uint8_t *data, size_t size);
-  Result commit(uint32_t handle, uint32_t &face, uint32_t &validationError);
-  Result close(uint32_t handle);
+  // Reserves an upload slot and returns its handle. Errors: InvalidSize,
+  // ResourceLimitExceeded (process/system budget or slots), OutOfMemory.
+  kstd::expected<uint32_t, KernelError> begin(ResourceBudget &budget, uint32_t size);
+  // Errors: InvalidSize, InvalidHandle, InvalidState (already committed),
+  // InvalidOffset (non-sequential or overflowing chunk).
+  KernelError append(uint32_t handle, uint32_t offset, const uint8_t *data, size_t size);
+  // Validates the upload and returns the committed face handle.
+  // `validationError` always receives the undos::font::Error detail; a
+  // validation failure returns InvalidResource and releases the upload.
+  // Other errors: InvalidHandle, InvalidState, ResourceLimitExceeded
+  // (handle generations exhausted).
+  kstd::expected<uint32_t, KernelError> commit(uint32_t handle, uint32_t &validationError);
+  KernelError close(uint32_t handle);
   void clear();
   uint32_t bytes();
 

@@ -13,12 +13,13 @@ diskfake::MemoryBackingStore g_backing;
 // Creates the Disk PDO and attaches it as a filter over `pdo` (mirroring
 // Ata_AddDevice's filter-over-parent pattern), so callers can retrieve it via
 // `pdo->attachedDevice` afterward.
-bool Fake_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
-  const auto disk = KE_IO_CreateBusWithContext<diskfake::FakeDiskContext>(driver, "FakeDisk");
-  if (!disk) {
+kernel::KernelError Fake_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
+  const auto created = KE_IO_CreateBusWithContext<diskfake::FakeDiskContext>(driver, "FakeDisk");
+  if (!created) {
     KE_Print("disk_fake: Failed to create Disk PDO");
-    return false;
+    return created.error();
   }
+  const auto &disk = *created;
 
   disk->deviceType = kernel::device_type::Disk;
   disk->hardwareId = "disk";
@@ -26,9 +27,10 @@ bool Fake_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, con
   auto *ctx = disk->deviceExtension.as<diskfake::FakeDiskContext>();
   ctx->backing = &g_backing;
 
-  KE_IO_AttachFilterDevice(disk, pdo);
+  const auto attached = KE_IO_AttachFilterDevice(disk, pdo);
+  if (!attached) return attached.error();
 
-  return true;
+  return kernel::KernelError::Success;
 }
 
 void Fake_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {

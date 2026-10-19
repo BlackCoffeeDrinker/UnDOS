@@ -68,15 +68,16 @@ void *allocate_large(size_t size) noexcept {
 
   g_large_alloc_lock.lock();
 
-  void *virt_ptr = vmm::allocate_memory(
+  auto allocation = vmm::allocate_memory(
       KE_VMM_GetKernelAddressSpace(), total,
       vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
 
-  if (!virt_ptr) {
+  if (!allocation) {
     g_large_alloc_lock.unlock();
     KE_Print("Failed to allocate large allocation!");
     return nullptr;
   }
+  void *virt_ptr = *allocation;
 
   auto *header = static_cast<LargeAllocHeader *>(virt_ptr);
   header->magic = kLargeAllocMagic;
@@ -89,7 +90,7 @@ void *allocate_large(size_t size) noexcept {
 
 void free_large(void *ptr) noexcept {
   const VirtualAddress virt = VirtualAddress::from_ptr(ptr) - sizeof(LargeAllocHeader);
-  auto *header = virt.as_ptr<LargeAllocHeader>();
+  const auto *header = virt.as_ptr<LargeAllocHeader>();
 
   g_large_alloc_lock.lock();
 
@@ -107,7 +108,11 @@ void free_large(void *ptr) noexcept {
   }
 
   HAL_PMM_FreeFrames(phys, pages);
-  KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), virt.as_ptr());
+  const auto region_status = KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), virt.as_ptr());
+  if (region_status != KernelError::Success) {
+    KE_Print("free_large: failed to release virtual region: {}",
+             make_error_code(region_status).message());
+  }
 
   g_large_alloc_lock.unlock();
 }

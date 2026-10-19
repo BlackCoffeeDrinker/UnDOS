@@ -249,7 +249,7 @@ struct basic_string_view {
   }
 
   [[nodiscard]] constexpr size_type rfind(CharT c, size_type pos = npos) const noexcept {
-    size_type size = _len;
+    const size_type size = _len;
     if (size != 0) {
       for (size_type i = min(pos, size - 1);; --i) {
         if (traits_type::eq(_data[i], c)) return i;

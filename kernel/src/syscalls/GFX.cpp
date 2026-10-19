@@ -1,9 +1,11 @@
+#include "gfx/gfx.hpp"
 #include "stdkrn.hpp"
 #include "syscalls.hpp"
+#include "user/bitmap_font.hpp"
 #include "user/user.hpp"
-#include "gfx/gfx.hpp"
-#include <kernel/gfx/bitmap_font.hpp>
+
 #include <kernel/gfx/raster_helpers.hpp>
+#include <expected.hpp>
 #include <undos/font/resource.hpp>
 
 // GFX (GDI-style) syscall handlers (300-399), generated from
@@ -20,17 +22,6 @@
 namespace {
 
 kernel::font::ResourceBudget fontResourceBudget;
-
-SyscallReturnCode FontResult(kernel::font::Result result) {
-  using kernel::font::Result;
-  switch (result) {
-    case Result::Okay: return SyscallReturnCode_OKAY;
-    case Result::OutOfMemory: return SyscallReturnCode_OUT_OF_MEMORY;
-    case Result::InvalidSize: return SyscallReturnCode_INVALID_SIZE;
-    case Result::Limit: return SyscallReturnCode_OUT_OF_MEMORY;
-    default: return SyscallReturnCode_INVALID_ARGUMENT;
-  }
-}
 
 struct OwnedBitmap final : kernel::KSurface {
   using KSurface::KSurface;
@@ -69,11 +60,13 @@ kernel::KProcessObject *CurrentProcess() {
   return currentThread->owner_process;
 }
 
-// Resolves a HANDLER value to a live KSurface (bitmap or DC target), or null.
-kernel::KObjectPtr<kernel::KSurface> ResolveSurface(kernel::KProcessObject &proc, uint32_t handle) {
+kstd::expected<kernel::KObjectPtr<kernel::KSurface>, kernel::KernelError>
+ResolveSurface(kernel::KProcessObject &proc, uint32_t handle) {
   const auto entry = proc.handles.Lookup(static_cast<kernel::KHandle>(handle));
-  if (!entry) return nullptr;
-  return entry->object.As<kernel::KSurface>();
+  if (!entry) return kstd::unexpected(kernel::KernelError::InvalidHandle);
+  const auto surface = entry->object.As<kernel::KSurface>();
+  if (!surface) return kstd::unexpected(kernel::KernelError::WrongObjectType);
+  return surface;
 }
 
 // Calls fn(left, top, right, bottom) for each part of the rectangle that lies
@@ -127,7 +120,8 @@ uint32_t NativeColor(const kernel::KSurface &surface, uint32_t index) {
   switch (surface.pixelFormat) {
     case kernel::PixelFormat::INDEX8:
       return surface.type == kernel::SurfaceType::Framebuffer && IsPacked(surface)
-                 ? kernel::gfx::RgbTo332(rgb) : index;
+                 ? kernel::gfx::RgbTo332(rgb)
+                 : index;
     case kernel::PixelFormat::RGB15: return kernel::gfx::RgbTo555(rgb);
     case kernel::PixelFormat::RGB16: return kernel::gfx::RgbTo565(rgb);
     case kernel::PixelFormat::ARGB32: return 0xff000000u | rgb;
@@ -137,7 +131,7 @@ uint32_t NativeColor(const kernel::KSurface &surface, uint32_t index) {
 }
 
 struct DirtyRect {
-  kernel::KClipRect rect{INT32_MAX, INT32_MAX, 0, 0};
+  kernel::KClipRect rect{.left = INT32_MAX, .top = INT32_MAX, .right = 0, .bottom = 0};
   void Add(int32_t l, int32_t t, int32_t r, int32_t b) {
     if (l < rect.left) rect.left = l;
     if (t < rect.top) rect.top = t;
@@ -146,27 +140,27 @@ struct DirtyRect {
   }
 };
 
-bool Fill(kernel::KDeviceContextSlot &slot, int64_t l, int64_t t, int64_t r, int64_t b,
+kernel::KernelError Fill(kernel::KDeviceContextSlot &slot, int64_t l, int64_t t, int64_t r, int64_t b,
           uint32_t color, DirtyRect &dirty) {
-  if (!slot.target || !slot.target->backing) return false;
-  bool ok = true;
+  if (!slot.target || !slot.target->backing) return kernel::KernelError::InvalidState;
+  auto result = kernel::KernelError::Success;
   const auto native = NativeColor(*slot.target, color);
   ForEachClip(slot, l, t, r, b, [&](int32_t cl, int32_t ct, int32_t cr, int32_t cb) {
-    bool drawn = false;
+    auto drawn = kernel::KernelError::Unsupported;
     const auto adapter = slot.display ? slot.display->adapter : nullptr;
     const bool screen = slot.display && slot.target == slot.display->surface;
     const bool packed = IsPacked(*slot.target);
     const bool tiny = static_cast<int64_t>(cr - cl) * (cb - ct) <= 256;
     if (packed && (tiny || slot.noAccel))
       drawn = KE_GFX_SoftwareFillRect(slot.target, cl, ct, cr - cl, cb - ct, native);
-    if (!drawn && screen && adapter && adapter->FillRect && (!slot.noAccel || !packed))
+    if (drawn != kernel::KernelError::Success && screen && adapter && adapter->FillRect && (!slot.noAccel || !packed))
       drawn = adapter->FillRect(adapter, slot.target, cl, ct, cr - cl, cb - ct, native);
-    if (!drawn && packed)
+    if (drawn != kernel::KernelError::Success && packed)
       drawn = KE_GFX_SoftwareFillRect(slot.target, cl, ct, cr - cl, cb - ct, native);
-    if (drawn) dirty.Add(cl, ct, cr, cb);
-    ok = ok && drawn;
+    if (drawn == kernel::KernelError::Success) dirty.Add(cl, ct, cr, cb);
+    if (result == kernel::KernelError::Success) result = drawn;
   });
-  return ok;
+  return result;
 }
 
 void Present(kernel::KDeviceContextSlot &slot, const DirtyRect &dirty) {
@@ -194,62 +188,70 @@ void Present(kernel::KDeviceContextSlot &slot, const DirtyRect &dirty) {
 
 }// namespace
 
-SyscallReturnCode handle_QueryFontEngine_V1(__KRN_GFX_QUERYFONTENGINE_V1 &&args) {
+kernel::KernelError handle_QueryFontEngine_V1(__KRN_GFX_QUERYFONTENGINE_V1 &&args) {
   args.version = undos::font::Version;
   args.capabilities = 1;
-  return SyscallReturnCode_OKAY;
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_BeginFontUpload_V1(__KRN_GFX_BEGINFONTUPLOAD_V1 &&args) {
+kernel::KernelError handle_BeginFontUpload_V1(__KRN_GFX_BEGINFONTUPLOAD_V1 &&args) {
   args.upload = 0;
   auto *process = CurrentProcess();
-  if (!process) return SyscallReturnCode_INVALID_ARGUMENT;
-  return FontResult(process->fontResources.begin(fontResourceBudget, args.totalBytes, args.upload));
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  const auto upload = process->fontResources.begin(fontResourceBudget, args.totalBytes);
+  if (!upload) return upload.error();
+  args.upload = *upload;
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_AppendFontUpload_V1(__KRN_GFX_APPENDFONTUPLOAD_V1 &&args) {
+kernel::KernelError handle_AppendFontUpload_V1(__KRN_GFX_APPENDFONTUPLOAD_V1 &&args) {
   auto *process = CurrentProcess();
-  if (!process) return SyscallReturnCode_INVALID_ARGUMENT;
-  return FontResult(process->fontResources.append(args.upload, args.offset, args.data.get(), args.data.size()));
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  return process->fontResources.append(args.upload, args.offset, args.data.get(), args.data.size());
 }
 
-SyscallReturnCode handle_CommitFontUpload_V1(__KRN_GFX_COMMITFONTUPLOAD_V1 &&args) {
+kernel::KernelError handle_CommitFontUpload_V1(__KRN_GFX_COMMITFONTUPLOAD_V1 &&args) {
   args.face = 0;
   args.validationError = 0;
   auto *process = CurrentProcess();
-  if (!process) return SyscallReturnCode_INVALID_ARGUMENT;
-  const auto result = process->fontResources.commit(args.upload, args.face, args.validationError);
-  if (result == kernel::font::Result::InvalidResource)
-    KE_Print("GFX Font Engine: registration rejected: {}",
-             undos::font::error_message(static_cast<undos::font::Error>(args.validationError)));
-  return FontResult(result);
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  const auto face = process->fontResources.commit(args.upload, args.validationError);
+  if (!face) {
+    if (face.error() == kernel::KernelError::InvalidResource)
+      KE_Print("GFX Font Engine: registration rejected: {}",
+               undos::font::error_message(static_cast<undos::font::Error>(args.validationError)));
+    return face.error();
+  }
+  args.face = *face;
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_CloseFontResource_V1(__KRN_GFX_CLOSEFONTRESOURCE_V1 &&args) {
+kernel::KernelError handle_CloseFontResource_V1(__KRN_GFX_CLOSEFONTRESOURCE_V1 &&args) {
   auto *process = CurrentProcess();
-  if (!process) return SyscallReturnCode_INVALID_ARGUMENT;
-  return FontResult(process->fontResources.close(args.handle));
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  return process->fontResources.close(args.handle);
 }
 
-SyscallReturnCode handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
+kernel::KernelError handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
   args.handle = 0;
   (void) args.driverName;
   (void) args.deviceName;
   const auto flags = static_cast<uint32_t>(args.initFlags);
   constexpr uint32_t supported = DCInitFlags_Primary | DCInitFlags_Memory | DCInitFlags_Offscreen | DCInitFlags_NoAccel;
   const bool memory = (flags & (DCInitFlags_Memory | DCInitFlags_Offscreen)) != 0;
-  if ((flags & ~supported) || (memory && (flags & DCInitFlags_Primary))) return SyscallReturnCode_INVALID_ARGUMENT;
+  if ((flags & ~supported) || (memory && (flags & DCInitFlags_Primary))) return kernel::KernelError::InvalidArgument;
 
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   kernel::user::Guard scene;
 
   const auto display = KE_GFX_GetPrimaryDisplay();
   if (!memory && (!display || !display->surface || !display->isAttachedToDesktop))
-    return SyscallReturnCode_UNSUPPORTED;
+    return kernel::KernelError::Unsupported;
 
-  auto [slot, hdc] = proc->dcTable.Allocate();
-  if (!slot) return SyscallReturnCode_OUT_OF_MEMORY;
+  const auto allocated = proc->dcTable.Allocate();
+  if (!allocated) return allocated.error();
+  auto [slot, hdc] = *allocated;
 
   slot->lock.lock();
   slot->display = display;
@@ -259,133 +261,133 @@ SyscallReturnCode handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
   slot->lock.unlock();
 
   args.handle = hdc;
-  return SyscallReturnCode_OKAY;
+  return kernel::KernelError::Success;
 }
 
 namespace {
 DisplayMode PublicMode(const kernel::KDisplayModeInfo &mode) {
-  return {static_cast<uint32_t>(mode.modeIndex), mode.width, mode.height, mode.bpp, mode.refreshRate};
+  return {.modeId = static_cast<uint32_t>(mode.modeIndex), .width = mode.width, .height = mode.height, .colorDepth = mode.bpp, .refreshHz = mode.refreshRate};
 }
-}
+}// namespace
 
-SyscallReturnCode handle_EnumDisplayModes_V1(__KRN_GFX_ENUMDISPLAYMODES_V1 &&args) {
+kernel::KernelError handle_EnumDisplayModes_V1(__KRN_GFX_ENUMDISPLAYMODES_V1 &&args) {
   args.mode = {};
   args.available = 0;
   kernel::user::Guard scene;
   const auto display = KE_GFX_GetPrimaryDisplay();
-  if (!display || !display->GetModeInfo || !display->SetMode) return SyscallReturnCode_UNSUPPORTED;
-  kernel::KDisplayModeInfo mode{};
-  if (kernel::gfx::enumerate_mode(display, args.index, mode)) {
-    args.mode = PublicMode(mode);
-    args.available = 1;
-  }
-  return SyscallReturnCode_OKAY;
+  if (!display || !display->GetModeInfo || !display->SetMode) return kernel::KernelError::Unsupported;
+  const auto mode = kernel::gfx::enumerate_mode(display, args.index);
+  if (!mode) return mode.error() == kernel::KernelError::NotFound ? kernel::KernelError::Success : mode.error();
+  args.mode = PublicMode(*mode);
+  args.available = 1;
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_GetDisplayMode_V1(__KRN_GFX_GETDISPLAYMODE_V1 &&args) {
+kernel::KernelError handle_GetDisplayMode_V1(__KRN_GFX_GETDISPLAYMODE_V1 &&args) {
   args.state = {};
   kernel::user::Guard scene;
   const auto display = KE_GFX_GetPrimaryDisplay();
-  if (!display) return SyscallReturnCode_UNSUPPORTED;
+  if (!display) return kernel::KernelError::Unsupported;
   args.state.active = display->isAttachedToDesktop ? 1 : 0;
   args.state.generation = display->modeGeneration;
   args.state.mode = PublicMode(display->currentMode);
-  return SyscallReturnCode_OKAY;
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_SetDisplayMode_V1(__KRN_GFX_SETDISPLAYMODE_V1 &&args) {
+kernel::KernelError handle_SetDisplayMode_V1(__KRN_GFX_SETDISPLAYMODE_V1 &&args) {
   kernel::user::Guard scene;
   const auto display = KE_GFX_GetPrimaryDisplay();
-  if (!display || !display->GetModeInfo || !display->SetMode) return SyscallReturnCode_UNSUPPORTED;
-  kernel::KDisplayModeInfo mode{};
-  if (!display->GetModeInfo(display, args.modeId, mode) ||
-      !kernel::gfx::usable_mode(display, mode)) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!display || !display->GetModeInfo || !display->SetMode) return kernel::KernelError::Unsupported;
+  const auto mode = display->GetModeInfo(display, args.modeId);
+  if (!mode) return mode.error();
+  if (!kernel::gfx::usable_mode(display, *mode)) return kernel::KernelError::InvalidArgument;
   if (display->isAttachedToDesktop && display->currentMode.modeIndex == args.modeId)
-    return SyscallReturnCode_OKAY;
+    return kernel::KernelError::Success;
   kernel::user::SceneDrawGuard drawing;
   const auto generation = display->modeGeneration;
-  const bool changed = KE_GFX_SetDisplayMode(display, args.modeId);
+  const auto result = KE_GFX_SetDisplayMode(display, args.modeId);
   if (generation != display->modeGeneration) {
     kernel::user::cursor_reset_locked();
     kernel::user::display_input_changed_locked(generation == 0);
-    kernel::user::display_changed_locked(display->isAttachedToDesktop ? mode.bpp : 0);
+    kernel::user::display_changed_locked(display->isAttachedToDesktop ? mode->bpp : 0);
   }
-  return changed ? SyscallReturnCode_OKAY : SyscallReturnCode_UNKNOWN;
+  return result;
 }
 
-SyscallReturnCode handle_DeleteDC_V1(__KRN_GFX_DELETEDC_V1 &&args) {
+kernel::KernelError handle_DeleteDC_V1(__KRN_GFX_DELETEDC_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   kernel::user::Guard scene;
 
-  if (proc->dcTable.Close(args.dc)) {
-    return SyscallReturnCode_OKAY;
-  }
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return proc->dcTable.Close(args.dc);
 }
 
-SyscallReturnCode handle_SelectObject_V1(__KRN_GFX_SELECTOBJECT_V1 &&args) {
+kernel::KernelError handle_SelectObject_V1(__KRN_GFX_SELECTOBJECT_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   kernel::user::Guard scene;
 
   const auto slot = proc->dcTable.Resolve(args.dc);
-  if (!slot) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!slot) return kernel::KernelError::InvalidHandle;
 
-  const auto bitmap = ResolveSurface(*proc, args.object);
-  if (!bitmap) return SyscallReturnCode_INVALID_ARGUMENT;
+  const auto resolved = ResolveSurface(*proc, args.object);
+  if (!resolved) return resolved.error();
+  const auto &bitmap = *resolved;
 
   slot->lock.lock();
   if (!slot->memoryDC) {
     slot->lock.unlock();
-    return SyscallReturnCode_INVALID_ARGUMENT;
+    return kernel::KernelError::InvalidState;
   }
   slot->selectedBitmap = bitmap;
   slot->target = bitmap;
   slot->lock.unlock();
 
-  return SyscallReturnCode_OKAY;
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_CreatePen_V1(__KRN_GFX_CREATEPEN_V1 &&args) {
+kernel::KernelError handle_CreatePen_V1(__KRN_GFX_CREATEPEN_V1 &&args) {
   (void) args;
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return kernel::KernelError::NotImplemented;
 }
 
-SyscallReturnCode handle_CreateBrush_V1(__KRN_GFX_CREATEBRUSH_V1 &&args) {
+kernel::KernelError handle_CreateBrush_V1(__KRN_GFX_CREATEBRUSH_V1 &&args) {
   (void) args;
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return kernel::KernelError::NotImplemented;
 }
 
-SyscallReturnCode handle_CreateFont_V1(__KRN_GFX_CREATEFONT_V1 &&args) {
+kernel::KernelError handle_CreateFont_V1(__KRN_GFX_CREATEFONT_V1 &&args) {
   (void) args;
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return kernel::KernelError::NotImplemented;
 }
 
-SyscallReturnCode handle_CreateBitmap_V1(__KRN_GFX_CREATEBITMAP_V1 &&args) {
+kernel::KernelError handle_CreateBitmap_V1(__KRN_GFX_CREATEBITMAP_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
 
   if (args.width == 0 || args.height == 0 || args.width > INT32_MAX || args.height > INT32_MAX ||
-      static_cast<uint32_t>(args.format) > 2) return SyscallReturnCode_INVALID_ARGUMENT;
+      static_cast<uint32_t>(args.format) > 2) return kernel::KernelError::InvalidArgument;
 
   const auto pixelFormat = static_cast<kernel::PixelFormat>(args.format);
   const uint32_t bpp = BytesPerPixel(pixelFormat);
   const uint64_t widePitch = static_cast<uint64_t>(args.width) * bpp;
   const uint64_t wideSize = widePitch * args.height;
   // A bounded allocation protects the 32-bit kernel and low-memory targets.
-  if (widePitch > INT32_MAX || wideSize > 16u * 1024u * 1024u) return SyscallReturnCode_INVALID_ARGUMENT;
-  const size_t pitch = static_cast<size_t>(widePitch);
-  const size_t size = static_cast<size_t>(wideSize);
+  if (widePitch > INT32_MAX || wideSize > 16u * 1024u * 1024u) return kernel::KernelError::InvalidArgument;
+  const auto pitch = static_cast<size_t>(widePitch);
+  const auto size = static_cast<size_t>(wideSize);
 
-  auto bitmap = kernel::CreateKObject<OwnedBitmap>("Bitmap");
-  if (!bitmap) return SyscallReturnCode_OUT_OF_MEMORY;
-  auto backing = kernel::CreateKObject<kernel::KMemoryBackingObject>("BitmapBacking");
-  if (!backing) return SyscallReturnCode_OUT_OF_MEMORY;
+  const auto createdBitmap = kernel::CreateKObject<OwnedBitmap>("Bitmap");
+  if (!createdBitmap) return createdBitmap.error();
+  const auto &bitmap = *createdBitmap;
+  const auto createdBacking = kernel::CreateKObject<kernel::KMemoryBackingObject>("BitmapBacking");
+  if (!createdBacking) return createdBacking.error();
+  const auto &backing = *createdBacking;
 
   auto &as = KE_VMM_GetKernelAddressSpace();
-  void *region = KE_VMM_AllocateRegion(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
-  if (!region) return SyscallReturnCode_OUT_OF_MEMORY;
+  const auto allocatedRegion = KE_VMM_AllocateRegion(as, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+  if (!allocatedRegion) return allocatedRegion.error();
+  void *region = *allocatedRegion;
 
   bitmap->pixels = region;
   backing->directAddress = kernel::VirtualAddress::from_ptr(region);
@@ -406,97 +408,99 @@ SyscallReturnCode handle_CreateBitmap_V1(__KRN_GFX_CREATEBITMAP_V1 &&args) {
   }
 
   kernel::user::Guard scene;
-  const kernel::KHandle h = proc->handles.Allocate(
+  const auto allocated = proc->handles.Allocate(
       bitmap,
       kernel::ProcessHandleTable::HandleAccess::Read |
           kernel::ProcessHandleTable::HandleAccess::Write,
       kernel::ProcessHandleTable::HandleFlags::None);
 
-  args.handle = static_cast<uint32_t>(h);
-  return SyscallReturnCode_OKAY;
+  if (!allocated) return allocated.error();
+  args.handle = static_cast<uint32_t>(*allocated);
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_DeleteObject_V1(__KRN_GFX_DELETEOBJECT_V1 &&args) {
+kernel::KernelError handle_DeleteObject_V1(__KRN_GFX_DELETEOBJECT_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   kernel::user::Guard scene;
 
-  if (!ResolveSurface(*proc, args.object)) return SyscallReturnCode_INVALID_ARGUMENT;
+  const auto surface = ResolveSurface(*proc, args.object);
+  if (!surface) return surface.error();
 
-  if (proc->handles.Close(static_cast<kernel::KHandle>(args.object))) {
-    return SyscallReturnCode_OKAY;
-  }
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return proc->handles.Close(static_cast<kernel::KHandle>(args.object));
 }
 
-SyscallReturnCode handle_MoveTo_V1(__KRN_GFX_MOVETO_V1 &&args) {
+kernel::KernelError handle_MoveTo_V1(__KRN_GFX_MOVETO_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   kernel::user::Guard scene;
 
   const auto slot = proc->dcTable.Resolve(args.dc);
-  if (!slot) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!slot) return kernel::KernelError::InvalidHandle;
 
   slot->lock.lock();
   slot->currentX = args.x;
   slot->currentY = args.y;
   slot->lock.unlock();
 
-  return SyscallReturnCode_OKAY;
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_LineTo_V1(__KRN_GFX_LINETO_V1 &&args) {
+kernel::KernelError handle_LineTo_V1(__KRN_GFX_LINETO_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   ScreenDrawGuard draw;
 
   const auto slot = proc->dcTable.Resolve(args.dc);
-  if (!slot) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!slot) return kernel::KernelError::InvalidHandle;
 
   slot->lock.lock();
 
   if (!slot->target || !slot->target->backing) {
     slot->lock.unlock();
-    return SyscallReturnCode_INVALID_ARGUMENT;
+    return kernel::KernelError::InvalidState;
   }
 
   const int64_t x0 = static_cast<int64_t>(slot->currentX) + slot->originX;
   const int64_t y0 = static_cast<int64_t>(slot->currentY) + slot->originY;
   const int64_t x1 = static_cast<int64_t>(args.x) + slot->originX;
   const int64_t y1 = static_cast<int64_t>(args.y) + slot->originY;
-  bool ok = true;
+  auto result = kernel::KernelError::Success;
   DirtyRect dirty;
-  const bool valid = kernel::gfx::ForEachLinePixel(x0, y0, x1, y1, slot->target->width, slot->target->height,
-      [&](int32_t x, int32_t y) {
-        if (InClip(*slot, x, y)) ok = Fill(*slot, x, y, static_cast<int64_t>(x) + 1,
-                                         static_cast<int64_t>(y) + 1, slot->penColor, dirty) && ok;
-      });
+  const auto valid = kernel::gfx::ForEachLinePixel(x0, y0, x1, y1, slot->target->width, slot->target->height,
+                                                   [&](int32_t x, int32_t y) {
+                                                     if (InClip(*slot, x, y)) {
+                                                       const auto error = Fill(*slot, x, y, static_cast<int64_t>(x) + 1,
+                                                                               static_cast<int64_t>(y) + 1, slot->penColor, dirty);
+                                                       if (result == kernel::KernelError::Success) result = error;
+                                                     }
+                                                   });
 
   slot->currentX = args.x;
   slot->currentY = args.y;
   Present(*slot, dirty);
   slot->lock.unlock();
 
-  return ok && valid ? SyscallReturnCode_OKAY : SyscallReturnCode_INVALID_ARGUMENT;
+  return valid == kernel::KernelError::Success ? result : valid;
 }
 
-SyscallReturnCode handle_Rectangle_V1(__KRN_GFX_RECTANGLE_V1 &&args) {
+kernel::KernelError handle_Rectangle_V1(__KRN_GFX_RECTANGLE_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   ScreenDrawGuard draw;
 
   const auto slot = proc->dcTable.Resolve(args.dc);
-  if (!slot) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!slot) return kernel::KernelError::InvalidHandle;
 
   slot->lock.lock();
 
   if (!slot->target || !slot->target->backing) {
     slot->lock.unlock();
-    return SyscallReturnCode_INVALID_ARGUMENT;
+    return kernel::KernelError::InvalidState;
   }
 
   DirtyRect dirty;
-  const bool ok = Fill(*slot, static_cast<int64_t>(args.left) + slot->originX,
+  const auto result = Fill(*slot, static_cast<int64_t>(args.left) + slot->originX,
                        static_cast<int64_t>(args.top) + slot->originY,
                        static_cast<int64_t>(args.right) + slot->originX,
                        static_cast<int64_t>(args.bottom) + slot->originY, slot->penColor, dirty);
@@ -504,47 +508,48 @@ SyscallReturnCode handle_Rectangle_V1(__KRN_GFX_RECTANGLE_V1 &&args) {
 
   slot->lock.unlock();
 
-  return ok ? SyscallReturnCode_OKAY : SyscallReturnCode_INVALID_ARGUMENT;
+  return result;
 }
 
-SyscallReturnCode handle_Ellipse_V1(__KRN_GFX_ELLIPSE_V1 &&args) {
+kernel::KernelError handle_Ellipse_V1(__KRN_GFX_ELLIPSE_V1 &&args) {
   (void) args;
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return kernel::KernelError::NotImplemented;
 }
 
-SyscallReturnCode handle_TextOut_V1(__KRN_GFX_TEXTOUT_V1 &&args) {
+kernel::KernelError handle_TextOut_V1(__KRN_GFX_TEXTOUT_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   ScreenDrawGuard draw;
   const auto slot = proc->dcTable.Resolve(args.dc);
-  if (!slot) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!slot) return kernel::KernelError::InvalidHandle;
   slot->lock.lock();
   if (!slot->target || !slot->target->backing) {
     slot->lock.unlock();
-    return SyscallReturnCode_INVALID_ARGUMENT;
+    return kernel::KernelError::InvalidState;
   }
-  bool ok = true;
+  auto result = kernel::KernelError::Success;
   DirtyRect dirty;
   kernel::gfx::DrawBitmapText(static_cast<int64_t>(args.x) + slot->originX,
                               static_cast<int64_t>(args.y) + slot->originY,
                               args.text.data(), args.text.size(), slot->penColor,
                               slot->backgroundColor, slot->opaqueText,
                               [&](int64_t l, int64_t t, int64_t r, int64_t b, uint32_t color) {
-                                ok = Fill(*slot, l, t, r, b, color, dirty) && ok;
+                                const auto error = Fill(*slot, l, t, r, b, color, dirty);
+                                if (result == kernel::KernelError::Success) result = error;
                               });
   Present(*slot, dirty);
   slot->lock.unlock();
-  return ok ? SyscallReturnCode_OKAY : SyscallReturnCode_INVALID_ARGUMENT;
+  return result;
 }
 
-SyscallReturnCode handle_BitBlt_V1(__KRN_GFX_BITBLT_V1 &&args) {
+kernel::KernelError handle_BitBlt_V1(__KRN_GFX_BITBLT_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   ScreenDrawGuard draw;
 
   const auto dstSlot = proc->dcTable.Resolve(args.dstDC);
   const auto srcSlot = proc->dcTable.Resolve(args.srcDC);
-  if (!dstSlot || !srcSlot) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!dstSlot || !srcSlot) return kernel::KernelError::InvalidHandle;
 
   // A single HDC can be resolved for both dst and src (e.g. blitting within
   // the same surface); SpinLock is not recursive, so only lock once in that
@@ -560,7 +565,7 @@ SyscallReturnCode handle_BitBlt_V1(__KRN_GFX_BITBLT_V1 &&args) {
   if (!dstSlot->target || !srcSlot->target) {
     if (!sameSlot) srcSlot->lock.unlock();
     dstSlot->lock.unlock();
-    return SyscallReturnCode_INVALID_ARGUMENT;
+    return kernel::KernelError::InvalidArgument;
   }
 
   const auto adapter = dstSlot->display ? dstSlot->display->adapter : nullptr;
@@ -570,31 +575,31 @@ SyscallReturnCode handle_BitBlt_V1(__KRN_GFX_BITBLT_V1 &&args) {
       (!dstPacked && (!adapter || !adapter->BitBlt || dstSlot->display != srcSlot->display))) {
     if (!sameSlot) srcSlot->lock.unlock();
     dstSlot->lock.unlock();
-    return SyscallReturnCode_INVALID_ARGUMENT;
+    return kernel::KernelError::InvalidArgument;
   }
 
   const auto rop = static_cast<kernel::RasterOp>(args.rop);
 
-  kernel::gfx::BlitRect copy{static_cast<int64_t>(args.x) + dstSlot->originX,
-                            static_cast<int64_t>(args.y) + dstSlot->originY,
-                            static_cast<int64_t>(args.srcX) + srcSlot->originX,
-                            static_cast<int64_t>(args.srcY) + srcSlot->originY,
-                            args.width, args.height};
+  kernel::gfx::BlitRect copy{.dstX = static_cast<int64_t>(args.x) + dstSlot->originX,
+                             .dstY = static_cast<int64_t>(args.y) + dstSlot->originY,
+                             .srcX = static_cast<int64_t>(args.srcX) + srcSlot->originX,
+                             .srcY = static_cast<int64_t>(args.srcY) + srcSlot->originY,
+                             .width = args.width, .height = args.height};
   if (!kernel::gfx::ClipBlit(copy, dstSlot->target->width, dstSlot->target->height,
                              srcSlot->target->width, srcSlot->target->height)) {
     if (!sameSlot) srcSlot->lock.unlock();
     dstSlot->lock.unlock();
-    return SyscallReturnCode_OKAY;
+    return kernel::KernelError::Success;
   }
   const int32_t dx = static_cast<int32_t>(copy.dstX);
   const int32_t dy = static_cast<int32_t>(copy.dstY);
   const int32_t sx = static_cast<int32_t>(copy.srcX);
   const int32_t sy = static_cast<int32_t>(copy.srcY);
-  bool ok = true;
+  auto result = kernel::KernelError::Success;
   const bool sharedBacking = dstSlot->target->backing == srcSlot->target->backing;
   if (sharedBacking && (dstSlot->target != srcSlot->target)) {
     // Aliased surface views with different pitches/layouts are unsupported.
-    ok = false;
+    result = kernel::KernelError::Unsupported;
   } else if (sharedBacking && (dstSlot->clipped || !dstPacked)) {
     // Global scan order matters even across disjoint clip rectangles. Copy
     // individual pixels in memmove order; drivers never see an overlapping blit.
@@ -605,74 +610,76 @@ SyscallReturnCode handle_BitBlt_V1(__KRN_GFX_BITBLT_V1 &&args) {
       for (int64_t col = 0; col < copy.width; ++col) {
         const int32_t offX = static_cast<int32_t>(reverseX ? copy.width - 1 - col : col);
         if (!InClip(*dstSlot, dx + offX, dy + offY)) continue;
-        const bool drawn = dstPacked
-            ? KE_GFX_SoftwareBitBlt(dstSlot->target, dx + offX, dy + offY, srcSlot->target, sx + offX, sy + offY, 1, 1, rop)
-            : adapter->BitBlt(adapter, dstSlot->target, dx + offX, dy + offY, srcSlot->target, sx + offX, sy + offY, 1, 1, rop);
-        ok = drawn && ok;
+        const auto drawn = dstPacked
+                               ? KE_GFX_SoftwareBitBlt(dstSlot->target, dx + offX, dy + offY, srcSlot->target, sx + offX, sy + offY, 1, 1, rop)
+                               : adapter->BitBlt(adapter, dstSlot->target, dx + offX, dy + offY, srcSlot->target, sx + offX, sy + offY, 1, 1, rop);
+        if (result == kernel::KernelError::Success) result = drawn;
       }
     }
   } else {
     ForEachClip(*dstSlot, dx, dy, dx + copy.width, dy + copy.height,
-              [&](int32_t l, int32_t t, int32_t r, int32_t b) {
-                const int32_t csx = sx + (l - dx);
-                const int32_t csy = sy + (t - dy);
-                const auto w = static_cast<uint32_t>(r - l);
-                const auto h = static_cast<uint32_t>(b - t);
-                bool drawn = false;
-                if (!dstPacked) drawn = adapter->BitBlt(adapter, dstSlot->target, l, t, srcSlot->target, csx, csy, w, h, rop);
-                else drawn = KE_GFX_SoftwareBitBlt(dstSlot->target, l, t, srcSlot->target, csx, csy, w, h, rop);
-                ok = ok && drawn;
-              });
+                [&](int32_t l, int32_t t, int32_t r, int32_t b) {
+                  const int32_t csx = sx + (l - dx);
+                  const int32_t csy = sy + (t - dy);
+                  const auto w = static_cast<uint32_t>(r - l);
+                  const auto h = static_cast<uint32_t>(b - t);
+                  auto drawn = kernel::KernelError::Unsupported;
+                  if (!dstPacked) drawn = adapter->BitBlt(adapter, dstSlot->target, l, t, srcSlot->target, csx, csy, w, h, rop);
+                  else
+                    drawn = KE_GFX_SoftwareBitBlt(dstSlot->target, l, t, srcSlot->target, csx, csy, w, h, rop);
+                  if (result == kernel::KernelError::Success) result = drawn;
+                });
   }
 
   DirtyRect dirty;
-  if (ok) dirty.Add(dx, dy, static_cast<int32_t>(dx + copy.width), static_cast<int32_t>(dy + copy.height));
+  if (result == kernel::KernelError::Success) dirty.Add(dx, dy, static_cast<int32_t>(dx + copy.width), static_cast<int32_t>(dy + copy.height));
   Present(*dstSlot, dirty);
   if (!sameSlot) srcSlot->lock.unlock();
   dstSlot->lock.unlock();
 
-  return ok ? SyscallReturnCode_OKAY : SyscallReturnCode_INVALID_ARGUMENT;
+  return result;
 }
 
-SyscallReturnCode handle_StretchBlt_V1(__KRN_GFX_STRETCHBLT_V1 &&args) {
+kernel::KernelError handle_StretchBlt_V1(__KRN_GFX_STRETCHBLT_V1 &&args) {
   (void) args;
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return kernel::KernelError::NotImplemented;
 }
 
-SyscallReturnCode handle_AlphaBlend_V1(__KRN_GFX_ALPHABLEND_V1 &&args) {
+kernel::KernelError handle_AlphaBlend_V1(__KRN_GFX_ALPHABLEND_V1 &&args) {
   (void) args;
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return kernel::KernelError::NotImplemented;
 }
 
-SyscallReturnCode handle_CreateRegion_V1(__KRN_GFX_CREATEREGION_V1 &&args) {
+kernel::KernelError handle_CreateRegion_V1(__KRN_GFX_CREATEREGION_V1 &&args) {
   (void) args;
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return kernel::KernelError::NotImplemented;
 }
 
-SyscallReturnCode handle_SelectClipRegion_V1(__KRN_GFX_SELECTCLIPREGION_V1 &&args) {
+kernel::KernelError handle_SelectClipRegion_V1(__KRN_GFX_SELECTCLIPREGION_V1 &&args) {
   (void) args;
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return kernel::KernelError::NotImplemented;
 }
 
-SyscallReturnCode handle_CombineRegion_V1(__KRN_GFX_COMBINEREGION_V1 &&args) {
+kernel::KernelError handle_CombineRegion_V1(__KRN_GFX_COMBINEREGION_V1 &&args) {
   (void) args;
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return kernel::KernelError::NotImplemented;
 }
 
-SyscallReturnCode handle_SetViewportOrg_V1(__KRN_GFX_SETVIEWPORTORG_V1 &&args) {
+kernel::KernelError handle_SetViewportOrg_V1(__KRN_GFX_SETVIEWPORTORG_V1 &&args) {
   (void) args;
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return kernel::KernelError::NotImplemented;
 }
 
-SyscallReturnCode handle_SetWindowOrg_V1(__KRN_GFX_SETWINDOWORG_V1 &&args) {
+kernel::KernelError handle_SetWindowOrg_V1(__KRN_GFX_SETWINDOWORG_V1 &&args) {
   (void) args;
-  return SyscallReturnCode_INVALID_ARGUMENT;
+  return kernel::KernelError::NotImplemented;
 }
 
-SyscallReturnCode handle_GetTextMetrics_V1(__KRN_GFX_GETTEXTMETRICS_V1 &&args) {
+kernel::KernelError handle_GetTextMetrics_V1(__KRN_GFX_GETTEXTMETRICS_V1 &&args) {
   const auto proc = CurrentProcess();
   kernel::user::Guard scene;
-  if (!proc || !proc->dcTable.Resolve(args.dc)) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
+  if (!proc->dcTable.Resolve(args.dc)) return kernel::KernelError::InvalidHandle;
   args.metrics.cellWidth = kernel::gfx::kFontCellWidth;
   args.metrics.cellHeight = kernel::gfx::kFontCellHeight;
   args.metrics.ascent = kernel::gfx::kFontAscent;
@@ -680,31 +687,34 @@ SyscallReturnCode handle_GetTextMetrics_V1(__KRN_GFX_GETTEXTMETRICS_V1 &&args) {
   args.metrics.firstChar = kernel::gfx::kFontFirstChar;
   args.metrics.lastChar = kernel::gfx::kFontLastChar;
   args.metrics.defaultChar = kernel::gfx::kFontDefaultChar;
-  return SyscallReturnCode_OKAY;
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_SetDrawColors_V1(__KRN_GFX_SETDRAWCOLORS_V1 &&args) {
+kernel::KernelError handle_SetDrawColors_V1(__KRN_GFX_SETDRAWCOLORS_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc || args.foreground > 15 || args.background > 15 || args.opaque > 1) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
+  if (args.foreground > 15 || args.background > 15 || args.opaque > 1) return kernel::KernelError::InvalidArgument;
   kernel::user::Guard scene;
   const auto slot = proc->dcTable.Resolve(args.dc);
-  if (!slot) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!slot) return kernel::KernelError::InvalidHandle;
   slot->lock.lock();
   slot->penColor = args.foreground;
   slot->backgroundColor = args.background;
   slot->opaqueText = args.opaque != 0;
   slot->lock.unlock();
-  return SyscallReturnCode_OKAY;
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_GetBitmapBits_V1(__KRN_GFX_GETBITMAPBITS_V1 &&args) {
+kernel::KernelError handle_GetBitmapBits_V1(__KRN_GFX_GETBITMAPBITS_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   kernel::user::Guard scene;
 
-  const auto bitmap = ResolveSurface(*proc, args.bitmap);
-  if (!bitmap || !bitmap->backing || !bitmap->backing->directAddress) return SyscallReturnCode_INVALID_ARGUMENT;
-  if (!args.buffer) return SyscallReturnCode_INVALID_ARGUMENT;
+  const auto resolved = ResolveSurface(*proc, args.bitmap);
+  if (!resolved) return resolved.error();
+  const auto &bitmap = *resolved;
+  if (!bitmap->backing || !bitmap->backing->directAddress) return kernel::KernelError::InvalidState;
+  if (!args.buffer) return kernel::KernelError::InvalidArgument;
 
   const size_t surfaceSize = SurfaceSizeInBytes(*bitmap);
   const size_t copySize = args.buffer.size() < surfaceSize ? args.buffer.size() : surfaceSize;
@@ -712,39 +722,41 @@ SyscallReturnCode handle_GetBitmapBits_V1(__KRN_GFX_GETBITMAPBITS_V1 &&args) {
   kstd::memcpy(args.buffer.get(), bitmap->backing->directAddress.as_ptr<uint8_t>(), copySize);
   args.buffer_len = copySize;
 
-  return SyscallReturnCode_OKAY;
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_SetBitmapBits_V1(__KRN_GFX_SETBITMAPBITS_V1 &&args) {
+kernel::KernelError handle_SetBitmapBits_V1(__KRN_GFX_SETBITMAPBITS_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   kernel::user::Guard scene;
 
-  const auto bitmap = ResolveSurface(*proc, args.bitmap);
-  if (!bitmap || !bitmap->backing || !bitmap->backing->directAddress) return SyscallReturnCode_INVALID_ARGUMENT;
-  if (!args.buffer) return SyscallReturnCode_INVALID_ARGUMENT;
+  const auto resolved = ResolveSurface(*proc, args.bitmap);
+  if (!resolved) return resolved.error();
+  const auto &bitmap = *resolved;
+  if (!bitmap->backing || !bitmap->backing->directAddress) return kernel::KernelError::InvalidState;
+  if (!args.buffer) return kernel::KernelError::InvalidArgument;
 
   const size_t surfaceSize = SurfaceSizeInBytes(*bitmap);
   const size_t copySize = args.buffer.size() < surfaceSize ? args.buffer.size() : surfaceSize;
 
   kstd::memcpy(bitmap->backing->directAddress.as_ptr<uint8_t>(), args.buffer.get(), copySize);
 
-  return SyscallReturnCode_OKAY;
+  return kernel::KernelError::Success;
 }
 
-SyscallReturnCode handle_GetDeviceCaps_V1(__KRN_GFX_GETDEVICECAPS_V1 &&args) {
+kernel::KernelError handle_GetDeviceCaps_V1(__KRN_GFX_GETDEVICECAPS_V1 &&args) {
   const auto proc = CurrentProcess();
-  if (!proc) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
   kernel::user::Guard scene;
 
   const auto slot = proc->dcTable.Resolve(args.dc);
-  if (!slot) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (!slot) return kernel::KernelError::InvalidHandle;
 
   slot->lock.lock();
 
   if (!slot->target) {
     slot->lock.unlock();
-    return SyscallReturnCode_INVALID_ARGUMENT;
+    return kernel::KernelError::InvalidState;
   }
 
   args.caps.width = slot->target->width;
@@ -754,5 +766,5 @@ SyscallReturnCode handle_GetDeviceCaps_V1(__KRN_GFX_GETDEVICECAPS_V1 &&args) {
 
   slot->lock.unlock();
 
-  return SyscallReturnCode_OKAY;
+  return kernel::KernelError::Success;
 }

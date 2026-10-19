@@ -2,7 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE("vector default is empty", "[vector]") {
-    kstd::vector<int> v;
+  const kstd::vector<int> v;
     REQUIRE(v.empty());
     REQUIRE(v.size() == 0);
     REQUIRE(v.capacity() == 0);
@@ -27,7 +27,7 @@ TEST_CASE("vector initializer_list", "[vector]") {
 }
 
 TEST_CASE("vector copy and move", "[vector]") {
-    kstd::vector<int> v = {1, 2, 3};
+  const kstd::vector<int> v = {1, 2, 3};
     kstd::vector<int> copy(v);
     REQUIRE(copy.size() == 3);
     REQUIRE(copy[0] == 1);

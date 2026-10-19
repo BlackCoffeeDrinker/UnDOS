@@ -1,7 +1,9 @@
 
 #pragma once
 
+#include <expected.hpp>
 #include <kernel/__core.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/common/DoubleList.hpp>
 #include <kernel/device.hpp>
 #include <kernel/fwd/KDevicePtr.hpp>
@@ -59,6 +61,9 @@ struct IoResourceRequirementsList {
   common::DoubleList<IoResourceList> alternatives;
 };
 
+using KResourceListResult = kstd::expected<IoResourceList *, KernelError>;
+using KResourceRequirementsResult = kstd::expected<IoResourceRequirementsList *, KernelError>;
+
 // A single granted resource (CM_PARTIAL_RESOURCE_DESCRIPTOR).
 struct CmPartialResourceDescriptor : common::Link<CmPartialResourceDescriptor> {
   ResourceType type = ResourceType::Null;
@@ -80,10 +85,10 @@ struct CmResourceList {
  * @ingroup RES
  * @brief Method KE_RES_CreateRequirementsList
  * 
- * Allocate an empty requirements list. Returns null on allocation failure.
+ * Allocate an empty requirements list, or return an allocation error.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::IoResourceRequirementsList*,
+    kernel::KResourceRequirementsResult,
     KE_RES_CreateRequirementsList,
     kernel::DeviceType interfaceType);
 
@@ -94,7 +99,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * Append a new (empty) alternative configuration to a requirements list.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::IoResourceList*,
+    kernel::KResourceListResult,
     KE_RES_AddAlternative,
     kernel::IoResourceRequirementsList *list);
 
@@ -104,7 +109,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_RES_AddPort,
     kernel::IoResourceList *alt, uint32_t start, uint32_t length, kernel::ResourceOption option, kernel::ResourceShare share);
 
@@ -114,7 +119,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_RES_AddInterrupt,
     kernel::IoResourceList *alt, uint32_t vector, kernel::ResourceOption option, kernel::ResourceShare share);
 
@@ -124,7 +129,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_RES_AddMemory,
     kernel::IoResourceList *alt, uint32_t start, uint32_t length, kernel::ResourceOption option, kernel::ResourceShare share);
 
@@ -134,7 +139,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_RES_AddDma,
     kernel::IoResourceList *alt, uint32_t channel, kernel::ResourceOption option, kernel::ResourceShare share);
 
@@ -156,11 +161,11 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @brief Method KE_RES_AssignResources
  * 
  * Reserve the device's resources. A null requirements list succeeds with an
- * empty grant. Returns false (reserving nothing) if any fixed range conflicts
- * with an already-reserved range.
+ * empty grant. Returns ResourceConflict (reserving nothing) if any fixed
+ * range conflicts with an already-reserved range.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_RES_AssignResources,
     const kernel::KDevicePtr<kernel::KDevice> &device, kernel::IoResourceRequirementsList *requirements);
 

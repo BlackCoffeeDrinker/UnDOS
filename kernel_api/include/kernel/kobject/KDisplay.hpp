@@ -1,10 +1,13 @@
 #pragma once
 
+#include <expected.hpp>
+
 #include <kernel/__core.hpp>
 #include <kernel/cfunc.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/gfx/edid.hpp>
 #include <kernel/gfx/monitor.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/KSurface.hpp>
 #include <kernel/kobject/ObjectType.hpp>
@@ -67,17 +70,18 @@ struct KDisplay : KObjectT<KDisplay, 1, TYPE_DISPLAY> {
   DisplayPowerState powerState{DisplayPowerState::PowerOn};
 
   // Driver Execution Entry Points
-  cfunc<bool(const KObjectPtr<KDisplay> &display, size_t modeIndex, KDisplayModeInfo &outInfo)> GetModeInfo;// Probe mode info, modeIndex++ until this retunrs false
+  // Probes mode info; modeIndex++ until this fails with KernelError::OutOfRange.
+  cfunc<kstd::expected<KDisplayModeInfo, KernelError>(const KObjectPtr<KDisplay> &display, size_t modeIndex)> GetModeInfo;
 
-  // Programs `modeIndex` in hardware and reports where the pixels live in
-  // `outBinding`. The driver does not touch KSurface; the kernel owns that.
-  cfunc<bool(const KObjectPtr<KDisplay> &display, size_t modeIndex, KDisplaySurfaceBinding &outBinding)> SetMode;
-  cfunc<bool(const KObjectPtr<KDisplay> &display)> Enable;  // Enable output timings & DAC
-  cfunc<void(const KObjectPtr<KDisplay> &display)> Disable; // Blank CRTC and disable signal output
-  cfunc<bool(const KObjectPtr<KDisplay> &display)> Validate;// Re-verify DDC link and connection status
+  // Programs `modeIndex` in hardware and reports where the pixels live. The
+  // driver does not touch KSurface; the kernel owns that.
+  cfunc<kstd::expected<KDisplaySurfaceBinding, KernelError>(const KObjectPtr<KDisplay> &display, size_t modeIndex)> SetMode;
+  cfunc<KernelError(const KObjectPtr<KDisplay> &display)> Enable;  // Enable output timings & DAC
+  cfunc<void(const KObjectPtr<KDisplay> &display)> Disable;        // Blank CRTC and disable signal output
+  cfunc<KernelError(const KObjectPtr<KDisplay> &display)> Validate;// Re-verify DDC link and connection status
 
   // Power & DPMS Control Hooks
-  cfunc<bool(const KObjectPtr<KDisplay> &display, DisplayPowerState state)> SetPowerState;
+  cfunc<KernelError(const KObjectPtr<KDisplay> &display, DisplayPowerState state)> SetPowerState;
 };
 
 template<>

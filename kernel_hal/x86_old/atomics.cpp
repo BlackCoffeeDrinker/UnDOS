@@ -235,7 +235,7 @@ bool atomic_compare_exchange_32_cmpxchg(volatile void *ptr,
 
 uint64_t atomic_load_64_386(volatile uint64_t *p) noexcept {
   atomic_lock_386();
-  uint64_t val = *p;
+  const uint64_t val = *p;
   atomic_unlock_386();
   return val;
 }
@@ -248,7 +248,7 @@ void atomic_store_64_386(volatile uint64_t *p, uint64_t val) noexcept {
 
 uint64_t atomic_exchange_64_386(volatile uint64_t *p, uint64_t val) noexcept {
   atomic_lock_386();
-  uint64_t old = *p;
+  const uint64_t old = *p;
   *p = val;
   atomic_unlock_386();
   return old;
@@ -256,7 +256,7 @@ uint64_t atomic_exchange_64_386(volatile uint64_t *p, uint64_t val) noexcept {
 
 bool atomic_compare_exchange_64_386(volatile uint64_t *p, uint64_t &expected, uint64_t desired) noexcept {
   atomic_lock_386();
-  bool success = (*p == expected);
+  const bool success = (*p == expected);
   if (success)
     *p = desired;
   else
@@ -369,9 +369,9 @@ UNDOS_HAL_API_DEF void HAL_ATOMIC_ThreadFence(PlatformMemoryOrder order) noexcep
 }
 
 UNDOS_HAL_API_DEF uint32_t HAL_ATOMIC_Load32(kernel::VirtualAddress addr, PlatformMemoryOrder order) noexcept {
-  volatile auto *p = addr.as_ptr<volatile uint32_t>();
+  const volatile auto *p = addr.as_ptr<volatile uint32_t>();
   atomic_memory_order(order);
-  uint32_t val = *p;
+  const uint32_t val = *p;
   atomic_memory_order(order);
   return val;
 }
@@ -409,7 +409,7 @@ UNDOS_HAL_API_DEF uint64_t HAL_ATOMIC_Load64(kernel::VirtualAddress addr, Platfo
   // plain atomic 64-bit access.
   volatile auto *p = addr.as_ptr<volatile uint64_t>();
   atomic_memory_order(order);
-  uint64_t val = atomic_load_64_impl(p);
+  const uint64_t val = atomic_load_64_impl(p);
   atomic_memory_order(order);
   return val;
 }
@@ -424,7 +424,7 @@ UNDOS_HAL_API_DEF void HAL_ATOMIC_Store64(kernel::VirtualAddress addr, uint64_t 
 UNDOS_HAL_API_DEF uint64_t HAL_ATOMIC_Exchange64(kernel::VirtualAddress addr, uint64_t val, PlatformMemoryOrder order) noexcept {
   volatile auto *p = addr.as_ptr<volatile uint64_t>();
   atomic_memory_order(order);
-  uint64_t old = atomic_exchange_64_impl(p, val);
+  const uint64_t old = atomic_exchange_64_impl(p, val);
   atomic_memory_order(order);
   return old;
 }
@@ -432,7 +432,7 @@ UNDOS_HAL_API_DEF uint64_t HAL_ATOMIC_Exchange64(kernel::VirtualAddress addr, ui
 UNDOS_HAL_API_DEF bool HAL_ATOMIC_CompareExchange64(kernel::VirtualAddress addr, uint64_t &expected_out, uint64_t desired, PlatformMemoryOrder order) noexcept {
   volatile auto *p = addr.as_ptr<volatile uint64_t>();
   atomic_memory_order(order);
-  bool success = atomic_compare_exchange_64_impl(p, expected_out, desired);
+  const bool success = atomic_compare_exchange_64_impl(p, expected_out, desired);
   atomic_memory_order(order);
   return success;
 }

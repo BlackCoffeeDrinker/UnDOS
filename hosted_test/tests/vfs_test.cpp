@@ -20,7 +20,7 @@ namespace {
 
 kstd::static_string<128> MakeTempImagePath(const char *name) {
   kstd::static_string<128> path;
-  kstd::format(path, "/tmp/undos_vfs_test_{}.img", name);
+  kstd::format(path, "undos_vfs_test_{}.img", name);
   return path;
 }
 
@@ -43,50 +43,50 @@ struct TestFsDriverState {
 
 TestFsDriverState g_testFsState;
 
-bool TestFs_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kstd::string_view &options) {
+kernel::KernelError TestFs_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kstd::string_view &options) {
   g_testFsState.mountVolumeCalled = true;
   g_testFsState.lastMountedVolume = mount->volume;
   g_testFsState.lastMountOptions = options;
-  return true;
+  return kernel::KernelError::Success;
 }
 
-bool TestFs_UnmountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount) {
+kernel::KernelError TestFs_UnmountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount) {
   g_testFsState.unmountVolumeCalled = true;
   g_testFsState.lastUnmountedMount = mount;
-  return true;
+  return kernel::KernelError::Success;
 }
 
-bool TestFs_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, kernel::KVFSNode &out) {
+kernel::KernelError TestFs_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, kernel::KVFSNode &out) {
   out.type = kernel::VFSNodeType::Directory;
   out.size = 0;
-  return true;
+  return kernel::KernelError::Success;
 }
 
-bool TestFs_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kstd::string_view, kernel::KVFSNode &out) {
+kernel::KernelError TestFs_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kstd::string_view, kernel::KVFSNode &out) {
   out.type = kernel::VFSNodeType::File;
   out.size = 0;
-  return true;
+  return kernel::KernelError::Success;
 }
 
-bool TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kernel::KIOObject::OpenMode) {
-  return g_testFsState.createHandleSucceeds;
+kernel::KernelError TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kernel::KIOObject::OpenMode) {
+  return g_testFsState.createHandleSucceeds ? kernel::KernelError::Success : kernel::KernelError::AccessDenied;
 }
 
 void TestFs_CloseHandle(const kernel::KObjectPtr<kernel::KIOObject> &) {
   ++g_testFsState.closeCount;
 }
 
-uint64_t TestFs_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &buffer) {
+kstd::expected<uint64_t, kernel::KernelError> TestFs_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &buffer) {
   size_t transferred = 0;
   const auto status = KE_IO_ReadDevice(mount->volume, offset, buffer, transferred);
-  if (status != kernel::IoStatus::Success) return 0;
+  if (status != kernel::KernelError::Success) return kstd::unexpected(status);
   return transferred;
 }
 
-uint64_t TestFs_WriteHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<const uint8_t> &buffer) {
+kstd::expected<uint64_t, kernel::KernelError> TestFs_WriteHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<const uint8_t> &buffer) {
   size_t transferred = 0;
   const auto status = KE_IO_WriteDevice(mount->volume, offset, buffer, transferred);
-  if (status != kernel::IoStatus::Success) return 0;
+  if (status != kernel::KernelError::Success) return kstd::unexpected(status);
   return transferred;
 }
 
@@ -103,20 +103,20 @@ struct TestFsFixture {
     // filesystem drivers registered by earlier tests.
     kstd::format(fsName, "TestFs_{}", imageName);
 
-    backing.Resize(imageSize);
+    REQUIRE(backing.Resize(imageSize) == kernel::KernelError::Success);
 
     g_testFsState = TestFsDriverState{};
 
-    driver = kernel::CreateKObject<kernel::KDriverObject>("TestFsDriver");
+    driver = kernel::CreateKObject<kernel::KDriverObject>("TestFsDriver").value_or(nullptr);
     driver->Read = diskfake::Read;
     driver->Write = diskfake::Write;
 
     kstd::static_string<64> volumeName;
     kstd::format(volumeName, "TestFsVolume_{}", imageName);
-    volume = KE_IO_CreateDeviceWithContext<diskfake::FakeDiskContext>(driver, volumeName, kernel::device_type::Disk);
+    volume = KE_IO_CreateDeviceWithContext<diskfake::FakeDiskContext>(driver, volumeName, kernel::device_type::Disk).value_or(nullptr);
     volume->deviceExtension.as<diskfake::FakeDiskContext>()->backing = &backing;
 
-    filesystem = KE_VFS_RegisterFilesystemDriver(driver, fsName);
+    filesystem = KE_VFS_RegisterFilesystemDriver(driver, fsName).value_or(nullptr);
     if (filesystem) {
       filesystem->MountVolume = TestFs_MountVolume;
       filesystem->UnmountVolume = TestFs_UnmountVolume;
@@ -136,7 +136,7 @@ struct TestFsFixture {
     // KE_OB_RemoveObject directly rather than KE_VFS_Unmount so tearing down
     // a still-mounted fixture doesn't unexpectedly invoke UnmountVolume.
     if (!mountedAt.empty()) {
-      if (auto mount = KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(KE_OB_GetVFSDirectory(), mountedAt)) {
+      if (const auto mount = KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(KE_OB_GetVFSDirectory(), mountedAt)) {
         KE_OB_RemoveObject(KE_OB_GetVFSDirectory(), mount);
       }
     }
@@ -144,7 +144,7 @@ struct TestFsFixture {
   }
 
   bool Mount(const kstd::string_view &mountPoint, const kstd::string_view &options) {
-    if (KE_VFS_Mount(volume, fsName, mountPoint, options)) {
+    if (KE_VFS_Mount(volume, fsName, mountPoint, options) == kernel::KernelError::Success) {
       mountedAt = mountPoint;
       return true;
     }
@@ -175,7 +175,7 @@ TEST_CASE("KE_VFS_RegisterFilesystemDriver / UnregisterFilesystemDriver", "[vfs]
     TestFsFixture fixture("register_dup");
     REQUIRE(fixture.filesystem != nullptr);
 
-    const auto duplicate = KE_VFS_RegisterFilesystemDriver(fixture.driver, fixture.fsName);
+    const auto duplicate = KE_VFS_RegisterFilesystemDriver(fixture.driver, fixture.fsName).value_or(nullptr);
     REQUIRE(duplicate == nullptr);
   }
 }
@@ -218,7 +218,7 @@ TEST_CASE("KE_VFS_Unmount", "[vfs]") {
     TestFsFixture fixture("unmount_remount");
     REQUIRE(fixture.Mount("/", ""));
 
-    REQUIRE(KE_VFS_Unmount("/"));
+    REQUIRE(KE_VFS_Unmount("/") == kernel::KernelError::Success);
     // The mount is gone, so a fresh Mount() at the same path must succeed
     // where it would previously have been rejected as "already in use".
     REQUIRE(fixture.Mount("/", ""));
@@ -231,7 +231,7 @@ TEST_CASE("KE_VFS_Unmount", "[vfs]") {
     const auto mount = KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(KE_OB_GetVFSDirectory(), "/");
     REQUIRE(mount != nullptr);
 
-    REQUIRE(KE_VFS_Unmount("/"));
+    REQUIRE(KE_VFS_Unmount("/") == kernel::KernelError::Success);
     REQUIRE(g_testFsState.unmountVolumeCalled);
     REQUIRE(g_testFsState.lastUnmountedMount.get() == mount.get());
 
@@ -246,7 +246,7 @@ TEST_CASE("KE_VFS_Unmount", "[vfs]") {
     fixture.filesystem->UnmountVolume = nullptr;
     REQUIRE(fixture.Mount("/", ""));
 
-    REQUIRE(KE_VFS_Unmount("/"));
+    REQUIRE(KE_VFS_Unmount("/") == kernel::KernelError::Success);
     fixture.mountedAt.clear();
   }
 
@@ -254,7 +254,7 @@ TEST_CASE("KE_VFS_Unmount", "[vfs]") {
     TestFsFixture fixture("unmount_missing");
     REQUIRE(fixture.Mount("/", ""));
 
-    REQUIRE_FALSE(KE_VFS_Unmount("/nonexistent"));
+    REQUIRE(KE_VFS_Unmount("/nonexistent") != kernel::KernelError::Success);
     // The existing mount at "/" must be untouched.
     REQUIRE(KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(KE_OB_GetVFSDirectory(), "/") != nullptr);
   }
@@ -265,27 +265,27 @@ TEST_CASE("KE_VFS_OpenFile / ReadFile / WriteFile / SeekFile / TellFile / CloseF
   TestFsFixture fixture("filerw");
   REQUIRE(fixture.Mount("/", ""));
 
-  auto file = KE_VFS_OpenFile("/somefile.txt", kernel::KIOObject::OpenMode::ReadWrite);
+  auto file = KE_VFS_OpenFile("/somefile.txt", kernel::KIOObject::OpenMode::ReadWrite).value_or(nullptr);
   REQUIRE(file != nullptr);
   REQUIRE(file->ops == &kernel::io::FileOps);
-  REQUIRE(KE_VFS_TellFile(file) == 0);
+  REQUIRE(KE_VFS_TellFile(file).value() == 0);
 
   kstd::array<uint8_t, 16> writeBuf{};
   for (size_t i = 0; i < writeBuf.size(); i++) writeBuf[i] = static_cast<uint8_t>('A' + i);
 
   const kstd::span<uint8_t> writeSpan(writeBuf);
-  const auto written = KE_VFS_WriteFile(file, writeSpan);
+  const auto written = KE_VFS_WriteFile(file, writeSpan).value();
   REQUIRE(written == writeBuf.size());
-  REQUIRE(KE_VFS_TellFile(file) == writeBuf.size());
+  REQUIRE(KE_VFS_TellFile(file).value() == writeBuf.size());
 
-  REQUIRE(KE_VFS_SeekFile(file, 0) == 0);
-  REQUIRE(KE_VFS_TellFile(file) == 0);
+  REQUIRE(KE_VFS_SeekFile(file, 0).value() == 0);
+  REQUIRE(KE_VFS_TellFile(file).value() == 0);
 
   kstd::array<uint8_t, 16> readBuf{};
   kstd::span<uint8_t> readSpan(readBuf);
-  const auto read = KE_VFS_ReadFile(file, readSpan);
+  const auto read = KE_VFS_ReadFile(file, readSpan).value();
   REQUIRE(read == readBuf.size());
-  REQUIRE(KE_VFS_TellFile(file) == readBuf.size());
+  REQUIRE(KE_VFS_TellFile(file).value() == readBuf.size());
 
   for (size_t i = 0; i < readBuf.size(); i++) {
     REQUIRE(readBuf[i] == writeBuf[i]);
@@ -295,7 +295,9 @@ TEST_CASE("KE_VFS_OpenFile / ReadFile / WriteFile / SeekFile / TellFile / CloseF
   KE_VFS_CloseFile(file);
   REQUIRE(g_testFsState.closeCount == 1);
   REQUIRE(file->isClosed);
-  REQUIRE(KE_VFS_ReadFile(file, readSpan) == 0);
+  const auto closedRead = KE_VFS_ReadFile(file, readSpan);
+  REQUIRE_FALSE(closedRead);
+  REQUIRE(closedRead.error() == kernel::KernelError::InvalidState);
 }
 
 TEST_CASE("KE_VFS_OpenFile cleans up failed opens", "[vfs]") {
@@ -303,10 +305,10 @@ TEST_CASE("KE_VFS_OpenFile cleans up failed opens", "[vfs]") {
   TestFsFixture fixture("open_failure");
   REQUIRE(fixture.Mount("/", ""));
   g_testFsState.createHandleSucceeds = false;
-  REQUIRE(KE_VFS_OpenFile("/somefile.txt", kernel::KIOObject::OpenMode::Read) == nullptr);
+  REQUIRE(KE_VFS_OpenFile("/somefile.txt", kernel::KIOObject::OpenMode::Read).value_or(nullptr) == nullptr);
   REQUIRE(g_testFsState.closeCount == 0);
   g_testFsState.createHandleSucceeds = true;
-  auto file = KE_VFS_OpenFile("/somefile.txt", kernel::KIOObject::OpenMode::Read);
+  auto file = KE_VFS_OpenFile("/somefile.txt", kernel::KIOObject::OpenMode::Read).value_or(nullptr);
   REQUIRE(file != nullptr);
   KE_VFS_CloseFile(file);
   REQUIRE(g_testFsState.closeCount == 1);
@@ -316,23 +318,63 @@ TEST_CASE("KIOObject remains usable across shared handles", "[vfs][io]") {
   EnsureObjectManagerInitialized();
   TestFsFixture fixture("shared_handles");
   REQUIRE(fixture.Mount("/", ""));
-  auto file = KE_VFS_OpenFile("/shared.txt", kernel::KIOObject::OpenMode::ReadWrite);
+  auto file = KE_VFS_OpenFile("/shared.txt", kernel::KIOObject::OpenMode::ReadWrite).value_or(nullptr);
   REQUIRE(file != nullptr);
   kernel::ProcessHandleTable table;
   const auto first = table.Allocate(file, kernel::ProcessHandleTable::HandleAccess::Read,
-                                    kernel::ProcessHandleTable::HandleFlags::None);
+                                    kernel::ProcessHandleTable::HandleFlags::None).value();
   const auto second = table.Allocate(file, kernel::ProcessHandleTable::HandleAccess::Read,
-                                     kernel::ProcessHandleTable::HandleFlags::None);
+                                     kernel::ProcessHandleTable::HandleFlags::None).value();
   file = nullptr;
-  REQUIRE(table.Close(first));
+  REQUIRE(table.Close(first) == kernel::KernelError::Success);
   REQUIRE(g_testFsState.closeCount == 0);
   auto remaining = table.Lookup(second)->object.As<kernel::KIOObject>();
   REQUIRE_FALSE(remaining->isClosed);
   uint8_t buffer[1]{};
   size_t transferred = 0;
-  REQUIRE(remaining->Read(kstd::span<uint8_t>(buffer, sizeof(buffer)), transferred) == kernel::IoStatus::Success);
-  REQUIRE(table.Close(second));
+  REQUIRE(remaining->Read(kstd::span<uint8_t>(buffer, sizeof(buffer)), transferred) == kernel::KernelError::Success);
+  REQUIRE(table.Close(second) == kernel::KernelError::Success);
   REQUIRE(g_testFsState.closeCount == 0);
   remaining = nullptr;
   REQUIRE(g_testFsState.closeCount == 1);
+}
+
+TEST_CASE("VFS distinguishes EOF and short writes from errors", "[vfs][io][kernel-error]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("expected_io");
+  REQUIRE(fixture.Mount("/", ""));
+  auto opened = KE_VFS_OpenFile("/counts.txt", kernel::KIOObject::OpenMode::ReadWrite);
+  REQUIRE(opened);
+  const auto &file = *opened;
+  uint8_t buffer[8]{};
+
+  fixture.filesystem->ReadHandle = [](const kernel::KObjectPtr<kernel::KVolumeMountObject> &,
+                                     const kernel::KVFSNode &, uint64_t,
+                                     const kstd::span<uint8_t> &) -> kstd::expected<uint64_t, kernel::KernelError> {
+    return 0ull;
+  };
+  auto eof = KE_VFS_ReadFile(file, buffer);
+  REQUIRE(eof);
+  REQUIRE(*eof == 0);
+  REQUIRE(file->offset == 0);
+
+  fixture.filesystem->ReadHandle = [](const kernel::KObjectPtr<kernel::KVolumeMountObject> &,
+                                     const kernel::KVFSNode &, uint64_t,
+                                     const kstd::span<uint8_t> &) -> kstd::expected<uint64_t, kernel::KernelError> {
+    return kstd::unexpected(kernel::KernelError::DeviceError);
+  };
+  auto failed = KE_VFS_ReadFile(file, buffer);
+  REQUIRE_FALSE(failed);
+  REQUIRE(failed.error() == kernel::KernelError::DeviceError);
+  REQUIRE(file->offset == 0);
+
+  fixture.filesystem->WriteHandle = [](const kernel::KObjectPtr<kernel::KVolumeMountObject> &,
+                                      const kernel::KVFSNode &, uint64_t,
+                                      const kstd::span<const uint8_t> &) -> kstd::expected<uint64_t, kernel::KernelError> {
+    return 2ull;
+  };
+  auto shortWrite = KE_VFS_WriteFile(file, buffer);
+  REQUIRE(shortWrite);
+  REQUIRE(*shortWrite == 2);
+  REQUIRE(file->offset == 2);
 }

@@ -72,12 +72,12 @@ TEST_CASE("StaticIdentifier basic functionality", "[StaticIdentifier]") {
 TEST_CASE("fnv1a64 hasher", "[fnv1a64]") {
     SECTION("Known hashes") {
         // Standard FNV-1a 64-bit for empty string with default offset basis
-        uint64_t empty = fnv1a64::hash("", 0);
+      const uint64_t empty = fnv1a64::hash("", 0);
         REQUIRE(empty == fnv1a64::offset_basis);
 
         // "a"
-        uint64_t a = fnv1a64::hash("a", 1);
-        uint64_t expected_a = (fnv1a64::offset_basis ^ static_cast<uint8_t>('a')) * fnv1a64::prime;
+      const uint64_t a = fnv1a64::hash("a", 1);
+      const uint64_t expected_a = (fnv1a64::offset_basis ^ static_cast<uint8_t>('a')) * fnv1a64::prime;
         REQUIRE(a == expected_a);
     }
 }

@@ -13,12 +13,12 @@ namespace {
 // it. Purely a spin count: there is no wall clock this early on the AP.
 constexpr uint32_t AP_START_SPIN_LIMIT = 100'000'000u;
 
-bool wait_until_online(const cpu::CpuContext &ctx) noexcept {
+KernelError wait_until_online(const cpu::CpuContext &ctx) noexcept {
   for (uint32_t spins = 0; spins < AP_START_SPIN_LIMIT; ++spins) {
     HAL_ATOMIC_ThreadFence(PlatformMemoryOrder::Acquire);
-    if (ctx.online) return true;
+    if (ctx.online) return KernelError::Success;
   }
-  return false;
+  return KernelError::Timeout;
 }
 
 }// namespace
@@ -50,7 +50,7 @@ void start_secondary_cpus() noexcept {
   const size_t limit = count < slots ? count : slots;
 
   for (uint32_t id = 1; id < limit; ++id) {
-    const VirtualAddress base = sched::alloc_kernel_stack(sched::KERNEL_STACK_SIZE);
+    const auto base = sched::alloc_kernel_stack(sched::KERNEL_STACK_SIZE);
     if (!base) {
       KE_Print("SMP: no kernel stack for CPU {}, left offline", id);
       continue;
@@ -58,12 +58,12 @@ void start_secondary_cpus() noexcept {
 
     if (!HAL_SMP_StartProcessor(id,
                                 cfunc<void(uint32_t)>(&ap_entry),
-                                base + sched::KERNEL_STACK_SIZE)) {
+                                *base + sched::KERNEL_STACK_SIZE)) {
       KE_Print("SMP: HAL cannot start CPU {}, left offline", id);
       continue;
     }
 
-    if (!wait_until_online(cpu::contexts()[id])) {
+    if (wait_until_online(cpu::contexts()[id]) != KernelError::Success) {
       KE_Print("SMP: CPU {} never came online, left offline", id);
       continue;
     }

@@ -86,10 +86,10 @@ UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_GetPhysicalAddress(VirtualAddress virt
   const uintptr_t pt_index = static_cast<uintptr_t>((virt >> 12) & 0x3FF);
   const uintptr_t page_offset = static_cast<uintptr_t>(virt & 0xFFF);
 
-  auto *directory = hal::x86::get_page_directory();
+  const auto *directory = hal::x86::get_page_directory();
   if (!directory[pd_index].is_present()) return 0;
 
-  auto *page_table = hal::x86::get_page_table(virt);
+  const auto *page_table = hal::x86::get_page_table(virt);
   if (!page_table[pt_index].is_present()) return 0;
 
   return page_table[pt_index].get_frame() + page_offset;

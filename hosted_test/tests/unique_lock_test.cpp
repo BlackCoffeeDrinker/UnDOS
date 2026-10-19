@@ -32,7 +32,7 @@ TEST_CASE("unique_lock is movable", "[unique_lock]") {
 TEST_CASE("unique_lock locks on construction", "[unique_lock]") {
   FakeMutex m;
   {
-    kstd::unique_lock<FakeMutex> lock(m);
+    const kstd::unique_lock<FakeMutex> lock(m);
     REQUIRE(m.lock_count == 1);
     REQUIRE(lock.owns_lock());
     REQUIRE(static_cast<bool>(lock));
@@ -54,7 +54,7 @@ TEST_CASE("unique_lock defer_lock does not lock", "[unique_lock]") {
 TEST_CASE("unique_lock try_to_lock", "[unique_lock]") {
   FakeMutex m;
   m.try_lock_result = false;
-  kstd::unique_lock<FakeMutex> lock(m, kstd::try_to_lock);
+  const kstd::unique_lock<FakeMutex> lock(m, kstd::try_to_lock);
   REQUIRE_FALSE(lock.owns_lock());
 }
 

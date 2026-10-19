@@ -444,16 +444,16 @@ private:
     __node_base *j = y;
     if (comp) {
       if (j == __header.__left) {
-        return {y, true, nullptr};
+        return {.parent = y, .insert_left = true, .existing = nullptr};
       }
       j = __tree_decrement(j);
     }
 
     if (__comp(__key(j), key)) {
-      return {y, comp, nullptr};
+      return {.parent = y, .insert_left = comp, .existing = nullptr};
     }
 
-    return {nullptr, false, j};
+    return {.parent = nullptr, .insert_left = false, .existing = j};
   }
 
   template<class... Args>

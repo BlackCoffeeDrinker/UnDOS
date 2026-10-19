@@ -41,20 +41,20 @@ void tick(kstd::chrono::nanoseconds now) noexcept {
 
 using namespace kernel;
 
-UNDOS_KERNEL_API_DEF WaitStatus KE_SCHED_WaitForHeader(KDispatcherHeader &header,
-                                                       kstd::chrono::milliseconds timeout) noexcept {
+UNDOS_KERNEL_API_DEF KernelError KE_SCHED_WaitForHeader(KDispatcherHeader &header,
+                                                        kstd::chrono::milliseconds timeout) noexcept {
   const auto self = KE_SCHED_GetCurrentThread();
-  if (!self) return WaitStatus::Invalid;
+  if (!self) return KernelError::NoCurrentThread;
 
   // Check-then-block under the wait lock so a signal cannot slip in between.
   const uintptr_t irq_state = wait::lock().lock_irqsave();
   if (header.TryAcquire()) {
     wait::lock().unlock_irqrestore(irq_state);
-    return WaitStatus::Signalled;
+    return KernelError::Success;
   }
   if (timeout.count() == 0) {
     wait::lock().unlock_irqrestore(irq_state);
-    return WaitStatus::Timeout;
+    return KernelError::Timeout;
   }
 
   KWaitBlock wb;
@@ -79,13 +79,13 @@ UNDOS_KERNEL_API_DEF WaitStatus KE_SCHED_WaitForHeader(KDispatcherHeader &header
   if (timed) wait::g_timed.Remove(wb);
   if (!wb.satisfied) header.RemoveWaiter(wb);
   wait::lock().unlock_irqrestore(irq_state);
-  return wb.satisfied ? WaitStatus::Signalled : WaitStatus::Timeout;
+  return wb.satisfied ? KernelError::Success : KernelError::Timeout;
 }
 
-UNDOS_KERNEL_API_DEF WaitStatus KE_SCHED_WaitForObject(const KObjectPtr<KObject> &object,
-                                                       kstd::chrono::milliseconds timeout) noexcept {
+UNDOS_KERNEL_API_DEF KernelError KE_SCHED_WaitForObject(const KObjectPtr<KObject> &object,
+                                                        kstd::chrono::milliseconds timeout) noexcept {
   auto *header = wait::header_of(object);
-  if (!header) return WaitStatus::Invalid;
+  if (!header) return KernelError::NotWaitable;
   // Hold a reference for the duration of the wait so a concurrent close
   // cannot free the header under us.
   const KObjectPtr<KObject> keep = object;
@@ -100,10 +100,11 @@ UNDOS_KERNEL_API_DEF void KE_EVENT_Signal(KDispatcherHeader &header, bool wakeAl
   wait::lock().unlock_irqrestore(state);
 }
 
-UNDOS_KERNEL_API_DEF KObjectPtr<KEventObject> KE_EVENT_Create(bool manualReset, bool initialState) noexcept {
+UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KEventObject>, KernelError>
+KE_EVENT_Create(bool manualReset, bool initialState) noexcept {
   auto event = CreateKObject<KEventObject>("event");
-  if (!event) return nullptr;
-  event->header.manualReset = manualReset;
-  event->header.signalled = initialState;
-  return event;
+  if (!event) return kstd::unexpected(event.error());
+  event.value()->header.manualReset = manualReset;
+  event.value()->header.signalled = initialState;
+  return *event;
 }

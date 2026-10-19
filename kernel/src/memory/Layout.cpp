@@ -22,7 +22,7 @@ Layout calculate_layout(size_t object_size, size_t alignment, size_t page_size) 
     return layout;
   }
 
-  size_t available = layout.slab_size - sizeof(Slab);
+  const size_t available = layout.slab_size - sizeof(Slab);
   layout.objects = available / (layout.object_size + sizeof(Storage));
 
   layout.object_offset = 0;

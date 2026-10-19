@@ -2,7 +2,7 @@
 #include "stdkrn.hpp"
 #include "syscalls.hpp"
 
-SyscallReturnCode handle_Print_V1(__KRN_DEBUG_PRINT_V1 &&args) {
+kernel::KernelError handle_Print_V1(__KRN_DEBUG_PRINT_V1 &&args) {
   KE_PrintBuffer(args.message.data(), args.message.size());
-  return SyscallReturnCode_OKAY;
+  return kernel::KernelError::Success;
 }

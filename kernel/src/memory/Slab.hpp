@@ -44,7 +44,7 @@ class Slab : public common::Link<Slab> {
     return addr >= reinterpret_cast<uintptr_t>(slab.memory_.data()) + slab.memory_.size();
   }
   friend bool operator==(uintptr_t addr, const Slab &slab) noexcept {
-    uintptr_t start = reinterpret_cast<uintptr_t>(slab.memory_.data());
+    const uintptr_t start = reinterpret_cast<uintptr_t>(slab.memory_.data());
     return addr >= start && addr < start + slab.memory_.size();
   }
 

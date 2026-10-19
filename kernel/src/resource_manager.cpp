@@ -24,7 +24,7 @@ struct ResourceAssignment : kernel::common::Link<ResourceAssignment> {
 kernel::common::DoubleList<ResourceAssignment> s_assignments;
 
 ResourceAssignment *FindAssignment(const kernel::KDevicePtr<kernel::KDevice> &device) {
-  for (auto s_assignment: s_assignments) {
+  for (const auto s_assignment: s_assignments) {
     if (s_assignment->device.get() == device.get()) return s_assignment;
   }
   return nullptr;
@@ -44,10 +44,10 @@ void DestroyAssignment(ResourceAssignment *node) {
   KE_Free(node);
 }
 
-bool AddDescriptor(IoResourceList *alt, ResourceType type, uint32_t start, uint32_t length, ResourceOption option, ResourceShare share) {
-  if (!alt) return false;
+kernel::KernelError AddDescriptor(IoResourceList *alt, ResourceType type, uint32_t start, uint32_t length, ResourceOption option, ResourceShare share) {
+  if (!alt) return kernel::KernelError::InvalidArgument;
   auto *d = static_cast<kernel::IoResourceDescriptor *>(KE_Malloc(sizeof(kernel::IoResourceDescriptor)));
-  if (!d) return false;
+  if (!d) return kernel::KernelError::OutOfMemory;
   new (d) kernel::IoResourceDescriptor();
   d->type = type;
   d->share = share;
@@ -57,7 +57,7 @@ bool AddDescriptor(IoResourceList *alt, ResourceType type, uint32_t start, uint3
   d->length = length;
   d->alignment = 1;
   alt->descriptors.push_back(d);
-  return true;
+  return kernel::KernelError::Success;
 }
 
 }// namespace
@@ -73,36 +73,36 @@ void init() {
 }// namespace kernel::resource
 
 // region Builders
-UNDOS_KERNEL_API_DEF IoResourceRequirementsList *KE_RES_CreateRequirementsList(kernel::DeviceType interfaceType) noexcept {
+UNDOS_KERNEL_API_DEF kstd::expected<IoResourceRequirementsList *, kernel::KernelError> KE_RES_CreateRequirementsList(kernel::DeviceType interfaceType) noexcept {
   auto *list = static_cast<IoResourceRequirementsList *>(KE_Malloc(sizeof(IoResourceRequirementsList)));
-  if (!list) return nullptr;
+  if (!list) return kstd::unexpected(kernel::KernelError::OutOfMemory);
   new (list) IoResourceRequirementsList();
   list->interfaceType = interfaceType;
   return list;
 }
 
-UNDOS_KERNEL_API_DEF IoResourceList *KE_RES_AddAlternative(IoResourceRequirementsList *list) noexcept {
-  if (!list) return nullptr;
+UNDOS_KERNEL_API_DEF kstd::expected<IoResourceList *, kernel::KernelError> KE_RES_AddAlternative(IoResourceRequirementsList *list) noexcept {
+  if (!list) return kstd::unexpected(kernel::KernelError::InvalidArgument);
   auto *alt = static_cast<IoResourceList *>(KE_Malloc(sizeof(IoResourceList)));
-  if (!alt) return nullptr;
+  if (!alt) return kstd::unexpected(kernel::KernelError::OutOfMemory);
   new (alt) IoResourceList();
   list->alternatives.push_back(alt);
   return alt;
 }
 
-UNDOS_KERNEL_API_DEF bool KE_RES_AddPort(IoResourceList *alt, uint32_t start, uint32_t length, ResourceOption option, ResourceShare share) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_RES_AddPort(IoResourceList *alt, uint32_t start, uint32_t length, ResourceOption option, ResourceShare share) noexcept {
   return AddDescriptor(alt, ResourceType::Port, start, length, option, share);
 }
 
-UNDOS_KERNEL_API_DEF bool KE_RES_AddInterrupt(IoResourceList *alt, uint32_t vector, ResourceOption option, ResourceShare share) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_RES_AddInterrupt(IoResourceList *alt, uint32_t vector, ResourceOption option, ResourceShare share) noexcept {
   return AddDescriptor(alt, ResourceType::Interrupt, vector, 1, option, share);
 }
 
-UNDOS_KERNEL_API_DEF bool KE_RES_AddMemory(IoResourceList *alt, uint32_t start, uint32_t length, ResourceOption option, ResourceShare share) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_RES_AddMemory(IoResourceList *alt, uint32_t start, uint32_t length, ResourceOption option, ResourceShare share) noexcept {
   return AddDescriptor(alt, ResourceType::Memory, start, length, option, share);
 }
 
-UNDOS_KERNEL_API_DEF bool KE_RES_AddDma(IoResourceList *alt, uint32_t channel, ResourceOption option, ResourceShare share) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_RES_AddDma(IoResourceList *alt, uint32_t channel, ResourceOption option, ResourceShare share) noexcept {
   return AddDescriptor(alt, ResourceType::Dma, channel, 1, option, share);
 }
 
@@ -126,22 +126,22 @@ UNDOS_KERNEL_API_DEF void KE_RES_FreeRequirementsList(IoResourceRequirementsList
 // endregion
 
 // region Assignment / lookup
-UNDOS_KERNEL_API_DEF bool KE_RES_AssignResources(const kernel::KDevicePtr<kernel::KDevice> &device, IoResourceRequirementsList *requirements) noexcept {
-  if (!device) return false;
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_RES_AssignResources(const kernel::KDevicePtr<kernel::KDevice> &device, IoResourceRequirementsList *requirements) noexcept {
+  if (!device) return kernel::KernelError::InvalidArgument;
 
   // Re-assignment: drop any previous grant so it does not conflict with itself
   // and is not double-counted in the reserved set.
   KE_RES_ReleaseResources(device);
 
   auto *assignment = static_cast<ResourceAssignment *>(KE_Malloc(sizeof(ResourceAssignment)));
-  if (!assignment) return false;
+  if (!assignment) return kernel::KernelError::OutOfMemory;
   new (assignment) ResourceAssignment();
   assignment->device = device;
 
   // No requirements -> success with an empty grant.
   if (!requirements || requirements->alternatives.empty()) {
     s_assignments.push_back(assignment);
-    return true;
+    return kernel::KernelError::Success;
   }
 
   // Flatten every existing grant into a temporary reserved set (copies, so the
@@ -165,11 +165,11 @@ UNDOS_KERNEL_API_DEF bool KE_RES_AssignResources(const kernel::KDevicePtr<kernel
     }
   }
 
-  bool ok = false;
+  auto status = kernel::KernelError::OutOfMemory;
   if (!oom) {
     // Fixed reservation only: use the first alternative.
     const IoResourceList &alt = requirements->alternatives.front();
-    ok = kernel::resource::TryReserveAlternative(
+    status = kernel::resource::TryReserveAlternative(
         alt, reserved, assignment->granted,
         []() -> CmPartialResourceDescriptor * {
           auto *n = static_cast<CmPartialResourceDescriptor *>(KE_Malloc(sizeof(CmPartialResourceDescriptor)));
@@ -180,13 +180,13 @@ UNDOS_KERNEL_API_DEF bool KE_RES_AssignResources(const kernel::KDevicePtr<kernel
 
   FreeCmDescriptors(reserved);
 
-  if (!ok) {
+  if (status != kernel::KernelError::Success) {
     DestroyAssignment(assignment);
-    return false;
+    return status;
   }
 
   s_assignments.push_back(assignment);
-  return true;
+  return kernel::KernelError::Success;
 }
 
 UNDOS_KERNEL_API_DEF const CmResourceList *KE_RES_GetAssignedResources(const kernel::KDevicePtr<kernel::KDevice> &device) noexcept {
@@ -198,7 +198,7 @@ UNDOS_KERNEL_API_DEF const CmPartialResourceDescriptor *KE_RES_FindAssigned(cons
   auto *a = FindAssignment(device);
   if (!a) return nullptr;
   size_t seen = 0;
-  for (auto descriptor: a->granted.descriptors) {
+  for (const auto descriptor: a->granted.descriptors) {
     if (descriptor->type != type) continue;
     if (seen == index) return descriptor;
     ++seen;

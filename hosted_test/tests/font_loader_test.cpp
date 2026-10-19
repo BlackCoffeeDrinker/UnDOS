@@ -26,7 +26,7 @@ struct Fixture {
     be16(head, 44, 2); be16(head, 50, 1);
     auto &maxp = add(tag('m','a','x','p'), 32);
     be32(maxp, 0, 0x10000); be16(maxp, 4, 3);
-    uint16_t limits[] = {3, 1, 6, 2, 2, 8, 16, 4, 4, 32, 8, 2, 4};
+    const uint16_t limits[] = {3, 1, 6, 2, 2, 8, 16, 4, 4, 32, 8, 2, 4};
     for (size_t i = 0; i < 13; ++i) be16(maxp, 6 + i * 2, limits[i]);
     auto &hhea = add(tag('h','h','e','a'), 36);
     be32(hhea, 0, 0x10000); be16(hhea, 4, 800); be16(hhea, 6, uint16_t(-200));
@@ -74,7 +74,7 @@ struct Fixture {
     auto &post = add(tag('p','o','s','t'), 32); be32(post, 0, 0x30000); be32(post, 12, 1);
   }
   Buffer &add(uint32_t id, size_t size) {
-    tables.push_back({id, Buffer(size)});
+    tables.push_back({.id = id, .bytes = Buffer(size)});
     return tables.back().bytes;
   }
   Buffer &get(uint32_t id) {
@@ -120,7 +120,7 @@ struct Fixture {
 };
 DecodeError run(Fixture &fixture, Buffer &output) {
   const auto file = fixture.build();
-  return decode({file.data(), file.size()}, output);
+  return decode({.data = file.data(), .size = file.size()}, output);
 }
 } // namespace
 
@@ -129,7 +129,7 @@ TEST_CASE("font loader preserves original coordinates, programs and metrics", "[
   Buffer output;
   REQUIRE(run(fixture, output) == DecodeError::None);
   REQUIRE(validate({output.data(), output.size()}) == Error::None);
-  ResourceView view({output.data(), output.size()});
+  ResourceView view({.data = output.data(), .size = output.size()});
   REQUIRE(read_u32(output.data() + 24) == 1024);
   REQUIRE(read_i32(output.data() + 32) == -200);
   REQUIRE(read_u32(output.data() + 40) == 700);
@@ -174,7 +174,7 @@ TEST_CASE("font loader decodes cmap formats 4 and 12", "[fontloader]") {
     Buffer output;
     REQUIRE(run(fixture, output) == DecodeError::None);
     REQUIRE(validate({output.data(), output.size()}) == Error::None);
-    const auto cmap = ResourceView({output.data(), output.size()}).section(Section::Cmap);
+    const auto cmap = ResourceView({.data = output.data(), .size = output.size()}).section(Section::Cmap);
     REQUIRE(cmap.size == CmapSize);
     REQUIRE(read_u32(cmap.data) == 65);
     REQUIRE(read_u32(cmap.data + 4) == 66);
@@ -230,7 +230,7 @@ TEST_CASE("font loader decodes signed short deltas, repeated flags and short loc
   Buffer output;
   REQUIRE(run(fixture, output) == DecodeError::None);
   REQUIRE(validate({output.data(), output.size()}) == Error::None);
-  const auto points = ResourceView({output.data(), output.size()}).section(Section::Points);
+  const auto points = ResourceView({.data = output.data(), .size = output.size()}).section(Section::Points);
   for (uint32_t i = 0; i < 3; ++i) {
     REQUIRE(read_i32(points.data + i * PointSize) == -10 * int32_t(i + 1));
     REQUIRE(read_i32(points.data + i * PointSize + 4) == -10 * int32_t(i + 1));
@@ -250,7 +250,7 @@ TEST_CASE("font loader preserves valid point-attached components", "[fontloader]
   Buffer output;
   REQUIRE(run(fixture, output) == DecodeError::None);
   REQUIRE(validate({output.data(), output.size()}) == Error::None);
-  const auto components = ResourceView({output.data(), output.size()}).section(Section::Components);
+  const auto components = ResourceView({.data = output.data(), .size = output.size()}).section(Section::Components);
   REQUIRE(components.size == ComponentSize * 2);
   REQUIRE(read_u32(components.data + 4) == 0x23);
   REQUIRE(read_u32(components.data + ComponentSize + 4) == 0x101);
@@ -267,7 +267,7 @@ TEST_CASE("font loader checks cmap4 glyph array relative offsets and delta", "[f
   Buffer output;
   REQUIRE(run(fixture, output) == DecodeError::None);
   REQUIRE(validate({output.data(), output.size()}) == Error::None);
-  const auto mapping = ResourceView({output.data(), output.size()}).section(Section::Cmap);
+  const auto mapping = ResourceView({.data = output.data(), .size = output.size()}).section(Section::Cmap);
   REQUIRE(mapping.size == CmapSize);
   REQUIRE(read_u32(mapping.data) == 66);
   REQUIRE(read_u32(mapping.data + 8) == 2);
@@ -408,7 +408,7 @@ TEST_CASE("font loader successful single-bit mutations retain resource invariant
   for (size_t i = 0; i < file.size(); ++i) {
     for (uint32_t bit = 0; bit < 8; ++bit) {
       file[i] ^= uint8_t(1u << bit);
-      const auto error = decode({file.data(), file.size()}, output);
+      const auto error = decode({.data = file.data(), .size = file.size()}, output);
       if (error == DecodeError::None) {
         REQUIRE(validate({output.data(), output.size()}) == Error::None);
       } else {

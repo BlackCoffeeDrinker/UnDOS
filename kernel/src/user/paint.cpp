@@ -3,10 +3,11 @@
 #include <kernel/gfx.hpp>
 #include <kernel/kobject/KDisplay.hpp>
 #include <kernel/kobject/KGraphicsAdapter.hpp>
+#include <kernel/kobject/KMemoryBackingObject.hpp>
 #include <kernel/kobject/KProcessObject.hpp>
 #include <kernel/kobject/KSurface.hpp>
-#include <kernel/kobject/KMemoryBackingObject.hpp>
-#include <kernel/gfx/bitmap_font.hpp>
+
+#include "user/bitmap_font.hpp"
 
 namespace kernel::user {
 namespace {
@@ -49,9 +50,11 @@ void fill(const KObjectPtr<KDisplay> &display, const URect &r, uint32_t color) n
   if (static_cast<uint64_t>(w) * static_cast<uint64_t>(h) <= 256 &&
       surface->backing && surface->backing->directAddress && surface->pitch > 0 &&
       static_cast<uint64_t>(surface->pitch) >= static_cast<uint64_t>(surface->width) * pixel_bytes(*surface) &&
-      KE_GFX_SoftwareFillRect(surface, r.left, r.top, w, h, packed)) return;
-  if (adapter && adapter->FillRect && adapter->FillRect(display->adapter, display->surface, r.left, r.top, w, h, packed)) return;
-  KE_GFX_SoftwareFillRect(display->surface, r.left, r.top, w, h, packed);
+      KE_GFX_SoftwareFillRect(surface, r.left, r.top, w, h, packed) == KernelError::Success) return;
+  if (adapter && adapter->FillRect &&
+      adapter->FillRect(display->adapter, display->surface, r.left, r.top, w, h, packed) == KernelError::Success) return;
+  // Last resort; scene painting has no caller to report a failed fill to.
+  (void) KE_GFX_SoftwareFillRect(display->surface, r.left, r.top, w, h, packed);
 }
 
 void present(const KObjectPtr<KDisplay> &display, const URect *rects, uint32_t count) noexcept {
@@ -69,10 +72,10 @@ void cursor_hide_locked() noexcept {
     uint32_t index = 0;
     for (int32_t y = r->top; y < r->bottom; ++y)
       for (int32_t x = r->left; x < r->right; ++x)
-        g_cursor.adapter->FillRect(g_cursor.adapter, surface, x, y, 1, 1, g_cursor.nativeSaved[index++]);
+        (void) g_cursor.adapter->FillRect(g_cursor.adapter, surface, x, y, 1, 1, g_cursor.nativeSaved[index++]);
     g_cursor.drawn = false;
     if (g_cursor.adapter->Present) {
-      const KClipRect rect{r->left, r->top, r->right, r->bottom};
+      const KClipRect rect{.left = r->left, .top = r->top, .right = r->right, .bottom = r->bottom};
       g_cursor.adapter->Present(g_cursor.adapter, surface, &rect, 1);
     }
     return;
@@ -95,7 +98,7 @@ void cursor_show_locked() noexcept {
   if (!display) return;
   const auto surface = display->surface;
   const auto bytes = pixel_bytes(*surface);
-  const auto r = URect{g_cursor.x - 4, g_cursor.y - 4, g_cursor.x + 5, g_cursor.y + 5}.Intersect(screen_rect());
+  const auto r = URect{.left = g_cursor.x - 4, .top = g_cursor.y - 4, .right = g_cursor.x + 5, .bottom = g_cursor.y + 5}.Intersect(screen_rect());
   if (r.Empty()) return;
   g_cursor.adapterSaved = false;
   const auto &adapter = display->adapter;
@@ -104,7 +107,7 @@ void cursor_show_locked() noexcept {
                       static_cast<uint64_t>(surface->pitch) >= static_cast<uint64_t>(surface->width) * bytes &&
                       static_cast<uint64_t>(surface->pitch) * surface->height <= surface->sizeInBytes;
   if (packed) {
-    auto *base = surface->backing->directAddress.as_ptr<uint8_t>();
+    const auto *base = surface->backing->directAddress.as_ptr<uint8_t>();
     uint32_t index = 0;
     for (int32_t y = r.top; y < r.bottom; ++y)
       for (int32_t x = r.left; x < r.right; ++x)
@@ -114,18 +117,21 @@ void cursor_show_locked() noexcept {
     if (!adapter || !adapter->ReadPixel || !adapter->FillRect) return;
     uint32_t index = 0;
     for (int32_t y = r.top; y < r.bottom; ++y)
-      for (int32_t x = r.left; x < r.right; ++x)
-        if (!adapter->ReadPixel(adapter, surface, x, y, g_cursor.nativeSaved[index++])) return;
+      for (int32_t x = r.left; x < r.right; ++x) {
+        const auto pixel = adapter->ReadPixel(adapter, surface, x, y);
+        if (!pixel) return;
+        g_cursor.nativeSaved[index++] = *pixel;
+      }
     g_cursor.adapterSaved = true;
   }
   g_cursor.surface = surface;
   g_cursor.adapter = adapter;
   g_cursor.savedRect = r;
   g_cursor.drawn = true;
-  const URect shapes[] = {{g_cursor.x - 4, g_cursor.y - 1, g_cursor.x + 5, g_cursor.y + 2},
-                          {g_cursor.x - 1, g_cursor.y - 4, g_cursor.x + 2, g_cursor.y + 5},
-                          {g_cursor.x - 3, g_cursor.y, g_cursor.x + 4, g_cursor.y + 1},
-                          {g_cursor.x, g_cursor.y - 3, g_cursor.x + 1, g_cursor.y + 4}};
+  const URect shapes[] = {{.left = g_cursor.x - 4, .top = g_cursor.y - 1, .right = g_cursor.x + 5, .bottom = g_cursor.y + 2},
+                          {.left = g_cursor.x - 1, .top = g_cursor.y - 4, .right = g_cursor.x + 2, .bottom = g_cursor.y + 5},
+                          {.left = g_cursor.x - 3, .top = g_cursor.y, .right = g_cursor.x + 4, .bottom = g_cursor.y + 1},
+                          {.left = g_cursor.x, .top = g_cursor.y - 3, .right = g_cursor.x + 1, .bottom = g_cursor.y + 4}};
   for (uint32_t i = 0; i < 4; ++i) {
     const auto c = shapes[i].Intersect(screen_rect());
     if (!c.Empty()) fill(display, c, i < 2 ? 0 : 15);
@@ -195,7 +201,7 @@ void fill_screen_locked(const URect &r, uint32_t color) noexcept {
 URect screen_rect() noexcept {
   const auto display = primary_display();
   if (!display) return {};
-  return {0, 0, static_cast<int32_t>(display->surface->width), static_cast<int32_t>(display->surface->height)};
+  return {.left = 0, .top = 0, .right = static_cast<int32_t>(display->surface->width), .bottom = static_cast<int32_t>(display->surface->height)};
 }
 
 void invalidate_locked(KWindowObject &window, const URect &clientRect) noexcept {
@@ -239,16 +245,16 @@ void expose_locked(const URect &screenRect) noexcept {
 
 void visible_region_locked(const KWindowObject &window, URegion &out) noexcept {
   out.Set(clipped_rect_locked(window));
-  for (auto *w = topmost_locked(); w && w != &window; w = w->below) {
+  for (const auto *w = topmost_locked(); w && w != &window; w = w->below) {
     if (effectively_visible_locked(*w)) out.Subtract(clipped_rect_locked(*w));
   }
 }
 
-bool begin_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t &hdc, URect &paint) noexcept {
+kstd::expected<PaintBegin, KernelError> begin_paint_locked(KProcessObject &proc, KWindowObject &window) noexcept {
   const auto display = primary_display();
-  if (!display) return false;
+  if (!display) return kstd::unexpected(KernelError::DeviceNotReady);
   if (window.paintDC) {
-    if (proc.dcTable.Resolve(window.paintDC)) return false;
+    if (proc.dcTable.Resolve(window.paintDC)) return kstd::unexpected(KernelError::InvalidState);
     // A caller can explicitly DeleteDC a paint DC. Recover its damage instead
     // of leaving the window permanently unable to begin another paint.
     window.invalid = window.invalid.Union(window.painting);
@@ -257,10 +263,12 @@ bool begin_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t &h
     window.paintClip.Clear();
   }
 
-  auto [slot, handle] = proc.dcTable.Allocate();
-  if (!slot) return false;
+  const auto allocated = proc.dcTable.Allocate();
+  if (!allocated) return kstd::unexpected(allocated.error());
+  auto *slot = allocated->first;
+  const HDC handle = allocated->second;
 
-  paint = window.invalid.Intersect(client_rect_locked(window));
+  const URect paint = window.invalid.Intersect(client_rect_locked(window));
   window.invalid = {};
   window.painting = paint;
 
@@ -288,15 +296,15 @@ bool begin_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t &h
   slot->clipOwner = KObjectPtr<KObject>(&window);
   slot->lock.unlock();
 
-  hdc = handle;
   window.paintDC = handle;
-  return true;
+  return PaintBegin{.dc = handle, .paint = paint};
 }
 
-bool end_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t hdc) noexcept {
-  if (!hdc || window.paintDC != hdc || window.process != &proc) return false;
+KernelError end_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t hdc) noexcept {
+  if (window.process != &proc) return KernelError::AccessDenied;
+  if (!hdc || window.paintDC != hdc) return KernelError::InvalidHandle;
   auto *slot = proc.dcTable.Resolve(hdc);
-  if (!slot) return false;
+  if (!slot) return KernelError::InvalidHandle;
   // The live clip can shrink after rasterization (hide, occlusion, or a scene
   // change). It is not a record of pixels already written into the shadow.
   // Preserve GFX's actual damage before Close resets the slot.
@@ -304,15 +312,15 @@ bool end_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t hdc)
   slot->lock.lock();
   if (slot->presentationDirty) {
     const auto &r = slot->presentationBounds;
-    damage = damage.Union({r.left, r.top, r.right, r.bottom});
+    damage = damage.Union({.left = r.left, .top = r.top, .right = r.right, .bottom = r.bottom});
   }
   slot->lock.unlock();
-  if (!proc.dcTable.Close(hdc)) return false;
+  if (const KernelError closed = proc.dcTable.Close(hdc); closed != KernelError::Success) return closed;
   present_locked(damage.Intersect(screen_rect()));
   window.paintDC = 0;
   window.painting = {};
   window.paintClip.Clear();
-  return true;
+  return KernelError::Success;
 }
 
 }// namespace kernel::user

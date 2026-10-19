@@ -32,7 +32,7 @@ void refresh_title() {
 }
 
 void refresh_groups() {
-  for (auto &v : shell.views) if (v.hwnd) gui::invalidate(v.hwnd);
+  for (const auto &v : shell.views) if (v.hwnd) gui::invalidate(v.hwnd);
   refresh_title();
 }
 
@@ -81,7 +81,7 @@ void edit_group(bool create) {
   if (!create && shell.active < 0) return;
   char name[LabelLength]{};
   if (!create) copy(name, sizeof(name), shell.model.groups[shell.active].title);
-  gui::Field field{"Group name", name, sizeof(name)};
+  gui::Field field{.label = "Group name", .value = name, .capacity = sizeof(name)};
   if (!gui::dialog(create ? "New group" : "Group properties", "Changes last for this session only.", &field, 1)) return;
   if (!name[0]) { gui::message("Invalid group", "A group must have a name."); return; }
   if (create) {
@@ -108,9 +108,9 @@ void edit_program(bool create) {
   if (!create && index < 0) return;
   Item item{};
   if (!create) item = shell.model.items[index];
-  gui::Field fields[] = {{"Description", item.title, sizeof(item.title)},
-                         {"Executable (absolute path)", item.path, sizeof(item.path)},
-                         {"Arguments", item.arguments, sizeof(item.arguments)}};
+  gui::Field fields[] = {{.label = "Description", .value = item.title, .capacity = sizeof(item.title)},
+                         {.label = "Executable (absolute path)", .value = item.path, .capacity = sizeof(item.path)},
+                         {.label = "Arguments", .value = item.arguments, .capacity = sizeof(item.arguments)}};
   if (!gui::dialog(create ? "New program" : "Program properties",
                    "Changes last for this session only.", fields, 3)) return;
   if (!item.title[0] || item.path[0] != '/' ||
@@ -157,8 +157,8 @@ void remove_group() {
 
 bool run_dialog() {
   char path[PathLength]{}, arguments[ArgumentLength]{};
-  gui::Field fields[] = {{"Executable (absolute path)", path, sizeof(path)},
-                         {"Arguments", arguments, sizeof(arguments)}};
+  gui::Field fields[] = {{.label = "Executable (absolute path)", .value = path, .capacity = sizeof(path)},
+                         {.label = "Arguments", .value = arguments, .capacity = sizeof(arguments)}};
   if (gui::dialog("Run", "Run a native UnDOS ELF program.", fields, 2)) {
     if (path[0] != '/') gui::message("Invalid path", "An absolute executable path is required.");
     else return launch(path, arguments);
@@ -172,7 +172,7 @@ void arrange_windows(bool tile) {
   for (const auto &v : shell.views) if (v.hwnd) ++count;
   if (!count) return;
   int ordinal = 0;
-  for (auto &v : shell.views) {
+  for (const auto &v : shell.views) {
     if (!v.hwnd) continue;
     gui::show(v.hwnd, ShowCommand_Restore);
     int width = client.right - 16;
@@ -301,24 +301,24 @@ void show_menu(int index) {
   const bool group = shell.active >= 0;
   const bool item = selected_item() >= 0;
   if (index == 0) {
-    const MenuEntry entries[] = {{"New Group...", NewGroup, true}, {"New Program...", NewProgram, group},
-      {"Program Properties...", Properties, item}, {"Group Properties...", GroupProperties, group},
-      {"Delete Program...", DeleteProgram, item}, {"Delete Group...", DeleteGroup, group},
-      {"Run...", Run, true}, {"Exit", Exit, true}};
+    const MenuEntry entries[] = {{.label = "New Group...", .command = NewGroup, .enabled = true}, {.label = "New Program...", .command = NewProgram, .enabled = group},
+      {.label = "Program Properties...", .command = Properties, .enabled = item}, {.label = "Group Properties...", .command = GroupProperties, .enabled = group},
+      {.label = "Delete Program...", .command = DeleteProgram, .enabled = item}, {.label = "Delete Group...", .command = DeleteGroup, .enabled = group},
+      {.label = "Run...", .command = Run, .enabled = true}, {.label = "Exit", .command = Exit, .enabled = true}};
     execute(popup(index, entries, 8));
   } else if (index == 1) {
-    const MenuEntry entries[] = {{"Arrange Icons", ArrangeIcons, group},
-      {"Session settings only", About, true}};
+    const MenuEntry entries[] = {{.label = "Arrange Icons", .command = ArrangeIcons, .enabled = group},
+      {.label = "Session settings only", .command = About, .enabled = true}};
     execute(popup(index, entries, 2));
   } else if (index == 2) {
-    MenuEntry entries[2 + MaxGroups] = {{"Cascade", Cascade, true}, {"Tile", Tile, true}};
+    MenuEntry entries[2 + MaxGroups] = {{.label = "Cascade", .command = Cascade, .enabled = true}, {.label = "Tile", .command = Tile, .enabled = true}};
     int n = 2;
     for (unsigned i = 0; i < MaxGroups; ++i)
       if (shell.model.groups[i].id)
         entries[n++] = {shell.model.groups[i].title, OpenGroupBase + static_cast<int>(i), true};
     execute(popup(index, entries, n));
   } else {
-    const MenuEntry entries[] = {{"About Program Manager...", About, true}};
+    const MenuEntry entries[] = {{.label = "About Program Manager...", .command = About, .enabled = true}};
     execute(popup(3, entries, 1));
   }
 }

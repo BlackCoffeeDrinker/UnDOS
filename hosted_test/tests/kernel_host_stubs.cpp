@@ -6,8 +6,8 @@
 #include <cstdio>
 #include <kernel/input.hpp>
 
-UNDOS_KERNEL_API_DEF bool KE_INPUT_WaitEvent(kernel::input::AnyInputEvent &, kstd::chrono::milliseconds) noexcept {
-  return false;
+UNDOS_KERNEL_API_DEF kernel::input::InputEventResult KE_INPUT_WaitEvent(kstd::chrono::milliseconds) noexcept {
+  return kstd::unexpected(kernel::KernelError::Timeout);
 }
 
 kernel::KDevicePtr<kernel::KDevice> g_lastReportedPdo;
@@ -21,9 +21,10 @@ UNDOS_KERNEL_API_DEF void KE_PrintBuffer(const char *str, size_t n) noexcept {
 // call driver AddDevice/StartDevice entry points directly instead of going
 // through the full PnP device-interest dispatch. These no-op stubs only
 // exist so drivers that call them (e.g. volmgr.cpp) can still link.
-UNDOS_KERNEL_API_DEF void KE_PNP_ReportNewDevice(const kernel::KDevicePtr<kernel::KDeviceBus> &parent, const kernel::KDevicePtr<kernel::KDevice> &pdo) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_PNP_ReportNewDevice(const kernel::KDevicePtr<kernel::KDeviceBus> &parent, const kernel::KDevicePtr<kernel::KDevice> &pdo) noexcept {
   (void) parent;
   g_lastReportedPdo = pdo;
+  return kernel::KernelError::Success;
 }
 
 // The background PnP work queue/worker thread live in pnp_manager.cpp, which
@@ -43,9 +44,10 @@ UNDOS_KERNEL_API_DEF const kernel::event::Category &KE_PNP_EventCategory() noexc
   return category;
 }
 
-UNDOS_KERNEL_API_DEF void KE_PNP_RegisterDeviceInterest(kernel::DeviceType type, const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_PNP_RegisterDeviceInterest(kernel::DeviceType type, const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
   (void) type;
   (void) driver;
+  return kernel::KernelError::Success;
 }
 
 // The scheduler (scheduler.cpp) is out of scope for hosted tests; there is no
@@ -69,17 +71,17 @@ UNDOS_KERNEL_API_DEF void KE_SCHED_Yield() noexcept {
 // which hosted tests never call: they drive dispatch synchronously instead
 // (kernel::event::detail::pump_once()). This stub only needs to satisfy the
 // linker.
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KThreadObject> KE_SCHED_CreateThread(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KThreadObject>, kernel::KernelError> KE_SCHED_CreateThread(
     kernel::cfunc<void(void *)> entry, void *arg, uint8_t priority) noexcept {
   (void) entry;
   (void) arg;
   (void) priority;
-  return nullptr;
+  return kstd::unexpected(kernel::KernelError::NotImplemented);
 }
 
-UNDOS_KERNEL_API_DEF kernel::WaitStatus KE_SCHED_WaitForHeader(kernel::KDispatcherHeader &header, kstd::chrono::milliseconds) noexcept {
-  if (header.TryAcquire()) return kernel::WaitStatus::Signalled;
-  return kernel::WaitStatus::Timeout;
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_SCHED_WaitForHeader(kernel::KDispatcherHeader &header, kstd::chrono::milliseconds) noexcept {
+  if (header.TryAcquire()) return kernel::KernelError::Success;
+  return kernel::KernelError::Timeout;
 }
 
 UNDOS_KERNEL_API_DEF void KE_EVENT_Signal(kernel::KDispatcherHeader &header, bool wakeAll) noexcept {
@@ -174,24 +176,26 @@ void Pump() noexcept {
 
 }// namespace test_dispatch
 
-UNDOS_KERNEL_API_DEF bool KE_DISPATCH_EnqueueInterrupt(const kernel::HalInterruptRecord &record) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_DISPATCH_EnqueueInterrupt(const kernel::HalInterruptRecord &record) noexcept {
   return g_testRing.Push(record);
 }
 
-UNDOS_KERNEL_API_DEF bool KE_DISPATCH_RegisterHandler(
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_DISPATCH_RegisterHandler(
     uint32_t irq,
     const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
   if (irq >= 16 || !isr) {
-    return false;
+    return kernel::KernelError::InvalidArgument;
   }
   g_testHandlers[irq] = isr;
-  return true;
+  return kernel::KernelError::Success;
 }
 
-UNDOS_KERNEL_API_DEF void KE_DISPATCH_UnregisterHandler(uint32_t irq) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_DISPATCH_UnregisterHandler(uint32_t irq) noexcept {
   if (irq < 16) {
     g_testHandlers[irq] = nullptr;
+    return kernel::KernelError::Success;
   }
+  return kernel::KernelError::InvalidArgument;
 }
 #include <stdexcept>
 void HAL_PLATFORM_Panic(const kstd::string_view &message, const char *file, int line) noexcept {

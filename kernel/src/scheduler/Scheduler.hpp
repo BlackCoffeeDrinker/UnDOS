@@ -4,6 +4,8 @@
 #include <stdint.h>
 
 #include <kernel/memory/address.hpp>
+#include <kernel/kerror.hpp>
+#include <expected.hpp>
 
 namespace kernel {
 struct KThreadObject;
@@ -46,7 +48,7 @@ uint32_t pick_target_cpu() noexcept;
 // Allocate a fresh, page-backed kernel stack. Returns the allocation base, or
 // a null VirtualAddress on failure. Shared with the AP bring-up path, which
 // needs a stack before the AP can run any kernel code.
-VirtualAddress alloc_kernel_stack(size_t size) noexcept;
+kstd::expected<VirtualAddress, KernelError> alloc_kernel_stack(size_t size) noexcept;
 
 // Default per-thread kernel stack size, also used for AP bootstrap stacks.
 inline constexpr size_t KERNEL_STACK_SIZE = 16 * 1024;

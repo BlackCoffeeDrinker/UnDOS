@@ -16,12 +16,12 @@
 namespace kernel::hid {
 
 // Parses a HID report descriptor (short items only) into `out`. Returns
-// false on anything malformed -- a truncated item, a length running past
+// an error on anything malformed -- a truncated item, a length running past
 // the buffer, an unterminated collection, or more fields than
 // ReportFormat::kMaxFields -- leaving `out` unusable rather than
 // half-populated. Never allocates. Called once, at attach time, never per
 // report and never from an ISR.
-bool ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &out);
+KernelError ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &out);
 
 // Decodes one report against a parsed format and pushes the resulting
 // KInputReport(s) for `device`. `state` is the reporting device's decoder

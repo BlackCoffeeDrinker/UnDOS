@@ -4,6 +4,8 @@
 #include <stdint.h>
 
 #include <span.hpp>
+#include <expected.hpp>
+#include <kernel/kerror.hpp>
 
 namespace volmgr {
 
@@ -78,8 +80,8 @@ inline PartitionScheme DetectScheme(ByteView sector0, ByteView lba1) {
 // Parses the 4 primary MBR partition entries (offset 446). Empty (type 0x00),
 // GPT-protective (type 0xEE) and zero-length entries are skipped. Returns the
 // number of entries written to `out` (bounded by `out.size()`).
-inline size_t ParseMbr(ByteView sector0, kstd::span<PartitionInfo> out) {
-  if (!HasMbrSignature(sector0)) return 0;
+inline kstd::expected<size_t, kernel::KernelError> ParseMbr(ByteView sector0, kstd::span<PartitionInfo> out) {
+  if (!HasMbrSignature(sector0)) return kstd::unexpected(kernel::KernelError::InvalidFormat);
   size_t count = 0;
   for (size_t i = 0; i < 4 && count < out.size(); i++) {
     const ByteView e = sector0.subspan(446 + i * 16);
@@ -98,11 +100,11 @@ inline size_t ParseMbr(ByteView sector0, kstd::span<PartitionInfo> out) {
 // Parses GPT partition entries from a contiguous `entries` buffer. `header` is
 // the GPT header (LBA 1). Unused entries (all-zero type GUID) and reversed
 // ranges are skipped. Returns the number of entries written to `out`.
-inline size_t ParseGptEntries(ByteView header, ByteView entries, kstd::span<PartitionInfo> out) {
-  if (!HasGptSignature(header)) return 0;
+inline kstd::expected<size_t, kernel::KernelError> ParseGptEntries(ByteView header, ByteView entries, kstd::span<PartitionInfo> out) {
+  if (header.size() < 88 || !HasGptSignature(header)) return kstd::unexpected(kernel::KernelError::InvalidFormat);
   const uint32_t numEntries = ReadLe32(header.subspan(80));
   const uint32_t entrySize = ReadLe32(header.subspan(84));
-  if (entrySize < 128) return 0;
+  if (entrySize < 128) return kstd::unexpected(kernel::KernelError::InvalidFormat);
   size_t count = 0;
   for (uint32_t i = 0; i < numEntries && count < out.size(); i++) {
     const size_t off = static_cast<size_t>(i) * entrySize;
@@ -127,13 +129,14 @@ inline size_t ParseGptEntries(ByteView header, ByteView entries, kstd::span<Part
 }
 
 // Range-checks a volume-relative request and converts it to an absolute disk
-// byte offset. Returns false (and leaves `absOffset` untouched) if the request
-// would fall outside the partition.
-inline bool ComputeAbsoluteOffset(uint64_t baseOffsetBytes, uint64_t lengthBytes, uint64_t reqOffset, uint64_t reqLength, uint64_t &absOffset) {
-  if (reqOffset > lengthBytes) return false;
-  if (reqLength > lengthBytes - reqOffset) return false;
-  absOffset = baseOffsetBytes + reqOffset;
-  return true;
+// byte offset, rejecting requests outside the partition or overflowing the disk offset.
+inline kstd::expected<uint64_t, kernel::KernelError> ComputeAbsoluteOffset(uint64_t baseOffsetBytes, uint64_t lengthBytes, uint64_t reqOffset, uint64_t reqLength) {
+  if (reqOffset > lengthBytes || reqLength > lengthBytes - reqOffset ||
+      reqOffset > UINT64_MAX - baseOffsetBytes ||
+      reqLength > UINT64_MAX - baseOffsetBytes - reqOffset) {
+    return kstd::unexpected(kernel::KernelError::OutOfRange);
+  }
+  return baseOffsetBytes + reqOffset;
 }
 
 } // namespace volmgr

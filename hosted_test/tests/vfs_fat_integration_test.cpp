@@ -24,7 +24,7 @@ using DriverEntryFn = void (*)(kernel::KObjectPtr<kernel::KDriverObject> &, cons
 
 kstd::static_string<128> MakeTempImagePath(const char *name) {
   kstd::static_string<128> path;
-  kstd::format(path, "/tmp/undos_vfs_fat_integration_{}.img", name);
+  kstd::format(path, "undos_vfs_fat_integration_{}.img", name);
   return path;
 }
 
@@ -53,8 +53,8 @@ kstd::array<uint8_t, kDiskSectors * kSectorSize> BuildFat12DiskImage() {
   kstd::array<uint8_t, kDiskSectors * kSectorSize> disk{};
 
   // --- MBR (LBA 0) ---
-  kstd::span<uint8_t> mbr(disk.data(), kSectorSize);
-  kstd::span<uint8_t> entry0 = mbr.subspan(446);
+  const kstd::span<uint8_t> mbr(disk.data(), kSectorSize);
+  const kstd::span<uint8_t> entry0 = mbr.subspan(446);
   entry0[4] = 0x01;// FAT12 partition type
   PutLe32(entry0.subspan(8), kPartitionStartLba);
   PutLe32(entry0.subspan(12), kPartitionSectors);
@@ -62,7 +62,7 @@ kstd::array<uint8_t, kDiskSectors * kSectorSize> BuildFat12DiskImage() {
   mbr[511] = 0xAA;
 
   // --- FAT12 BPB (partition-relative LBA 0, i.e. disk LBA 1) ---
-  kstd::span<uint8_t> bpb(disk.data() + kPartitionStartLba * kSectorSize, kSectorSize);
+  const kstd::span<uint8_t> bpb(disk.data() + kPartitionStartLba * kSectorSize, kSectorSize);
   bpb[0] = 0xEB;// jmpBoot
   bpb[1] = 0x3C;
   bpb[2] = 0x90;
@@ -84,10 +84,10 @@ kstd::array<uint8_t, kDiskSectors * kSectorSize> BuildFat12DiskImage() {
 // so LoadDriver() below can hand each driver a per-driver configuration key
 // the same way KE_DRIVER_Load() does for a real boot driver.
 kernel::KConfigurationKeyPtr GetTestBootRoot() {
-  if (auto existing = KE_CM_OpenRoot("IntegrationTestBoot")) {
+  if (auto existing = KE_CM_OpenRoot("IntegrationTestBoot").value_or(nullptr)) {
     return existing;
   }
-  return KE_CM_OpenRoot("IntegrationTestBoot");
+  return KE_CM_OpenRoot("IntegrationTestBoot").value_or(nullptr);
 }
 
 // Loads a driver module and calls its DriverEntry with a freshly created
@@ -100,11 +100,11 @@ kernel::KObjectPtr<kernel::KDriverObject> LoadDriver(const char *path, const cha
   auto *entry = reinterpret_cast<DriverEntryFn>(dlsym(handle, "DriverEntry"));
   REQUIRE(entry != nullptr);
 
-  auto driver = kernel::CreateKObject<kernel::KDriverObject>(driverName);
+  auto driver = kernel::CreateKObject<kernel::KDriverObject>(driverName).value_or(nullptr);
 
   kernel::KConfigurationKeyPtr driverConfig = nullptr;
   if (const auto bootRoot = GetTestBootRoot()) {
-    driverConfig = KE_CM_CreateKey(bootRoot, driverName, kernel::KConfigurationKeyAccess::ReadWrite);
+    driverConfig = KE_CM_CreateKey(bootRoot, driverName, kernel::KConfigurationKeyAccess::ReadWrite).value_or(nullptr);
   }
 
   entry(driver, driverConfig);
@@ -122,18 +122,18 @@ TEST_CASE("End-to-end disk_fake -> volmgr -> fs_fat -> VFS mount", "[vfs][fat][i
   REQUIRE(backing.IsOpen());
 
   const auto diskImage = BuildFat12DiskImage();
-  REQUIRE(diskfake::Seed(diskfake::FakeDiskContext{}, kstd::span<const uint8_t>(diskImage)) == false);// no backing set, sanity-check Seed's guard
-  REQUIRE(backing.Resize(diskImage.size()));
-  REQUIRE(backing.WriteAt(0, kstd::span<const uint8_t>(diskImage)));
+  REQUIRE(diskfake::Seed(diskfake::FakeDiskContext{}, kstd::span<const uint8_t>(diskImage)) == kernel::KernelError::InvalidState);// no backing set, sanity-check Seed's guard
+  REQUIRE(backing.Resize(diskImage.size()) == kernel::KernelError::Success);
+  REQUIRE(backing.WriteAt(0, kstd::span<const uint8_t>(diskImage)) == kernel::KernelError::Success);
 
   UNSCOPED_INFO("Disk image left on disk for inspection at: " << imagePath.data());
 
   // --- disk_fake: a Disk PDO backed by the image file we just wrote ---
-  auto diskDriver = kernel::CreateKObject<kernel::KDriverObject>("IntegrationDiskDriver");
+  auto diskDriver = kernel::CreateKObject<kernel::KDriverObject>("IntegrationDiskDriver").value_or(nullptr);
   diskDriver->Read = diskfake::Read;
   diskDriver->Write = diskfake::Write;
 
-  auto diskDevice = KE_IO_CreateDeviceWithContext<diskfake::FakeDiskContext>(diskDriver, "IntegrationDisk", kernel::device_type::Disk);
+  auto diskDevice = KE_IO_CreateDeviceWithContext<diskfake::FakeDiskContext>(diskDriver, "IntegrationDisk", kernel::device_type::Disk).value_or(nullptr);
   REQUIRE(diskDevice != nullptr);
   diskDevice->deviceExtension.as<diskfake::FakeDiskContext>()->backing = &backing;
 
@@ -142,7 +142,7 @@ TEST_CASE("End-to-end disk_fake -> volmgr -> fs_fat -> VFS mount", "[vfs][fat][i
   REQUIRE(volmgrDriver->AddDevice.valid());
   REQUIRE(volmgrDriver->StartDevice.valid());
 
-  REQUIRE(volmgrDriver->AddDevice(volmgrDriver, diskDevice));
+  REQUIRE(volmgrDriver->AddDevice(volmgrDriver, diskDevice) == kernel::KernelError::Success);
   g_lastReportedPdo = nullptr;
   volmgrDriver->StartDevice(diskDevice);
 
@@ -155,7 +155,7 @@ TEST_CASE("End-to-end disk_fake -> volmgr -> fs_fat -> VFS mount", "[vfs][fat][i
 
   // KE_VFS_Mount only permits mounting at a non-root path when a parent mount
   // already exists, so mount this standalone volume at the root "/".
-  REQUIRE(KE_VFS_Mount(volumePdo, "FAT", "/", ""));
+  REQUIRE(KE_VFS_Mount(volumePdo, "FAT", "/", "") == kernel::KernelError::Success);
 
   // Clean up the mount so later tests mounting at "/" aren't blocked by this
   // one (the singleton VFS directory persists for the whole process).

@@ -1,7 +1,7 @@
 
 #include "stdkrn.hpp"
+#include "../user/bitmap_font.hpp"
 #include <kernel/gfx/raster_helpers.hpp>
-#include <kernel/gfx/bitmap_font.hpp>
 
 namespace {
 size_t BytesPerPixel(kernel::PixelFormat format) {
@@ -75,13 +75,16 @@ void WritePixel(const kernel::KObjectPtr<kernel::KSurface> &surface, int x, int 
 
 }// namespace
 
-UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareFillRect(
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SoftwareFillRect(
     const kernel::KObjectPtr<kernel::KSurface> &dst,
     int x, int y, int w, int h,
     uint32_t colorIndex) noexcept {
   auto *base = SurfaceBase(dst);
-  if (!base || w <= 0 || h <= 0) {
-    return false;
+  if (!base) {
+    return kernel::KernelError::Unsupported;
+  }
+  if (w <= 0 || h <= 0) {
+    return kernel::KernelError::InvalidSize;
   }
 
   int64_t right = static_cast<int64_t>(x) + w;
@@ -90,7 +93,7 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareFillRect(
   if (bottom > dst->height) bottom = dst->height;
   const int64_t left = x < 0 ? 0 : x;
   const int64_t top = y < 0 ? 0 : y;
-  if (right <= left || bottom <= top) return true;
+  if (right <= left || bottom <= top) return kernel::KernelError::Success;
   const size_t bytes = BytesPerPixel(dst->pixelFormat);
   const uint8_t pattern[4] = {
       static_cast<uint8_t>(colorIndex), static_cast<uint8_t>(colorIndex >> 8),
@@ -107,22 +110,22 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareFillRect(
       pixel += bytes;
     }
   }
-  return true;
+  return kernel::KernelError::Success;
 }
 
-UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareDrawLine(
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SoftwareDrawLine(
     const kernel::KObjectPtr<kernel::KSurface> &dst,
     int x0, int y0, int x1, int y1,
     uint32_t colorIndex) noexcept {
   if (!SurfaceBase(dst)) {
-    return false;
+    return kernel::KernelError::Unsupported;
   }
 
   return kernel::gfx::ForEachLinePixel(x0, y0, x1, y1, dst->width, dst->height,
       [&](int32_t x, int32_t y) { WritePixel(dst, x, y, colorIndex); });
 }
 
-UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SoftwareBitBlt(
     const kernel::KObjectPtr<kernel::KSurface> &dst,
     int dstX, int dstY,
     const kernel::KObjectPtr<kernel::KSurface> &src,
@@ -131,11 +134,11 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
     kernel::RasterOp rop) noexcept {
   if (rop != kernel::RasterOp::SRCCOPY) {
     // Only straight copy is implemented in the software fallback.
-    return false;
+    return kernel::KernelError::Unsupported;
   }
 
   if (width == 0 || height == 0) {
-    return true;
+    return kernel::KernelError::Success;
   }
 
   // 1. Resolve raw surface memory base pointers once
@@ -143,11 +146,11 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
   const uint8_t *srcBase = SurfaceBase(src);
 
   if (!dstBase || !srcBase) {
-    return false;
+    return kernel::KernelError::Unsupported;
   }
 
   kernel::gfx::BlitRect copy{dstX, dstY, srcX, srcY, width, height};
-  if (!kernel::gfx::ClipBlit(copy, dst->width, dst->height, src->width, src->height)) return true;
+  if (!kernel::gfx::ClipBlit(copy, dst->width, dst->height, src->width, src->height)) return kernel::KernelError::Success;
   dstX = static_cast<int>(copy.dstX);
   dstY = static_cast<int>(copy.dstY);
   srcX = static_cast<int>(copy.srcX);
@@ -165,7 +168,7 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
   const bool src332 = srcFmt == kernel::PixelFormat::INDEX8 && src->type == kernel::SurfaceType::Framebuffer;
   const bool dst332 = dstFmt == kernel::PixelFormat::INDEX8 && dst->type == kernel::SurfaceType::Framebuffer;
   const bool sharedBacking = dst->backing == src->backing;
-  if (sharedBacking && (dstPitch != srcPitch || dstFmt != srcFmt)) return false;
+  if (sharedBacking && (dstPitch != srcPitch || dstFmt != srcFmt)) return kernel::KernelError::Unsupported;
 
   // Calculate starting byte offsets for the top-left of the blit region
   uint8_t *dstRow = dstBase + static_cast<ptrdiff_t>(dstY) * dstPitch +
@@ -186,7 +189,7 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
         bytesPerRow == static_cast<size_t>(srcPitch)) {
       // Single bulk transfer for the entire region
       kstd::memmove(dstRow, srcRow, bytesPerRow * height);
-      return true;
+      return kernel::KernelError::Success;
     }
 
     // Bottom-up logical traversal protects vertically overlapping rows.
@@ -198,7 +201,7 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
         dstRow -= dstPitch;
         srcRow -= srcPitch;
       }
-      return true;
+      return kernel::KernelError::Success;
     }
 
     // Row-by-row memory copy, including horizontal overlap.
@@ -207,7 +210,7 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
       dstRow += dstPitch;
       srcRow += srcPitch;
     }
-    return true;
+    return kernel::KernelError::Success;
   }
 
   // --------------------------------------------------------------------------
@@ -286,5 +289,5 @@ UNDOS_KERNEL_API_DEF bool KE_GFX_SoftwareBitBlt(
     srcRow += srcPitch;
   }
 
-  return true;
+  return kernel::KernelError::Success;
 }

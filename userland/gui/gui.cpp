@@ -58,7 +58,7 @@ bool next(Msg &msg) {
 }
 
 bool destroy(uint32_t hwnd) {
-  const Msg notification{hwnd, WindowMessage_Destroy, 0, 0, 0};
+  const Msg notification{.hwnd = hwnd, .message = WindowMessage_Destroy, .wParam = 0, .lParam = 0, .time = 0};
   dispatch(notification);
   return check(UD_SYS_DestroyWindowV1(hwnd), "DestroyWindow");
 }
@@ -272,7 +272,7 @@ void system_menu(uint32_t hwnd, int x, int y) {
     case 3: show(hwnd, ShowCommand_Minimize); break;
     case 4: show(hwnd, ShowCommand_Maximize); break;
     case 5: {
-      const Msg close{hwnd, WindowMessage_Close, 0, 0, 0};
+      const Msg close{.hwnd = hwnd, .message = WindowMessage_Close, .wParam = 0, .lParam = 0, .time = 0};
       dispatch(close);
       break;
     }
@@ -330,7 +330,7 @@ void dialog_proc(const Msg &msg) {
       d.done = true;
     }
   } else if (msg.message == WindowMessage_Char && d.focus < d.count) {
-    Field &f = d.fields[d.focus];
+    const Field &f = d.fields[d.focus];
     const size_t n = strlen(f.value);
     d.error = nullptr;
     if (msg.wParam == 8 && n) f.value[n - 1] = 0;

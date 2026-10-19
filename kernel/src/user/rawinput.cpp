@@ -17,7 +17,7 @@ struct InputState {
 } g_input;
 
 uint32_t packed_point(const KWindowObject &window) noexcept {
-  const auto point = screen_to_client_locked(window, {g_input.mouseX, g_input.mouseY, 0, 0});
+  const auto point = screen_to_client_locked(window, {.left = g_input.mouseX, .top = g_input.mouseY, .right = 0, .bottom = 0});
   return (static_cast<uint32_t>(point.top & 0xFFFF) << 16) |
          static_cast<uint32_t>(point.left & 0xFFFF);
 }
@@ -34,7 +34,7 @@ bool resize_hit(HitTest hit) noexcept {
 
 void drag_locked() noexcept {
   auto *window = lookup_locked(g_input.dragHwnd);
-  if (!window || !effectively_visible_locked(*window) || window->state != 0) {
+  if (!window || !effectively_visible_locked(*window) || window->state != KWindowObject::State::Restored) {
     g_input.dragHwnd = 0;
     return;
   }
@@ -59,7 +59,7 @@ void drag_locked() noexcept {
   }
   // Interactive child movement stays within the parent's client. The syscall
   // also permits partially clipped children for intentional layouts.
-  if (auto *parent = lookup_locked(window->parent)) {
+  if (const auto *parent = lookup_locked(window->parent)) {
     const auto bounds = client_to_screen_locked(*parent, client_rect_locked(*parent));
     if (g_input.dragHit == HitTest::Caption) {
       if (rect.left < bounds.left) rect = rect.Offset(bounds.left - rect.left, 0);
@@ -69,7 +69,7 @@ void drag_locked() noexcept {
     } else rect = rect.Intersect(bounds);
   }
   if (!rect.Empty() && rect.left >= -32768 && rect.top >= -32768 &&
-      rect.right <= 32767 && rect.bottom <= 32767 && move_window_locked(*window, rect))
+      rect.right <= 32767 && rect.bottom <= 32767 && move_window_locked(*window, rect) == KernelError::Success)
     window->restoredRect = rect;
 }
 
@@ -100,8 +100,8 @@ void mouse_locked(const input::MouseInputEvent &event) noexcept {
       g_input.lastClickX = g_input.mouseX;
       g_input.lastClickY = g_input.mouseY;
       g_input.lastClickHit = hit;
-      if (target->state != 2) set_focus_locked(target->hwnd);
-      if (target->state == 2) {
+      if (target->state != KWindowObject::State::Minimized) set_focus_locked(target->hwnd);
+      if (target->state == KWindowObject::State::Minimized) {
         if (doubleClick || !target->parent) show_command_locked(*target, 4);
         else set_focus_locked(target->hwnd);
       } else if (hit == HitTest::Client) {
@@ -114,8 +114,8 @@ void mouse_locked(const input::MouseInputEvent &event) noexcept {
                       static_cast<uint32_t>(g_input.mouseX & 0xFFFF));
       } else if (hit == HitTest::MinButton) show_command_locked(*target, 2);
       else if (hit == HitTest::MaxButton || (hit == HitTest::Caption && doubleClick))
-        show_command_locked(*target, target->state == 3 ? 4 : 3);
-      else if (target->state == 0 && (hit == HitTest::Caption || resize_hit(hit))) {
+        show_command_locked(*target, target->state == KWindowObject::State::Maximized ? 4 : 3);
+      else if (target->state == KWindowObject::State::Restored && (hit == HitTest::Caption || resize_hit(hit))) {
         g_input.dragHwnd = target->hwnd;
         g_input.dragHit = hit;
         g_input.dragX = g_input.mouseX;
@@ -161,13 +161,13 @@ void keyboard_locked(const input::KeyboardInputEvent &event) noexcept {
       return;
     }
     if (alt && event.virtualKey == 0x73) { // Alt+F4
-      if (auto *w = focused_window_locked(); w && w->queue) post_locked(*w->queue, w->hwnd, kMsgClose, 0, 0);
+      if (const auto *w = focused_window_locked(); w && w->queue) post_locked(*w->queue, w->hwnd, kMsgClose, 0, 0);
       return;
     }
     if (alt && event.virtualKey == 0x20) { // Alt+Space opens the focused frame's system menu.
       auto *window = focused_window_locked();
       if (!window) window = active_window_locked();
-      if (window && window->state == 2 && window->parent && !released && event.virtualKey == 0x0D) {
+      if (window && window->state == KWindowObject::State::Minimized && window->parent && !released && event.virtualKey == 0x0D) {
         show_command_locked(*window, 4);
         return;
       }
@@ -183,7 +183,7 @@ void keyboard_locked(const input::KeyboardInputEvent &event) noexcept {
   }
   auto *window = focused_window_locked();
   if (!window) window = active_window_locked();
-  if (!window || !window->queue || !effectively_visible_locked(*window) || window->state == 2) return;
+  if (!window || !window->queue || !effectively_visible_locked(*window) || window->state == KWindowObject::State::Minimized) return;
   const uint32_t metadata = event.scanCode | ((event.keyFlags & 7u) << 8) | ((event.modifiers & 0x1FF) << 16);
   post_locked(*window->queue, window->hwnd, released ? kMsgKeyUp : kMsgKeyDown, event.virtualKey, metadata);
   if (event.character && !released && !alt && !control)
@@ -199,8 +199,9 @@ void raw_input_thread(void *) {
     cursor_move_locked(g_input.mouseX, g_input.mouseY);
   }
   for (;;) {
-    input::AnyInputEvent event;
-    if (!KE_INPUT_WaitEvent(event, kstd::chrono::milliseconds(1000))) continue;
+    const auto next = KE_INPUT_WaitEvent(kstd::chrono::milliseconds(1000));
+    if (!next) continue;
+    const input::AnyInputEvent &event = *next;
     Guard guard;
     if (event.base.is<input::MouseInputEvent>()) mouse_locked(event.mouse);
     else if (event.base.is<input::KeyboardInputEvent>()) keyboard_locked(event.keyboard);
@@ -209,7 +210,8 @@ void raw_input_thread(void *) {
 } // namespace
 
 void init_raw_input() noexcept {
-  if (!KE_SCHED_CreateThread(raw_input_thread, nullptr, 2)) KE_Print("USER: cannot create raw input worker");
+  if (const auto worker = KE_SCHED_CreateThread(raw_input_thread, nullptr, 2); !worker)
+    KE_Print("USER: cannot create raw input worker: {}", worker.error());
 }
 
 void display_input_changed_locked(bool firstActivation) noexcept {

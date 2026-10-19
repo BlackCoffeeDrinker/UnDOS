@@ -17,13 +17,13 @@ class ExitCallbacks {
 public:
   int add(void (*function)(void *), void *argument, void *dso) {
     if (!function || count == CAPACITY) return -1;
-    entries[count++] = {function, argument, dso, nullptr};
+    entries[count++] = {.function = function, .argument = argument, .dso = dso, .plain = nullptr};
     return 0;
   }
 
   int add(void (*function)()) {
     if (!function || count == CAPACITY) return -1;
-    entries[count++] = {nullptr, nullptr, nullptr, function};
+    entries[count++] = {.function = nullptr, .argument = nullptr, .dso = nullptr, .plain = function};
     return 0;
   }
 

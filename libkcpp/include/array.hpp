@@ -9,6 +9,8 @@ namespace kstd {
 
 template<class T, size_t N>
 struct array {
+  static constexpr size_t CONST_SIZE = N;
+  
   // types:
   using __self = array;
   using value_type = T;
@@ -28,10 +30,17 @@ struct array {
   T elements[N];
 
   // Accessors
-  constexpr T &operator[](size_t i) { return elements[i]; }
-  constexpr T &operator[](int i) { return elements[i]; }
-  constexpr const T &operator[](size_t i) const { return elements[i]; }
-  constexpr const T &operator[](int i) const { return elements[i]; }
+  // Non-const overload
+  template<kstd::integral Int>
+  constexpr T &operator[](Int i) {
+    return elements[static_cast<size_t>(i)];
+  }
+
+  // Const overload
+  template<kstd::integral Int>
+  constexpr const T &operator[](Int i) const {
+    return elements[static_cast<size_t>(i)];
+  }
 
   constexpr bool operator==(const array &rhs) const {
     for (size_t i = 0; i < N; i++)
@@ -62,7 +71,7 @@ struct array {
   }
 
   // Size
-  constexpr size_t size() const { return N; }
+  [[nodiscard]] constexpr size_t size() const { return N; }
 };
 
 template<class T>

@@ -13,24 +13,28 @@ SymbolTable::~SymbolTable() {
   });
 }
 
-bool SymbolTable::Register(kstd::string_view name, uintptr_t address) {
+KernelError SymbolTable::Register(kstd::string_view name, uintptr_t address) {
+  if (name.empty()) return KernelError::InvalidArgument;
+  if (name.size() >= 64) return KernelError::NameTooLong;
+  if (symbols.find(name)) return KernelError::AlreadyExists;
   auto entry = KE_CreateObject<SymbolEntry>();
-  if (!entry) return false;
+  if (!entry) return entry.error();
 
-  entry->name = name;
-  entry->address = address;
-  symbols.insert(*entry);
+  entry.value()->name = name;
+  entry.value()->address = address;
+  symbols.insert(*entry.value());
 
   // The AVL tree now owns this memory (linked in by address); release the
   // unique_ptr so it isn't freed here out from under the tree. It is freed
   // later via KE_Free in the destructor's clear() callback above.
-  entry.release();
-  return true;
+  entry->release();
+  return KernelError::Success;
 }
 
-uintptr_t SymbolTable::Resolve(kstd::string_view name) const {
+ kstd::expected<uintptr_t, KernelError> SymbolTable::Resolve(kstd::string_view name) const {
   const auto *entry = symbols.find(name);
-  return entry ? entry->address : 0;
+  if (!entry) return kstd::unexpected(KernelError::NotFound);
+  return entry->address;
 }
 
 }// namespace kernel::driver

@@ -36,10 +36,11 @@ const kernel::hid::ReportField *FindField(const kernel::hid::ReportFormat &forma
 
 }// namespace
 
-UNDOS_KERNEL_API_DEF void KE_INPUT_PushEvent(const kernel::KDevicePtr<kernel::KDevice> &device,
-                                             const kernel::input::KInputReport &report) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_INPUT_PushEvent(const kernel::KDevicePtr<kernel::KDevice> &device,
+                                                            const kernel::input::KInputReport &report) noexcept {
   (void) device;
   g_pushed.push_back(report);
+  return kernel::KernelError::Success;
 }
 
 using namespace kernel::hid;
@@ -48,7 +49,7 @@ using namespace kernel::input;
 TEST_CASE("ParseReportDescriptor accepts the synthetic keyboard descriptor", "[hid_parser]") {
   ReportFormat format;
   REQUIRE(ParseReportDescriptor(
-      kstd::span<const uint8_t>(ps2::kKeyboardReportDescriptor, sizeof(ps2::kKeyboardReportDescriptor)), format));
+      kstd::span<const uint8_t>(ps2::kKeyboardReportDescriptor, sizeof(ps2::kKeyboardReportDescriptor)), format) == kernel::KernelError::Success);
 
   REQUIRE(format.collectionUsage == usage_gd::Keyboard);
   REQUIRE(format.reportBytes == ps2::kKeyReportBytes);
@@ -72,7 +73,7 @@ TEST_CASE("ParseReportDescriptor accepts the synthetic keyboard descriptor", "[h
 TEST_CASE("ParseReportDescriptor accepts the synthetic mouse descriptor", "[hid_parser]") {
   ReportFormat format;
   REQUIRE(ParseReportDescriptor(
-      kstd::span<const uint8_t>(ps2::kMouseReportDescriptor, sizeof(ps2::kMouseReportDescriptor)), format));
+      kstd::span<const uint8_t>(ps2::kMouseReportDescriptor, sizeof(ps2::kMouseReportDescriptor)), format) == kernel::KernelError::Success);
 
   REQUIRE(format.collectionUsage == usage_gd::Mouse);
   REQUIRE(format.reportBytes == ps2::kMouseReportBytes);
@@ -95,7 +96,7 @@ TEST_CASE("ParseReportDescriptor accepts the synthetic joystick descriptor", "[h
   ReportFormat format;
   REQUIRE(ParseReportDescriptor(
       kstd::span<const uint8_t>(gameport::kJoystickReportDescriptor, sizeof(gameport::kJoystickReportDescriptor)),
-      format));
+      format) == kernel::KernelError::Success);
 
   REQUIRE(format.collectionUsage == usage_gd::Joystick);
   REQUIRE(format.reportBytes == gameport::kReportBytes);
@@ -113,35 +114,35 @@ TEST_CASE("ParseReportDescriptor rejects malformed descriptors", "[hid_parser]")
 
   // Item header promising more data than the buffer holds.
   const uint8_t truncated[] = {0x05};
-  REQUIRE_FALSE(ParseReportDescriptor(kstd::span<const uint8_t>(truncated, sizeof(truncated)), format));
+  REQUIRE(ParseReportDescriptor(kstd::span<const uint8_t>(truncated, sizeof(truncated)), format) != kernel::KernelError::Success);
 
   // Collection opened but never closed.
   const uint8_t unterminated[] = {0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02};
-  REQUIRE_FALSE(ParseReportDescriptor(kstd::span<const uint8_t>(unterminated, sizeof(unterminated)), format));
+  REQUIRE(ParseReportDescriptor(kstd::span<const uint8_t>(unterminated, sizeof(unterminated)), format) != kernel::KernelError::Success);
 
   // End Collection with no matching Collection.
   const uint8_t stray[] = {0xC0};
-  REQUIRE_FALSE(ParseReportDescriptor(kstd::span<const uint8_t>(stray, sizeof(stray)), format));
+  REQUIRE(ParseReportDescriptor(kstd::span<const uint8_t>(stray, sizeof(stray)), format) != kernel::KernelError::Success);
 
   // A long item is rejected rather than skipped.
   const uint8_t longItem[] = {0xFE, 0x00, 0x00};
-  REQUIRE_FALSE(ParseReportDescriptor(kstd::span<const uint8_t>(longItem, sizeof(longItem)), format));
+  REQUIRE(ParseReportDescriptor(kstd::span<const uint8_t>(longItem, sizeof(longItem)), format) != kernel::KernelError::Success);
 }
 
 TEST_CASE("ExtractField sign-extends only signed fields", "[hid_parser]") {
   const uint8_t report[] = {0x00, 0x80, 0x80, 0x00};
 
-  ReportField signedField{usage_page::GenericDesktop, usage_gd::X, 8, 8, true, false, -127, 127};
+  const ReportField signedField{.usagePage = usage_page::GenericDesktop, .usage = usage_gd::X, .bitOffset = 8, .bitSize = 8, .isRelative = true, .isArray = false, .logicalMin = -127, .logicalMax = 127};
   REQUIRE(ExtractField(signedField, kstd::span<const uint8_t>(report, sizeof(report))) == -128);
 
-  ReportField unsignedField{usage_page::GenericDesktop, usage_gd::X, 8, 8, false, false, 0, 255};
+  const ReportField unsignedField{.usagePage = usage_page::GenericDesktop, .usage = usage_gd::X, .bitOffset = 8, .bitSize = 8, .isRelative = false, .isArray = false, .logicalMin = 0, .logicalMax = 255};
   REQUIRE(ExtractField(unsignedField, kstd::span<const uint8_t>(report, sizeof(report))) == 128);
 }
 
 TEST_CASE("SubmitReport rejects a report shorter than the format", "[hid_parser]") {
   ReportFormat format;
   REQUIRE(ParseReportDescriptor(
-      kstd::span<const uint8_t>(ps2::kMouseReportDescriptor, sizeof(ps2::kMouseReportDescriptor)), format));
+      kstd::span<const uint8_t>(ps2::kMouseReportDescriptor, sizeof(ps2::kMouseReportDescriptor)), format) == kernel::KernelError::Success);
 
   ResetCapture();
   DecoderState state;
@@ -153,7 +154,7 @@ TEST_CASE("SubmitReport rejects a report shorter than the format", "[hid_parser]
 TEST_CASE("SubmitReport round-trips a packed mouse report", "[hid_parser]") {
   ReportFormat format;
   REQUIRE(ParseReportDescriptor(
-      kstd::span<const uint8_t>(ps2::kMouseReportDescriptor, sizeof(ps2::kMouseReportDescriptor)), format));
+      kstd::span<const uint8_t>(ps2::kMouseReportDescriptor, sizeof(ps2::kMouseReportDescriptor)), format) == kernel::KernelError::Success);
 
   MousePacket packet;
   packet.dx = -12;
@@ -180,14 +181,14 @@ TEST_CASE("SubmitReport round-trips a packed mouse report", "[hid_parser]") {
 TEST_CASE("SubmitReport emits one make and one break for a held key", "[hid_parser]") {
   ReportFormat format;
   REQUIRE(ParseReportDescriptor(
-      kstd::span<const uint8_t>(ps2::kKeyboardReportDescriptor, sizeof(ps2::kKeyboardReportDescriptor)), format));
+      kstd::span<const uint8_t>(ps2::kKeyboardReportDescriptor, sizeof(ps2::kKeyboardReportDescriptor)), format) == kernel::KernelError::Success);
 
   DecoderState state;
   ps2::KeyboardReportBuilder builder;
   uint8_t report[ps2::kKeyReportBytes]{};
 
   ResetCapture();
-  builder.Apply(ps2::KeyTransition{usage_kbd::A, false});
+  builder.Apply(ps2::KeyTransition{.usage = usage_kbd::A, .isBreak = false});
   builder.Pack(report);
   SubmitReport(TestDevice(), format, state, kstd::span<const uint8_t>(report, sizeof(report)));
   REQUIRE(g_pushed.size() == 1);
@@ -201,7 +202,7 @@ TEST_CASE("SubmitReport emits one make and one break for a held key", "[hid_pars
   REQUIRE(g_pushed.size() == 1);
 
   ResetCapture();
-  builder.Apply(ps2::KeyTransition{usage_kbd::A, true});
+  builder.Apply(ps2::KeyTransition{.usage = usage_kbd::A, .isBreak = true});
   builder.Pack(report);
   SubmitReport(TestDevice(), format, state, kstd::span<const uint8_t>(report, sizeof(report)));
   REQUIRE(g_pushed.size() == 1);
@@ -212,7 +213,7 @@ TEST_CASE("SubmitReport scales joystick axes into the normalized range", "[hid_p
   ReportFormat format;
   REQUIRE(ParseReportDescriptor(
       kstd::span<const uint8_t>(gameport::kJoystickReportDescriptor, sizeof(gameport::kJoystickReportDescriptor)),
-      format));
+      format) == kernel::KernelError::Success);
 
   // Minimum, centre, maximum, centre; buttons 1 and 3 pressed (active high
   // by the time the report is packed).
@@ -270,7 +271,7 @@ TEST_CASE("HID usage tables reproduce the original VK and ASCII mapping", "[hid_
 TEST_CASE("SubmitReport tracks lock keys and held modifiers", "[hid_parser]") {
   ReportFormat format;
   REQUIRE(ParseReportDescriptor(
-      kstd::span<const uint8_t>(ps2::kKeyboardReportDescriptor, sizeof(ps2::kKeyboardReportDescriptor)), format));
+      kstd::span<const uint8_t>(ps2::kKeyboardReportDescriptor, sizeof(ps2::kKeyboardReportDescriptor)), format) == kernel::KernelError::Success);
 
   DecoderState state;
   ps2::KeyboardReportBuilder builder;
@@ -278,15 +279,15 @@ TEST_CASE("SubmitReport tracks lock keys and held modifiers", "[hid_parser]") {
 
   // CapsLock make toggles the lock bit on, and the following letter is
   // uppercased by it.
-  builder.Apply(ps2::KeyTransition{usage_kbd::CapsLock, false});
+  builder.Apply(ps2::KeyTransition{.usage = usage_kbd::CapsLock, .isBreak = false});
   builder.Pack(report);
   SubmitReport(TestDevice(), format, state, kstd::span<const uint8_t>(report, sizeof(report)));
-  builder.Apply(ps2::KeyTransition{usage_kbd::CapsLock, true});
+  builder.Apply(ps2::KeyTransition{.usage = usage_kbd::CapsLock, .isBreak = true});
   builder.Pack(report);
   SubmitReport(TestDevice(), format, state, kstd::span<const uint8_t>(report, sizeof(report)));
 
   ResetCapture();
-  builder.Apply(ps2::KeyTransition{usage_kbd::A, false});
+  builder.Apply(ps2::KeyTransition{.usage = usage_kbd::A, .isBreak = false});
   builder.Pack(report);
   SubmitReport(TestDevice(), format, state, kstd::span<const uint8_t>(report, sizeof(report)));
   REQUIRE(g_pushed.size() == 1);

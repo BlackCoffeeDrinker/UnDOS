@@ -49,7 +49,7 @@ extern "C" int main(int argc, char **argv) {
       argc != 4 || !argv || argv[argc] || strcmp(argv[0], "/System/abitest.elf") ||
       strcmp(argv[1], "two words") || strcmp(argv[2], "") || strcmp(argv[3], "last") ||
       !environ || environ[0]) fail();
-  for (auto value : zero_data) if (value) fail();
+  for (const auto value : zero_data) if (value) fail();
   FpuCapability capability{};
   if (UD_SYS_QueryFpuV1(&capability) != SyscallReturnCode_OKAY ||
       capability != FpuCapability_Unavailable) fail();

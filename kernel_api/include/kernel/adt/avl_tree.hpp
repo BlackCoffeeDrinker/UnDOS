@@ -135,8 +135,8 @@ class AvlTree {
 
   static void update_height(T *node) noexcept {
     if (!node) return;
-    int hl = get_height((node->*NodeMember).left);
-    int hr = get_height((node->*NodeMember).right);
+    const int hl = get_height((node->*NodeMember).left);
+    const int hr = get_height((node->*NodeMember).right);
     (node->*NodeMember).height = (hl > hr ? hl : hr) + 1;
   }
 
@@ -192,7 +192,7 @@ class AvlTree {
   void rebalance(T *node) noexcept {
     while (node) {
       update_height(node);
-      int balance = get_balance(node);
+      const int balance = get_balance(node);
 
       if (balance > 1) {
         if (get_balance((node->*NodeMember).left) < 0) {

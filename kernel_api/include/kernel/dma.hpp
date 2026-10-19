@@ -2,10 +2,18 @@
 #pragma once
 
 #include <kernel/__core.hpp>
+#include <expected.hpp>
 #include <kernel/cfunc.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/common/DoubleList.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/io.hpp>
+
+namespace kernel {
+using KDmaAdapterResult = kstd::expected<kernel::DmaOperation *, KernelError>;
+using KPhysicalAddressResult = kstd::expected<kernel::PhysicalAddress, KernelError>;
+}// namespace kernel
+
 
 namespace kernel {
 struct KDeviceObject;
@@ -71,13 +79,13 @@ struct ScatterGatherList {
 };
 
 struct DmaOperation : Versioned<DmaOperation, 1> {
-  cfunc<VirtualAddress(DmaOperation *self, size_t size, PhysicalAddress *physicalAddress, DmaAllocationFlags flags)> AllocateCommonBuffer;
+  cfunc<kstd::expected<VirtualAddress, KernelError>(DmaOperation *self, size_t size, PhysicalAddress *physicalAddress, DmaAllocationFlags flags)> AllocateCommonBuffer;
   cfunc<void(DmaOperation *self, size_t size, PhysicalAddress physicalAddress, VirtualAddress virtualAddress)> FreeCommonBuffer;
-  cfunc<bool(DmaOperation *self, const KDevicePtr<KDevice> &deviceObject, uint32_t numberOfMapRegisters, cfunc<DmaAction(const KDevicePtr<KDevice> &deviceObject, VirtualAddress context, VirtualAddress mapRegisterBase, VirtualAddress reserved)> executionRoutine, VirtualAddress context)> AllocateAdapterChannel;
+  cfunc<KernelError(DmaOperation *self, const KDevicePtr<KDevice> &deviceObject, uint32_t numberOfMapRegisters, cfunc<DmaAction(const KDevicePtr<KDevice> &deviceObject, VirtualAddress context, VirtualAddress mapRegisterBase, VirtualAddress reserved)> executionRoutine, VirtualAddress context)> AllocateAdapterChannel;
   cfunc<void(DmaOperation *self, VirtualAddress mapRegisterBase)> FreeAdapterChannel;
   cfunc<void(DmaOperation *self, VirtualAddress mapRegisterBase, uint32_t numberOfMapRegisters)> FreeMapRegisters;
-  cfunc<PhysicalAddress(DmaOperation *self, VirtualAddress mapRegisterBase, VirtualAddress virtualAddress, size_t *length, DmaDirection direction)> MapTransfer;
-  cfunc<bool(DmaOperation *self, const KDevicePtr<KDevice> &deviceObject, VirtualAddress virtualAddress, size_t length, DmaDirection direction, cfunc<void(const KDevicePtr<KDevice> &deviceObject, VirtualAddress context, ScatterGatherList *sgList)> executionRoutine, VirtualAddress context)> GetScatterGatherList;
+  cfunc<kstd::expected<PhysicalAddress, KernelError>(DmaOperation *self, VirtualAddress mapRegisterBase, VirtualAddress virtualAddress, size_t *length, DmaDirection direction)> MapTransfer;
+  cfunc<KernelError(DmaOperation *self, const KDevicePtr<KDevice> &deviceObject, VirtualAddress virtualAddress, size_t length, DmaDirection direction, cfunc<void(const KDevicePtr<KDevice> &deviceObject, VirtualAddress context, ScatterGatherList *sgList)> executionRoutine, VirtualAddress context)> GetScatterGatherList;
   cfunc<void(DmaOperation *self, ScatterGatherList *sgList, DmaDirection direction)> PutScatterGatherList;
   cfunc<size_t(DmaOperation *self)> GetDmaAlignment;
   cfunc<void(DmaOperation *self, PhysicalAddress address, size_t count, DmaDirection direction)> SetupTransfer;
@@ -90,14 +98,14 @@ struct DmaOperation : Versioned<DmaOperation, 1> {
 
 }// namespace kernel
 
-// Returns null on failure
+// NotFound when no driver in the device stack or parent bus provides an adapter.
 /**
  * @ingroup DMA
  * @brief Method KE_DMA_GetAdapter
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::DmaOperation *,
+    kernel::KDmaAdapterResult,
     KE_DMA_GetAdapter,
     const kernel::KDevicePtr<kernel::KDevice> &device, const kernel::DmaDescription &description);
 
@@ -107,7 +115,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_DMA_AllocateAdapterChannel,
     kernel::DmaOperation *self, const kernel::KDevicePtr<kernel::KDevice> &deviceObject, uint32_t numberOfMapRegisters, kernel::cfunc<kernel::DmaAction(const kernel::KDevicePtr<kernel::KDevice> &deviceObject, kernel::VirtualAddress context, kernel::VirtualAddress mapRegisterBase, kernel::VirtualAddress reserved)> executionRoutine, kernel::VirtualAddress context);
 
@@ -137,7 +145,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::PhysicalAddress,
+    kernel::KPhysicalAddressResult,
     KE_DMA_MapTransfer,
     kernel::DmaOperation *self, kernel::VirtualAddress mapRegisterBase, kernel::VirtualAddress virtualAddress, size_t *length, kernel::DmaDirection direction);
 
@@ -147,7 +155,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_DMA_GetScatterGatherList,
     kernel::DmaOperation *self, const kernel::KDevicePtr<kernel::KDevice> &deviceObject, kernel::VirtualAddress virtualAddress, size_t length, kernel::DmaDirection direction, kernel::cfunc<void(const kernel::KDevicePtr<kernel::KDevice> &deviceObject, kernel::VirtualAddress context, kernel::ScatterGatherList *sgList)> executionRoutine, kernel::VirtualAddress context);
 

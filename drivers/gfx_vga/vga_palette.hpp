@@ -1,6 +1,6 @@
 #pragma once
 
-#include <kernel/gfx/bitmap_font.hpp>
+#include <../../kernel/src/user/bitmap_font.hpp>
 
 namespace vga_regs {
 

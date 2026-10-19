@@ -17,6 +17,28 @@ from idlgen.resolver import ResolverError, resolve_aliases
 
 
 class ScalarAliasTests(unittest.TestCase):
+    def test_kernel_errors_are_converted_only_at_public_dispatch(self):
+        module = parse_idl("""
+            syscall V1 TEST Example [1] {
+                value: OUT c<uint32_t>;
+            };
+        """)
+        with tempfile.TemporaryDirectory(prefix="undos-idl-") as directory:
+            root = Path(directory)
+            generate_kernel(module, str(root), "undos/syscalls")
+            declarations = (root / "syscalls.hpp").read_text()
+            self.assertIn("kernel::KernelError handle_Example_V1(", declarations)
+            dispatch = (root / "handler_syscall.cpp").read_text()
+            self.assertIn("static kernel::KernelError Dispatch_Example_V1(", dispatch)
+            self.assertIn("return kernel::KernelError::InvalidSize;", dispatch)
+            self.assertIn("return kernel::KernelError::NoCurrentThread;", dispatch)
+            self.assertIn("return kernel::KernelError::NoCurrentProcess;", dispatch)
+            self.assertIn("const kernel::KernelError ret = handle_Example_V1(", dispatch)
+            self.assertIn("if (!mapped) [[unlikely]] return mapped.error();", dispatch)
+            self.assertIn("error != kernel::KernelError::Success) return error;", dispatch)
+            self.assertIn("case 1: return kernel::KErrorToSysReturnCode(Dispatch_Example_V1(", dispatch)
+            self.assertNotIn("return SyscallReturnCode_INVALID_", dispatch)
+
     def test_scalar_aliases_preserve_names_and_flatten_typedefs(self):
         module = parse_idl("""
             using SECOND = HANDLE;

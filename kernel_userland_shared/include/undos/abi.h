@@ -27,7 +27,7 @@ namespace undos::abi {
 inline bool valid_startup(const UnDOSStartupInfoV1 &info) {
   if (info.size != sizeof(info) || info.version != UNDOS_APPLICATION_ABI_VERSION ||
       !info.argc || info.argc > 32 || !info.argv || !info.envp || info.flags) return false;
-  for (auto value : info.reserved) if (value) return false;
+  for (const auto value : info.reserved) if (value) return false;
   return true;
 }
 }

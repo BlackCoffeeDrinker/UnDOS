@@ -2,12 +2,14 @@
 
 #include <kernel/__core.hpp>
 #include <kernel/cfunc.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/fwd/KConfigurationKey.hpp>
 #include <kernel/fwd/KDevicePtr.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/ObjectType.hpp>
 
+#include <expected.hpp>
 #include <span.hpp>
 
 namespace kernel {
@@ -15,18 +17,6 @@ struct KDeviceObject;
 struct DmaOperation;
 struct DmaDescription;
 struct IoResourceRequirementsList;
-
-// Result of a synchronous block I/O dispatch (KE_IO_ReadDevice/WriteDevice).
-enum class IoStatus : uint8_t {
-  Success,
-  InvalidParameter,
-  OutOfRange,
-  Unsupported,
-  DeviceError,
-  InvalidSize,
-  AccessDenied,
-  DeviceNotReady,
-};
 
 struct KDriverObject : KObjectT<KDriverObject, 1, TYPE_DRIVER> {
   using KObjectT::KObjectT;
@@ -41,14 +31,16 @@ struct KDriverObject : KObjectT<KDriverObject, 1, TYPE_DRIVER> {
   // region PnP
   cfunc<size_t(const KDevicePtr<KDevice> &)> GetChildCount;
   cfunc<void(const KDevicePtr<KDevice> &)> EnumerateDevices;
-  cfunc<bool(const KObjectPtr<KDriverObject> &, const KDevicePtr<KDevice> &)> AddDevice;
+  // Success once the driver has attached its device; any other status abandons the device.
+  cfunc<KernelError(const KObjectPtr<KDriverObject> &, const KDevicePtr<KDevice> &)> AddDevice;
   cfunc<void(const KDevicePtr<KDevice> &)> StartDevice;
   cfunc<KDevicePtr<KDevice>(const KDevicePtr<KDevice> &, size_t)> GetChild;
   cfunc<kstd::string_view(const KDevicePtr<KDevice> &)> GetHardwareId;
-  cfunc<DmaOperation *(const KDevicePtr<KDevice> &, const DmaDescription &)> GetDmaAdapter;
+  // NotFound/Unsupported lets KE_DMA_GetAdapter continue down the stack and to the parent bus.
+  cfunc<kstd::expected<DmaOperation *, KernelError>(const KDevicePtr<KDevice> &, const DmaDescription &)> GetDmaAdapter;
   // Queried by the PnP manager against a child PDO to learn the fixed resources
-  // its enumerator assigned to it. Returning nullptr means "no resources".
-  cfunc<IoResourceRequirementsList *(const KDevicePtr<KDevice> &)> QueryResourceRequirements;
+  // its enumerator assigned to it. A successful nullptr means "no resources"; failure is reported as an error.
+  cfunc<kstd::expected<IoResourceRequirementsList *, KernelError>(const KDevicePtr<KDevice> &)> QueryResourceRequirements;
   // endregion
 
   // region Block I/O
@@ -57,15 +49,15 @@ struct KDriverObject : KObjectT<KDriverObject, 1, TYPE_DRIVER> {
   // stack; the lowest driver (e.g. ATA) translates the byte offset into LBA
   // sector transfers. The buffer span carries both the storage and its length;
   // `transferred` receives the number of bytes moved.
-  cfunc<IoStatus(const KDevicePtr<KDevice> &, uint64_t, kstd::span<uint8_t>, size_t &)> Read;
-  cfunc<IoStatus(const KDevicePtr<KDevice> &, uint64_t, kstd::span<const uint8_t>, size_t &)> Write;
+  cfunc<KernelError(const KDevicePtr<KDevice> &, uint64_t, kstd::span<uint8_t>, size_t &)> Read;
+  cfunc<KernelError(const KDevicePtr<KDevice> &, uint64_t, kstd::span<const uint8_t>, size_t &)> Write;
   // endregion
 
   // region Device control
   // Synchronous control request (code, input payload, output buffer). The
   // driver sets `transferred` to the bytes written to the output buffer and
-  // returns IoStatus::Unsupported for codes it does not handle.
-  cfunc<IoStatus(const KDevicePtr<KDevice> &, uint32_t, kstd::span<const uint8_t>, kstd::span<uint8_t>, size_t &)> DeviceControl;
+  // returns KernelError::Unsupported for codes it does not handle.
+  cfunc<KernelError(const KDevicePtr<KDevice> &, uint32_t, kstd::span<const uint8_t>, kstd::span<uint8_t>, size_t &)> DeviceControl;
   // endregion
 };
 

@@ -70,7 +70,7 @@ bool read_sectors_chunk(uint32_t lba, uint16_t count, uint8_t *dest) noexcept {
   }
 
   const size_t bytes = static_cast<size_t>(count) * kSectorSize;
-  volatile uint8_t *src = byte_ptr(kScratchSegment, kBufferOffset);
+  const volatile uint8_t *src = byte_ptr(kScratchSegment, kBufferOffset);
   for (size_t i = 0; i < bytes; ++i) {
     dest[i] = src[i];
   }

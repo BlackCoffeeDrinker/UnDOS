@@ -52,7 +52,11 @@ void InterruptDispatchThread(void *) {
       }
     }
 
-    KE_SCHED_WaitForHeader(g_recordAvailable, kernel::WAIT_INFINITE);
+    const auto waitStatus = KE_SCHED_WaitForHeader(g_recordAvailable, kernel::WAIT_INFINITE);
+    if (waitStatus != kernel::KernelError::Success) {
+      KE_Print("interrupt dispatch wait failed: {}", kernel::make_error_code(waitStatus).message());
+      KE_SCHED_Yield();
+    }
   }
 }
 
@@ -60,68 +64,70 @@ void InterruptDispatchThread(void *) {
 
 namespace kernel::dispatch {
 
-void init() noexcept {
+KernelError init() noexcept {
   g_interruptRing.Reset();
   g_recordAvailable.manualReset = false;
   g_recordAvailable.signalled = false;
   // Spawn dispatch thread at elevated priority (10), running ahead of normal threads (priority 1)
-  g_dispatchThread = KE_SCHED_CreateThread(cfunc<void(void *)>(&InterruptDispatchThread), nullptr, 10);
+  auto thread = KE_SCHED_CreateThread(cfunc<void(void *)>(&InterruptDispatchThread), nullptr, 10);
+  if (!thread) return thread.error();
+  g_dispatchThread = *thread;
+  return KernelError::Success;
 }
 
 InterruptRecordRing &get_ring() noexcept {
   return g_interruptRing;
 }
 
-bool enqueue(const HalInterruptRecord &record) noexcept {
-  const bool pushed = g_interruptRing.Push(record);
-  if (pushed) {
+KernelError enqueue(const HalInterruptRecord &record) noexcept {
+  const KernelError status = g_interruptRing.Push(record);
+  if (status == KernelError::Success) {
     // Sticky signal, usable from an interrupt gate: KE_EVENT_Signal masks
     // interrupts itself and is safe before init() created the thread.
     KE_EVENT_Signal(g_recordAvailable, false);
   }
-  return pushed;
+  return status;
 }
 
-bool register_handler(uint32_t irq, const KObjectPtr<KInterruptServiceRoutineObject> &isr) noexcept {
-  if (irq >= 16 || !isr) {
-    return false;
-  }
+KernelError register_handler(uint32_t irq, const KObjectPtr<KInterruptServiceRoutineObject> &isr) noexcept {
+  if (irq >= 16 || !isr) return KernelError::InvalidArgument;
   kstd::unique_lock guard(g_handlersLock);
   for (size_t i = 0; i < g_irqHandlers[irq].count; ++i) {
     if (g_irqHandlers[irq].handlers[i] == isr) {
-      return true;
+      return KernelError::Success;
     }
   }
   if (g_irqHandlers[irq].count >= kMaxHandlersPerIrq) {
-    return false;
+    return KernelError::ResourceLimitExceeded;
   }
   g_irqHandlers[irq].handlers[g_irqHandlers[irq].count++] = isr;
-  return true;
+  return KernelError::Success;
 }
 
-void unregister_handler(uint32_t irq) noexcept {
+KernelError unregister_handler(uint32_t irq) noexcept {
   if (irq >= 16) {
-    return;
+    return KernelError::InvalidArgument;
   }
   kstd::unique_lock guard(g_handlersLock);
   for (size_t i = 0; i < g_irqHandlers[irq].count; ++i) {
     g_irqHandlers[irq].handlers[i] = nullptr;
   }
   g_irqHandlers[irq].count = 0;
+  return KernelError::Success;
 }
 
 }// namespace kernel::dispatch
 
-UNDOS_KERNEL_API_DEF bool KE_DISPATCH_EnqueueInterrupt(const kernel::HalInterruptRecord &record) noexcept {
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_DISPATCH_EnqueueInterrupt(const kernel::HalInterruptRecord &record) noexcept {
   return kernel::dispatch::enqueue(record);
 }
 
-UNDOS_KERNEL_API_DEF bool KE_DISPATCH_RegisterHandler(
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_DISPATCH_RegisterHandler(
     uint32_t irq,
     const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
   return kernel::dispatch::register_handler(irq, isr);
 }
 
-UNDOS_KERNEL_API_DEF void KE_DISPATCH_UnregisterHandler(uint32_t irq) noexcept {
-  kernel::dispatch::unregister_handler(irq);
+UNDOS_KERNEL_API_DEF kernel::KernelError KE_DISPATCH_UnregisterHandler(uint32_t irq) noexcept {
+  return kernel::dispatch::unregister_handler(irq);
 }

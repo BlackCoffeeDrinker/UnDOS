@@ -9,7 +9,7 @@ using namespace undos::font;
 kstd::vector<uint8_t> resource(uint32_t programSize = 1) {
   const uint32_t sizes[] = {3 * GlyphSize, 3 * PointSize, 4, ComponentSize, 2 * CmapSize, 4, programSize, 0, 0, LimitsSize};
   uint32_t size = PayloadStart;
-  for (auto length : sizes) size += aligned(length);
+  for (const auto length : sizes) size += aligned(length);
   kstd::vector<uint8_t> bytes(size, 0);
   const uint32_t header[] = {Magic, Version, HeaderSize, size, SectionCount, 3, 2048, 1800,
                              static_cast<uint32_t>(-400), 0, 400, 0};
@@ -22,7 +22,7 @@ kstd::vector<uint8_t> resource(uint32_t programSize = 1) {
     write_u32(entry + 8, sizes[i]);
     offset += aligned(sizes[i]);
   }
-  const ResourceView view({bytes.data(), bytes.size()});
+  const ResourceView view({.data = bytes.data(), .size = bytes.size()});
   auto *glyphs = const_cast<uint8_t *>(view.section(Section::Glyphs).data);
   const uint32_t glyph[][15] = {
       {1, 1200, 0, 0, 0, 1000, 1000, 0, 3, 0, 1, 0, 0, 0, programSize},
@@ -47,7 +47,7 @@ kstd::vector<uint8_t> resource(uint32_t programSize = 1) {
 }
 
 void change(kstd::vector<uint8_t> &bytes, Section section, uint32_t offset, uint32_t value) {
-  const ResourceView view({bytes.data(), bytes.size()});
+  const ResourceView view({.data = bytes.data(), .size = bytes.size()});
   write_u32(const_cast<uint8_t *>(view.section(section).data) + offset, value);
 }
 }
@@ -55,7 +55,7 @@ void change(kstd::vector<uint8_t> &bytes, Section section, uint32_t offset, uint
 TEST_CASE("Normalized fonts preserve points composites and raw programs", "[font][resource]") {
   const auto bytes = resource();
   REQUIRE(validate({bytes.data(), bytes.size()}) == Error::None);
-  const ResourceView view({bytes.data(), bytes.size()});
+  const ResourceView view({.data = bytes.data(), .size = bytes.size()});
   REQUIRE(view.section(Section::Glyphs).size == 180);
   REQUIRE(view.section(Section::GlyphPrograms).size == 1);
   REQUIRE(read_i32(bytes.data() + 32) == -400);
@@ -78,7 +78,7 @@ TEST_CASE("Normalized font directory has canonical sizes offsets and padding", "
   SECTION("huge section") { write_u32(bytes.data() + HeaderSize + 8, UINT32_MAX); }
   SECTION("duplicate type") { write_u32(bytes.data() + HeaderSize + DirectoryEntrySize, 1); }
   SECTION("nonzero padding") {
-    const ResourceView view({bytes.data(), bytes.size()});
+    const ResourceView view({.data = bytes.data(), .size = bytes.size()});
     const auto program = view.section(Section::GlyphPrograms);
     bytes[static_cast<size_t>(program.data - bytes.data()) + 1] = 1;
   }
@@ -132,7 +132,7 @@ TEST_CASE("Normalized cmap rejects invalid Unicode and glyph ranges", "[font][re
 
 TEST_CASE("Font component depth accepts its exact ceiling and rejects overflow", "[font][resource]") {
   const auto original = resource();
-  const ResourceView originalView({original.data(), original.size()});
+  const ResourceView originalView({.data = original.data(), .size = original.size()});
   for (uint32_t depth = MaxComponentDepth; depth <= MaxComponentDepth + 1; ++depth) {
     const uint32_t sizes[] = {(depth + 1) * GlyphSize, 3 * PointSize, 4, depth * ComponentSize,
                              2 * CmapSize, 4, 1, 0, 0, LimitsSize};
@@ -172,31 +172,47 @@ TEST_CASE("Font component depth accepts its exact ceiling and rejects overflow",
   }
 }
 
+namespace {
+// Adapts the expected-returning upload API to the status/out-parameter shape
+// these tests assert on; failed calls report handle 0.
+kernel::KernelError BeginUpload(kernel::font::ResourceTable &table, kernel::font::ResourceBudget &budget, uint32_t size, uint32_t &handle) {
+  const auto result = table.begin(budget, size);
+  handle = result ? *result : 0;
+  return result ? kernel::KernelError::Success : result.error();
+}
+
+kernel::KernelError CommitUpload(kernel::font::ResourceTable &table, uint32_t handle, uint32_t &face, uint32_t &validationError) {
+  const auto result = table.commit(handle, validationError);
+  face = result ? *result : 0;
+  return result ? kernel::KernelError::Success : result.error();
+}
+}// namespace
+
 TEST_CASE("Font uploads commit immutable resources with generation-safe handles", "[font][upload]") {
   using namespace kernel::font;
   ResourceBudget budget;
   ResourceTable table;
   auto bytes = resource();
   uint32_t upload = 99, face = 99, error = 99;
-  REQUIRE(table.begin(budget, static_cast<uint32_t>(bytes.size()), upload) == Result::Okay);
+  REQUIRE(BeginUpload(table, budget, static_cast<uint32_t>(bytes.size()), upload) == kernel::KernelError::Success);
   REQUIRE(upload != 0);
   REQUIRE(table.bytes() == bytes.size());
-  REQUIRE(table.commit(upload, face, error) == Result::InvalidState);
+  REQUIRE(CommitUpload(table, upload, face, error) == kernel::KernelError::InvalidState);
   REQUIRE(face == 0);
-  REQUIRE(table.append(upload, 1, bytes.data(), 10) == Result::InvalidOffset);
-  REQUIRE(table.append(upload, 0, bytes.data(), 10) == Result::Okay);
-  REQUIRE(table.append(upload, 0, bytes.data(), 10) == Result::InvalidOffset);
-  REQUIRE(table.append(upload, 10, bytes.data() + 10, bytes.size() - 10) == Result::Okay);
+  REQUIRE(table.append(upload, 1, bytes.data(), 10) == kernel::KernelError::InvalidOffset);
+  REQUIRE(table.append(upload, 0, bytes.data(), 10) == kernel::KernelError::Success);
+  REQUIRE(table.append(upload, 0, bytes.data(), 10) == kernel::KernelError::InvalidOffset);
+  REQUIRE(table.append(upload, 10, bytes.data() + 10, bytes.size() - 10) == kernel::KernelError::Success);
   // Mutating the producer after upload cannot change the committed snapshot.
   bytes[0] = 0;
-  REQUIRE(table.commit(upload, face, error) == Result::Okay);
+  REQUIRE(CommitUpload(table, upload, face, error) == kernel::KernelError::Success);
   REQUIRE(error == 0);
   REQUIRE(face != upload);
-  REQUIRE(table.close(upload) == Result::InvalidHandle);
-  REQUIRE(table.append(face, 0, bytes.data(), 1) == Result::InvalidState);
-  REQUIRE(table.commit(face, upload, error) == Result::InvalidState);
-  REQUIRE(table.close(face) == Result::Okay);
-  REQUIRE(table.close(face) == Result::InvalidHandle);
+  REQUIRE(table.close(upload) == kernel::KernelError::InvalidHandle);
+  REQUIRE(table.append(face, 0, bytes.data(), 1) == kernel::KernelError::InvalidState);
+  REQUIRE(CommitUpload(table, face, upload, error) == kernel::KernelError::InvalidState);
+  REQUIRE(table.close(face) == kernel::KernelError::Success);
+  REQUIRE(table.close(face) == kernel::KernelError::InvalidHandle);
   REQUIRE(budget.used() == 0);
 }
 
@@ -207,12 +223,12 @@ TEST_CASE("Invalid font commits discard staging without publishing", "[font][upl
   auto bytes = resource();
   bytes[0] = 0;
   uint32_t upload = 0, face = 99, error = 99;
-  REQUIRE(table.begin(budget, static_cast<uint32_t>(bytes.size()), upload) == Result::Okay);
-  REQUIRE(table.append(upload, 0, bytes.data(), bytes.size()) == Result::Okay);
-  REQUIRE(table.commit(upload, face, error) == Result::InvalidResource);
+  REQUIRE(BeginUpload(table, budget, static_cast<uint32_t>(bytes.size()), upload) == kernel::KernelError::Success);
+  REQUIRE(table.append(upload, 0, bytes.data(), bytes.size()) == kernel::KernelError::Success);
+  REQUIRE(CommitUpload(table, upload, face, error) == kernel::KernelError::InvalidResource);
   REQUIRE(face == 0);
   REQUIRE(error == static_cast<uint32_t>(Error::InvalidHeader));
-  REQUIRE(table.close(upload) == Result::InvalidHandle);
+  REQUIRE(table.close(upload) == kernel::KernelError::InvalidHandle);
   REQUIRE(budget.used() == 0);
 }
 
@@ -223,18 +239,18 @@ TEST_CASE("Font upload quotas are aggregate across processes and cleanup", "[fon
   {
     ResourceTable first, second;
     uint32_t handle = 99;
-    REQUIRE(first.begin(budget, 0, handle) == Result::InvalidSize);
+    REQUIRE(BeginUpload(first, budget, 0, handle) == kernel::KernelError::InvalidSize);
     REQUIRE(handle == 0);
-    REQUIRE(first.begin(budget, undos::font::MaxResourceBytes, stale) == Result::Okay);
-    REQUIRE(second.begin(budget, undos::font::PayloadStart, handle) == Result::Limit);
+    REQUIRE(BeginUpload(first, budget, undos::font::MaxResourceBytes, stale) == kernel::KernelError::Success);
+    REQUIRE(BeginUpload(second, budget, undos::font::PayloadStart, handle) == kernel::KernelError::ResourceLimitExceeded);
     REQUIRE(second.bytes() == 0);
-    REQUIRE(first.append(stale, 0, nullptr, 4096) == Result::InvalidSize);
-    REQUIRE(first.append(stale, UINT32_MAX, reinterpret_cast<const uint8_t *>("a"), 1) == Result::InvalidOffset);
-    REQUIRE(first.close(stale) == Result::Okay);
-    REQUIRE(first.begin(budget, undos::font::PayloadStart, handle) == Result::Okay);
+    REQUIRE(first.append(stale, 0, nullptr, 4096) == kernel::KernelError::InvalidSize);
+    REQUIRE(first.append(stale, UINT32_MAX, reinterpret_cast<const uint8_t *>("a"), 1) == kernel::KernelError::InvalidOffset);
+    REQUIRE(first.close(stale) == kernel::KernelError::Success);
+    REQUIRE(BeginUpload(first, budget, undos::font::PayloadStart, handle) == kernel::KernelError::Success);
     REQUIRE(handle != stale);
-    REQUIRE(first.close(stale) == Result::InvalidHandle);
-    REQUIRE(second.begin(budget, undos::font::PayloadStart, stale) == Result::Okay);
+    REQUIRE(first.close(stale) == kernel::KernelError::InvalidHandle);
+    REQUIRE(BeginUpload(second, budget, undos::font::PayloadStart, stale) == kernel::KernelError::Success);
   }
   REQUIRE(budget.used() == 0);
 }
@@ -245,8 +261,8 @@ TEST_CASE("Font resource slots are bounded and explicit clear releases faces", "
   ResourceTable table;
   uint32_t handle = 0;
   for (uint32_t i = 0; i < ResourceSlots; ++i)
-    REQUIRE(table.begin(budget, PayloadStart, handle) == Result::Okay);
-  REQUIRE(table.begin(budget, PayloadStart, handle) == Result::Limit);
+    REQUIRE(BeginUpload(table, budget, PayloadStart, handle) == kernel::KernelError::Success);
+  REQUIRE(BeginUpload(table, budget, PayloadStart, handle) == kernel::KernelError::ResourceLimitExceeded);
   table.clear();
   REQUIRE(table.bytes() == 0);
   REQUIRE(budget.used() == 0);
@@ -258,15 +274,15 @@ TEST_CASE("Font uploads enforce the syscall boundary without partial writes", "[
   ResourceTable table;
   const auto bytes = resource(5000);
   uint32_t upload = 0, face = 0, error = 0;
-  REQUIRE(table.begin(budget, static_cast<uint32_t>(bytes.size()), upload) == Result::Okay);
-  REQUIRE(table.append(upload, 0, bytes.data(), 4097) == Result::InvalidSize);
-  REQUIRE(table.append(upload, 0, bytes.data(), 4096) == Result::Okay);
-  REQUIRE(table.commit(upload, face, error) == Result::InvalidState);
-  REQUIRE(table.append(upload, 4096, bytes.data() + 4096, bytes.size() - 4096) == Result::Okay);
-  REQUIRE(table.commit(upload, face, error) == Result::Okay);
+  REQUIRE(BeginUpload(table, budget, static_cast<uint32_t>(bytes.size()), upload) == kernel::KernelError::Success);
+  REQUIRE(table.append(upload, 0, bytes.data(), 4097) == kernel::KernelError::InvalidSize);
+  REQUIRE(table.append(upload, 0, bytes.data(), 4096) == kernel::KernelError::Success);
+  REQUIRE(CommitUpload(table, upload, face, error) == kernel::KernelError::InvalidState);
+  REQUIRE(table.append(upload, 4096, bytes.data() + 4096, bytes.size() - 4096) == kernel::KernelError::Success);
+  REQUIRE(CommitUpload(table, upload, face, error) == kernel::KernelError::Success);
   REQUIRE(table.bytes() == bytes.size());
   table.clear();
   REQUIRE(table.bytes() == 0);
   REQUIRE(budget.used() == 0);
-  REQUIRE(table.close(face) == Result::InvalidHandle);
+  REQUIRE(table.close(face) == kernel::KernelError::InvalidHandle);
 }

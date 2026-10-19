@@ -25,6 +25,13 @@ const kernel::event::Category &TestCategory() {
 
 kernel::event::Code Ev(uint32_t value) { return kernel::event::Code(static_cast<int>(value), TestCategory()); }
 
+kernel::event::EventInterestToken RegisterInterest(const kernel::event::Source &source,
+                                                  kernel::event::RegistrationContext &&context) {
+  auto token = KE_EVENT_RegisterInterest(source, kstd::move(context));
+  REQUIRE(token);
+  return kstd::move(*token);
+}
+
 // Recorded callback invocations, shared by the free-function callbacks below
 // (EventCallbackFn is a plain function pointer, so there are no captures).
 struct CallLog {
@@ -67,17 +74,17 @@ kernel::event::Source g_sourceForNestedRegister;
 
 void CallbackRegistersAnother(const kernel::event::Source &, const kernel::event::Code &code, const kernel::DataBuffer &) {
   g_logA.Record(code);
-  g_tokenFromCallback = KE_EVENT_RegisterInterest(
+  g_tokenFromCallback = RegisterInterest(
       g_sourceForNestedRegister,
-      kernel::event::RegistrationContext{&CallbackB, {}});
+      kernel::event::RegistrationContext{.fn = &CallbackB, .user_buffer = {}});
 }
 
 // Any KObject works as an event source; a directory is the cheapest one the
 // hosted harness can create.
 kernel::KObjectPtr<kernel::KObject> MakeSource(const char *name) {
   auto dir = kernel::CreateKObject<kernel::KDirectoryObject>(name);
-  REQUIRE(dir != nullptr);
-  return dir;
+  REQUIRE(dir);
+  return *dir;
 }
 
 struct Fixture {
@@ -107,12 +114,12 @@ TEST_CASE("Broadcast reaches every subscriber of the same source", "[event]") {
   // Regression: broadcast() used to re-lock the (non-recursive) queue mutex
   // once per matching subscriber, so a second subscriber on the same source
   // deadlocked the broadcasting thread forever.
-  auto tokenA = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                          kernel::event::RegistrationContext{&CallbackA, {}});
-  auto tokenB = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                          kernel::event::RegistrationContext{&CallbackB, {}});
-  auto tokenC = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                          kernel::event::RegistrationContext{&CallbackC, {}});
+  auto tokenA = RegisterInterest(kernel::event::Source(source),
+                                          kernel::event::RegistrationContext{.fn = &CallbackA, .user_buffer = {}});
+  auto tokenB = RegisterInterest(kernel::event::Source(source),
+                                          kernel::event::RegistrationContext{.fn = &CallbackB, .user_buffer = {}});
+  auto tokenC = RegisterInterest(kernel::event::Source(source),
+                                          kernel::event::RegistrationContext{.fn = &CallbackC, .user_buffer = {}});
   REQUIRE(tokenA);
   REQUIRE(tokenB);
   REQUIRE(tokenC);
@@ -138,10 +145,10 @@ TEST_CASE("Broadcast does not reach subscribers of another source", "[event]") {
   const auto wanted = MakeSource("evt-wanted");
   const auto other = MakeSource("evt-other");
 
-  auto tokenA = KE_EVENT_RegisterInterest(kernel::event::Source(wanted),
-                                          kernel::event::RegistrationContext{&CallbackA, {}});
-  auto tokenB = KE_EVENT_RegisterInterest(kernel::event::Source(other),
-                                          kernel::event::RegistrationContext{&CallbackB, {}});
+  auto tokenA = RegisterInterest(kernel::event::Source(wanted),
+                                          kernel::event::RegistrationContext{.fn = &CallbackA, .user_buffer = {}});
+  auto tokenB = RegisterInterest(kernel::event::Source(other),
+                                          kernel::event::RegistrationContext{.fn = &CallbackB, .user_buffer = {}});
 
   kernel::event::broadcast(wanted, Ev(1u));
   PumpAll();
@@ -164,17 +171,18 @@ TEST_CASE("Registering with a null callback yields an empty token", "[event]") {
   Fixture fixture;
   const auto source = MakeSource("evt-null");
 
-  auto token = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                         kernel::event::RegistrationContext{});
-  REQUIRE_FALSE(token);
+  const auto result = KE_EVENT_RegisterInterest(kernel::event::Source(source),
+                                                kernel::event::RegistrationContext{});
+  REQUIRE_FALSE(result);
+  REQUIRE(result.error() == kernel::KernelError::InvalidArgument);
 }
 
 TEST_CASE("Unregister stops further callbacks", "[event]") {
   Fixture fixture;
   const auto source = MakeSource("evt-unreg");
 
-  auto tokenA = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                          kernel::event::RegistrationContext{&CallbackA, {}});
+  auto tokenA = RegisterInterest(kernel::event::Source(source),
+                                          kernel::event::RegistrationContext{.fn = &CallbackA, .user_buffer = {}});
 
   kernel::event::broadcast(source, Ev(1u));
   PumpAll();
@@ -195,10 +203,10 @@ TEST_CASE("Unregister from inside a callback suppresses the other subscriber", "
   // Regression: work items used to hold a raw EventSubscriber*, so tearing a
   // subscriber down mid-dispatch left dangling pointers in the queue (made
   // worse by an erase loop that skipped every other element).
-  auto first = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                         kernel::event::RegistrationContext{&CallbackUnregistersOther, {}});
-  g_tokenToUnregister = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                                  kernel::event::RegistrationContext{&CallbackB, {}});
+  auto first = RegisterInterest(kernel::event::Source(source),
+                                         kernel::event::RegistrationContext{.fn = &CallbackUnregistersOther, .user_buffer = {}});
+  g_tokenToUnregister = RegisterInterest(kernel::event::Source(source),
+                                                  kernel::event::RegistrationContext{.fn = &CallbackB, .user_buffer = {}});
 
   kernel::event::broadcast(source, Ev(5u));
   PumpAll();
@@ -218,8 +226,8 @@ TEST_CASE("A callback can unregister its own token without deadlocking", "[event
   Fixture fixture;
   const auto source = MakeSource("evt-unreg-self");
 
-  g_selfToken = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                          kernel::event::RegistrationContext{&CallbackUnregistersSelf, {}});
+  g_selfToken = RegisterInterest(kernel::event::Source(source),
+                                          kernel::event::RegistrationContext{.fn = &CallbackUnregistersSelf, .user_buffer = {}});
 
   kernel::event::broadcast(source, Ev(9u));
   PumpAll();
@@ -237,8 +245,8 @@ TEST_CASE("A callback can register a new subscriber", "[event]") {
   const auto source = MakeSource("evt-nested-reg");
   g_sourceForNestedRegister = kernel::event::Source(source);
 
-  auto first = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                         kernel::event::RegistrationContext{&CallbackRegistersAnother, {}});
+  auto first = RegisterInterest(kernel::event::Source(source),
+                                         kernel::event::RegistrationContext{.fn = &CallbackRegistersAnother, .user_buffer = {}});
 
   kernel::event::broadcast(source, Ev(1u));
   PumpAll();
@@ -259,8 +267,8 @@ TEST_CASE("A callback may broadcast again", "[event]") {
   Fixture fixture;
   const auto source = MakeSource("evt-renter");
 
-  auto tokenA = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                          kernel::event::RegistrationContext{&CallbackA, {}});
+  auto tokenA = RegisterInterest(kernel::event::Source(source),
+                                          kernel::event::RegistrationContext{.fn = &CallbackA, .user_buffer = {}});
 
   kernel::event::broadcast(source, Ev(1u));
   kernel::event::broadcast(source, Ev(2u));
@@ -274,8 +282,8 @@ TEST_CASE("Queue overflow drops events and is counted", "[event]") {
   Fixture fixture;
   const auto source = MakeSource("evt-overflow");
 
-  auto tokenA = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                          kernel::event::RegistrationContext{&CallbackA, {}});
+  auto tokenA = RegisterInterest(kernel::event::Source(source),
+                                          kernel::event::RegistrationContext{.fn = &CallbackA, .user_buffer = {}});
 
   // Capacity is 64; push well past it without pumping.
   constexpr int kPushed = 100;
@@ -302,8 +310,8 @@ TEST_CASE("EventInterestToken destructor unregisters exactly once", "[event]") {
   const auto source = MakeSource("evt-token");
 
   {
-    auto token = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                           kernel::event::RegistrationContext{&CallbackA, {}});
+    auto token = RegisterInterest(kernel::event::Source(source),
+                                           kernel::event::RegistrationContext{.fn = &CallbackA, .user_buffer = {}});
     REQUIRE(token);
 
     kernel::event::broadcast(source, Ev(1u));
@@ -322,8 +330,8 @@ TEST_CASE("Moving an EventInterestToken transfers ownership", "[event]") {
 
   kernel::event::EventInterestToken outer;
   {
-    auto token = KE_EVENT_RegisterInterest(kernel::event::Source(source),
-                                           kernel::event::RegistrationContext{&CallbackA, {}});
+    auto token = RegisterInterest(kernel::event::Source(source),
+                                           kernel::event::RegistrationContext{.fn = &CallbackA, .user_buffer = {}});
     outer = kstd::move(token);
     REQUIRE_FALSE(token);
   }
@@ -355,9 +363,9 @@ TEST_CASE("The user buffer is handed back to the callback", "[event]") {
   REQUIRE(buffer);
   *buffer.as<uint32_t>() = 0xABCDu;
 
-  auto token = KE_EVENT_RegisterInterest(
+  auto token = RegisterInterest(
       kernel::event::Source(source),
-      kernel::event::RegistrationContext{&Handler::Fn, kstd::move(buffer)});
+      kernel::event::RegistrationContext{.fn = &Handler::Fn, .user_buffer = kstd::move(buffer)});
 
   kernel::event::broadcast(source, Ev(1u));
   PumpAll();

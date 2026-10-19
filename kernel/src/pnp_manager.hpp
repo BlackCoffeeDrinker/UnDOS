@@ -1,9 +1,10 @@
 
 #pragma once
+#include <kernel/kerror.hpp>
 #include <kernel/kobject/KDriverObject.hpp>
 
 namespace kernel::pnp {
-void init();
+KernelError init();
 }
 
-void KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept;
+kernel::KernelError KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept;

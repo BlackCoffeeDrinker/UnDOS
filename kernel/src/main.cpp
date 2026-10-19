@@ -224,20 +224,41 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
 
   HAL_PLATFORM_Init(boot_info, KE_VMM_GetKernelAddressSpace());
   kernel::vmm::init();
-  kernel::objectmanager::init();
+  if (const auto error = kernel::objectmanager::init(); error != kernel::KernelError::Success) {
+    KE_Print("Failed to initialize object manager: {}", kernel::make_error_code(error).message());
+    HAL_PLATFORM_Panic("Failed to initialize object manager", __FILE__, __LINE__);
+  }
   kernel::vmm::late_init();
-  kernel::driver::init(boot_info);//< This just copies the symbols
+  if (const auto error = kernel::driver::init(boot_info); error != kernel::KernelError::Success) {
+    KE_Print("Failed to initialize driver loader: {}", kernel::make_error_code(error).message());
+    HAL_PLATFORM_Panic("Failed to initialize driver loader", __FILE__, __LINE__);
+  }
   HAL_VMM_FinalizeInit();
   kernel::sched::init_bsp();
-  kernel::dispatch::init();
+  if (const auto error = kernel::dispatch::init(); error != kernel::KernelError::Success) {
+    KE_Print("Failed to initialize dispatch: {}", kernel::make_error_code(error).message());
+    HAL_PLATFORM_Panic("Failed to initialize dispatch", __FILE__, __LINE__);
+  }
   HAL_PLATFORM_InitializeSystemTimer();
   HAL_CPU_EnableInterrupts();
-  kernel::event::init();
-  kernel::pnp::init();
+  if (const auto error = kernel::event::init(); error != kernel::KernelError::Success) {
+    KE_Print("Failed to initialize events: {}", kernel::make_error_code(error).message());
+    HAL_PLATFORM_Panic("Failed to initialize events", __FILE__, __LINE__);
+  }
+  if (const auto error = kernel::pnp::init(); error != kernel::KernelError::Success) {
+    KE_Print("Failed to initialize PnP: {}", kernel::make_error_code(error).message());
+    HAL_PLATFORM_Panic("Failed to initialize PnP", __FILE__, __LINE__);
+  }
   kernel::resource::init();
-  kernel::input::init();
+  if (const auto error = kernel::input::init(); error != kernel::KernelError::Success) {
+    KE_Print("Failed to initialize input: {}", kernel::make_error_code(error).message());
+    HAL_PLATFORM_Panic("Failed to initialize input", __FILE__, __LINE__);
+  }
   kernel::vfs::init();
-  kernel::initial::init_boot_device_volume();
+  if (const auto error = kernel::initial::init_boot_device_volume(); error != kernel::KernelError::Success) {
+    KE_Print("Failed to initialize boot volume: {}", kernel::make_error_code(error).message());
+    HAL_PLATFORM_Panic("Failed to initialize boot volume", __FILE__, __LINE__);
+  }
   kernel::configuration_manager::init();
   kernel::driver::LoadBootDrivers();
 
@@ -270,15 +291,15 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
       // Drop the early-boot BootDeviceVolume mount before mounting the real
       // root filesystem in its place: "/" is the same mount point both
       // before and after this swap.
-      if (!KE_VFS_Unmount("/")) {
+      if (KE_VFS_Unmount("/") != kernel::KernelError::Success) {
         HAL_PLATFORM_Panic("Failed to unmount BootDeviceVolume from root\r\n", __FILE__, __LINE__);
       }
 
-      if (!KE_VFS_Mount(
+      if (KE_VFS_Mount(
               root->device,
               parser.get("rootfs", "FAT"),
               "/",
-              parser.get("rootops", {}))) {
+              parser.get("rootops", {})) != kernel::KernelError::Success) {
         HAL_PLATFORM_Panic("Failed to mount root filesystem\r\n", __FILE__, __LINE__);
       }
     }
@@ -298,9 +319,10 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
 
   // Register the native ELF loader subsystem, a long-lived singleton used to
   // bootstrap user processes (see KE_USER_CreateProcess).
-  if (const auto native_elf_loader = kernel::CreateKObject<kernel::KSubsystemObject>("NativeElfLoader")) {
+  if (const auto created = kernel::CreateKObject<kernel::KSubsystemObject>("NativeElfLoader")) {
+    const auto &native_elf_loader = *created;
     native_elf_loader->loader_path = "/System/ELoader.elf";
-    if (!KE_OB_InsertObject(KE_OB_GetSubsystemDirectory(), native_elf_loader)) {
+    if (KE_OB_InsertObject(KE_OB_GetSubsystemDirectory(), native_elf_loader) != kernel::KernelError::Success) {
       KE_Print("Failed to register NativeElfLoader subsystem");
     }
   } else {
@@ -332,7 +354,9 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
 
   // Try and find the init
   KE_Print("Loading init...");
-  KE_USER_CreateProcess("/System/init.elf");
+  if (const auto process = KE_USER_CreateProcess("/System/init.elf"); !process) {
+    KE_Print("Failed to start init: {}", kernel::make_error_code(process.error()).message());
+  }
 
   // Thread 0 becomes a low-noise heartbeat. It must never return or shut the
   // CPU down, which would tear down the threads now running on it.

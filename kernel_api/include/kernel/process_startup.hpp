@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <undos/abi.h>
+#include <kernel/kerror.hpp>
 
 namespace kernel::process_startup {
 constexpr size_t PATH_CAPACITY = 256;
@@ -23,14 +24,14 @@ constexpr bool whitespace(char ch) {
   return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\v' || ch == '\f';
 }
 
-inline bool parse(const char *path, size_t path_size, const char *command, size_t command_size,
-                  Arguments &out) {
+inline KernelError parse(const char *path, size_t path_size, const char *command, size_t command_size,
+                         Arguments &out) {
   out.argc = out.bytes = 0;
-  if (!path || !path_size || path_size >= PATH_CAPACITY ||
-      command_size >= ARGUMENT_CAPACITY || (!command && command_size)) return false;
+  if (!path || !path_size || (!command && command_size)) return KernelError::InvalidArgument;
+  if (path_size >= PATH_CAPACITY || command_size >= ARGUMENT_CAPACITY) return KernelError::BufferTooSmall;
   out.offsets[out.argc++] = 0;
   for (size_t i = 0; i < path_size; ++i) {
-    if (!path[i]) return false;
+    if (!path[i]) return KernelError::InvalidData;
     out.text[out.bytes++] = path[i];
   }
   out.text[out.bytes++] = '\0';
@@ -38,21 +39,21 @@ inline bool parse(const char *path, size_t path_size, const char *command, size_
   while (pos < command_size) {
     while (pos < command_size && whitespace(command[pos])) ++pos;
     if (pos == command_size) break;
-    if (out.argc == MAX_ARGUMENTS) return false;
+    if (out.argc == MAX_ARGUMENTS) return KernelError::TooManyArguments;
     out.offsets[out.argc++] = out.bytes;
     bool quoted = false;
     while (pos < command_size) {
       const char ch = command[pos];
-      if (!ch) return false;
+      if (!ch) return KernelError::InvalidData;
       if (!quoted && whitespace(ch)) break;
       ++pos;
       if (ch == '"') quoted = !quoted;
       else out.text[out.bytes++] = ch;
     }
-    if (quoted) return false;
+    if (quoted) return KernelError::InvalidFormat;
     out.text[out.bytes++] = '\0';
   }
-  return true;
+  return KernelError::Success;
 }
 
 // Entry stack: [0, startup-info address, loader-private event, 0], followed by
@@ -62,11 +63,14 @@ constexpr size_t stack_size(const Arguments &args) {
           args.bytes + 15) & ~size_t(15);
 }
 
-inline bool write_stack(void *storage, size_t capacity, uint32_t user_address, const Arguments &args,
-                        uint32_t startup_event = UINT32_MAX) {
+inline KernelError write_stack(void *storage, size_t capacity, uint32_t user_address, const Arguments &args,
+                               uint32_t startup_event = UINT32_MAX) {
   const size_t size = stack_size(args);
-  if (!storage || !args.argc || args.argc > MAX_ARGUMENTS || size > capacity ||
-      (user_address & 15) || user_address > UINT32_MAX - size) return false;
+  if (!storage) return KernelError::InvalidAddress;
+  if (!args.argc || args.argc > MAX_ARGUMENTS || args.bytes > sizeof(args.text)) return KernelError::InvalidData;
+  if (size > capacity) return KernelError::BufferTooSmall;
+  if (user_address & 15) return KernelError::InvalidAlignment;
+  if (user_address > UINT32_MAX - size) return KernelError::ArithmeticOverflow;
   auto *words = static_cast<uint32_t *>(storage);
   words[0] = 0;
   words[1] = user_address + 16;
@@ -86,6 +90,6 @@ inline bool write_stack(void *storage, size_t capacity, uint32_t user_address, c
   argv[args.argc + 1] = 0;
   auto *text = reinterpret_cast<char *>(argv + args.argc + 2);
   for (uint32_t i = 0; i < args.bytes; ++i) text[i] = args.text[i];
-  return true;
+  return KernelError::Success;
 }
 } // namespace kernel::process_startup

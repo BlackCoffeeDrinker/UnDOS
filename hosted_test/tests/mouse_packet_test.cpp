@@ -82,7 +82,7 @@ TEST_CASE("MousePacketDecoder a pure-garbage stream never emits a packet", "[mou
   MousePacketDecoder decoder;
   MousePacket packet{};
 
-  for (uint8_t b: {static_cast<uint8_t>(0x00), static_cast<uint8_t>(0x01), static_cast<uint8_t>(0x02),
+  for (const uint8_t b: {static_cast<uint8_t>(0x00), static_cast<uint8_t>(0x01), static_cast<uint8_t>(0x02),
                    static_cast<uint8_t>(0x03), static_cast<uint8_t>(0x04), static_cast<uint8_t>(0x05),
                    static_cast<uint8_t>(0x06), static_cast<uint8_t>(0x07), static_cast<uint8_t>(0x70),
                    static_cast<uint8_t>(0xF0)}) {

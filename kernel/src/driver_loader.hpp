@@ -2,12 +2,13 @@
 #pragma once
 
 #include <Kernel.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/adt/avl_tree.hpp>
 #include <static_string.hpp>
 #include <string_view.hpp>
 
 namespace kernel::driver {
-void init(const kernel::BootInfoT &boot_info);
+kernel::KernelError init(const kernel::BootInfoT &boot_info);
 void LoadBootDrivers();
 
 // Loads every driver declared under LocalMachine's "/Drivers" key whose

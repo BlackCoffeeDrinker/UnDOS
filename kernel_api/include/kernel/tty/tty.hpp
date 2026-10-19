@@ -3,8 +3,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <atomic.hpp>
+#include <expected.hpp>
 #include <mutex.hpp>
 #include <kernel/__core.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/mutex.hpp>
 #include <kernel/fwd/KPtr.hpp>
 #include <kernel/kobject/KDispatcherHeader.hpp>
@@ -109,16 +111,18 @@ public:
   KVtty &operator=(const KVtty &) = delete;
 
   // Source endpoint operations
-  size_t source_write(const uint8_t *src, size_t count);
+  // Returns the number of bytes accepted (a short count means the ring was full); InvalidState once either endpoint is closed.
+  kstd::expected<size_t, kernel::KernelError> source_write(const uint8_t *src, size_t count);
   size_t source_read(uint8_t *dst, size_t count);
   [[nodiscard]] bool source_has_data() const;
   void close_source();
   [[nodiscard]] bool is_source_closed() const;
 
   // Sink endpoint operations
-  size_t sink_write(const uint8_t *src, size_t count);
+  kstd::expected<size_t, kernel::KernelError> sink_write(const uint8_t *src, size_t count);
   size_t sink_read(uint8_t *dst, size_t count);
-  bool sink_read_wait(uint8_t *dst, size_t count, size_t &transferred);
+  // Blocks until data or EOF. Success with transferred == 0 is EOF; any other status is a wait failure.
+  kernel::KernelError sink_read_wait(uint8_t *dst, size_t count, size_t &transferred);
   [[nodiscard]] bool sink_has_data() const;
   void close_sink();
   [[nodiscard]] bool is_sink_closed() const;
@@ -162,7 +166,7 @@ private:
   bool m_sourceClosed{false};
   bool m_sinkClosed{false};
   bool m_eofSignaled{false};
-  kernel::KDispatcherHeader m_inputReady{false, true, nullptr};
+  kernel::KDispatcherHeader m_inputReady{.signalled = false, .manualReset = true, .waiters = nullptr};
 };
 
 } // namespace kernel::tty

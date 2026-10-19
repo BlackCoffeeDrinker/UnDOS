@@ -24,9 +24,9 @@ struct __undos_FILE {
 };
 
 static FILE streams[FOPEN_MAX] = {
-    {true, true, false, false, false, false, 0, 0, EOF, _IONBF, 0, BUFSIZ, NULL, {0}},
-    {true, false, true, false, false, false, 1, 0, EOF, _IONBF, 0, BUFSIZ, NULL, {0}},
-    {true, false, true, false, false, false, 2, 0, EOF, _IONBF, 0, BUFSIZ, NULL, {0}},
+    {.active = true, .readable = true, .writable = false, .eof = false, .error = false, .started = false, .standard = 0, .handle = 0, .pushed = EOF, .mode = _IONBF, .used = 0, .capacity = BUFSIZ, .buffer = NULL, .storage = {0}},
+    {.active = true, .readable = false, .writable = true, .eof = false, .error = false, .started = false, .standard = 1, .handle = 0, .pushed = EOF, .mode = _IONBF, .used = 0, .capacity = BUFSIZ, .buffer = NULL, .storage = {0}},
+    {.active = true, .readable = false, .writable = true, .eof = false, .error = false, .started = false, .standard = 2, .handle = 0, .pushed = EOF, .mode = _IONBF, .used = 0, .capacity = BUFSIZ, .buffer = NULL, .storage = {0}},
 };
 
 static int fail(FILE *stream, int error) {
@@ -79,8 +79,7 @@ FILE *fopen(const char *path, const char *mode) {
     HANDLE handle = 0;
     const int error = undos_libc_open(path, &handle);
     if (error) { errno = error; return NULL; }
-    streams[i] = (FILE){true, true, false, false, false, false, -1, handle,
-                       EOF, _IONBF, 0, BUFSIZ, NULL, {0}};
+    streams[i] = (FILE) {.active = true, .readable = true, .writable = false, .eof = false, .error = false, .started = false, .standard = -1, .handle = handle, .pushed = EOF, .mode = _IONBF, .used = 0, .capacity = BUFSIZ, .buffer = NULL, .storage = {0}};
     return &streams[i];
   }
   errno = EMFILE;

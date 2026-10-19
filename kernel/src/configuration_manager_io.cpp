@@ -4,16 +4,20 @@
 
 namespace kernel::configuration_manager_io {
 
-bool ReadRawAt(const KObjectPtr<KIOObject> &file, uint64_t offset, kstd::span<uint8_t> outValue) {
-  if (!file) return false;
-  KE_VFS_SeekFile(file, offset);
-  return KE_VFS_ReadFile(file, outValue) == outValue.size();
+KernelError ReadRawAt(const KObjectPtr<KIOObject> &file, uint64_t offset, kstd::span<uint8_t> outValue) {
+  if (!file) return KernelError::InvalidHandle;
+  if (const auto sought = KE_VFS_SeekFile(file, offset); !sought) return sought.error();
+  const auto read = KE_VFS_ReadFile(file, outValue);
+  if (!read) return read.error();
+  return *read == outValue.size() ? KernelError::Success : KernelError::UnexpectedEndOfFile;
 }
 
-bool WriteRawAt(const KObjectPtr<KIOObject> &file, uint64_t offset, kstd::span<const uint8_t> data) {
-  if (!file) return false;
-  KE_VFS_SeekFile(file, offset);
-  return KE_VFS_WriteFile(file, data) == data.size();
+KernelError WriteRawAt(const KObjectPtr<KIOObject> &file, uint64_t offset, kstd::span<const uint8_t> data) {
+  if (!file) return KernelError::InvalidHandle;
+  if (const auto sought = KE_VFS_SeekFile(file, offset); !sought) return sought.error();
+  const auto written = KE_VFS_WriteFile(file, data);
+  if (!written) return written.error();
+  return *written == data.size() ? KernelError::Success : KernelError::IoError;
 }
 
 uint64_t PairedNameBlockOffset(uint32_t indexBlockOffset) {
@@ -26,8 +30,8 @@ void ReadNameEntry(const KObjectPtr<KIOObject> &file, uint32_t indexBlockOffset,
   const uint64_t entryOffset = PairedNameBlockOffset(indexBlockOffset) + offsetof(ConfigurationNameBlock, entries) +
                                static_cast<uint64_t>(nameEntryIndex) * sizeof(ConfigurationNameEntry);
   ConfigurationNameEntry entry{};
-  kstd::span entryData(reinterpret_cast<uint8_t *>(&entry), sizeof(ConfigurationNameEntry));
-  if (!ReadRawAt(file, entryOffset, entryData)) return;
+  const kstd::span entryData(reinterpret_cast<uint8_t *>(&entry), sizeof(ConfigurationNameEntry));
+  if (ReadRawAt(file, entryOffset, entryData) != KernelError::Success) return;
   if (entry.keyHash != keyHash) return;
 
   outName = kstd::string_view(entry.name, kstd::char_traits<char>::length(entry.name));
@@ -43,7 +47,7 @@ uint64_t ComputeDataRegionEnd(const KConfigurationRoot &root, uint32_t indexBloc
   return end;
 }
 
-bool PersistIndexEntry(const KObjectPtr<KIOObject> &file, const KConfigurationRoot::Root &root) {
+KernelError PersistIndexEntry(const KObjectPtr<KIOObject> &file, const KConfigurationRoot::Root &root) {
   const ConfigurationIndexEntry onDisk{
       .keyHash = root.keyHash,
       .parentHash = root.parentHash,
@@ -56,7 +60,7 @@ bool PersistIndexEntry(const KObjectPtr<KIOObject> &file, const KConfigurationRo
                     kstd::span(reinterpret_cast<const uint8_t *>(&onDisk), sizeof(ConfigurationIndexEntry)));
 }
 
-bool PersistNameEntry(const KObjectPtr<KIOObject> &file, uint32_t indexBlockOffset, uint16_t nameEntryIndex, uint64_t keyHash, const kstd::string_view &name) {
+KernelError PersistNameEntry(const KObjectPtr<KIOObject> &file, uint32_t indexBlockOffset, uint16_t nameEntryIndex, uint64_t keyHash, const kstd::string_view &name) {
   ConfigurationNameEntry onDisk{};
   onDisk.keyHash = keyHash;
   const size_t toCopy = name.size() < NAME_LENGTH ? name.size() : NAME_LENGTH;
@@ -69,42 +73,43 @@ bool PersistNameEntry(const KObjectPtr<KIOObject> &file, uint32_t indexBlockOffs
   return WriteRawAt(file, entryOffset, kstd::span(reinterpret_cast<const uint8_t *>(&onDisk), sizeof(ConfigurationNameEntry)));
 }
 
-bool FindOrAllocateNameSlot(const KObjectPtr<KIOObject> &file, uint32_t indexBlockOffset, uint64_t keyHash, const kstd::string_view &name, uint16_t &outNameEntryIndex) {
+KernelError FindOrAllocateNameSlot(const KObjectPtr<KIOObject> &file, uint32_t indexBlockOffset, uint64_t keyHash, const kstd::string_view &name, uint16_t &outNameEntryIndex) {
   const uint64_t nameBlockOffset = PairedNameBlockOffset(indexBlockOffset);
 
   for (uint16_t slot = 0; slot < ENTRIES_PER_NAME_BLOCK; slot++) {
     uint64_t existingHash = 0;
     const uint64_t entryOffset = nameBlockOffset + offsetof(ConfigurationNameBlock, entries) + static_cast<uint64_t>(slot) * sizeof(ConfigurationNameEntry);
-    if (!ReadRawAt(file, entryOffset + offsetof(ConfigurationNameEntry, keyHash),
-                   kstd::span(reinterpret_cast<uint8_t *>(&existingHash), sizeof(existingHash)))) {
-      return false;
+    if (const auto status = ReadRawAt(file, entryOffset + offsetof(ConfigurationNameEntry, keyHash),
+                                      kstd::span(reinterpret_cast<uint8_t *>(&existingHash), sizeof(existingHash)));
+        status != KernelError::Success) {
+      return status;
     }
 
     if (existingHash == 0) {
-      if (!PersistNameEntry(file, indexBlockOffset, slot, keyHash, name)) {
-        return false;
+      if (const auto status = PersistNameEntry(file, indexBlockOffset, slot, keyHash, name); status != KernelError::Success) {
+        return status;
       }
       outNameEntryIndex = slot;
-      return true;
+      return KernelError::Success;
     }
   }
-  return false;
+  return KernelError::ResourceLimitExceeded;
 }
 
-bool ReadKeyValue(const KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, ConfigurationValueType expectedType, kstd::span<uint8_t> outValue) {
+KernelError ReadKeyValue(const KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, ConfigurationValueType expectedType, kstd::span<uint8_t> outValue) {
   for (const auto &entry: root.roots) {
     if (entry.keyHash == keyHash && entry.parentHash == parentHash) {
       if (entry.valueType != expectedType || entry.length != outValue.size()) {
-        return false;
+        return KernelError::InvalidFormat;
       }
 
       return ReadRawAt(root.file, entry.offset, outValue);
     }
   }
-  return false;
+  return KernelError::NotFound;
 }
 
-bool FindOrAllocateFreeSlot(KConfigurationRoot &root, uint32_t &outIndexBlockOffset, uint32_t &outIndexEntryOffset) {
+KernelError FindOrAllocateFreeSlot(KConfigurationRoot &root, uint32_t &outIndexBlockOffset, uint32_t &outIndexEntryOffset) {
   uint64_t indexBlockOffset = sizeof(ConfigurationFileHeader);
 
   while (true) {
@@ -116,13 +121,14 @@ bool FindOrAllocateFreeSlot(KConfigurationRoot &root, uint32_t &outIndexBlockOff
     if (occupied < ENTRIES_PER_INDEX_BLOCK) {
       outIndexBlockOffset = static_cast<uint32_t>(indexBlockOffset);
       outIndexEntryOffset = static_cast<uint32_t>(indexBlockOffset + offsetof(ConfigurationIndexBlock, entries) + occupied * sizeof(ConfigurationIndexEntry));
-      return true;
+      return KernelError::Success;
     }
 
     uint32_t nextBlockOffset = 0;
-    kstd::span nextBlockOffsetData(reinterpret_cast<uint8_t *>(&nextBlockOffset), sizeof(nextBlockOffset));
-    if (!ReadRawAt(root.file, indexBlockOffset + offsetof(ConfigurationIndexBlock, nextBlockOffset), nextBlockOffsetData)) {
-      return false;
+    const kstd::span nextBlockOffsetData(reinterpret_cast<uint8_t *>(&nextBlockOffset), sizeof(nextBlockOffset));
+    if (const auto status = ReadRawAt(root.file, indexBlockOffset + offsetof(ConfigurationIndexBlock, nextBlockOffset), nextBlockOffsetData);
+        status != KernelError::Success) {
+      return status;
     }
 
     if (nextBlockOffset != 0) {
@@ -136,24 +142,29 @@ bool FindOrAllocateFreeSlot(KConfigurationRoot &root, uint32_t &outIndexBlockOff
     const uint64_t newIndexBlockOffset = ComputeDataRegionEnd(root, static_cast<uint32_t>(indexBlockOffset));
     const ConfigurationIndexBlock freshIndexBlock{};
     const ConfigurationNameBlock freshNameBlock{};
-    if (!WriteRawAt(root.file, newIndexBlockOffset,
-                    kstd::span(reinterpret_cast<const uint8_t *>(&freshIndexBlock), sizeof(ConfigurationIndexBlock))) ||
-        !WriteRawAt(root.file, newIndexBlockOffset + sizeof(ConfigurationIndexBlock),
-                    kstd::span(reinterpret_cast<const uint8_t *>(&freshNameBlock), sizeof(ConfigurationNameBlock)))) {
-      return false;
+    if (const auto status = WriteRawAt(root.file, newIndexBlockOffset,
+                                       kstd::span(reinterpret_cast<const uint8_t *>(&freshIndexBlock), sizeof(ConfigurationIndexBlock)));
+        status != KernelError::Success) {
+      return status;
+    }
+    if (const auto status = WriteRawAt(root.file, newIndexBlockOffset + sizeof(ConfigurationIndexBlock),
+                                       kstd::span(reinterpret_cast<const uint8_t *>(&freshNameBlock), sizeof(ConfigurationNameBlock)));
+        status != KernelError::Success) {
+      return status;
     }
 
     const auto newIndexBlockOffset32 = static_cast<uint32_t>(newIndexBlockOffset);
-    if (!WriteRawAt(root.file, indexBlockOffset + offsetof(ConfigurationIndexBlock, nextBlockOffset),
-                    kstd::span(reinterpret_cast<const uint8_t *>(&newIndexBlockOffset32), sizeof(newIndexBlockOffset32)))) {
-      return false;
+    if (const auto status = WriteRawAt(root.file, indexBlockOffset + offsetof(ConfigurationIndexBlock, nextBlockOffset),
+                                       kstd::span(reinterpret_cast<const uint8_t *>(&newIndexBlockOffset32), sizeof(newIndexBlockOffset32)));
+        status != KernelError::Success) {
+      return status;
     }
 
     indexBlockOffset = newIndexBlockOffset;
   }
 }
 
-bool WriteKeyValue(KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, ConfigurationValueType type, kstd::span<const uint8_t> data) {
+KernelError WriteKeyValue(KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, ConfigurationValueType type, kstd::span<const uint8_t> data) {
   for (auto &entry: root.roots) {
     if (entry.keyHash == keyHash && entry.parentHash == parentHash) {
       uint64_t targetOffset = entry.offset;
@@ -165,8 +176,8 @@ bool WriteKeyValue(KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHa
         targetOffset = ComputeDataRegionEnd(root, entry.indexBlockOffset);
       }
 
-      if (!WriteRawAt(root.file, targetOffset, data)) {
-        return false;
+      if (const auto status = WriteRawAt(root.file, targetOffset, data); status != KernelError::Success) {
+        return status;
       }
 
       entry.offset = static_cast<uint32_t>(targetOffset);
@@ -176,11 +187,11 @@ bool WriteKeyValue(KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHa
       return PersistIndexEntry(root.file, entry);
     }
   }
-  return false;
+  return KernelError::NotFound;
 }
 
-bool FormatEmptyConfigurationFile(const KObjectPtr<KIOObject> &file) {
-  if (!file) return false;
+KernelError FormatEmptyConfigurationFile(const KObjectPtr<KIOObject> &file) {
+  if (!file) return KernelError::InvalidHandle;
 
   constexpr uint32_t indexBlockOffset = sizeof(ConfigurationFileHeader);
   constexpr uint32_t nameBlockOffset = indexBlockOffset + sizeof(ConfigurationIndexBlock);
@@ -192,14 +203,16 @@ bool FormatEmptyConfigurationFile(const KObjectPtr<KIOObject> &file) {
       .offsetToFirstIndexBlock = indexBlockOffset,
       .offsetToFirstNameBlock = nameBlockOffset,
       .offsetToDataRegion = dataRegionOffset};
-  if (!WriteRawAt(file, 0, kstd::span(reinterpret_cast<const uint8_t *>(&header), sizeof(header)))) {
-    return false;
+  if (const auto status = WriteRawAt(file, 0, kstd::span(reinterpret_cast<const uint8_t *>(&header), sizeof(header)));
+      status != KernelError::Success) {
+    return status;
   }
 
   const ConfigurationIndexBlock emptyIndexBlock{};
-  if (!WriteRawAt(file, indexBlockOffset,
-                  kstd::span(reinterpret_cast<const uint8_t *>(&emptyIndexBlock), sizeof(emptyIndexBlock)))) {
-    return false;
+  if (const auto status = WriteRawAt(file, indexBlockOffset,
+                                     kstd::span(reinterpret_cast<const uint8_t *>(&emptyIndexBlock), sizeof(emptyIndexBlock)));
+      status != KernelError::Success) {
+    return status;
   }
 
   const ConfigurationNameBlock emptyNameBlock{};
@@ -207,12 +220,15 @@ bool FormatEmptyConfigurationFile(const KObjectPtr<KIOObject> &file) {
                     kstd::span(reinterpret_cast<const uint8_t *>(&emptyNameBlock), sizeof(emptyNameBlock)));
 }
 
-bool LoadConfigurationIndex(const KObjectPtr<KIOObject> &file, kstd::list<KConfigurationRoot::Root> &outRoots, size_t &outNumRoots) {
+KernelError LoadConfigurationIndex(const KObjectPtr<KIOObject> &file, kstd::list<KConfigurationRoot::Root> &outRoots, size_t &outNumRoots) {
   ConfigurationFileHeader header{};
   {
     const kstd::span headerData(reinterpret_cast<uint8_t *>(&header), sizeof(ConfigurationFileHeader));
-    if (!ReadRawAt(file, 0, headerData) || header.magic != MAGIC) {
-      return false;
+    if (const auto status = ReadRawAt(file, 0, headerData); status != KernelError::Success) {
+      return status;
+    }
+    if (header.magic != MAGIC) {
+      return KernelError::InvalidFormat;
     }
   }
 
@@ -230,9 +246,9 @@ bool LoadConfigurationIndex(const KObjectPtr<KIOObject> &file, kstd::list<KConfi
     for (size_t slot = 0; slot < ENTRIES_PER_INDEX_BLOCK; slot++) {
       ConfigurationIndexEntry entry{};
       const uint64_t entryOffset = indexBlockOffset + offsetof(ConfigurationIndexBlock, entries) + slot * sizeof(ConfigurationIndexEntry);
-      kstd::span entryData(reinterpret_cast<uint8_t *>(&entry), sizeof(ConfigurationIndexEntry));
-      if (!ReadRawAt(file, entryOffset, entryData)) {
-        return false;
+      const kstd::span entryData(reinterpret_cast<uint8_t *>(&entry), sizeof(ConfigurationIndexEntry));
+      if (const auto status = ReadRawAt(file, entryOffset, entryData); status != KernelError::Success) {
+        return status;
       }
 
       if (entry.keyHash == 0) {
@@ -256,9 +272,10 @@ bool LoadConfigurationIndex(const KObjectPtr<KIOObject> &file, kstd::list<KConfi
     }
 
     uint32_t nextBlockOffset = 0;
-    kstd::span nextBlockOffsetData(reinterpret_cast<uint8_t *>(&nextBlockOffset), sizeof(nextBlockOffset));
-    if (!ReadRawAt(file, indexBlockOffset + offsetof(ConfigurationIndexBlock, nextBlockOffset), nextBlockOffsetData)) {
-      return false;
+    const kstd::span nextBlockOffsetData(reinterpret_cast<uint8_t *>(&nextBlockOffset), sizeof(nextBlockOffset));
+    if (const auto status = ReadRawAt(file, indexBlockOffset + offsetof(ConfigurationIndexBlock, nextBlockOffset), nextBlockOffsetData);
+        status != KernelError::Success) {
+      return status;
     }
 
     if (nextBlockOffset == 0) {
@@ -271,7 +288,7 @@ bool LoadConfigurationIndex(const KObjectPtr<KIOObject> &file, kstd::list<KConfi
 
   outRoots = kstd::move(loaded);
   outNumRoots = populatedCount;
-  return true;
+  return KernelError::Success;
 }
 
 }// namespace kernel::configuration_manager_io

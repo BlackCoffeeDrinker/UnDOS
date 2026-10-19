@@ -2,7 +2,7 @@
 
 namespace kernel {
 
-kstd::pair<KDeviceContextSlot *, HDC> DeviceContextTable::Allocate() noexcept {
+kstd::expected<kstd::pair<KDeviceContextSlot *, HDC>, KernelError> DeviceContextTable::Allocate() noexcept {
   table_lock.lock();
 
   uint32_t index;
@@ -11,13 +11,17 @@ kstd::pair<KDeviceContextSlot *, HDC> DeviceContextTable::Allocate() noexcept {
     free_indices.pop_front();
   } else {
     index = next_index;
+    if (index > 0xFFFF) {
+      table_lock.unlock();
+      return kstd::unexpected(KernelError::ResourceLimitExceeded);
+    }
 
     if (const size_t chunkIndex = index / kSlotsPerChunk;
         chunkIndex >= chunks.size()) {
       auto chunk = kstd::make_unique<Chunk>();
       if (!chunk) {
         table_lock.unlock();
-        return kstd::make_pair(static_cast<KDeviceContextSlot *>(nullptr), INVALID_HDC);
+        return kstd::unexpected(KernelError::OutOfMemory);
       }
       chunks.push_back(kstd::move(chunk));
     }
@@ -74,12 +78,12 @@ KDeviceContextSlot *DeviceContextTable::Resolve(HDC hdc) noexcept {
   return &slot;
 }
 
-bool DeviceContextTable::Close(HDC hdc) noexcept {
+KernelError DeviceContextTable::Close(HDC hdc) noexcept {
   const uint32_t index = hdc & 0xFFFF;
 
   KDeviceContextSlot *slot = Resolve(hdc);
   if (!slot) {
-    return false;
+    return KernelError::InvalidHandle;
   }
 
   slot->used = false;
@@ -96,7 +100,7 @@ bool DeviceContextTable::Close(HDC hdc) noexcept {
   free_indices.push_back(index);
   table_lock.unlock();
 
-  return true;
+  return KernelError::Success;
 }
 
 }// namespace kernel

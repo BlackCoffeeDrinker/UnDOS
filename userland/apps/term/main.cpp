@@ -169,8 +169,8 @@ struct TerminalState {
       lineBuf[lastNonSpace + 1] = '\0';
 
       if (lastNonSpace >= 0) {
-        int32_t x = TERM_PADDING;
-        int32_t y = TERM_PADDING + r * CHAR_HEIGHT;
+        const int32_t x = TERM_PADDING;
+        const int32_t y = TERM_PADDING + r * CHAR_HEIGHT;
         paint.text(x, y, lineBuf, 7, 0);
       }
     }
@@ -213,7 +213,7 @@ void command(char *line) {
   } else if (!strcmp(line, "exit")) s_term.running = false;
   else if (!strncmp(line, "echo ", 5)) { output(line + 5); output("\n"); }
   else if (!strncmp(line, "run ", 4)) {
-    char *path = line + 4;
+    const char *path = line + 4;
     char *args = strchr(path, ' ');
     if (args) *args++ = 0;
     HANDLE handle = 0;

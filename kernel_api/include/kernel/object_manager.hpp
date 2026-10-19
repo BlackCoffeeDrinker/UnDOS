@@ -2,6 +2,8 @@
 #pragma once
 #include <kernel/__core.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
+#include <kernel/kerror.hpp>
+#include <expected.hpp>
 
 #include <static_string.hpp>
 #include <string_view.hpp>
@@ -9,6 +11,7 @@
 namespace kernel {
 struct KObject;
 struct KDirectoryObject;
+using MakeUniqueNameResult = kstd::expected<uint32_t, KernelError>;
 
 constexpr kstd::static_string kOBRootPath = "/";
 constexpr kstd::static_string kOBDevicesPath = "Device";
@@ -32,7 +35,7 @@ constexpr kstd::static_string kOBGfxPath = "Gfx";
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_OB_InsertObject,
     const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child);
 
@@ -46,7 +49,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    uint32_t,
+    kernel::MakeUniqueNameResult,
     KE_OB_MakeUniqueName,
     const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kstd::string_view &baseName);
 
@@ -56,7 +59,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    bool,
+    kernel::KernelError,
     KE_OB_RemoveObject,
     const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child);
 

@@ -60,7 +60,7 @@ TEST_CASE("MBR detection and parsing", "[volmgr][mbr]") {
   SECTION("No signature yields None and no partitions") {
     kstd::array<PartitionInfo, 4> parts{};
     REQUIRE(DetectScheme(View(sector0), ByteView{}) == PartitionScheme::None);
-    REQUIRE(ParseMbr(View(sector0), kstd::span<PartitionInfo>(parts.data(), parts.size())) == 0);
+    REQUIRE(ParseMbr(View(sector0), kstd::span<PartitionInfo>(parts.data(), parts.size())).error() == kernel::KernelError::InvalidFormat);
   }
 
   SECTION("Two valid partitions are parsed with correct offsets") {
@@ -71,7 +71,7 @@ TEST_CASE("MBR detection and parsing", "[volmgr][mbr]") {
     REQUIRE(DetectScheme(View(sector0), ByteView{}) == PartitionScheme::Mbr);
 
     kstd::array<PartitionInfo, 4> parts{};
-    const size_t count = ParseMbr(View(sector0), kstd::span<PartitionInfo>(parts.data(), parts.size()));
+    const size_t count = ParseMbr(View(sector0), kstd::span<PartitionInfo>(parts.data(), parts.size())).value();
     REQUIRE(count == 2);
     REQUIRE(parts[0].baseOffsetBytes == 2048ull * 512);
     REQUIRE(parts[0].lengthBytes == 20480ull * 512);
@@ -86,7 +86,7 @@ TEST_CASE("MBR detection and parsing", "[volmgr][mbr]") {
     SetMbrEntry(sector0, 2, 0x83, 8192, 1000);
 
     kstd::array<PartitionInfo, 4> parts{};
-    const size_t count = ParseMbr(View(sector0), kstd::span<PartitionInfo>(parts.data(), parts.size()));
+    const size_t count = ParseMbr(View(sector0), kstd::span<PartitionInfo>(parts.data(), parts.size())).value();
     REQUIRE(count == 1);
     REQUIRE(parts[0].baseOffsetBytes == 8192ull * 512);
     REQUIRE(parts[0].lengthBytes == 1000ull * 512);
@@ -121,7 +121,7 @@ TEST_CASE("GPT detection and parsing", "[volmgr][gpt]") {
     SetGptEntry(entriesView, 2, entrySize, true, 4096, 8191);// 4096 sectors
 
     kstd::array<PartitionInfo, 4> parts{};
-    const size_t count = ParseGptEntries(View(lba1), ByteView(entries.data(), entries.size()), kstd::span<PartitionInfo>(parts.data(), parts.size()));
+    const size_t count = ParseGptEntries(View(lba1), ByteView(entries.data(), entries.size()), kstd::span<PartitionInfo>(parts.data(), parts.size())).value();
     REQUIRE(count == 2);
     REQUIRE(parts[0].baseOffsetBytes == 34ull * 512);
     REQUIRE(parts[0].lengthBytes == (2081ull - 34 + 1) * 512);
@@ -136,24 +136,24 @@ TEST_CASE("Volume offset translation and range checking", "[volmgr][offset]") {
 
   SECTION("In-range access adds the base offset") {
     uint64_t abs = 0;
-    REQUIRE(ComputeAbsoluteOffset(base, length, 512, 1024, abs));
+    abs = ComputeAbsoluteOffset(base, length, 512, 1024).value();
     REQUIRE(abs == base + 512);
   }
 
   SECTION("Access exactly at the end is allowed") {
     uint64_t abs = 0;
-    REQUIRE(ComputeAbsoluteOffset(base, length, length - 512, 512, abs));
+    abs = ComputeAbsoluteOffset(base, length, length - 512, 512).value();
     REQUIRE(abs == base + length - 512);
   }
 
   SECTION("Offset beyond the partition fails") {
     uint64_t abs = 12345;
-    REQUIRE_FALSE(ComputeAbsoluteOffset(base, length, length + 1, 1, abs));
+    REQUIRE(ComputeAbsoluteOffset(base, length, length + 1, 1).error() == kernel::KernelError::OutOfRange);
     REQUIRE(abs == 12345);// untouched
   }
 
   SECTION("Length overrunning the partition fails") {
     uint64_t abs = 0;
-    REQUIRE_FALSE(ComputeAbsoluteOffset(base, length, length - 100, 200, abs));
+    REQUIRE(ComputeAbsoluteOffset(base, length, length - 100, 200).error() == kernel::KernelError::OutOfRange);
   }
 }

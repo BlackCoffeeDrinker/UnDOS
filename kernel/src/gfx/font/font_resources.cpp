@@ -4,11 +4,11 @@
 
 namespace kernel::font {
 
-bool ResourceBudget::reserve(uint32_t size) noexcept {
+KernelError ResourceBudget::reserve(uint32_t size) noexcept {
   kstd::unique_lock lock(mutex_);
-  if (size > MaxRegisteredBytes - bytes_) return false;
+  if (size > MaxRegisteredBytes - bytes_) return KernelError::ResourceLimitExceeded;
   bytes_ += size;
-  return true;
+  return KernelError::Success;
 }
 
 void ResourceBudget::release(uint32_t size) noexcept {
@@ -30,21 +30,21 @@ ResourceTable::Slot *ResourceTable::lookup(uint32_t handle) {
   return slot.used && slot.generation == generation ? &slot : nullptr;
 }
 
-Result ResourceTable::begin(ResourceBudget &budget, uint32_t size, uint32_t &handle) {
-  handle = 0;
+kstd::expected<uint32_t, KernelError> ResourceTable::begin(ResourceBudget &budget, uint32_t size) {
   if (size < undos::font::PayloadStart || size > undos::font::MaxResourceBytes || (size & 3u))
-    return Result::InvalidSize;
+    return kstd::unexpected(KernelError::InvalidSize);
   kstd::unique_lock lock(mutex_);
-  if (size > MaxProcessBytes - bytes_) return Result::Limit;
+  if (size > MaxProcessBytes - bytes_) return kstd::unexpected(KernelError::ResourceLimitExceeded);
   for (uint32_t index = 0; index < ResourceSlots; ++index) {
     auto &slot = slots_[index];
     if (slot.used || !slot.generation) continue;
-    if (!budget.reserve(size)) return Result::Limit;
+    if (const KernelError reserved = budget.reserve(size); reserved != KernelError::Success)
+      return kstd::unexpected(reserved);
     slot.data.resize(size);
     if (slot.data.size() != size || !slot.data.data()) {
       slot.data = kstd::vector<uint8_t>();
       budget.release(size);
-      return Result::OutOfMemory;
+      return kstd::unexpected(KernelError::OutOfMemory);
     }
     slot.used = true;
     slot.committed = false;
@@ -52,46 +52,43 @@ Result ResourceTable::begin(ResourceBudget &budget, uint32_t size, uint32_t &han
     slot.reserved = size;
     slot.budget = &budget;
     bytes_ += size;
-    handle = (slot.generation << 8) | (index + 1);
-    return Result::Okay;
+    return (slot.generation << 8) | (index + 1);
   }
-  return Result::Limit;
+  return kstd::unexpected(KernelError::ResourceLimitExceeded);
 }
 
-Result ResourceTable::append(uint32_t handle, uint32_t offset, const uint8_t *data, size_t size) {
-  if (!data || !size || size > 4096) return Result::InvalidSize;
+KernelError ResourceTable::append(uint32_t handle, uint32_t offset, const uint8_t *data, size_t size) {
+  if (!data || !size || size > 4096) return KernelError::InvalidSize;
   kstd::unique_lock lock(mutex_);
   auto *slot = lookup(handle);
-  if (!slot) return Result::InvalidHandle;
-  if (slot->committed) return Result::InvalidState;
-  if (offset != slot->written || size > slot->data.size() - slot->written) return Result::InvalidOffset;
+  if (!slot) return KernelError::InvalidHandle;
+  if (slot->committed) return KernelError::InvalidState;
+  if (offset != slot->written || size > slot->data.size() - slot->written) return KernelError::InvalidOffset;
   for (size_t i = 0; i < size; ++i) slot->data[offset + i] = data[i];
   slot->written += static_cast<uint32_t>(size);
-  return Result::Okay;
+  return KernelError::Success;
 }
 
-Result ResourceTable::commit(uint32_t handle, uint32_t &face, uint32_t &validationError) {
-  face = 0;
+kstd::expected<uint32_t, KernelError> ResourceTable::commit(uint32_t handle, uint32_t &validationError) {
   validationError = static_cast<uint32_t>(undos::font::Error::None);
   kstd::unique_lock lock(mutex_);
   auto *slot = lookup(handle);
-  if (!slot) return Result::InvalidHandle;
-  if (slot->committed || slot->written != slot->data.size()) return Result::InvalidState;
-  const auto error = undos::font::validate({slot->data.data(), slot->data.size()});
+  if (!slot) return kstd::unexpected(KernelError::InvalidHandle);
+  if (slot->committed || slot->written != slot->data.size()) return kstd::unexpected(KernelError::InvalidState);
+  const auto error = undos::font::validate({.data = slot->data.data(), .size = slot->data.size()});
   validationError = static_cast<uint32_t>(error);
   if (error != undos::font::Error::None) {
     release(*slot);
-    return Result::InvalidResource;
+    return kstd::unexpected(KernelError::InvalidResource);
   }
   // Commit replaces the upload capability, invalidating its old generation.
   if (slot->generation == 0xffffffu) {
     release(*slot);
-    return Result::Limit;
+    return kstd::unexpected(KernelError::ResourceLimitExceeded);
   }
   ++slot->generation;
   slot->committed = true;
-  face = (slot->generation << 8) | (handle & 255u);
-  return Result::Okay;
+  return (slot->generation << 8) | (handle & 255u);
 }
 
 void ResourceTable::release(Slot &slot) {
@@ -107,12 +104,12 @@ void ResourceTable::release(Slot &slot) {
   slot.generation = slot.generation == 0xffffffu ? 0 : slot.generation + 1;
 }
 
-Result ResourceTable::close(uint32_t handle) {
+KernelError ResourceTable::close(uint32_t handle) {
   kstd::unique_lock lock(mutex_);
   auto *slot = lookup(handle);
-  if (!slot) return Result::InvalidHandle;
+  if (!slot) return KernelError::InvalidHandle;
   release(*slot);
-  return Result::Okay;
+  return KernelError::Success;
 }
 
 void ResourceTable::clear() {

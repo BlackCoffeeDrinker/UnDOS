@@ -1,6 +1,7 @@
 #pragma once
 
 #include <kernel/__core.hpp>
+#include <kernel/kerror.hpp>
 
 #include <kernel/konsole.hpp>
 

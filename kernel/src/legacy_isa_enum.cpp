@@ -28,9 +28,9 @@ struct LegacyReservationContext {
 };
 
 // Parses a decimal ("5") or 0x-prefixed hex ("0x220") unsigned integer.
-// Returns false (leaving out untouched) on empty or malformed input.
-bool ParseUInt32(const kstd::string_view &text, uint32_t &out) {
-  if (text.empty()) return false;
+// Leaves out untouched on empty, malformed or overflowing input.
+kernel::KernelError ParseUInt32(const kstd::string_view &text, uint32_t &out) {
+  if (text.empty()) return kernel::KernelError::InvalidFormat;
 
   size_t i = 0;
   uint32_t base = 10;
@@ -38,7 +38,7 @@ bool ParseUInt32(const kstd::string_view &text, uint32_t &out) {
     base = 16;
     i = 2;
   }
-  if (i >= text.length()) return false;
+  if (i >= text.length()) return kernel::KernelError::InvalidFormat;
 
   uint32_t value = 0;
   for (; i < text.length(); ++i) {
@@ -51,21 +51,26 @@ bool ParseUInt32(const kstd::string_view &text, uint32_t &out) {
     } else if (base == 16 && c >= 'A' && c <= 'F') {
       digit = static_cast<uint32_t>(c - 'A' + 10);
     } else {
-      return false;
+      return kernel::KernelError::InvalidFormat;
     }
+    if (value > (UINT32_MAX - digit) / base) return kernel::KernelError::ArithmeticOverflow;
     value = value * base + digit;
   }
 
   out = value;
-  return true;
+  return kernel::KernelError::Success;
 }
 
 // Parses a "start-end" range (each side per ParseUInt32) as found in the
 // registry's IoPorts/Memory values, e.g. "0x3C0-0x3DF".
-bool ParseRange(const kstd::string_view &text, uint32_t &start, uint32_t &end) {
+kernel::KernelError ParseRange(const kstd::string_view &text, uint32_t &start, uint32_t &end) {
   const auto dash = text.find('-');
-  if (dash == kstd::string_view::npos) return false;
-  return ParseUInt32(text.substr(0, dash), start) && ParseUInt32(text.substr(dash + 1), end);
+  if (dash == kstd::string_view::npos) return kernel::KernelError::InvalidFormat;
+  if (const auto error = ParseUInt32(text.substr(0, dash), start);
+      error != kernel::KernelError::Success) return error;
+  if (const auto error = ParseUInt32(text.substr(dash + 1), end);
+      error != kernel::KernelError::Success) return error;
+  return end >= start ? kernel::KernelError::Success : kernel::KernelError::OutOfRange;
 }
 
 // Reads the named value subkey (e.g. "IoPorts") under deviceKey, matching the
@@ -74,11 +79,16 @@ bool ParseRange(const kstd::string_view &text, uint32_t &start, uint32_t &end) {
 // via KE_CM_GetKeyValueStringSize() and has KE_CM_GetKeyValueString() write
 // straight into it, rather than aliasing any scratch storage owned by
 // valueKey.
-bool ReadStringValue(const kernel::KConfigurationKeyPtr &deviceKey, const kstd::string_view &valueName, kstd::string &out) {
+kernel::KernelError ReadStringValue(const kernel::KConfigurationKeyPtr &deviceKey, const kstd::string_view &valueName, kstd::string &out) {
   const auto valueKey = KE_CM_OpenKey(deviceKey, valueName);
-  if (!valueKey) return false;
-  out.resize(KE_CM_GetKeyValueStringSize(valueKey));
-  return KE_CM_GetKeyValueString(valueKey, kstd::span(out.data(), out.size()));
+  if (!valueKey) return valueKey.error();
+  const auto size = KE_CM_GetKeyValueStringSize(*valueKey);
+  if (!size) return size.error();
+  out.resize(*size);
+  if (out.size() != *size) return kernel::KernelError::OutOfMemory;
+  const auto copied = KE_CM_GetKeyValueString(*valueKey, kstd::span(out.data(), out.size()));
+  if (!copied) return copied.error();
+  return kernel::KernelError::Success;
 }
 
 // Best-effort generic ISA presence probe: reads back the device's first
@@ -96,27 +106,38 @@ bool ProbeLegacyDevice(const LegacyReservationContext &ctx) {
 // KDriverObject (before AddDevice rebinds pdo->driverObject to the matched
 // function driver), once per reported PDO. A fresh list is built each call
 // since ProcessDevice frees it after assigning resources.
-kernel::IoResourceRequirementsList *LegacyIsaEnum_QueryResourceRequirements(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
+kstd::expected<kernel::IoResourceRequirementsList *, kernel::KernelError>
+LegacyIsaEnum_QueryResourceRequirements(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto *ctx = pdo->deviceExtension.as<LegacyReservationContext>();
-  if (!ctx) return nullptr;
+  if (!ctx) return kstd::unexpected(kernel::KernelError::InvalidState);
 
-  auto *req = KE_RES_CreateRequirementsList(kernel::device_type::Unknown);
-  if (!req) return nullptr;
+  const auto created = KE_RES_CreateRequirementsList(kernel::device_type::Unknown);
+  if (!created) return kstd::unexpected(created.error());
+  auto *req = *created;
 
-  auto *alt = KE_RES_AddAlternative(req);
-  if (!alt) return req;
+  const auto added = KE_RES_AddAlternative(req);
+  if (!added) {
+    KE_RES_FreeRequirementsList(req);
+    return kstd::unexpected(added.error());
+  }
+  auto *alt = *added;
 
+  auto error = kernel::KernelError::Success;
   if (ctx->hasPort) {
-    KE_RES_AddPort(alt, ctx->portStart, ctx->portLength, kernel::ResourceOption::Fixed, kernel::ResourceShare::DeviceExclusive);
+    error = KE_RES_AddPort(alt, ctx->portStart, ctx->portLength, kernel::ResourceOption::Fixed, kernel::ResourceShare::DeviceExclusive);
   }
-  if (ctx->hasMemory) {
-    KE_RES_AddMemory(alt, ctx->memoryStart, ctx->memoryLength, kernel::ResourceOption::Fixed, kernel::ResourceShare::DeviceExclusive);
+  if (error == kernel::KernelError::Success && ctx->hasMemory) {
+    error = KE_RES_AddMemory(alt, ctx->memoryStart, ctx->memoryLength, kernel::ResourceOption::Fixed, kernel::ResourceShare::DeviceExclusive);
   }
-  if (ctx->hasIrq) {
-    KE_RES_AddInterrupt(alt, ctx->irq, kernel::ResourceOption::Fixed, kernel::ResourceShare::DeviceExclusive);
+  if (error == kernel::KernelError::Success && ctx->hasIrq) {
+    error = KE_RES_AddInterrupt(alt, ctx->irq, kernel::ResourceOption::Fixed, kernel::ResourceShare::DeviceExclusive);
   }
-  if (ctx->hasDma) {
-    KE_RES_AddDma(alt, ctx->dma, kernel::ResourceOption::Fixed, kernel::ResourceShare::DeviceExclusive);
+  if (error == kernel::KernelError::Success && ctx->hasDma) {
+    error = KE_RES_AddDma(alt, ctx->dma, kernel::ResourceOption::Fixed, kernel::ResourceShare::DeviceExclusive);
+  }
+  if (error != kernel::KernelError::Success) {
+    KE_RES_FreeRequirementsList(req);
+    return kstd::unexpected(error);
   }
   return req;
 }
@@ -126,73 +147,88 @@ kernel::IoResourceRequirementsList *LegacyIsaEnum_QueryResourceRequirements(cons
 // reported PDO's hardwareId); IoPorts/Memory/Irq/Dma/DriverImage are all
 // optional, matching the fact that not every legacy device needs every kind
 // of resource (e.g. a speaker has neither ports nor an image to load).
-bool LoadLegacyReservation(
+kernel::KernelError LoadLegacyReservation(
     const kernel::KConfigurationKeyPtr &deviceKey,
     const kstd::string_view &childName,
     kstd::string &outHwId,
     kstd::string &outDriverImage,
     LegacyReservationContext &ctx) {
-  if (!ReadStringValue(deviceKey, "HwID", outHwId) || outHwId.empty()) {
+  if (const auto error = ReadStringValue(deviceKey, "HwID", outHwId);
+      error != kernel::KernelError::Success || outHwId.empty()) {
     KE_Print("LegacyIsaEnum: '{}' has no HwID, skipping", childName);
-    return false;
+    return error != kernel::KernelError::Success ? error : kernel::KernelError::InvalidArgument;
   }
 
   // DriverImage is optional: if absent, a driver already registered under
   // this HwID (e.g. loaded earlier as a Boot/Automatic driver) is expected
   // to bind instead.
-  ReadStringValue(deviceKey, "DriverImage", outDriverImage);
+  if (const auto error = ReadStringValue(deviceKey, "DriverImage", outDriverImage);
+      error != kernel::KernelError::Success && error != kernel::KernelError::NotFound) return error;
 
   kstd::string ioPorts;
-  if (ReadStringValue(deviceKey, "IoPorts", ioPorts)) {
+  if (const auto error = ReadStringValue(deviceKey, "IoPorts", ioPorts);
+      error == kernel::KernelError::Success) {
     uint32_t start = 0, end = 0;
-    if (ParseRange(ioPorts, start, end) && end >= start) {
+    if (const auto parsed = ParseRange(ioPorts, start, end); parsed == kernel::KernelError::Success) {
+      if (end - start == UINT32_MAX) return kernel::KernelError::ArithmeticOverflow;
       ctx.hasPort = true;
       ctx.portStart = start;
       ctx.portLength = end - start + 1;
     } else {
       KE_Print("LegacyIsaEnum: '{}' has invalid IoPorts '{}'", childName, ioPorts);
+      return parsed;
     }
-  }
+  } else if (error != kernel::KernelError::NotFound) return error;
 
   kstd::string memory;
-  if (ReadStringValue(deviceKey, "Memory", memory)) {
+  if (const auto error = ReadStringValue(deviceKey, "Memory", memory);
+      error == kernel::KernelError::Success) {
     uint32_t start = 0, end = 0;
-    if (ParseRange(memory, start, end) && end >= start) {
+    if (const auto parsed = ParseRange(memory, start, end); parsed == kernel::KernelError::Success) {
+      if (end - start == UINT32_MAX) return kernel::KernelError::ArithmeticOverflow;
       ctx.hasMemory = true;
       ctx.memoryStart = start;
       ctx.memoryLength = end - start + 1;
     } else {
       KE_Print("LegacyIsaEnum: '{}' has invalid Memory '{}'", childName, memory);
+      return parsed;
     }
-  }
+  } else if (error != kernel::KernelError::NotFound) return error;
 
   kstd::string irq;
-  if (ReadStringValue(deviceKey, "Irq", irq)) {
-    if (ParseUInt32(irq, ctx.irq)) {
+  if (const auto error = ReadStringValue(deviceKey, "Irq", irq);
+      error == kernel::KernelError::Success) {
+    if (const auto parsed = ParseUInt32(irq, ctx.irq); parsed == kernel::KernelError::Success) {
       ctx.hasIrq = true;
     } else {
       KE_Print("LegacyIsaEnum: '{}' has invalid Irq '{}'", childName, irq);
+      return parsed;
     }
-  }
+  } else if (error != kernel::KernelError::NotFound) return error;
 
   kstd::string dma;
-  if (ReadStringValue(deviceKey, "Dma", dma)) {
-    if (ParseUInt32(dma, ctx.dma)) {
+  if (const auto error = ReadStringValue(deviceKey, "Dma", dma);
+      error == kernel::KernelError::Success) {
+    if (const auto parsed = ParseUInt32(dma, ctx.dma); parsed == kernel::KernelError::Success) {
       ctx.hasDma = true;
     } else {
       KE_Print("LegacyIsaEnum: '{}' has invalid Dma '{}'", childName, dma);
+      return parsed;
     }
-  }
+  } else if (error != kernel::KernelError::NotFound) return error;
 
-  return true;
+  return kernel::KernelError::Success;
 }
 
 // True when the entry opts out of the normal enumeration pass by declaring
 // Start=LastResort, mirroring the driver-level Start value: such an entry is
 // only reported if nothing else claimed the hardware it stands in for.
-bool IsLastResortEntry(const kernel::KConfigurationKeyPtr &deviceKey) {
+kstd::expected<bool, kernel::KernelError> IsLastResortEntry(const kernel::KConfigurationKeyPtr &deviceKey) {
   kstd::string start;
-  if (!ReadStringValue(deviceKey, "Start", start)) return false;
+  if (const auto error = ReadStringValue(deviceKey, "Start", start); error != kernel::KernelError::Success) {
+    if (error == kernel::KernelError::NotFound) return false;
+    return kstd::unexpected(error);
+  }
   return start == "LastResort";
 }
 
@@ -200,37 +236,55 @@ bool IsLastResortEntry(const kernel::KConfigurationKeyPtr &deviceKey) {
 // LegacyISAReservations entries is considered, so the two passes together
 // cover every entry exactly once.
 void EnumerateLegacyEntries(bool lastResort) {
-  const auto localMachine = KE_CM_OpenRoot("LocalMachine");
-  if (!localMachine) {
-    KE_Print("LegacyIsaEnum: failed to open LocalMachine");
+  const auto openedRoot = KE_CM_OpenRoot("LocalMachine");
+  if (!openedRoot) {
+    KE_Print("LegacyIsaEnum: failed to open LocalMachine: {}", kernel::make_error_code(openedRoot.error()).message());
     return;
   }
+  const auto &localMachine = *openedRoot;
 
-  const auto legacyKey = KE_CM_OpenKey(localMachine, "LegacyISAReservations");
-  if (!legacyKey) {
-    KE_Print("LegacyIsaEnum: no LegacyISAReservations key, nothing to enumerate");
+  const auto openedLegacy = KE_CM_OpenKey(localMachine, "LegacyISAReservations");
+  if (!openedLegacy) {
+    KE_Print("LegacyIsaEnum: cannot open LegacyISAReservations: {}", kernel::make_error_code(openedLegacy.error()).message());
     return;
   }
+  const auto &legacyKey = *openedLegacy;
 
   for (uint32_t index = 0;; ++index) {
-    kstd::string_view childName;
-    if (!KE_CM_EnumKey(legacyKey, index, childName)) {
+    const auto child = KE_CM_EnumKey(legacyKey, index);
+    if (!child) {
+      KE_Print("LegacyIsaEnum: failed to enumerate reservations: {}", kernel::make_error_code(child.error()).message());
       break;
     }
+    if (!child->available) {
+      break;
+    }
+    const auto childName = child->name;
 
-    const auto deviceKey = KE_CM_OpenKey(legacyKey, childName);
-    if (!deviceKey) {
+    const auto openedDevice = KE_CM_OpenKey(legacyKey, childName);
+    if (!openedDevice) {
+      KE_Print("LegacyIsaEnum: failed to open '{}': {}", childName, kernel::make_error_code(openedDevice.error()).message());
       continue;
     }
+    const auto &deviceKey = *openedDevice;
 
-    if (IsLastResortEntry(deviceKey) != lastResort) {
+    const auto lastResortEntry = IsLastResortEntry(deviceKey);
+    if (!lastResortEntry) {
+      KE_Print("LegacyIsaEnum: failed to read Start for '{}': {}", childName,
+               kernel::make_error_code(lastResortEntry.error()).message());
+      continue;
+    }
+    if (*lastResortEntry != lastResort) {
       continue;
     }
 
     kstd::string hwid;
     kstd::string driverImage;
     LegacyReservationContext ctx;
-    if (!LoadLegacyReservation(deviceKey, childName, hwid, driverImage, ctx)) {
+    if (const auto error = LoadLegacyReservation(deviceKey, childName, hwid, driverImage, ctx);
+        error != kernel::KernelError::Success) {
+      KE_Print("LegacyIsaEnum: failed to load reservation '{}': {}", childName,
+               kernel::make_error_code(error).message());
       continue;
     }
 
@@ -243,21 +297,27 @@ void EnumerateLegacyEntries(bool lastResort) {
     // registered by the time the PnP worker thread matches the PDO's
     // hardware id.
     if (!driverImage.empty()) {
-      KE_DRIVER_Load(driverImage);
+      if (const auto driver = KE_DRIVER_Load(driverImage); !driver) {
+        KE_Print("LegacyIsaEnum: failed to load driver '{}': {}", driverImage,
+                 kernel::make_error_code(driver.error()).message());
+        continue;
+      }
     }
 
-    const auto enumerator = kernel::CreateKObject<kernel::KDriverObject>("LegacyIsaEnum");
-    if (!enumerator) {
+    const auto createdEnumerator = kernel::CreateKObject<kernel::KDriverObject>("LegacyIsaEnum");
+    if (!createdEnumerator) {
       KE_Print("LegacyIsaEnum: failed to create enumerator driver object for '{}'", childName);
       continue;
     }
+    const auto &enumerator = *createdEnumerator;
     enumerator->QueryResourceRequirements = LegacyIsaEnum_QueryResourceRequirements;
 
-    auto pdo = KE_IO_CreateDeviceWithContext<LegacyReservationContext>(enumerator, {}, kernel::device_type::Unknown);
-    if (!pdo) {
+    auto createdPdo = KE_IO_CreateDeviceWithContext<LegacyReservationContext>(enumerator, {}, kernel::device_type::Unknown);
+    if (!createdPdo) {
       KE_Print("LegacyIsaEnum: failed to create PDO for '{}'", childName);
       continue;
     }
+    const auto &pdo = *createdPdo;
     *pdo->deviceExtension.template as<LegacyReservationContext>() = ctx;
     pdo->hardwareId = hwid;
 

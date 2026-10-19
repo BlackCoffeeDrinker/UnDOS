@@ -3,6 +3,7 @@
 
 namespace {
 using namespace kernel::process_startup;
+using kernel::KernelError;
 
 bool equal(const char *a, const char *b) {
   while (*a && *a == *b) { ++a; ++b; }
@@ -13,7 +14,7 @@ bool equal(const char *a, const char *b) {
 TEST_CASE("Process startup preserves argv0 and parses quoted arguments", "[process-startup]") {
   Arguments args;
   constexpr char command[] = " \talpha \"two words\" \"\" pre\"mid dle\"post C:\\bin\r\n";
-  REQUIRE(parse("/System/Test App", 16, command, sizeof(command) - 1, args));
+  REQUIRE(parse("/System/Test App", 16, command, sizeof(command) - 1, args) == KernelError::Success);
   REQUIRE(args.argc == 6);
   REQUIRE(equal(args.text + args.offsets[0], "/System/Test App"));
   REQUIRE(equal(args.text + args.offsets[1], "alpha"));
@@ -25,31 +26,31 @@ TEST_CASE("Process startup preserves argv0 and parses quoted arguments", "[proce
 
 TEST_CASE("Process startup defaults to executable argv0 only", "[process-startup]") {
   Arguments args;
-  REQUIRE(parse("/init", 5, nullptr, 0, args));
+  REQUIRE(parse("/init", 5, nullptr, 0, args) == KernelError::Success);
   REQUIRE(args.argc == 1);
   REQUIRE(equal(args.text, "/init"));
-  REQUIRE(parse("/init", 5, " \t\r\n", 4, args));
+  REQUIRE(parse("/init", 5, " \t\r\n", 4, args) == KernelError::Success);
   REQUIRE(args.argc == 1);
 }
 
 TEST_CASE("Process startup rejects malformed and oversized input", "[process-startup]") {
   Arguments args;
-  REQUIRE_FALSE(parse("", 0, nullptr, 0, args));
-  REQUIRE_FALSE(parse(nullptr, 4, nullptr, 0, args));
-  REQUIRE_FALSE(parse("a", 1, "\"bad", 4, args));
-  REQUIRE_FALSE(parse("a\0b", 3, nullptr, 0, args));
-  REQUIRE_FALSE(parse("a", 1, "x\0y", 3, args));
-  REQUIRE_FALSE(parse("a", 1, nullptr, 1, args));
+  REQUIRE(parse("", 0, nullptr, 0, args) == KernelError::InvalidArgument);
+  REQUIRE(parse(nullptr, 4, nullptr, 0, args) == KernelError::InvalidArgument);
+  REQUIRE(parse("a", 1, "\"bad", 4, args) == KernelError::InvalidFormat);
+  REQUIRE(parse("a\0b", 3, nullptr, 0, args) == KernelError::InvalidData);
+  REQUIRE(parse("a", 1, "x\0y", 3, args) == KernelError::InvalidData);
+  REQUIRE(parse("a", 1, nullptr, 1, args) == KernelError::InvalidArgument);
   char path[PATH_CAPACITY];
   for (auto &ch : path) ch = 'p';
-  REQUIRE(parse(path, PATH_CAPACITY - 1, nullptr, 0, args));
-  REQUIRE_FALSE(parse(path, PATH_CAPACITY, nullptr, 0, args));
+  REQUIRE(parse(path, PATH_CAPACITY - 1, nullptr, 0, args) == KernelError::Success);
+  REQUIRE(parse(path, PATH_CAPACITY, nullptr, 0, args) == KernelError::BufferTooSmall);
   char command[ARGUMENT_CAPACITY];
   for (auto &ch : command) ch = 'x';
-  REQUIRE(parse("a", 1, command, ARGUMENT_CAPACITY - 1, args));
-  REQUIRE(parse(path, PATH_CAPACITY - 1, command, ARGUMENT_CAPACITY - 1, args));
+  REQUIRE(parse("a", 1, command, ARGUMENT_CAPACITY - 1, args) == KernelError::Success);
+  REQUIRE(parse(path, PATH_CAPACITY - 1, command, ARGUMENT_CAPACITY - 1, args) == KernelError::Success);
   REQUIRE(args.bytes == sizeof(args.text));
-  REQUIRE_FALSE(parse("a", 1, command, ARGUMENT_CAPACITY, args));
+  REQUIRE(parse("a", 1, command, ARGUMENT_CAPACITY, args) == KernelError::BufferTooSmall);
 }
 
 TEST_CASE("Process startup enforces argument count without truncation", "[process-startup]") {
@@ -59,21 +60,21 @@ TEST_CASE("Process startup enforces argument count without truncation", "[proces
     command[i * 2] = 'x';
     command[i * 2 + 1] = ' ';
   }
-  REQUIRE(parse("a", 1, command, (MAX_ARGUMENTS - 1) * 2, args));
+  REQUIRE(parse("a", 1, command, (MAX_ARGUMENTS - 1) * 2, args) == KernelError::Success);
   REQUIRE(args.argc == MAX_ARGUMENTS);
-  REQUIRE_FALSE(parse("a", 1, command, MAX_ARGUMENTS * 2, args));
+  REQUIRE(parse("a", 1, command, MAX_ARGUMENTS * 2, args) == KernelError::TooManyArguments);
 }
 
 TEST_CASE("Process startup builds aligned bounded i386 argc argv stack", "[process-startup]") {
   Arguments args;
-  REQUIRE(parse("/app", 4, "\"a b\" c", 7, args));
+  REQUIRE(parse("/app", 4, "\"a b\" c", 7, args) == KernelError::Success);
   alignas(16) uint32_t buffer[512]{};
   const auto size = stack_size(args);
   REQUIRE(size % 16 == 0);
-  REQUIRE_FALSE(write_stack(buffer, size - 1, 0x20000, args));
-  REQUIRE_FALSE(write_stack(buffer, sizeof(buffer), 0x20001, args));
-  REQUIRE_FALSE(write_stack(buffer, sizeof(buffer), 0xfffffff0, args));
-  REQUIRE(write_stack(buffer, size, 0x20000, args, 42));
+  REQUIRE(write_stack(buffer, size - 1, 0x20000, args) == KernelError::BufferTooSmall);
+  REQUIRE(write_stack(buffer, sizeof(buffer), 0x20001, args) == KernelError::InvalidAlignment);
+  REQUIRE(write_stack(buffer, sizeof(buffer), 0xfffffff0, args) == KernelError::ArithmeticOverflow);
+  REQUIRE(write_stack(buffer, size, 0x20000, args, 42) == KernelError::Success);
   REQUIRE(buffer[0] == 0);
   REQUIRE(buffer[1] == 0x20010);
   REQUIRE(buffer[2] == 42);

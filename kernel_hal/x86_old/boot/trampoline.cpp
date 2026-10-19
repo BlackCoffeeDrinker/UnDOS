@@ -139,11 +139,11 @@ void register_global_symbol(const char *name, uint32_t value) {
     write_fmt("Stage 1.5: Failed to register symbol: {} g_symbol_count > {}\n\r", name, g_symbol_table.size());
     return;
   }
-  g_symbol_table[g_symbol_count++] = {name, value};
+  g_symbol_table[g_symbol_count++] = {.name = name, .value = value};
 }
 
 uint32_t lookup_global_symbol(const char *name) {
-  for (auto & i : g_symbol_table) {
+  for (const auto & i : g_symbol_table) {
     if (kstrcmp(i.name, name)) {
       return i.value;
     }
@@ -275,7 +275,7 @@ void setup_got(multiboot_module_t *mod, module_got_t &got, uintptr_t v_base_over
 // Fixed Relocation Engine
 void process_module_relocations(uint32_t module_start, const module_got_t &got, uintptr_t v_base_override = 0) {
   const auto *ehdr = reinterpret_cast<hal::Elf32_Ehdr *>(module_start);
-  auto *shdr_table = reinterpret_cast<hal::Elf32_Shdr *>(module_start + ehdr->e_shoff);
+  const auto *shdr_table = reinterpret_cast<hal::Elf32_Shdr *>(module_start + ehdr->e_shoff);
   const auto section_str_tab = reinterpret_cast<const char *>(module_start + shdr_table[ehdr->e_shstrndx].sh_offset);
   const uintptr_t original_base = get_elf_load_vaddr(module_start);
 
@@ -577,9 +577,9 @@ kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_
 
       // TODO: Make sure we don't overflow the address
       boot_info_ptr->memory_regions[count++] = {
-          static_cast<uintptr_t>(entry->addr),
-          entry->len,
-          region_type};
+          .base = static_cast<uintptr_t>(entry->addr),
+          .length = entry->len,
+          .type = region_type};
 
       mmap_ptr += entry->size + sizeof(entry->size);
     }
@@ -632,7 +632,7 @@ extern "C" void kernel_main(uint32_t mb_physical_addr) {
   write_fmt("--------------------------------------------------------------------------------\n\r");
   write_fmt("Booting with mb_physical_addr = 0x{x}\n\r", mb_physical_addr);
 
-  auto *mbi = reinterpret_cast<multiboot_info_t *>(mb_physical_addr);
+  const auto *mbi = reinterpret_cast<multiboot_info_t *>(mb_physical_addr);
   multiboot_module_t *hal_module = nullptr;
   multiboot_module_t *kernel_module = nullptr;
 
@@ -659,8 +659,8 @@ extern "C" void kernel_main(uint32_t mb_physical_addr) {
 
   auto *boot_info = fill_boot_info(mbi, kernel_stack_top);
 
-  auto *kernel_ehdr = reinterpret_cast<hal::Elf32_Ehdr *>(kernel_module->mod_start);
-  uintptr_t entry_point = kernel_ehdr->e_entry;
+  const auto *kernel_ehdr = reinterpret_cast<hal::Elf32_Ehdr *>(kernel_module->mod_start);
+  const uintptr_t entry_point = kernel_ehdr->e_entry;
 
   if (entry_point < KERNEL_VIRTUAL_BASE || entry_point >= g_kernel_virtual_end) {
     write_fmt("ERROR: Entry point 0x{x} is outside mapped range [0x{x}, 0x{x}]\n\r",

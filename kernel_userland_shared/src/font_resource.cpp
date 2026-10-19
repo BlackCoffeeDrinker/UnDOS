@@ -175,7 +175,7 @@ Error validate(Bytes bytes) {
       return Error::InvalidCmap;
     last = end;
   }
-  Graph graph{glyphs, components};
+  Graph graph{.glyphs = glyphs, .components = components};
   for (uint32_t id = 0; id < glyphCount; ++id) {
     uint32_t expandedPoints = 0, expandedContours = 0, levels = 0;
     const auto error = graph.visit(id, 0, expandedPoints, expandedContours, levels);

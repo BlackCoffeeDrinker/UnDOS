@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include <kernel/kerror.hpp>
+
 namespace kernel::gfx {
 
 struct BlitRect {
@@ -24,11 +26,12 @@ inline bool ClipBlit(BlitRect &r, uint32_t dstWidth, uint32_t dstHeight,
 
 // Work is bounded by the visible dominant axis, even for extreme coordinates.
 // The unsigned product fits because validated endpoints are signed 32-bit.
+// Endpoints outside the signed 32-bit range fail with OutOfRange.
 template<typename Plot>
-bool ForEachLinePixel(int64_t x0, int64_t y0, int64_t x1, int64_t y1,
+KernelError ForEachLinePixel(int64_t x0, int64_t y0, int64_t x1, int64_t y1,
                       uint32_t width, uint32_t height, Plot &&plot) {
   if (x0 < INT32_MIN || x0 > INT32_MAX || y0 < INT32_MIN || y0 > INT32_MAX ||
-      x1 < INT32_MIN || x1 > INT32_MAX || y1 < INT32_MIN || y1 > INT32_MAX) return false;
+      x1 < INT32_MIN || x1 > INT32_MAX || y1 < INT32_MIN || y1 > INT32_MAX) return KernelError::OutOfRange;
   const uint64_t dx = static_cast<uint64_t>(x1 > x0 ? x1 - x0 : x0 - x1);
   const uint64_t dy = static_cast<uint64_t>(y1 > y0 ? y1 - y0 : y0 - y1);
   if (dx >= dy && dx) {
@@ -54,7 +57,7 @@ bool ForEachLinePixel(int64_t x0, int64_t y0, int64_t x1, int64_t y1,
       if (x >= 0 && x < width) plot(static_cast<int32_t>(x), static_cast<int32_t>(y));
     }
   }
-  return true;
+  return KernelError::Success;
 }
 
 } // namespace kernel::gfx

@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include <kernel/kerror.hpp>
+
 namespace kernel::user {
 
 struct QueuedMessage {
@@ -24,19 +26,18 @@ struct MessageRing {
   [[nodiscard]] bool Empty() const noexcept { return count == 0; }
   [[nodiscard]] bool Full() const noexcept { return count == N; }
 
-  // Returns false when the ring is full (the message is dropped).
-  bool Push(const QueuedMessage &m) noexcept {
+  // Fails with QueueFull when the ring is full (the message is dropped).
+  KernelError Push(const QueuedMessage &m) noexcept {
     if (count > 0 && m.message == MouseMoveMessage) {
-      QueuedMessage &last = slots[(head + count - 1) % N];
-      if (last.message == MouseMoveMessage && last.hwnd == m.hwnd) {
+      if (QueuedMessage &last = slots[(head + count - 1) % N]; last.message == MouseMoveMessage && last.hwnd == m.hwnd) {
         last = m;
-        return true;
+        return KernelError::Success;
       }
     }
-    if (Full()) return false;
+    if (Full()) return KernelError::QueueFull;
     slots[(head + count) % N] = m;
     ++count;
-    return true;
+    return KernelError::Success;
   }
 
   bool Peek(QueuedMessage &out) const noexcept {
@@ -63,4 +64,4 @@ struct MessageRing {
   }
 };
 
-} // namespace kernel::user
+}// namespace kernel::user

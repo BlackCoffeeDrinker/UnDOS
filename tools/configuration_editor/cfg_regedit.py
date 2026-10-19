@@ -2,6 +2,8 @@
 """
 CFG1 Hive Registry Editor (RegEdit TUI)
 Compatible with kernel configuration_manager.cpp
+
+The tree scrolls with the selection; value edits preserve navigation state.
 """
 
 import curses
@@ -51,6 +53,7 @@ class RegEditApp:
         self.active_pane = 0  # 0: Tree (Left), 1: Values (Right)
         self.tree_flat: List[Tuple[RegistryNode, int]] = []  # (node, depth)
         self.tree_selected_idx = 0
+        self.tree_scroll_offset = 0
         self.val_selected_idx = 0
         self.status_msg = f"Loaded: {filename} ({len(self.config.entries)} entries)"
 
@@ -114,8 +117,13 @@ class RegEditApp:
 
     def save(self):
         self.config.modified = True
-        self.config.save(force=True)
+        try:
+            self.config.save(force=True)
+        except ValueError as error:
+            self.status_msg = str(error)
+            return False
         self.status_msg = f"Saved: {self.filename}"
+        return True
 
     def edit_selected_value(self):
         if not self.tree_flat:
@@ -156,9 +164,10 @@ class RegEditApp:
             return
 
         self.config.set(node.path, new_value, value_type)
-        self.save()
-        self.load_from_config()
-        self.rebuild_tree()
+        if not self.save():
+            self.config.entries[node.path] = (value_type, node.entry.value)
+            return
+        node.entry.value = new_value
 
     def draw(self):
         self.stdscr.clear()
@@ -190,10 +199,20 @@ class RegEditApp:
 
         # Render Left Pane (Tree)
         tree_y_start = 3
-        for idx, (node, depth) in enumerate(self.tree_flat):
-            y = tree_y_start + idx
-            if y >= max_y - 2:
-                break
+        tree_height = max(0, max_y - tree_y_start - 2)
+        self.tree_scroll_offset = min(
+            self.tree_scroll_offset, max(0, len(self.tree_flat) - tree_height)
+        )
+        if tree_height:
+            if self.tree_selected_idx < self.tree_scroll_offset:
+                self.tree_scroll_offset = self.tree_selected_idx
+            elif self.tree_selected_idx >= self.tree_scroll_offset + tree_height:
+                self.tree_scroll_offset = self.tree_selected_idx - tree_height + 1
+
+        visible_nodes = self.tree_flat[self.tree_scroll_offset:self.tree_scroll_offset + tree_height]
+        for row, (node, depth) in enumerate(visible_nodes):
+            idx = self.tree_scroll_offset + row
+            y = tree_y_start + row
 
             prefix = "  " * depth + ("[-] " if node.children and node.expanded else "[+] " if node.children else "    ")
             label = f"{prefix}{node.name}"[:split_x - 1]

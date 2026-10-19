@@ -1,9 +1,12 @@
 
 #pragma once
 
+#include <expected.hpp>
+
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/gfx/edid.hpp>
 #include <kernel/gfx/monitor.hpp>
+#include <kernel/kerror.hpp>
 
 namespace kernel {
 struct KGraphicsAdapter;
@@ -28,9 +31,14 @@ KMonitorCapabilities capabilities_from_edid(const Edid &edid);
 
 // Monitor-approved modes whose geometry USER can represent.
 bool usable_mode(const KObjectPtr<KDisplay> &display, const KDisplayModeInfo &mode) noexcept;
-bool enumerate_mode(const KObjectPtr<KDisplay> &display, uint32_t ordinal, KDisplayModeInfo &out) noexcept;
+// Returns the `ordinal`th usable mode (modeIndex filled in). Errors:
+// InvalidArgument (null display), Unsupported (no GetModeInfo hook),
+// OutOfRange (fewer usable modes).
+// NotFound marks the end of supported-mode enumeration.
+kstd::expected<KDisplayModeInfo, KernelError> enumerate_mode(const KObjectPtr<KDisplay> &display, uint32_t ordinal) noexcept;
 
 // Parses a "<width>x<height>@<refresh>" timing string; the "@<refresh>"
-// suffix is optional and yields a refreshRate of 0 ("any").
-bool parse_timing(const kstd::string_view &text, KMonitorTiming &out);
+// suffix is optional and yields a refreshRate of 0 ("any"). Errors:
+// InvalidFormat (malformed text), ArithmeticOverflow (number too large).
+kstd::expected<KMonitorTiming, KernelError> parse_timing(const kstd::string_view &text);
 }// namespace kernel::gfx

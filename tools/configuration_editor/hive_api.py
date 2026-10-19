@@ -14,6 +14,12 @@ Index entry (32 bytes):
 Name entry (72 bytes):
   keyHash(u64) name[64]
 
+Each index block is immediately followed by its paired name block.
+Name indices are local to that pair. Authoring uses at most 56 entries per
+pair so every key retains its name, with payloads following their own pair.
+Hives with unresolved names can be inspected but not rewritten; restore a
+named backup or regenerate defaults with config.py's author-localmachine.
+
 keyHash is FNV-1a64 of the entry's own short name only, seeded with
 ConfigurationKeyTag::seed. parentHash is 0 for top-level entries, otherwise
 the parent's keyHash.
@@ -69,6 +75,7 @@ class Config:
         # path -> (value_type, value). Folder keys use VALUE_INVALID / None.
         self.entries: Dict[str, Tuple[int, Any]] = {}
         self.modified = False
+        self._unnamed_paths = set()
         if os.path.exists(filename):
             self.load()
 
@@ -129,16 +136,16 @@ class Config:
         data_offset = struct.unpack("<I", header[24:28])[0]
         return version, index_count, name_count, index_offset, name_offset, data_offset
 
-    def _read_index_blocks(self, f, offset: int, count: int) -> list:
+    def _read_index_blocks(self, f, offset: int) -> list:
         entries = []
         current_offset = offset
 
-        while current_offset != 0 and len(entries) < count:
+        while current_offset != 0:
             f.seek(current_offset)
             next_offset = struct.unpack("<I", f.read(4))[0]
             f.read(4)  # reserved
 
-            for _ in range(min(self.INDEX_ENTRIES_PER_BLOCK, count - len(entries))):
+            for _ in range(self.INDEX_ENTRIES_PER_BLOCK):
                 entry_data = f.read(self.INDEX_ENTRY_SIZE)
                 if len(entry_data) < self.INDEX_ENTRY_SIZE:
                     break
@@ -166,18 +173,15 @@ class Config:
 
         return entries
 
-    def _read_name_blocks(self, f, offset: int, count: int) -> Dict[int, Tuple[int, str]]:
-        """Return global name-slot index -> (key_hash, name)."""
-        names: Dict[int, Tuple[int, str]] = {}
-        current_offset = offset
-        idx = 0
-
-        while current_offset != 0 and idx < count:
+    def _read_name_blocks(self, f, index_entries: list) -> Dict[Tuple[int, int], Tuple[int, str]]:
+        """Return (index-block offset, local name slot) -> (key_hash, name)."""
+        names: Dict[Tuple[int, int], Tuple[int, str]] = {}
+        for index_offset in dict.fromkeys(entry["index_block_offset"] for entry in index_entries):
+            current_offset = index_offset + self.PAGE_SIZE
             f.seek(current_offset)
-            next_offset = struct.unpack("<I", f.read(4))[0]
-            f.read(4)  # reserved[4]
+            f.read(8)  # next offset and reserved[4]
 
-            for _ in range(min(self.NAME_ENTRIES_PER_BLOCK, count - idx)):
+            for slot in range(self.NAME_ENTRIES_PER_BLOCK):
                 entry_data = f.read(self.NAME_ENTRY_SIZE)
                 if len(entry_data) < self.NAME_ENTRY_SIZE:
                     break
@@ -185,10 +189,7 @@ class Config:
                 name_bytes = entry_data[8:72]
                 name = name_bytes.split(b"\0", 1)[0].decode("utf-8", errors="replace")
                 if path_hash != 0 or name:
-                    names[idx] = (path_hash, name)
-                idx += 1
-
-            current_offset = next_offset
+                    names[(index_offset, slot)] = (path_hash, name)
 
         return names
 
@@ -212,24 +213,16 @@ class Config:
 
     def load(self) -> None:
         with open(self.filename, "rb") as f:
-            _version, index_count, name_count, index_offset, name_offset, _data_offset = (
+            _version, _index_count, _name_count, index_offset, _name_offset, _data_offset = (
                 self._read_header(f)
             )
-
-            if index_count == 0:
-                self.entries = {}
-                self.modified = False
-                return
-
-            index_entries = self._read_index_blocks(f, index_offset, index_count)
-            names = self._read_name_blocks(f, name_offset, name_count)
-
-            # Rebuild hierarchy from parentHash + short names.
-            # name_index is per paired NAME BLOCK (0..55), not global across
-            # the whole file. For the single-block case used by this tool that
-            # is identical to a global index.
-            by_hash_parent: Dict[Tuple[int, int], str] = {}
-            loaded: List[Tuple[str, int, Any]] = []
+            self.entries = {}
+            self._unnamed_paths = set()
+            unnamed_names = set()
+            # Kernel-created entries need not update the header counts or
+            # link name blocks; follow index blocks and read each paired block.
+            index_entries = self._read_index_blocks(f, index_offset)
+            names = self._read_name_blocks(f, index_entries)
 
             # First pass: resolve each entry's short name and provisional path
             # components. We may need multiple passes to attach under parents.
@@ -237,13 +230,14 @@ class Config:
             for entry in index_entries:
                 short = ""
                 ni = entry["name_index"]
-                if ni != self.NO_NAME_ENTRY and ni in names:
-                    nh, short = names[ni]
+                name_key = (entry["index_block_offset"], ni)
+                if ni != self.NO_NAME_ENTRY and name_key in names:
+                    nh, short = names[name_key]
                     if nh != entry["key_hash"]:
                         short = ""
                 if not short:
-                    # Fallback: cannot reconstruct a meaningful path.
                     short = f"<{entry['key_hash']:016x}>"
+                    unnamed_names.add(short)
 
                 data = b""
                 if entry["value_type"] != self.VALUE_INVALID and entry["data_length"]:
@@ -285,6 +279,10 @@ class Config:
                         self.entries[path] = (vtype, value)
                     break
 
+        self._unnamed_paths = {
+            path for path in self.entries
+            if any(part in unnamed_names for part in self._split_path(path))
+        }
         self.modified = False
 
     def get(self, path: str) -> Optional[Any]:
@@ -368,25 +366,24 @@ class Config:
         n = len(items)
 
         index_offset = self.HEADER_SIZE
-        num_index_blocks = max(1, (n + self.INDEX_ENTRIES_PER_BLOCK - 1) // self.INDEX_ENTRIES_PER_BLOCK)
-        # NAME BLOCKs are paired 1:1 with INDEX BLOCKs in the kernel.
-        num_name_blocks = num_index_blocks
-        # But name slots are limited to 56 per block; if we have more names
-        # than that within a single index block's worth of entries we still
-        # only have one paired name block (kernel limitation). For our
-        # authoring tool keep entries <= 56 so every entry can be named.
-        if n > self.NAME_ENTRIES_PER_BLOCK * num_name_blocks:
-            # Grow block pairs so each entry can have a name slot.
-            need = (n + self.NAME_ENTRIES_PER_BLOCK - 1) // self.NAME_ENTRIES_PER_BLOCK
-            num_index_blocks = max(num_index_blocks, need)
-            num_name_blocks = num_index_blocks
+        entries_per_pair = min(self.INDEX_ENTRIES_PER_BLOCK, self.NAME_ENTRIES_PER_BLOCK)
 
-        # Layout: header, then for each pair: INDEX then NAME, then data.
-        # Kernel expects nameBlockOffset = indexBlockOffset + 4096 for the
-        # first pair, and subsequent pairs appended the same way.
-        # For multi-block, chain nextBlockOffset through index blocks; each
-        # name block is paired immediately after its index block.
-        data_offset = index_offset + num_index_blocks * 2 * self.PAGE_SIZE
+        meta = []
+        for path, value_type, value in items:
+            short = self._short_name(path)
+            kh = key_hash(short)
+            parent = self._parent_path(path)
+            ph = 0 if parent == "/" else key_hash(self._short_name(parent))
+            payload = self._encode_value(value_type, value)
+            meta.append((short, kh, ph, value_type, payload))
+
+        blocks = [meta[i:i + entries_per_pair] for i in range(0, n, entries_per_pair)] or [[]]
+        block_offsets = []
+        end = index_offset
+        for block in blocks:
+            block_offsets.append(end)
+            end += 2 * self.PAGE_SIZE + sum(len(entry[4]) for entry in block)
+        data_offset = index_offset + 2 * self.PAGE_SIZE
 
         header = bytearray(self.HEADER_SIZE)
         header[0:4] = self.MAGIC
@@ -400,50 +397,24 @@ class Config:
         struct.pack_into("<I", header, 24, data_offset)
         f.write(header)
 
-        data_buffer = bytearray()
-
-        # Precompute hashes.
-        meta = []
-        for path, value_type, value in items:
-            short = self._short_name(path)
-            kh = key_hash(short)
-            parent = self._parent_path(path)
-            if parent == "/":
-                ph = 0
-            else:
-                ph = key_hash(self._short_name(parent))
-            payload = self._encode_value(value_type, value)
-            meta.append((path, short, kh, ph, value_type, payload))
-
-        # Write block pairs. Entries are distributed across index blocks;
-        # name entries use the same slot index within the paired name block.
-        for block_idx in range(num_index_blocks):
-            index_block_file_offset = index_offset + block_idx * 2 * self.PAGE_SIZE
+        for block_idx, block in enumerate(blocks):
+            index_block_file_offset = block_offsets[block_idx]
             name_block_file_offset = index_block_file_offset + self.PAGE_SIZE
             next_index = (
-                index_offset + (block_idx + 1) * 2 * self.PAGE_SIZE
-                if block_idx < num_index_blocks - 1
+                block_offsets[block_idx + 1]
+                if block_idx + 1 < len(blocks)
                 else 0
             )
-            next_name = (
-                name_block_file_offset + 2 * self.PAGE_SIZE
-                if block_idx < num_index_blocks - 1
-                else 0
-            )
+            next_name = next_index + self.PAGE_SIZE if next_index else 0
+            data_offset = name_block_file_offset + self.PAGE_SIZE
+            data_buffer = bytearray()
 
             index_block = bytearray(self.PAGE_SIZE)
             name_block = bytearray(self.PAGE_SIZE)
             struct.pack_into("<I", index_block, 0, next_index)
             struct.pack_into("<I", name_block, 0, next_name)
 
-            for i in range(self.INDEX_ENTRIES_PER_BLOCK):
-                entry_idx = block_idx * self.INDEX_ENTRIES_PER_BLOCK + i
-                if entry_idx >= n:
-                    break
-                # Name block only has 56 slots; keep name index in range.
-                name_slot = i if i < self.NAME_ENTRIES_PER_BLOCK else self.NO_NAME_ENTRY
-
-                path, short, kh, ph, value_type, payload = meta[entry_idx]
+            for i, (short, kh, ph, value_type, payload) in enumerate(block):
                 off = 0
                 length = 0
                 if value_type != self.VALUE_INVALID and payload:
@@ -454,29 +425,31 @@ class Config:
                 ie_off = 8 + i * self.INDEX_ENTRY_SIZE
                 struct.pack_into("<Q", index_block, ie_off + 0, kh)
                 struct.pack_into("<Q", index_block, ie_off + 8, ph)
-                name_index_val = name_slot if name_slot != self.NO_NAME_ENTRY else self.NO_NAME_ENTRY
-                struct.pack_into("<H", index_block, ie_off + 16, name_index_val)
+                struct.pack_into("<H", index_block, ie_off + 16, i)
                 index_block[ie_off + 18] = value_type & 0xFF
                 index_block[ie_off + 19] = 0
                 struct.pack_into("<I", index_block, ie_off + 20, off)
                 struct.pack_into("<I", index_block, ie_off + 24, length)
                 struct.pack_into("<I", index_block, ie_off + 28, 0)
 
-                if name_slot != self.NO_NAME_ENTRY:
-                    ne_off = 8 + name_slot * self.NAME_ENTRY_SIZE
-                    struct.pack_into("<Q", name_block, ne_off + 0, kh)
-                    name_bytes = short.encode("utf-8")[:64]
-                    name_bytes = name_bytes + b"\0" * (64 - len(name_bytes))
-                    name_block[ne_off + 8 : ne_off + 72] = name_bytes
+                ne_off = 8 + i * self.NAME_ENTRY_SIZE
+                struct.pack_into("<Q", name_block, ne_off + 0, kh)
+                name_bytes = short.encode("utf-8")[:64]
+                name_bytes = name_bytes + b"\0" * (64 - len(name_bytes))
+                name_block[ne_off + 8 : ne_off + 72] = name_bytes
 
             f.write(index_block)
             f.write(name_block)
-
-        f.write(data_buffer)
+            f.write(data_buffer)
 
     def save(self, force: bool = False) -> None:
         if not self.modified and not force:
             return
+        if self._unnamed_paths.intersection(self.entries):
+            raise ValueError(
+                "Cannot save hive with unresolved key names: saving would change "
+                "their hashes. Restore or regenerate a hive with intact names first."
+            )
         os.makedirs(os.path.dirname(os.path.abspath(self.filename)) or ".", exist_ok=True)
         with open(self.filename, "wb") as f:
             self._write_config(f)

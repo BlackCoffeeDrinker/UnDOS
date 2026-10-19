@@ -14,21 +14,36 @@ struct URect {
   [[nodiscard]] constexpr bool Empty() const noexcept { return right <= left || bottom <= top; }
 
   [[nodiscard]] constexpr URect Intersect(const URect &o) const noexcept {
-    URect r{left > o.left ? left : o.left, top > o.top ? top : o.top,
-            right < o.right ? right : o.right, bottom < o.bottom ? bottom : o.bottom};
-    if (r.Empty()) return {};
+    const URect r{
+        .left = left > o.left ? left : o.left,
+        .top = top > o.top ? top : o.top,
+        .right = right < o.right ? right : o.right,
+        .bottom = bottom < o.bottom ? bottom : o.bottom};
+
+    if (r.Empty()) {
+      return {};
+    }
+
     return r;
   }
 
   [[nodiscard]] constexpr URect Union(const URect &o) const noexcept {
-    if (Empty()) return o;
-    if (o.Empty()) return *this;
-    return {left < o.left ? left : o.left, top < o.top ? top : o.top,
-            right > o.right ? right : o.right, bottom > o.bottom ? bottom : o.bottom};
+    if (Empty()) { return o; }
+    if (o.Empty()) { return *this; }
+
+    return {
+        .left = left < o.left ? left : o.left,
+        .top = top < o.top ? top : o.top,
+        .right = right > o.right ? right : o.right,
+        .bottom = bottom > o.bottom ? bottom : o.bottom};
   }
 
   [[nodiscard]] constexpr URect Offset(int32_t dx, int32_t dy) const noexcept {
-    return {left + dx, top + dy, right + dx, bottom + dy};
+    return {
+        .left = left + dx,
+        .top = top + dy,
+        .right = right + dx,
+        .bottom = bottom + dy};
   }
 
   constexpr bool operator==(const URect &) const noexcept = default;
@@ -54,15 +69,19 @@ struct URegion {
 
   [[nodiscard]] URect Bounds() const noexcept {
     URect b{};
-    for (uint32_t i = 0; i < count; ++i) b = b.Union(rects[i]);
+    for (uint32_t i = 0; i < count; ++i) {
+      b = b.Union(rects[i]);
+    }
     return b;
   }
 
   void Intersect(const URect &clip) noexcept {
     uint32_t out = 0;
     for (uint32_t i = 0; i < count; ++i) {
-      const URect r = rects[i].Intersect(clip);
-      if (!r.Empty()) rects[out++] = r;
+      const auto r = rects[i].Intersect(clip);
+      if (!r.Empty()) {
+        rects[out++] = r;
+      }
     }
     count = out;
   }
@@ -80,10 +99,12 @@ struct URegion {
       }
       URect parts[4];
       uint32_t p = 0;
-      if (r.top < x.top) parts[p++] = {r.left, r.top, r.right, x.top};
-      if (x.bottom < r.bottom) parts[p++] = {r.left, x.bottom, r.right, r.bottom};
-      if (r.left < x.left) parts[p++] = {r.left, x.top, x.left, x.bottom};
-      if (x.right < r.right) parts[p++] = {x.right, x.top, r.right, x.bottom};
+      
+      if (r.top < x.top) parts[p++] = {.left = r.left, .top = r.top, .right = r.right, .bottom = x.top};
+      if (x.bottom < r.bottom) parts[p++] = {.left = r.left, .top = x.bottom, .right = r.right, .bottom = r.bottom};
+      if (r.left < x.left) parts[p++] = {.left = r.left, .top = x.top, .right = x.left, .bottom = x.bottom};
+      if (x.right < r.right) parts[p++] = {.left = x.right, .top = x.top, .right = r.right, .bottom = x.bottom};
+      
       if (n + p > kMaxRects) {
         continue;
       }
@@ -101,13 +122,15 @@ struct URegion {
 [[nodiscard]] inline bool region_merges_to_bounds(const URegion &region) noexcept {
   if (region.count < 2) return true;
   uint64_t covered = 0;
+  
   for (uint32_t i = 0; i < region.count; ++i) {
-    const URect &r = region.rects[i];
+    const auto &r = region.rects[i];
     covered += static_cast<uint64_t>(r.right - r.left) * static_cast<uint64_t>(r.bottom - r.top);
   }
-  const URect b = region.Bounds();
+  
+  const auto b = region.Bounds();
   const uint64_t bounds = static_cast<uint64_t>(b.right - b.left) * static_cast<uint64_t>(b.bottom - b.top);
   return bounds <= covered + covered / 4;
 }
 
-} // namespace kernel::user
+}// namespace kernel::user

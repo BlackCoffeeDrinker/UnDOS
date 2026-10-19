@@ -60,7 +60,7 @@ class borrowed_ptr final {
 
   // Release ownership without unmapping
   pointer release() {
-    pointer tmp = _ptr;
+    const pointer tmp = _ptr;
     _ptr = nullptr;
     _size = 0;
     return tmp;

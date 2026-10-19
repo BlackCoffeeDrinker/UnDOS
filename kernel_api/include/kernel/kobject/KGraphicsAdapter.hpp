@@ -1,11 +1,14 @@
 #pragma once
 
 
+#include <expected.hpp>
+
 #include <kernel/__core.hpp>
 #include <kernel/cfunc.hpp>
 #include <kernel/event_broadcast.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/gfx/structs.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/KSurface.hpp>
 #include <kernel/kobject/ObjectType.hpp>
@@ -61,12 +64,14 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
   }
 
   // Called by kernel to probe and enumerate displays
-  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &)> Probe;// optional: detect hardware
+  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &)> Probe;// optional: detect hardware
 
   /**
-   * The graphics subsystem will call this function to probe and enumerate displays until the index is out of bounds (returns false)
+   * The graphics subsystem calls this with increasing display indices until
+   * it returns KernelError::OutOfRange (no more heads). Any other error
+   * aborts the enumeration of this adapter.
    */
-  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &, const KGraphicsAdapterDisplayEnumInfo &, KGraphicsAdapterDisplayInfo &)> ProbeDisplay;
+  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &, const KGraphicsAdapterDisplayEnumInfo &, KGraphicsAdapterDisplayInfo &)> ProbeDisplay;
 
   /**
    * Called once per head the driver reported from ProbeDisplay, after the
@@ -76,12 +81,13 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
    * The driver binds its per-head entry points on the passed display here:
    * GetModeInfo / SetMode / Enable / Disable / Validate / SetPowerState.
    *
-   * Returning false discards the head.
+   * Returning an error discards the head.
    */
-  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display)> ConfigureDisplay;
+  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display)> ConfigureDisplay;
 
-  // Basic 2D operations (driver may return false to indicate kernel fallback)
-  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &,
+  // Basic 2D operations. KernelError::Unsupported asks the kernel to use its
+  // software fallback; any other error means the request itself failed.
+  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &,
              const KObjectPtr<KSurface> &dst,
              int dstX, int dstY,
              const KObjectPtr<KSurface> &src,
@@ -90,22 +96,22 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
              RasterOp rop)>
       BitBlt;
 
-  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &,
+  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &,
              const KObjectPtr<KSurface> &dst,
              int x, int y, int w, int h,
              uint32_t colorIndex)>
       FillRect;
 
-  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &,
+  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &,
              const KObjectPtr<KSurface> &dst,
              int x0, int y0, int x1, int y1,
              uint32_t colorIndex)>
       DrawLine;
 
   // Optional native-pixel readback for saved-under cursors on non-linear
-  // device surfaces. Return false without modifying color when unsupported.
-  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &,
-             const KObjectPtr<KSurface> &src, int x, int y, uint32_t &color)>
+  // device surfaces. Returns the native pixel value.
+  cfunc<kstd::expected<uint32_t, KernelError>(const KObjectPtr<KGraphicsAdapter> &,
+                                              const KObjectPtr<KSurface> &src, int x, int y)>
       ReadPixel;
 
   // Optional present / flush hook. `rects` is a list of `count` screen

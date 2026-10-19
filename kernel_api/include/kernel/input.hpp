@@ -2,12 +2,14 @@
 #pragma once
 
 #include <chrono.hpp>
+#include <expected.hpp>
 #include <string_view.hpp>
 
 #include <kernel/StaticIdentifier.hpp>
 #include <kernel/__core.hpp>
 #include <kernel/cfunc.hpp>
 #include <kernel/fwd/KDevicePtr.hpp>
+#include <kernel/kerror.hpp>
 
 // Windows2000-style, RTTI-less input event hierarchy: a non-virtual
 // InputEvent base carries a StaticIdentifier-tagged type field (mirrors
@@ -214,6 +216,9 @@ struct KInputReport {
   constexpr KInputReport(const GamepadState &g) noexcept : kind(InputReportKind::Gamepad), gamepad(g) {}
 };
 
+using GamepadStateResult = kstd::expected<GamepadState, KernelError>;
+using InputEventResult = kstd::expected<AnyInputEvent, KernelError>;
+
 }// namespace kernel::input
 
 /**
@@ -222,9 +227,10 @@ struct KInputReport {
  *
  * Initializes the kernel input manager's event ring, gamepad snapshot store
  * and \Device\Input stream. Must be called once at boot before any driver
- * pushes a report.
+ * pushes a report. The ring is usable even when publishing \Device\Input
+ * fails; that failure is returned.
  */
-UNDOS_KERNEL_PUBLIC_V1API(void, KE_INPUT_Initialize);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_INPUT_Initialize);
 
 /**
  * @ingroup INPUT
@@ -247,8 +253,11 @@ UNDOS_KERNEL_PUBLIC_V1API(void, KE_INPUT_Initialize);
  *                    \Device\Input signalled.
  *   Gamepad       -> overwrites that device's snapshot slot and stamps
  *                    `sequence`; the event ring is NOT touched.
+ *
+ * Errors: InvalidArgument (null device or unknown report kind),
+ * ResourceLimitExceeded (device/gamepad table full; the report is dropped).
  */
-UNDOS_KERNEL_PUBLIC_V1API(void, KE_INPUT_PushEvent,
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_INPUT_PushEvent,
                           const kernel::KDevicePtr<kernel::KDevice> &device,
                           const kernel::input::KInputReport &report);
 
@@ -256,12 +265,11 @@ UNDOS_KERNEL_PUBLIC_V1API(void, KE_INPUT_PushEvent,
  * @ingroup INPUT
  * @brief Method KE_INPUT_GetGamepadState
  *
- * Reads the latest snapshot pushed by `device`. Returns false, leaving `out`
- * untouched, if that device has never pushed a Gamepad report.
+ * Returns the latest snapshot pushed by `device`. Errors: InvalidArgument
+ * (null device), NotFound (the device never pushed a Gamepad report).
  */
-UNDOS_KERNEL_PUBLIC_V1API(bool, KE_INPUT_GetGamepadState,
-                          const kernel::KDevicePtr<kernel::KDevice> &device,
-                          kernel::input::GamepadState &out);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::input::GamepadStateResult, KE_INPUT_GetGamepadState,
+                          const kernel::KDevicePtr<kernel::KDevice> &device);
 
 /**
  * @ingroup INPUT
@@ -278,8 +286,9 @@ UNDOS_KERNEL_PUBLIC_V1API(bool, KE_INPUT_DequeueEvent, kernel::input::AnyInputEv
  *
  * Kernel-side consumer (USER raw input thread): pops the oldest event,
  * blocking up to `timeout` (WAIT_INFINITE allowed) until one arrives.
+ * Fails with Timeout when nothing arrived, or with the scheduler's wait error.
  */
-UNDOS_KERNEL_PUBLIC_V1API(bool, KE_INPUT_WaitEvent, kernel::input::AnyInputEvent &out, kstd::chrono::milliseconds timeout);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::input::InputEventResult, KE_INPUT_WaitEvent, kstd::chrono::milliseconds timeout);
 
 /**
  * @ingroup INPUT

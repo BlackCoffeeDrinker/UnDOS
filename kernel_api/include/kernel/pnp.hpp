@@ -2,6 +2,12 @@
 
 #include <kernel/event_broadcast.hpp>
 #include <kernel/io.hpp>
+#include <kernel/kerror.hpp>
+#include <expected.hpp>
+
+namespace kernel {
+using ReportRootDeviceResult = kstd::expected<KDevicePtr<KDevice>, KernelError>;
+}
 
 // NOTE: The KEvent/KPnpEvent dispatch layer was removed for now in favour of
 // raw method calls (e.g. the PnP manager calls driver->StartDevice directly).
@@ -30,7 +36,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    void,
+    kernel::KernelError,
     KE_PNP_ReportNewDevice,
     const kernel::KDevicePtr<kernel::KDeviceBus> &parent, const kernel::KDevicePtr<kernel::KDevice> &pdo);
 
@@ -40,7 +46,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    void,
+    kernel::KernelError,
     KE_PNP_EnumerateBus,
     const kernel::KDevicePtr<kernel::KDeviceBus> &busDevice);
 
@@ -56,7 +62,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * 
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    void,
+    kernel::KernelError,
     KE_PNP_RegisterDeviceInterest,
     kernel::DeviceType type, const kernel::KObjectPtr<kernel::KDriverObject> &driver);
 
@@ -69,7 +75,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * matching driver can bind (used by the HAL to spawn legacy bus PDOs).
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KDevicePtr<kernel::KDevice>,
+    kernel::ReportRootDeviceResult,
     KE_PNP_ReportRootDevice,
     const kstd::string_view &hardwareId);
 
