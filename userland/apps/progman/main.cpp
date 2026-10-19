@@ -20,6 +20,7 @@ struct Shell {
   char configuration[12289]{};
   GroupView views[MaxGroups];
   uint32_t frame{0};
+  uint32_t frameState{0};
   uint32_t workspace{0};
   int active{-1};
   bool running{true};
@@ -421,7 +422,13 @@ void group_proc(const Msg &msg) {
 }
 
 void frame_proc(const Msg &msg) {
-  if (msg.message == WindowMessage_Paint) {
+  if (msg.message == WindowMessage_DisplayChange) {
+    DisplayState state{};
+    if (gui::check(UD_SYS_GetDisplayModeV1(&state), "Query changed display") &&
+        state.active && shell.frameState == 0)
+      gui::move(msg.hwnd, 4, 4, static_cast<int>(state.mode.width) - 8,
+                static_cast<int>(state.mode.height) - 12);
+  } else if (msg.message == WindowMessage_Paint) {
     gui::Paint p(msg.hwnd);
     const Rect area = gui::client(msg.hwnd);
     p.fill(0, 0, area.right, MenuHeight, gui::Face);
@@ -437,6 +444,7 @@ void frame_proc(const Msg &msg) {
       for (int i = 0; i < 4; ++i)
         if (gui::mouse_x(msg) >= MenuLeft[i] && gui::mouse_x(msg) < MenuLeft[i + 1]) { show_menu(i); break; }
   } else if (msg.message == WindowMessage_Size) {
+    shell.frameState = msg.wParam;
     if (shell.workspace) {
       const Rect area = gui::client(msg.hwnd);
       if (area.right > 0 && area.bottom > MenuHeight)

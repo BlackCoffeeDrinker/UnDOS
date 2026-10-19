@@ -4,6 +4,11 @@
 #include "pnp_test_hooks.hpp"
 
 #include <cstdio>
+#include <kernel/input.hpp>
+
+UNDOS_KERNEL_API_DEF bool KE_INPUT_WaitEvent(kernel::input::AnyInputEvent &, kstd::chrono::milliseconds) noexcept {
+  return false;
+}
 
 kernel::KDevicePtr<kernel::KDevice> g_lastReportedPdo;
 

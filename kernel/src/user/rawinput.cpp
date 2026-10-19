@@ -211,4 +211,17 @@ void raw_input_thread(void *) {
 void init_raw_input() noexcept {
   if (!KE_SCHED_CreateThread(raw_input_thread, nullptr, 2)) KE_Print("USER: cannot create raw input worker");
 }
+
+void display_input_changed_locked(bool firstActivation) noexcept {
+  g_input.dragHwnd = 0;
+  g_input.lastClickHwnd = 0;
+  set_capture_locked(0);
+  const auto screen = screen_rect();
+  if (screen.Empty()) return;
+  g_input.mouseX = firstActivation ? screen.right / 2 :
+      g_input.mouseX < 0 ? 0 : g_input.mouseX >= screen.right ? screen.right - 1 : g_input.mouseX;
+  g_input.mouseY = firstActivation ? screen.bottom / 2 :
+      g_input.mouseY < 0 ? 0 : g_input.mouseY >= screen.bottom ? screen.bottom - 1 : g_input.mouseY;
+  cursor_move_locked(g_input.mouseX, g_input.mouseY);
+}
 } // namespace kernel::user

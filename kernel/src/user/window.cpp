@@ -435,6 +435,47 @@ void set_capture_locked(uint32_t hwnd) noexcept {
 }
 uint32_t capture_locked() noexcept { return g_capture; }
 
+void display_changed_locked(uint32_t bpp) noexcept {
+  const auto bounds = screen_rect();
+  // Refit roots bottom-to-top so parent moves update descendants first.
+  auto *bottom = g_top;
+  while (bottom && bottom->below) bottom = bottom->below;
+  for (auto *w = bottom; w; w = w->above) {
+    if (w->parent || bounds.Empty()) continue;
+    const auto fit = [&](URect rect) {
+      const auto width = rect.right - rect.left < bounds.right ? rect.right - rect.left : bounds.right;
+      const auto height = rect.bottom - rect.top < bounds.bottom ? rect.bottom - rect.top : bounds.bottom;
+      const auto left = rect.left < 0 ? 0 : rect.left > bounds.right - width ? bounds.right - width : rect.left;
+      const auto top = rect.top < 0 ? 0 : rect.top > bounds.bottom - height ? bounds.bottom - height : rect.top;
+      return URect{left, top, left + width, top + height};
+    };
+    if (!w->restoredRect.Empty()) w->restoredRect = fit(w->restoredRect);
+    auto target = w->state == 3 ? bounds : fit(w->rect);
+    if (w->state == 2) target = target.Offset(0, bounds.bottom - target.bottom);
+    if (!move_window_locked(*w, target))
+      KE_Print("USER: could not refit window {} after display change", w->hwnd);
+    if (w->state == 0) w->restoredRect = w->rect;
+  }
+  for (auto *w = g_top; w; w = w->below) {
+    w->invalid = client_rect_locked(*w);
+    if (w->paintDC && w->process) {
+      if (auto *slot = w->process->dcTable.Resolve(w->paintDC)) {
+        slot->lock.lock();
+        slot->presentationDirty = false;
+        slot->presentationBounds = {};
+        slot->lock.unlock();
+      }
+    }
+    w->pendingDisplayChange = true;
+    w->displayBpp = bpp;
+    w->displaySize = (static_cast<uint32_t>(bounds.bottom) << 16) |
+                     static_cast<uint32_t>(bounds.right);
+    if (w->queue) wake_locked(*w->queue);
+  }
+  // Also refresh active paint clips when output became inactive.
+  expose_locked(bounds);
+}
+
 void on_process_exit(KProcessObject &proc) noexcept {
   Guard guard;
   for (uint32_t i = 0; i < kMaxWindows; ++i) {

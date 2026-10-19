@@ -19,6 +19,10 @@ enum WindowMessage {
     Paint       = 0x000F,
     Close       = 0x0010,
     Quit        = 0x0012,
+    /** Coalesced display change; wParam=bpp, lParam=height<<16 | width.
+     * An inactive output reports zero dimensions and bpp. Query GetDisplayMode
+     * for the current generation and full state. */
+    DisplayChange = 0x007E,
     NcHitTest   = 0x0084,
     NcMouseMove = 0x00A0,
     /** Single system-box click: wParam=SysMenu (3), lParam signed screen x/y.

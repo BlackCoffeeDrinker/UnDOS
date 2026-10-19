@@ -30,8 +30,10 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * place so existing device contexts stay valid.
  *
  * The subsystem orchestrates the switch as display->Disable, display->SetMode,
- * surface rebind, then display->Enable. Returns false and leaves the previously
- * programmed mode untouched on failure.
+ * surface rebind, then display->Enable. Callers serialize against USER drawing.
+ * Validation/allocation failure leaves the previous mode intact. Enable failure
+ * returns false with isAttachedToDesktop cleared; the programmed surface remains
+ * valid and modeGeneration records the change.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
     bool,

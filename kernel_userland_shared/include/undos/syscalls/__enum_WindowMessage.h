@@ -17,6 +17,12 @@ enum WindowMessage {
     WindowMessage_Paint = 15,
     WindowMessage_Close = 16,
     WindowMessage_Quit = 18,
+    /**
+     * Coalesced display change; wParam=bpp, lParam=height<<16 | width.
+     * An inactive output reports zero dimensions and bpp. Query GetDisplayMode
+     * for the current generation and full state.
+     */
+    WindowMessage_DisplayChange = 126,
     WindowMessage_NcHitTest = 132,
     WindowMessage_NcMouseMove = 160,
     /**

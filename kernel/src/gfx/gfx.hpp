@@ -7,6 +7,7 @@
 
 namespace kernel {
 struct KGraphicsAdapter;
+struct KDisplay;
 }
 
 namespace kernel::gfx {
@@ -25,9 +26,9 @@ const KMonitorCapabilities &default_monitor_capabilities();
 // Derives the capabilities of a PnP head from its EDID timing list.
 KMonitorCapabilities capabilities_from_edid(const Edid &edid);
 
-// Reads the preferred desktop mode from \System\Console\Desktop. Returns
-// false when the key is absent or its Width/Height/Bpp are unparsable.
-bool read_desktop_preference(uint32_t &width, uint32_t &height, uint32_t &bpp, uint32_t &refreshRate);
+// Monitor-approved modes whose geometry USER can represent.
+bool usable_mode(const KObjectPtr<KDisplay> &display, const KDisplayModeInfo &mode) noexcept;
+bool enumerate_mode(const KObjectPtr<KDisplay> &display, uint32_t ordinal, KDisplayModeInfo &out) noexcept;
 
 // Parses a "<width>x<height>@<refresh>" timing string; the "@<refresh>"
 // suffix is optional and yields a refreshRate of 0 ("any").

@@ -64,7 +64,14 @@ bool post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t 
 
 bool geometry_message_locked(const MessageQueue &queue, QueuedMessage &out, bool remove) noexcept {
   for (auto *w = topmost_locked(); w; w = w->below) {
-    if (w->queue != &queue || !w->pendingGeometry) continue;
+    if (w->queue != &queue) continue;
+    if (!w->pendingGeometry && w->pendingDisplayChange) {
+      out = QueuedMessage{w->hwnd, kMsgDisplayChange, w->displayBpp, w->displaySize,
+                          static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
+      if (remove) w->pendingDisplayChange = false;
+      return true;
+    }
+    if (!w->pendingGeometry) continue;
     const bool move = (w->pendingGeometry & 1) != 0;
     out = QueuedMessage{w->hwnd, move ? kMsgMove : kMsgSize, move ? 0 : w->state,
                         move ? w->moveParam : w->sizeParam,

@@ -559,6 +559,72 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CloseFontResourceV1(uint32_t handle)
     return ret;
 }
 
+/**
+ * Enumerates monitor-approved primary-display modes without activating output.
+ * Ordinals start at zero. OKAY with available=0 and a zero mode marks the end.
+ * UNSUPPORTED means no usable primary display.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_EnumDisplayModesV1(uint32_t index, struct DisplayMode* mode, uint32_t* available)
+{
+    uint32_t ret = 0;
+    struct __SYS_GFX_ENUMDISPLAYMODES_V1 __wire;
+    __wire.index = index;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(350), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *mode = __wire.mode;
+    *available = __wire.available;
+    return ret;
+}
+
+/**
+ * Queries the primary display, including its inactive pre-graphics state.
+ * Returns UNSUPPORTED when no primary display exists.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetDisplayModeV1(struct DisplayState* state)
+{
+    uint32_t ret = 0;
+    struct __SYS_GFX_GETDISPLAYMODE_V1 __wire;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(351), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *state = __wire.state;
+    return ret;
+}
+
+/**
+ * Activates or changes the primary display. Any process may call this.
+ * modeId comes from EnumDisplayModes, not its enumeration ordinal.
+ * Existing screen DC handles remain valid; pixels are lost and all windows
+ * repaint. DisplayChange is coalesced per window and survives a full queue.
+ * Invalid/monitor-rejected IDs fail without changing the display. Allocation
+ * failures preserve the previous mode. Hardware enable failure reports UNKNOWN;
+ * GetDisplayMode then reports the programmed mode as inactive.
+ * This call does not persist a preference.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetDisplayModeV1(uint32_t modeId)
+{
+    uint32_t ret = 0;
+    struct __SYS_GFX_SETDISPLAYMODE_V1 __wire;
+    __wire.modeId = modeId;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(352), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
 /** Registers a process-scoped window class; wndProc is opaque and called by userland. */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_RegisterClassV1(const char* name, uint32_t wndProc, COLORREF background)
 {

@@ -159,6 +159,12 @@ bool Vga_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t mod
     return false;
   }
 
+  auto backing = KE_VMM_CreateDirectBacking(ctx_vga->framebuffer, kVgaFramebufferSize);
+  if (!backing) {
+    KE_Print("gfx_vga: could not allocate mode backing, keeping the current mode");
+    return false;
+  }
+
   Vga_ProgramMode12h();
 
   // Clear all four planes: whatever text mode left in the window (font,
@@ -174,10 +180,7 @@ bool Vga_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t mod
     fb[i] = 0;
   }
 
-  outBinding.backing = KE_VMM_CreateDirectBacking(ctx_vga->framebuffer, kVgaFramebufferSize);
-  if (!outBinding.backing) {
-    return false;
-  }
+  outBinding.backing = backing;
 
   outBinding.type = kernel::SurfaceType::Framebuffer;
   outBinding.flags = kernel::SurfaceFlags::TopDown;

@@ -321,7 +321,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
     kernel::driver::LoadLastResortDrivers();
     KE_PNP_WaitForQuiescence();
     // PnP queues Started notifications; the event pump still has to enumerate
-    // the fallback adapter and select a mode before GUI processes can paint.
+    // the fallback adapter. Userland selects the initial graphics mode.
     kernel::gfx::wait_for_drivers();
   }
 

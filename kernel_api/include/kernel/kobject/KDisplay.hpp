@@ -63,6 +63,7 @@ struct KDisplay : KObjectT<KDisplay, 1, TYPE_DISPLAY> {
   // Framebuffer Surface & Active Hardware Mode
   KObjectPtr<KSurface> surface{nullptr};// Active scanout framebuffer surface
   KDisplayModeInfo currentMode{};       // Currently programmed mode hardware timings
+  uint32_t modeGeneration{0};
   DisplayPowerState powerState{DisplayPowerState::PowerOn};
 
   // Driver Execution Entry Points

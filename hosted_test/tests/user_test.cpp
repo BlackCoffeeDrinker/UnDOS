@@ -179,6 +179,7 @@ void UserPresent(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KSurface
 struct Scene {
   KObjectPtr<KDisplay> display;
   KObjectPtr<KSurface> oldSurface;
+  bool oldAttached{};
   KObjectPtr<KGraphicsAdapter> oldAdapter;
   KObjectPtr<KSurface> surface;
   KObjectPtr<KProcessObject> process;
@@ -200,6 +201,7 @@ struct Scene {
     }
     REQUIRE(display);
     oldSurface = display->surface;
+    oldAttached = display->isAttachedToDesktop;
     oldAdapter = display->adapter;
     surface = CreateKObject<KSurface>("user-test-surface");
     process = CreateKObject<KProcessObject>("user-test-process");
@@ -215,6 +217,7 @@ struct Scene {
     surface->sizeInBytes = sizeof(pixels);
     surface->flags = SurfaceFlags::Linear | SurfaceFlags::TopDown;
     display->surface = surface;
+    display->isAttachedToDesktop = true;
     display->adapter = nullptr; // exercise real software raster, not fake success
   }
 
@@ -239,10 +242,76 @@ struct Scene {
     for (uint32_t i = 0; i < count; ++i)
       if (lookup_locked(windows[i]->hwnd)) destroy_window_locked(*windows[i]);
     display->surface = oldSurface;
+    display->isAttachedToDesktop = oldAttached;
     display->adapter = oldAdapter;
   }
 };
 } // namespace
+
+TEST_CASE("USER display changes refit roots and refresh outstanding paint DCs", "[user][scene][mode]") {
+  Scene scene;
+  kernel::user::Guard guard;
+  kernel::user::SceneDrawGuard drawing;
+  auto &root = scene.add({450, 350, 630, 470});
+  auto &maximized = scene.add({0, 0, 640, 480});
+  maximized.state = 3;
+  maximized.restoredRect = {400, 300, 600, 460};
+  auto &child = scene.add({5, 5, 100, 100}, maximized.hwnd);
+  child.state = 3;
+  root.invalid = kernel::user::client_rect_locked(root);
+  uint32_t dc = 0;
+  URect paint{};
+  REQUIRE(kernel::user::begin_paint_locked(*scene.process, root, dc, paint));
+  auto *slot = scene.process->dcTable.Resolve(dc);
+  REQUIRE(slot);
+  slot->presentationDirty = true;
+  slot->presentationBounds = {450, 350, 630, 470};
+
+  scene.surface->width = 320;
+  scene.surface->height = 240;
+  kernel::user::display_changed_locked(8);
+  REQUIRE(root.rect.right <= 320);
+  REQUIRE(root.rect.bottom <= 240);
+  REQUIRE(root.rect.left >= 0);
+  REQUIRE(root.rect.top >= 0);
+  REQUIRE(maximized.rect == URect{0, 0, 320, 240});
+  REQUIRE(maximized.restoredRect.right <= 320);
+  REQUIRE(child.rect == URect{0, 0, 320, 240});
+  REQUIRE(slot->target == scene.surface);
+  REQUIRE_FALSE(slot->presentationDirty);
+  REQUIRE(root.invalid == kernel::user::client_rect_locked(root));
+  for (uint32_t i = 0; i < slot->clipCount; ++i) {
+    REQUIRE(slot->clipRects[i].right <= 320);
+    REQUIRE(slot->clipRects[i].bottom <= 240);
+  }
+  REQUIRE(kernel::user::end_paint_locked(*scene.process, root, dc));
+}
+
+TEST_CASE("USER display notifications coalesce outside a full message ring", "[user][scene][mode]") {
+  Scene scene;
+  kernel::user::Guard guard;
+  kernel::user::SceneDrawGuard drawing;
+  auto &window = scene.add({10, 10, 200, 150});
+  scene.queue.ring = {};
+  for (uint32_t i = 0; i < kernel::user::kQueueSize; ++i)
+    REQUIRE(kernel::user::post_locked(scene.queue, window.hwnd, 0x400, i, 0));
+  REQUIRE_FALSE(kernel::user::post_locked(scene.queue, window.hwnd, 0x400, 0, 0));
+  scene.surface->width = 320;
+  scene.surface->height = 240;
+  kernel::user::display_changed_locked(8);
+  scene.surface->width = 400;
+  scene.surface->height = 300;
+  kernel::user::display_changed_locked(16);
+  kernel::user::QueuedMessage message{};
+  REQUIRE(kernel::user::geometry_message_locked(scene.queue, message, false));
+  REQUIRE(message.message == kernel::user::kMsgDisplayChange);
+  REQUIRE(message.wParam == 16);
+  REQUIRE(message.lParam == ((300u << 16) | 400u));
+  REQUIRE(window.pendingDisplayChange);
+  REQUIRE(kernel::user::geometry_message_locked(scene.queue, message, true));
+  REQUIRE_FALSE(window.pendingDisplayChange);
+  REQUIRE(scene.queue.ring.count == kernel::user::kQueueSize);
+}
 
 TEST_CASE("USER children use parent client placement and clip every ancestor", "[user][scene]") {
   Scene scene;

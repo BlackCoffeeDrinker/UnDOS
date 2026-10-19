@@ -700,6 +700,13 @@ bool Cirrus_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t 
   }
   __builtin_memset(buffer, 0, size);
 
+  auto backing = KE_VMM_CreateDirectBacking(kernel::VirtualAddress::from_ptr(buffer), size);
+  if (!backing) {
+    KE_Free(buffer);
+    KE_Print("gfx_cirrus: could not allocate mode backing, keeping the current mode");
+    return false;
+  }
+
   const auto previousShadow = ctx_cirrus->shadow;
 
   ctx_cirrus->shadow = kernel::VirtualAddress::from_ptr(buffer);
@@ -715,10 +722,7 @@ bool Cirrus_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t 
     KE_Free(previousShadow.as_ptr<void>());
   }
 
-  outBinding.backing = KE_VMM_CreateDirectBacking(ctx_cirrus->shadow, size);
-  if (!outBinding.backing) {
-    return false;
-  }
+  outBinding.backing = backing;
 
   outBinding.type = kernel::SurfaceType::Framebuffer;
   outBinding.flags = kernel::SurfaceFlags::TopDown | kernel::SurfaceFlags::Linear;

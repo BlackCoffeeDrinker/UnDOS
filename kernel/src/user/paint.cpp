@@ -36,8 +36,7 @@ uint32_t pixel_bytes(const KSurface &surface) noexcept {
 
 KObjectPtr<KDisplay> primary_display() noexcept {
   auto display = KE_GFX_GetPrimaryDisplay();
-  if (display && !display->surface) display->surface = KE_GFX_CreateSurfaceForMode(display, 0);
-  if (!display || !display->surface) return nullptr;
+  if (!display || !display->surface || !display->isAttachedToDesktop) return nullptr;
   return display;
 }
 
@@ -140,6 +139,14 @@ void cursor_move_locked(int32_t x, int32_t y) noexcept {
   g_cursor.y = y;
   g_cursor.enabled = true;
   cursor_show_locked();
+}
+
+void cursor_reset_locked() noexcept {
+  g_cursor.drawn = false;
+  g_cursor.adapterSaved = false;
+  g_cursor.surface = nullptr;
+  g_cursor.adapter = nullptr;
+  g_cursor.savedRect = {};
 }
 
 void begin_scene_draw_locked() noexcept {

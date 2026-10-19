@@ -83,6 +83,25 @@ struct DeviceCaps {
     accelFlags: c<uint32_t>;
 };
 
+/** Primary-display mode. modeId is an opaque driver mode ID, not the
+ * enumeration ordinal. Refresh rate is in Hz; colorDepth is bits per pixel. */
+struct DisplayMode {
+    modeId:     c<uint32_t>;
+    width:      c<uint32_t>;
+    height:     c<uint32_t>;
+    colorDepth: c<uint32_t>;
+    refreshHz:  c<uint32_t>;
+};
+
+struct DisplayState {
+    /** Zero before activation or after an output-enable failure. */
+    active:     c<uint32_t>;
+    /** Changes when a new mode is programmed, including enable failure. */
+    generation: c<uint32_t>;
+    /** All zero before the first mode is programmed. */
+    mode:       struct<DisplayMode>;
+};
+
 struct TextMetrics {
     cellWidth:   c<uint32_t>;
     cellHeight:  c<uint32_t>;
@@ -117,7 +136,9 @@ enum RasterOp {
 //  Device Context & Object Lifecycle
 // -----------------------------------------------------
 
-// Zero/Primary selects the screen. Memory/Offscreen creates a DC with no target
+// Zero/Primary selects the active screen; never implicitly programs a mode.
+// Returns UNSUPPORTED until SetDisplayMode activates the display.
+// Memory/Offscreen creates a DC with no target
 // until SelectObject selects a bitmap. Primary cannot combine with these flags.
 // NoAccel bypasses packed acceleration, never the required planar adapter path.
 syscall V1 GFX CreateDC [300] {
@@ -351,6 +372,33 @@ syscall V1 GFX CommitFontUpload [348] {
 
 syscall V1 GFX CloseFontResource [349] {
     handle: IN c<uint32_t>;
+};
+
+/** Enumerates monitor-approved primary-display modes without activating output.
+ * Ordinals start at zero. OKAY with available=0 and a zero mode marks the end.
+ * UNSUPPORTED means no usable primary display. */
+syscall V1 GFX EnumDisplayModes [350] {
+    index:     IN c<uint32_t>;
+    mode:      OUT struct<DisplayMode>;
+    available: OUT c<uint32_t>;
+};
+
+/** Queries the primary display, including its inactive pre-graphics state.
+ * Returns UNSUPPORTED when no primary display exists. */
+syscall V1 GFX GetDisplayMode [351] {
+    state: OUT struct<DisplayState>;
+};
+
+/** Activates or changes the primary display. Any process may call this.
+ * modeId comes from EnumDisplayModes, not its enumeration ordinal.
+ * Existing screen DC handles remain valid; pixels are lost and all windows
+ * repaint. DisplayChange is coalesced per window and survives a full queue.
+ * Invalid/monitor-rejected IDs fail without changing the display. Allocation
+ * failures preserve the previous mode. Hardware enable failure reports UNKNOWN;
+ * GetDisplayMode then reports the programmed mode as inactive.
+ * This call does not persist a preference. */
+syscall V1 GFX SetDisplayMode [352] {
+    modeId: IN c<uint32_t>;
 };
 
 // endregion

@@ -34,6 +34,8 @@
 #include <undos/syscalls/__struct_Point.h>
 #include <undos/syscalls/__struct_Rect.h>
 #include <undos/syscalls/__struct_DeviceCaps.h>
+#include <undos/syscalls/__struct_DisplayMode.h>
+#include <undos/syscalls/__struct_DisplayState.h>
 #include <undos/syscalls/__struct_TextMetrics.h>
 #include <undos/syscalls/__struct_Msg.h>
 #include <undos/syscalls/__struct_PaintInfo.h>
@@ -240,6 +242,39 @@ struct __KRN_GFX_COMMITFONTUPLOAD_V1 {
 
 struct __KRN_GFX_CLOSEFONTRESOURCE_V1 {
     uint32_t handle;
+};
+
+/**
+ * Enumerates monitor-approved primary-display modes without activating output.
+ * Ordinals start at zero. OKAY with available=0 and a zero mode marks the end.
+ * UNSUPPORTED means no usable primary display.
+ */
+struct __KRN_GFX_ENUMDISPLAYMODES_V1 {
+    uint32_t index;
+    struct DisplayMode mode;
+    uint32_t available;
+};
+
+/**
+ * Queries the primary display, including its inactive pre-graphics state.
+ * Returns UNSUPPORTED when no primary display exists.
+ */
+struct __KRN_GFX_GETDISPLAYMODE_V1 {
+    struct DisplayState state;
+};
+
+/**
+ * Activates or changes the primary display. Any process may call this.
+ * modeId comes from EnumDisplayModes, not its enumeration ordinal.
+ * Existing screen DC handles remain valid; pixels are lost and all windows
+ * repaint. DisplayChange is coalesced per window and survives a full queue.
+ * Invalid/monitor-rejected IDs fail without changing the display. Allocation
+ * failures preserve the previous mode. Hardware enable failure reports UNKNOWN;
+ * GetDisplayMode then reports the programmed mode as inactive.
+ * This call does not persist a preference.
+ */
+struct __KRN_GFX_SETDISPLAYMODE_V1 {
+    uint32_t modeId;
 };
 
 /** Registers a process-scoped window class; wndProc is opaque and called by userland. */

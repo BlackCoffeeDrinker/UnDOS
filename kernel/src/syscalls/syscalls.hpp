@@ -40,6 +40,28 @@ SyscallReturnCode handle_BeginFontUpload_V1(__KRN_GFX_BEGINFONTUPLOAD_V1 && args
 SyscallReturnCode handle_AppendFontUpload_V1(__KRN_GFX_APPENDFONTUPLOAD_V1 && args);
 SyscallReturnCode handle_CommitFontUpload_V1(__KRN_GFX_COMMITFONTUPLOAD_V1 && args);
 SyscallReturnCode handle_CloseFontResource_V1(__KRN_GFX_CLOSEFONTRESOURCE_V1 && args);
+/**
+ * Enumerates monitor-approved primary-display modes without activating output.
+ * Ordinals start at zero. OKAY with available=0 and a zero mode marks the end.
+ * UNSUPPORTED means no usable primary display.
+ */
+SyscallReturnCode handle_EnumDisplayModes_V1(__KRN_GFX_ENUMDISPLAYMODES_V1 && args);
+/**
+ * Queries the primary display, including its inactive pre-graphics state.
+ * Returns UNSUPPORTED when no primary display exists.
+ */
+SyscallReturnCode handle_GetDisplayMode_V1(__KRN_GFX_GETDISPLAYMODE_V1 && args);
+/**
+ * Activates or changes the primary display. Any process may call this.
+ * modeId comes from EnumDisplayModes, not its enumeration ordinal.
+ * Existing screen DC handles remain valid; pixels are lost and all windows
+ * repaint. DisplayChange is coalesced per window and survives a full queue.
+ * Invalid/monitor-rejected IDs fail without changing the display. Allocation
+ * failures preserve the previous mode. Hardware enable failure reports UNKNOWN;
+ * GetDisplayMode then reports the programmed mode as inactive.
+ * This call does not persist a preference.
+ */
+SyscallReturnCode handle_SetDisplayMode_V1(__KRN_GFX_SETDISPLAYMODE_V1 && args);
 /** Registers a process-scoped window class; wndProc is opaque and called by userland. */
 SyscallReturnCode handle_RegisterClass_V1(__KRN_USER_REGISTERCLASS_V1 && args);
 /**

@@ -35,6 +35,8 @@
 #include <undos/syscalls/__struct_Point.h>
 #include <undos/syscalls/__struct_Rect.h>
 #include <undos/syscalls/__struct_DeviceCaps.h>
+#include <undos/syscalls/__struct_DisplayMode.h>
+#include <undos/syscalls/__struct_DisplayState.h>
 #include <undos/syscalls/__struct_TextMetrics.h>
 #include <undos/syscalls/__struct_Msg.h>
 #include <undos/syscalls/__struct_PaintInfo.h>
@@ -74,6 +76,9 @@
 #include <undos/syscalls/__syscall_AppendFontUpload_V1.h>
 #include <undos/syscalls/__syscall_CommitFontUpload_V1.h>
 #include <undos/syscalls/__syscall_CloseFontResource_V1.h>
+#include <undos/syscalls/__syscall_EnumDisplayModes_V1.h>
+#include <undos/syscalls/__syscall_GetDisplayMode_V1.h>
+#include <undos/syscalls/__syscall_SetDisplayMode_V1.h>
 #include <undos/syscalls/__syscall_RegisterClass_V1.h>
 #include <undos/syscalls/__syscall_CreateWindow_V1.h>
 #include <undos/syscalls/__syscall_DestroyWindow_V1.h>
@@ -1019,6 +1024,77 @@ static uint32_t Dispatch_CloseFontResource_V1(void *userData, size_t size, uint3
 
   (void)flags;
   const SyscallReturnCode ret = handle_CloseFontResource_V1(kstd::move(args));
+
+  return ret;
+}
+
+static uint32_t Dispatch_EnumDisplayModes_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_GFX_ENUMDISPLAYMODES_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_GFX_ENUMDISPLAYMODES_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_GFX_ENUMDISPLAYMODES_V1 args {};
+  args.index = headerCopy.index;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_EnumDisplayModes_V1(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_ENUMDISPLAYMODES_V1, mode), &args.mode, sizeof(args.mode));
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_ENUMDISPLAYMODES_V1, available), &args.available, sizeof(args.available));
+  return ret;
+}
+
+static uint32_t Dispatch_GetDisplayMode_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_GETDISPLAYMODE_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_GFX_GETDISPLAYMODE_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_GFX_GETDISPLAYMODE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETDISPLAYMODE_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_GETDISPLAYMODE_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_GETDISPLAYMODE_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_GFX_GETDISPLAYMODE_V1 args {};
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_GetDisplayMode_V1(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETDISPLAYMODE_V1, state), &args.state, sizeof(args.state));
+  return ret;
+}
+
+static uint32_t Dispatch_SetDisplayMode_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_SETDISPLAYMODE_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_GFX_SETDISPLAYMODE_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_GFX_SETDISPLAYMODE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETDISPLAYMODE_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_SETDISPLAYMODE_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_SETDISPLAYMODE_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_GFX_SETDISPLAYMODE_V1 args {};
+  args.modeId = headerCopy.modeId;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_SetDisplayMode_V1(kstd::move(args));
 
   return ret;
 }
@@ -2320,6 +2396,9 @@ UNDOS_KERNEL_API_DEF uint32_t KE_SYSCALL_Dispatch(uint32_t number, uint32_t size
     case 347: return Dispatch_AppendFontUpload_V1(data, size, flags);
     case 348: return Dispatch_CommitFontUpload_V1(data, size, flags);
     case 349: return Dispatch_CloseFontResource_V1(data, size, flags);
+    case 350: return Dispatch_EnumDisplayModes_V1(data, size, flags);
+    case 351: return Dispatch_GetDisplayMode_V1(data, size, flags);
+    case 352: return Dispatch_SetDisplayMode_V1(data, size, flags);
     case 400: return Dispatch_RegisterClass_V1(data, size, flags);
     case 401: return Dispatch_CreateWindow_V1(data, size, flags);
     case 402: return Dispatch_DestroyWindow_V1(data, size, flags);

@@ -152,31 +152,4 @@ KMonitorCapabilities capabilities_from_edid(const Edid &edid) {
   return caps;
 }
 
-bool read_desktop_preference(uint32_t &width, uint32_t &height, uint32_t &bpp, uint32_t &refreshRate) {
-  const auto consoleKey = OpenSystemKey("Console");
-  const auto desktopKey = consoleKey ? KE_CM_OpenKey(consoleKey, "Desktop") : nullptr;
-  if (!desktopKey) {
-    KE_Print("GFX: no System\\Console\\Desktop key");
-    return false;
-  }
-
-  uint32_t w = 0, h = 0, b = 0, r = 0;
-  if (!ReadUInt32Value(desktopKey, "Width", w) ||
-      !ReadUInt32Value(desktopKey, "Height", h) ||
-      !ReadUInt32Value(desktopKey, "Bpp", b)) {
-    KE_Print("GFX: System\\Console\\Desktop has an absent or unparsable Width/Height/Bpp");
-    return false;
-  }
-
-  // An absent refresh rate means "whatever the mode reports".
-  if (!ReadUInt32Value(desktopKey, "RefreshRate", r)) {
-    r = 0;
-  }
-
-  width = w;
-  height = h;
-  bpp = b;
-  refreshRate = r;
-  return true;
-}
 }// namespace kernel::gfx

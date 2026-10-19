@@ -3,10 +3,102 @@
 #include <undoscrt/process.h>
 #include <userspace.h>
 #include <undos/syscalls.h>
+#include "display_config.hpp"
 
 extern "C" const char *init_shared_message();
 
 namespace {
+bool init_display() {
+  DisplayState state{};
+  if (UD_SYS_GetDisplayModeV1(&state) != SyscallReturnCode_OKAY) {
+    (void) UD_SYS_PrintV1("init: no primary display is available");
+    return false;
+  }
+  if (state.active) return true;
+  HANDLE file = 0;
+  if (UD_SYS_OpenV1("/System/DISPLAY.CFG", FileOpenMode_Read, &file) != SyscallReturnCode_OKAY) {
+    (void) UD_SYS_PrintV1("init: cannot open /System/DISPLAY.CFG");
+    return false;
+  }
+  char configuration[128]{};
+  uint32_t total = 0;
+  bool readable = true;
+  while (total < sizeof(configuration)) {
+    uint32_t length = sizeof(configuration) - total;
+    if (UD_SYS_ReadV1(file, reinterpret_cast<uint8_t *>(configuration + total), &length) != SyscallReturnCode_OKAY) {
+      readable = false;
+      break;
+    }
+    total += length;
+    if (!length) break;
+  }
+  if (UD_SYS_CloseV1(file) != SyscallReturnCode_OKAY) readable = false;
+  init::DisplayPreference preference{};
+  if (!readable || total == sizeof(configuration) || !init::parse_display_config(configuration, total, preference)) {
+    (void) UD_SYS_PrintV1("init: DISPLAY.CFG must contain width height bpp refreshHz (refresh 0 means any)");
+    return false;
+  }
+  DisplayMode chosen{};
+  bool haveMode = false, matched = false;
+  for (uint32_t index = 0;; ++index) {
+    DisplayMode mode{};
+    uint32_t available = 0;
+    if (UD_SYS_EnumDisplayModesV1(index, &mode, &available) != SyscallReturnCode_OKAY) {
+      (void) UD_SYS_PrintV1("init: display mode enumeration failed");
+      return false;
+    }
+    if (!available) break;
+    if (!haveMode) { chosen = mode; haveMode = true; }
+    if (mode.width == preference.width && mode.height == preference.height &&
+        mode.colorDepth == preference.bpp && (!preference.refreshHz || mode.refreshHz == preference.refreshHz)) {
+      chosen = mode;
+      matched = true;
+      break;
+    }
+  }
+  if (!haveMode) { (void) UD_SYS_PrintV1("init: display has no supported modes"); return false; }
+  if (!matched) (void) UD_SYS_PrintV1("init: configured mode unavailable; explicitly selecting first supported mode");
+  const auto result = UD_SYS_SetDisplayModeV1(chosen.modeId);
+  crt_printf("init: initial display %ux%ux%u@%u ret=%x\n",
+             chosen.width, chosen.height, chosen.colorDepth, chosen.refreshHz, result);
+  (void) UD_SYS_PrintV1(result == SyscallReturnCode_OKAY ?
+                      "init: initial display active" : "init: initial display activation failed");
+  return result == SyscallReturnCode_OKAY;
+}
+
+int init_probe_display() {
+  DisplayState before{}, after{};
+  uint32_t dc = 0;
+  if (UD_SYS_GetDisplayModeV1(&before) != SyscallReturnCode_OKAY || !before.active ||
+      UD_SYS_CreateDCV1("", "", DCInitFlags_Primary, &dc) != SyscallReturnCode_OKAY) return 1;
+  bool switched = false;
+  bool okay = UD_SYS_SetDisplayModeV1(UINT32_MAX) == SyscallReturnCode_INVALID_ARGUMENT;
+  for (uint32_t index = 0; okay; ++index) {
+    DisplayMode mode{};
+    uint32_t available = 0;
+    okay = UD_SYS_EnumDisplayModesV1(index, &mode, &available) == SyscallReturnCode_OKAY;
+    if (!okay || !available) break;
+    if (mode.width == before.mode.width && mode.height == before.mode.height) continue;
+    okay = UD_SYS_SetDisplayModeV1(mode.modeId) == SyscallReturnCode_OKAY;
+    if (!okay) break;
+    DeviceCaps caps{};
+    okay = UD_SYS_GetDeviceCapsV1(dc, &caps) == SyscallReturnCode_OKAY &&
+           caps.width == mode.width && caps.height == mode.height &&
+           caps.colorDepth == mode.colorDepth &&
+           UD_SYS_GetDisplayModeV1(&after) == SyscallReturnCode_OKAY && after.active &&
+           after.generation != before.generation && after.mode.modeId == mode.modeId &&
+           UD_SYS_RectangleV1(dc, 2, 2, 18, 18) == SyscallReturnCode_OKAY;
+    switched = true;
+    break;
+  }
+  const bool restored = UD_SYS_SetDisplayModeV1(before.mode.modeId) == SyscallReturnCode_OKAY;
+  const bool closed = UD_SYS_DeleteDCV1(dc) == SyscallReturnCode_OKAY;
+  okay = okay && restored && closed;
+  if (!switched && okay) (void) UD_SYS_PrintV1("display probe: single-mode adapter (switch skipped)");
+  (void) UD_SYS_PrintV1(okay ? "display probe: PASS" : "display probe: FAIL");
+  return okay ? 0 : 1;
+}
+
 void init_probe_device_control() {
   HANDLE mouse = 0;
   if (UD_SYS_OpenV1("\\Device\\PointerPort0", FileOpenMode_Read, &mouse) == SyscallReturnCode_OKAY) {
@@ -131,6 +223,8 @@ extern "C" int main(int argc, char **argv) {
     (void) UD_SYS_PrintV1("ABI probe: exit status and missing-note rejection PASS");
     return 0;
   }
+  if (!init_display()) return 1;
+  if (argc == 2 && !strcmp(argv[1], "--display-test")) return init_probe_display();
   if (argc < 2 || strcmp(argv[1], "--diagnostic") != 0) {
     init_probe_device_control();
     for (unsigned attempt = 0; attempt < 3; ++attempt) {

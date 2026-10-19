@@ -12,6 +12,9 @@
 #include <kernel/kobject/KSurface.hpp>
 #include <kernel/object_manager.hpp>
 #include <kernel/virtual_memory.hpp>
+#include "../../userland/apps/init/display_config.hpp"
+#include "syscalls/syscalls.hpp"
+#include "user/user.hpp"
 
 namespace {
 
@@ -33,6 +36,7 @@ struct FakeAdapterState {
 
   // --- SetMode ---
   bool setModeShouldSucceed = true;
+  bool enableShouldSucceed = true;
   size_t setModeCalls = 0;
   size_t lastSetModeIndex = 0;
 
@@ -121,7 +125,7 @@ bool FakeSetMode(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
 
 bool FakeEnable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
   RecordCall('E');
-  return true;
+  return g_fakeAdapterState.enableShouldSucceed;
 }
 
 void FakeDisable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
@@ -655,6 +659,163 @@ TEST_CASE("StartAdapter skips a head reporting isPresent = false", "[gfx][mode]"
 // ---------------------------------------------------------------------------
 // Runtime mode changes
 // ---------------------------------------------------------------------------
+
+TEST_CASE("Adapter discovery and mode enumeration never activate graphics", "[gfx][mode]") {
+  EnsureObjectManagerInitialized();
+  ResetFakeAdapterState();
+  g_fakeAdapterState.modeCount = 2;
+  const auto displays = StartFakeAdapter();
+  REQUIRE(displays.size() == 1);
+  const auto &display = displays[0];
+  REQUIRE_FALSE(display->surface);
+  REQUIRE_FALSE(display->isAttachedToDesktop);
+  REQUIRE(display->currentMode.width == 0);
+  REQUIRE(display->modeGeneration == 0);
+  REQUIRE(g_fakeAdapterState.setModeCalls == 0);
+  REQUIRE(CallLog().empty());
+  display->monitorCaps = {};
+  REQUIRE(display->monitorCaps.Add({800, 600, 60}));
+  kernel::KDisplayModeInfo mode{};
+  REQUIRE(kernel::gfx::enumerate_mode(display, 0, mode));
+  REQUIRE(mode.modeIndex == 1);
+  REQUIRE(mode.width == 800);
+  REQUIRE_FALSE(kernel::gfx::enumerate_mode(display, 1, mode));
+  REQUIRE(mode.width == 0);
+  REQUIRE_FALSE(kernel::gfx::enumerate_mode(display, UINT32_MAX, mode));
+  REQUIRE(g_fakeAdapterState.setModeCalls == 0);
+}
+
+TEST_CASE("Display syscalls query inactive state and keep root surfaces across switches", "[gfx][mode]") {
+  EnsureObjectManagerInitialized();
+  const auto created = MakeFakeDisplay();
+  const auto display = KE_GFX_GetPrimaryDisplay();
+  REQUIRE(display);
+  struct Restore {
+    kernel::KObjectPtr<kernel::KDisplay> display;
+    decltype(display->GetModeInfo) getMode;
+    decltype(display->SetMode) setMode;
+    decltype(display->Enable) enable;
+    decltype(display->Disable) disable;
+    kernel::KObjectPtr<kernel::KSurface> surface;
+    kernel::KDisplayModeInfo mode;
+    kernel::KMonitorCapabilities caps;
+    uint32_t generation;
+    bool attached;
+    ~Restore() {
+      kernel::user::Guard guard;
+      kernel::user::cursor_hide_locked();
+      kernel::user::cursor_reset_locked();
+      display->GetModeInfo = getMode;
+      display->SetMode = setMode;
+      display->Enable = enable;
+      display->Disable = disable;
+      display->surface = surface;
+      display->currentMode = mode;
+      display->monitorCaps = caps;
+      display->modeGeneration = generation;
+      display->isAttachedToDesktop = attached;
+    }
+  } restore{display, display->GetModeInfo, display->SetMode, display->Enable, display->Disable,
+            display->surface, display->currentMode, display->monitorCaps,
+            display->modeGeneration, display->isAttachedToDesktop};
+  display->GetModeInfo = created->GetModeInfo;
+  display->SetMode = created->SetMode;
+  display->Enable = created->Enable;
+  display->Disable = created->Disable;
+  display->surface = nullptr;
+  display->currentMode = {};
+  display->monitorCaps = {};
+  display->modeGeneration = 0;
+  display->isAttachedToDesktop = false;
+  g_fakeAdapterState.modeCount = 2;
+
+  __KRN_GFX_GETDISPLAYMODE_V1 query{};
+  REQUIRE(handle_GetDisplayMode_V1(kstd::move(query)) == SyscallReturnCode_OKAY);
+  REQUIRE(query.state.active == 0);
+  REQUIRE(query.state.generation == 0);
+  REQUIRE(query.state.mode.width == 0);
+  REQUIRE(kernel::user::screen_rect().Empty());
+  REQUIRE_FALSE(display->surface);
+
+  __KRN_GFX_ENUMDISPLAYMODES_V1 enumeration{};
+  enumeration.index = 1;
+  REQUIRE(handle_EnumDisplayModes_V1(kstd::move(enumeration)) == SyscallReturnCode_OKAY);
+  REQUIRE(enumeration.available == 1);
+  REQUIRE(enumeration.mode.modeId == 1);
+  REQUIRE(enumeration.mode.width == 800);
+  enumeration.index = UINT32_MAX;
+  REQUIRE(handle_EnumDisplayModes_V1(kstd::move(enumeration)) == SyscallReturnCode_OKAY);
+  REQUIRE(enumeration.available == 0);
+  REQUIRE(enumeration.mode.width == 0);
+  REQUIRE_FALSE(display->surface);
+
+  __KRN_GFX_SETDISPLAYMODE_V1 set{0};
+  REQUIRE(handle_SetDisplayMode_V1(kstd::move(set)) == SyscallReturnCode_OKAY);
+  const auto surface = display->surface;
+  REQUIRE(surface);
+  REQUIRE(display->isAttachedToDesktop);
+  set.modeId = UINT32_MAX;
+  REQUIRE(handle_SetDisplayMode_V1(kstd::move(set)) == SyscallReturnCode_INVALID_ARGUMENT);
+  REQUIRE(display->modeGeneration == 1);
+  set.modeId = 1;
+  REQUIRE(handle_SetDisplayMode_V1(kstd::move(set)) == SyscallReturnCode_OKAY);
+  REQUIRE(display->surface == surface);
+  REQUIRE(surface->width == 800);
+  REQUIRE(handle_GetDisplayMode_V1(kstd::move(query)) == SyscallReturnCode_OKAY);
+  REQUIRE(query.state.active == 1);
+  REQUIRE(query.state.generation == 2);
+  REQUIRE(query.state.mode.modeId == 1);
+  REQUIRE(handle_SetDisplayMode_V1(kstd::move(set)) == SyscallReturnCode_OKAY);
+  REQUIRE(display->modeGeneration == 2);
+}
+
+TEST_CASE("Output enable failure is explicit and leaves valid programmed state", "[gfx][mode]") {
+  EnsureObjectManagerInitialized();
+  const auto display = MakeFakeDisplay();
+  g_fakeAdapterState.enableShouldSucceed = false;
+  REQUIRE_FALSE(KE_GFX_SetDisplayMode(display, 0));
+  REQUIRE(display->surface);
+  REQUIRE(display->currentMode.width == 640);
+  REQUIRE_FALSE(display->isAttachedToDesktop);
+  REQUIRE(display->modeGeneration == 1);
+  g_fakeAdapterState.enableShouldSucceed = true;
+  REQUIRE(KE_GFX_SetDisplayMode(display, 0));
+  REQUIRE(display->isAttachedToDesktop);
+  REQUIRE(display->modeGeneration == 2);
+}
+
+TEST_CASE("Initial programming failure does not invent an active surface", "[gfx][mode]") {
+  EnsureObjectManagerInitialized();
+  const auto display = MakeFakeDisplay();
+  g_fakeAdapterState.setModeShouldSucceed = false;
+  REQUIRE_FALSE(KE_GFX_SetDisplayMode(display, 0));
+  REQUIRE_FALSE(display->surface);
+  REQUIRE_FALSE(display->isAttachedToDesktop);
+  REQUIRE(display->modeGeneration == 0);
+  REQUIRE(CallLog() == "DS");
+}
+
+TEST_CASE("Display configuration is bounded and rejects approximate input", "[gfx][mode]") {
+  init::DisplayPreference pref{};
+  const auto parse = [&](const char *text) {
+    return init::parse_display_config(text, __builtin_strlen(text), pref);
+  };
+  REQUIRE(parse("640 480 8 60\n"));
+  REQUIRE(pref.width == 640);
+  REQUIRE(pref.bpp == 8);
+  REQUIRE(parse(" 800\t600 16 0\r\n"));
+  REQUIRE(pref.refreshHz == 0);
+  REQUIRE_FALSE(parse(""));
+  REQUIRE_FALSE(parse("640 480 8"));
+  REQUIRE_FALSE(parse("640 480 8 60 extra"));
+  REQUIRE_FALSE(parse("640x480 8 60"));
+  REQUIRE_FALSE(parse("0 480 8 60"));
+  REQUIRE_FALSE(parse("32768 480 8 60"));
+  REQUIRE_FALSE(parse("640 480 33 60"));
+  REQUIRE_FALSE(parse("4294967296 480 8 60"));
+  const char embedded[] = "640 480 8 60\0junk";
+  REQUIRE_FALSE(init::parse_display_config(embedded, sizeof(embedded) - 1, pref));
+}
 
 TEST_CASE("KE_GFX_SetDisplayMode reuses the same KSurface across a mode switch", "[gfx][mode]") {
   EnsureObjectManagerInitialized();

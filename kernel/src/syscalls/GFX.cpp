@@ -1,6 +1,7 @@
 #include "stdkrn.hpp"
 #include "syscalls.hpp"
 #include "user/user.hpp"
+#include "gfx/gfx.hpp"
 #include <kernel/gfx/bitmap_font.hpp>
 #include <kernel/gfx/raster_helpers.hpp>
 #include <undos/font/resource.hpp>
@@ -231,6 +232,7 @@ SyscallReturnCode handle_CloseFontResource_V1(__KRN_GFX_CLOSEFONTRESOURCE_V1 &&a
 }
 
 SyscallReturnCode handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
+  args.handle = 0;
   (void) args.driverName;
   (void) args.deviceName;
   const auto flags = static_cast<uint32_t>(args.initFlags);
@@ -243,12 +245,8 @@ SyscallReturnCode handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
   kernel::user::Guard scene;
 
   const auto display = KE_GFX_GetPrimaryDisplay();
-  if (!display && !memory) return SyscallReturnCode_INVALID_ARGUMENT;
-
-  if (!memory && !display->surface) {
-    display->surface = KE_GFX_CreateSurfaceForMode(display, 0);
-    if (!display->surface) return SyscallReturnCode_INVALID_ARGUMENT;
-  }
+  if (!memory && (!display || !display->surface || !display->isAttachedToDesktop))
+    return SyscallReturnCode_UNSUPPORTED;
 
   auto [slot, hdc] = proc->dcTable.Allocate();
   if (!slot) return SyscallReturnCode_OUT_OF_MEMORY;
@@ -262,6 +260,57 @@ SyscallReturnCode handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
 
   args.handle = hdc;
   return SyscallReturnCode_OKAY;
+}
+
+namespace {
+DisplayMode PublicMode(const kernel::KDisplayModeInfo &mode) {
+  return {static_cast<uint32_t>(mode.modeIndex), mode.width, mode.height, mode.bpp, mode.refreshRate};
+}
+}
+
+SyscallReturnCode handle_EnumDisplayModes_V1(__KRN_GFX_ENUMDISPLAYMODES_V1 &&args) {
+  args.mode = {};
+  args.available = 0;
+  kernel::user::Guard scene;
+  const auto display = KE_GFX_GetPrimaryDisplay();
+  if (!display || !display->GetModeInfo || !display->SetMode) return SyscallReturnCode_UNSUPPORTED;
+  kernel::KDisplayModeInfo mode{};
+  if (kernel::gfx::enumerate_mode(display, args.index, mode)) {
+    args.mode = PublicMode(mode);
+    args.available = 1;
+  }
+  return SyscallReturnCode_OKAY;
+}
+
+SyscallReturnCode handle_GetDisplayMode_V1(__KRN_GFX_GETDISPLAYMODE_V1 &&args) {
+  args.state = {};
+  kernel::user::Guard scene;
+  const auto display = KE_GFX_GetPrimaryDisplay();
+  if (!display) return SyscallReturnCode_UNSUPPORTED;
+  args.state.active = display->isAttachedToDesktop ? 1 : 0;
+  args.state.generation = display->modeGeneration;
+  args.state.mode = PublicMode(display->currentMode);
+  return SyscallReturnCode_OKAY;
+}
+
+SyscallReturnCode handle_SetDisplayMode_V1(__KRN_GFX_SETDISPLAYMODE_V1 &&args) {
+  kernel::user::Guard scene;
+  const auto display = KE_GFX_GetPrimaryDisplay();
+  if (!display || !display->GetModeInfo || !display->SetMode) return SyscallReturnCode_UNSUPPORTED;
+  kernel::KDisplayModeInfo mode{};
+  if (!display->GetModeInfo(display, args.modeId, mode) ||
+      !kernel::gfx::usable_mode(display, mode)) return SyscallReturnCode_INVALID_ARGUMENT;
+  if (display->isAttachedToDesktop && display->currentMode.modeIndex == args.modeId)
+    return SyscallReturnCode_OKAY;
+  kernel::user::SceneDrawGuard drawing;
+  const auto generation = display->modeGeneration;
+  const bool changed = KE_GFX_SetDisplayMode(display, args.modeId);
+  if (generation != display->modeGeneration) {
+    kernel::user::cursor_reset_locked();
+    kernel::user::display_input_changed_locked(generation == 0);
+    kernel::user::display_changed_locked(display->isAttachedToDesktop ? mode.bpp : 0);
+  }
+  return changed ? SyscallReturnCode_OKAY : SyscallReturnCode_UNKNOWN;
 }
 
 SyscallReturnCode handle_DeleteDC_V1(__KRN_GFX_DELETEDC_V1 &&args) {

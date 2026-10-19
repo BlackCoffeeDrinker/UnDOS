@@ -33,6 +33,7 @@ constexpr uint32_t kMsgKillFocus = 0x0008;
 constexpr uint32_t kMsgCaptureChanged = 0x0215;
 constexpr uint32_t kMsgPaint = 0x000F;
 constexpr uint32_t kMsgClose = 0x0010;
+constexpr uint32_t kMsgDisplayChange = 0x007E;
 constexpr uint32_t kMsgKeyDown = 0x0100;
 constexpr uint32_t kMsgKeyUp = 0x0101;
 constexpr uint32_t kMsgChar = 0x0102;
@@ -122,6 +123,8 @@ struct KWindowObject : KObjectT<KWindowObject, 1, TYPE_WINDOW> {
   URect painting{}; // validated client damage, restored if painting is interrupted
   uint32_t moveParam{0}, sizeParam{0};
   uint8_t pendingGeometry{0}; // coalesced Move/Size survive a full message ring
+  bool pendingDisplayChange{false};
+  uint32_t displayBpp{0}, displaySize{0};
 
   // z-order, topmost first; the window table holds the reference.
   KWindowObject *above{nullptr};
@@ -167,12 +170,14 @@ bool show_command_locked(KWindowObject &window, uint32_t command) noexcept;
 void cycle_window_locked(bool children, bool reverse) noexcept;
 void set_capture_locked(uint32_t hwnd) noexcept;
 uint32_t capture_locked() noexcept;
+void display_changed_locked(uint32_t bpp) noexcept;
 
 // paint.cpp: fill a screen rectangle through the adapter (planar-safe), clipped to the screen.
 void fill_screen_locked(const URect &r, uint32_t color) noexcept;
 void cursor_hide_locked() noexcept;
 void cursor_show_locked() noexcept;
 void cursor_move_locked(int32_t x, int32_t y) noexcept;
+void cursor_reset_locked() noexcept;
 void begin_scene_draw_locked() noexcept;
 void end_scene_draw_locked() noexcept;
 
@@ -189,6 +194,7 @@ void draw_nonclient_locked(KWindowObject &window) noexcept;
 
 // rawinput.cpp
 void init_raw_input() noexcept;
+void display_input_changed_locked(bool firstActivation) noexcept;
 
 // msgqueue.cpp
 MessageQueue *queue_for_current_locked(bool create) noexcept;

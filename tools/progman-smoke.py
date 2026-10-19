@@ -85,7 +85,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--vga", choices=("cirrus", "std"), default="cirrus")
-    parser.add_argument("--scenario", choices=("launch", "editing", "failure", "windows", "terminal", "terminal-stdio", "terminal-close", "multiple", "font", "abi", "sdk"), default="launch")
+    parser.add_argument("--scenario", choices=("launch", "editing", "failure", "windows", "terminal", "terminal-stdio", "terminal-close", "multiple", "font", "abi", "sdk", "display"), default="launch")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -128,7 +128,28 @@ def main():
                 raise RuntimeError("Program Manager did not become ready within 9 seconds")
             time.sleep(0.2)
             monitor.capture(output / "01-shell.ppm")
-            if args.scenario == "launch":
+            if args.scenario == "display":
+                if not any("init: initial display active" in line for line in lines):
+                    raise RuntimeError("init did not explicitly activate the initial display")
+                monitor.key("f10")
+                for _ in range(6):
+                    monitor.key("down")
+                monitor.key("ret")
+                time.sleep(0.15)
+                monitor.type("/System/init.elf")
+                monitor.key("tab")
+                monitor.type("--display-test")
+                monitor.key("ret")
+                deadline = time.monotonic() + 2
+                while not any("display probe: PASS" in line for line in lines):
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("Userland display switching probe failed")
+                    time.sleep(0.02)
+                if args.vga == "cirrus" and any("single-mode adapter" in line for line in lines):
+                    raise RuntimeError("Cirrus probe did not exercise a runtime mode switch")
+                time.sleep(0.2)
+                monitor.capture(output / "02-restored-display.ppm")
+            elif args.scenario == "launch":
                 monitor.key("f10")
                 time.sleep(0.15)
                 monitor.capture(output / "02-file-menu.ppm")

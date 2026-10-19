@@ -70,6 +70,8 @@ add_executable(KernelTests
         ../../kernel/src/user/msgqueue.cpp
         ../../kernel/src/user/paint.cpp
         ../../kernel/src/user/nonclient.cpp
+        ../../kernel/src/user/rawinput.cpp
+        ../../kernel/src/syscalls/GFX.cpp
 
         object_manager_test.cpp
         subsystem_object_test.cpp
