@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 struct __SYS_IO_OPEN_V1 {
     /** Path to the object to open. */
     const char* path;
@@ -12,7 +14,7 @@ struct __SYS_IO_OPEN_V1 {
     /** Open mode (read, write, append). */
     enum FileOpenMode mode;
     /** Handle to receive the opened object. */
-    uint32_t handle;
+    HANDLE handle;
 };
 
 constexpr size_t   __SYS_IO_OPEN_V1_SIZE = sizeof(struct __SYS_IO_OPEN_V1);

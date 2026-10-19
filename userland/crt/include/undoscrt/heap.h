@@ -13,6 +13,7 @@ extern "C" {
 void *crt_malloc(size_t size);
 void crt_free(void *ptr);
 void *crt_calloc(size_t count, size_t size);
+void *crt_realloc(void *ptr, size_t size);
 
 #ifdef __cplusplus
 }

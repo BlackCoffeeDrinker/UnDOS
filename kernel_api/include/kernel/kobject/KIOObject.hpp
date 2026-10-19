@@ -61,6 +61,8 @@ struct KIOObject : KObjectT<KIOObject, 1, TYPE_IO> {
   uint64_t offset{0};
   OpenMode mode{OpenMode::ReadWrite};
   bool isClosed{false};
+  bool blockingRead{false};
+  bool ownsTtyEndpoint{true};
   void *context{nullptr};
 
   ~KIOObject() override;

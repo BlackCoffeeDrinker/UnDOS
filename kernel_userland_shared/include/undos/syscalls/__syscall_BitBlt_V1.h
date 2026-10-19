@@ -5,13 +5,15 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 struct __SYS_GFX_BITBLT_V1 {
-    uint32_t dstDC;
+    HANDLER dstDC;
     int32_t x;
     int32_t y;
     uint32_t width;
     uint32_t height;
-    uint32_t srcDC;
+    HANDLER srcDC;
     int32_t srcX;
     int32_t srcY;
     enum RasterOp rop;

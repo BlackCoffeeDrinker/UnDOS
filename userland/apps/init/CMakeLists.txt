@@ -7,6 +7,8 @@ set(INIT_SHARED_FILE ${CMAKE_CURRENT_BINARY_DIR}/initlib.so)
 add_custom_command(OUTPUT ${INIT_SHARED_FILE}
     COMMAND ${CMAKE_LINKER} -shared -soname initlib.so -o ${INIT_SHARED_FILE} $<TARGET_OBJECTS:init_shared_object>
     DEPENDS init_shared_object $<TARGET_OBJECTS:init_shared_object>
+    COMMAND_EXPAND_LISTS
+    VERBATIM
 )
 add_custom_target(init_shared DEPENDS ${INIT_SHARED_FILE})
 

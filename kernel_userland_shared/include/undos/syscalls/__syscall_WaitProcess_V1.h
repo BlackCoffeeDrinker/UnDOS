@@ -5,10 +5,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 /** Blocks until a process exits and returns its exit code. Returns TIMEOUT on expiry. */
 struct __SYS_PROC_WAITPROCESS_V1 {
     /** Process handle from CreateProcess. */
-    uint32_t handle;
+    HANDLE handle;
     /** Timeout in milliseconds; 0 polls, WaitTimeout_Infinite never expires. */
     uint32_t timeoutMs;
     /** Exit code of the process. */

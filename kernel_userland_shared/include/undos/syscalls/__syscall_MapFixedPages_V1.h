@@ -5,7 +5,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/** Maps anonymous user pages at a page-aligned address selected by the caller. */
+/**
+ * Maps zeroed anonymous user pages at a page-aligned address selected by the
+ * caller. Read is required; unknown flags and no-access/write-only mappings
+ * reject. i386 does not enforce NX.
+ */
 struct __SYS_MEM_MAPFIXEDPAGES_V1 {
     uint32_t address;
     uint32_t size;

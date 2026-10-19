@@ -35,8 +35,8 @@ struct URect {
 };
 
 // Fixed-capacity list of disjoint rectangles (no allocation). When a
-// subtraction would exceed the capacity the rectangle is kept whole, which
-// errs on the side of drawing too much rather than leaving holes.
+// subtraction would exceed capacity, discard that fragment. Visibility clips
+// must fail closed: drawing too little is preferable to corrupting an occluder.
 struct URegion {
   static constexpr uint32_t kMaxRects = 32;
 
@@ -85,7 +85,6 @@ struct URegion {
       if (r.left < x.left) parts[p++] = {r.left, x.top, x.left, x.bottom};
       if (x.right < r.right) parts[p++] = {x.right, x.top, r.right, x.bottom};
       if (n + p > kMaxRects) {
-        if (n < kMaxRects) result[n++] = r;
         continue;
       }
       for (uint32_t k = 0; k < p; ++k) result[n++] = parts[k];

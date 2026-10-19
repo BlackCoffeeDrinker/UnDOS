@@ -754,6 +754,13 @@ bool Cirrus_ConfigureDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> 
 // endregion
 
 bool Cirrus_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
+  // The generic ISA presence check also sees standard VGA at these ports.
+  // Reject it before PnP reserves the shared VGA aperture for this driver,
+  // otherwise the real VGA fallback cannot acquire its exclusive resources.
+  if (!Cirrus_UnlockExtensions()) {
+    KE_Print("gfx_cirrus: no Cirrus chip detected (SR06 unlock failed)");
+    return false;
+  }
   const auto fdo = KE_IO_CreateDeviceWithContext<CirrusContext>(driver, "Cirrus", kernel::device_type::Video);
   if (!fdo) {
     KE_Print("gfx_cirrus: Failed to create Cirrus device");
@@ -798,6 +805,7 @@ void Cirrus_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
 
   if (!Cirrus_UnlockExtensions()) {
     KE_Print("gfx_cirrus: no Cirrus chip detected (SR06 unlock failed)");
+    KE_RES_ReleaseResources(pdo);
     return;
   }
 

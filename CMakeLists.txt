@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.27)
 
 include(cmake/PreventInSourceBuilds.cmake)
+option(UNDOS_SDK_ONLY "Build only application SDK libraries and installation targets" OFF)
+if (UNDOS_SDK_ONLY AND TESTING_ONLY)
+    message(FATAL_ERROR "UNDOS_SDK_ONLY and TESTING_ONLY are mutually exclusive")
+endif ()
 
 ##
 # This allows to have CMake test the compiler without linking
@@ -35,7 +39,9 @@ include(CheckCXXCompilerFlag)
 include(ExternalProject)
 include(FetchContent)
 
-include(cmake/CPM.cmake)
+if (NOT UNDOS_SDK_ONLY)
+    include(cmake/CPM.cmake)
+endif ()
 include(cmake/StandardProjectSettings.cmake)
 include(cmake/CompilerWarnings.cmake)
 include(cmake/AddDriver.cmake)
@@ -98,13 +104,22 @@ find_program(PYTHON3_EXECUTABLE NAMES python3 REQUIRED)
 add_custom_target(undos-syscalls-gen
         COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/create-syscalls.py tools/syscalls.txt kernel_userland_shared/include/undos/syscalls userland/ kernel/src/syscalls
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        DEPENDS tools/syscalls.txt tools/gfxsyscall.txt tools/usersyscall.txt
+        DEPENDS tools/syscalls.txt tools/gfxsyscall.txt tools/usersyscall.txt tools/abisyscall.txt
         COMMENT "Generating syscalls from tools/syscalls.txt (includes tools/gfxsyscall.txt)"
 )
 
 #######################################################################################################################
 ## Load up third parties
 #######################################################################################################################
+if (UNDOS_SDK_ONLY)
+    add_subdirectory(kernel_userland_shared)
+    add_compile_options(-march=i386)
+    add_subdirectory(userland/crt)
+    add_subdirectory(userland/gui)
+    add_subdirectory(sdk)
+    return()
+endif ()
+
 add_subdirectory(third_party)
 
 #######################################################################################################################
@@ -120,6 +135,7 @@ if (NOT TESTING_ONLY)
     add_subdirectory(drivers)
 
     add_subdirectory(userland)
+    add_subdirectory(sdk)
 
     #######################################################################################################################
     ## Tools that generate the initial image 
@@ -141,6 +157,7 @@ if (NOT TESTING_ONLY)
             COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/bin
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Config
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Fonts
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:native_elf_loader> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/ELoader.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:bus_isa> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/bus_isa.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:disk_ata> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/disk_ata.elf
@@ -155,20 +172,34 @@ if (NOT TESTING_ONLY)
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:input_gameport> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/gameport.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:serial_uart> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/serial.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:term> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/term.elf
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:progman> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/progman.elf
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:demo> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/demo.elf
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:fontloader> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/fontload.elf
+            COMMAND ${PYTHON3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/create-font-fixture.py
+                    ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Fonts/FTEST.TTF
+            COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/userland/apps/progman/PROGMAN.INI ${CMAKE_SOURCE_DIR}/bin/filesystem/System/PROGMAN.INI
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:init> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/init.elf
+            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:abi_test> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abitest.elf
+            COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/userland/apps/abitest/abitest.so ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abitest.so
+            COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/userland/apps/abitest/abinext.so ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abinext.so
+            COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/userland/apps/abitest/abimiss.elf ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abimiss.elf
             COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/userland/apps/init/initlib.so ${CMAKE_SOURCE_DIR}/bin/filesystem/System/initlib.so
             COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/configuration_editor/config.py
                     ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Config/MACHI
                     author-localmachine
             COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py ${PROJECT_SOURCE_DIR}/bin/fat32.img ${PROJECT_SOURCE_DIR}/bin/filesystem
 
-            DEPENDS native_elf_loader bus_isa disk_ata volmgr fs_fat gfx_vga gfx_cirrus input_i8042 input_gameport serial_uart term init init_shared
+            DEPENDS native_elf_loader bus_isa disk_ata volmgr fs_fat gfx_vga gfx_cirrus input_i8042 input_gameport serial_uart term progman demo fontloader init init_shared abi_test abi_test_shared abi_test_dependent abi_test_missing_note
             $<TARGET_FILE:native_elf_loader>
             $<TARGET_FILE:bus_isa> $<TARGET_FILE:disk_ata> $<TARGET_FILE:volmgr> $<TARGET_FILE:fs_fat> $<TARGET_FILE:gfx_vga> $<TARGET_FILE:gfx_cirrus> $<TARGET_FILE:input_i8042> $<TARGET_FILE:input_gameport>
             $<TARGET_FILE:serial_uart>
             $<TARGET_FILE:term> $<TARGET_FILE:init> ${CMAKE_BINARY_DIR}/userland/apps/init/initlib.so
+            $<TARGET_FILE:progman> $<TARGET_FILE:demo>
+            $<TARGET_FILE:fontloader>
+            ${CMAKE_SOURCE_DIR}/userland/apps/progman/PROGMAN.INI
             ${PROJECT_SOURCE_DIR}/tools/configuration_editor/config.py
             ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py
+            ${PROJECT_SOURCE_DIR}/tools/create-font-fixture.py
             BYPRODUCTS ${PROJECT_SOURCE_DIR}/bin/fat32.img
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Config/MACHI
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/bus_isa.elf
@@ -180,6 +211,11 @@ if (NOT TESTING_ONLY)
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/i8042.elf
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/serial.elf
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/term.elf
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/progman.elf
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/demo.elf
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/fontload.elf
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Fonts/FTEST.TTF
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/PROGMAN.INI
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/init.elf
                 ${CMAKE_SOURCE_DIR}/bin/filesystem/System/initlib.so
 

@@ -50,11 +50,13 @@ def kernel_struct_name(sc: Syscall) -> str:
     return f"__KRN_{sc.category}_{sc.name.upper()}_{sc.version}"
 
 
-def generate_file_header(f):
+def generate_file_header(f, include_aliases=False):
     f.write("#pragma once\n\n")
     f.write("// Generated from UnDOS IDL\n\n")
     f.write("#include <stdint.h>\n")
     f.write("#include <stddef.h>\n\n")
+    if include_aliases:
+        f.write("#include <undos/syscalls/__aliases.h>\n\n")
 
 
 def write_doc_comment(f, doc: str, indent: str = ""):

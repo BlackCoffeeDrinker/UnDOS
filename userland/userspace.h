@@ -12,11 +12,11 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateDCV1(const char* driverName, const char*
     uint32_t ret = 0;
     struct __SYS_GFX_CREATEDC_V1 __wire;
     __wire.driverName = driverName;
-    __wire.driverNameLength = driverName ? 1 : 0;
-     while (driverName[__wire.driverNameLength]) __wire.driverNameLength++;
+    __wire.driverNameLength = 0;
+    if (driverName) while (driverName[__wire.driverNameLength]) __wire.driverNameLength++;
     __wire.deviceName = deviceName;
-    __wire.deviceNameLength = deviceName ? 1 : 0;
-     while (deviceName[__wire.deviceNameLength]) __wire.deviceNameLength++;
+    __wire.deviceNameLength = 0;
+    if (deviceName) while (deviceName[__wire.deviceNameLength]) __wire.deviceNameLength++;
     __wire.initFlags = initFlags;
 
     asm volatile(
@@ -29,7 +29,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateDCV1(const char* driverName, const char*
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_DeleteDCV1(uint32_t dc)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_DeleteDCV1(HANDLER dc)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_DELETEDC_V1 __wire;
@@ -44,7 +44,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_DeleteDCV1(uint32_t dc)
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_SelectObjectV1(uint32_t dc, uint32_t object)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SelectObjectV1(HANDLER dc, HANDLER object)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_SELECTOBJECT_V1 __wire;
@@ -60,7 +60,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_SelectObjectV1(uint32_t dc, uint32_t object)
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreatePenV1(enum PenStyle style, uint32_t width, uint32_t color)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreatePenV1(enum PenStyle style, uint32_t width, COLORREF color)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_CREATEPEN_V1 __wire;
@@ -77,7 +77,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreatePenV1(enum PenStyle style, uint32_t widt
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateBrushV1(enum BrushPattern pattern, uint32_t color)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateBrushV1(enum BrushPattern pattern, COLORREF color)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_CREATEBRUSH_V1 __wire;
@@ -101,8 +101,8 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateFontV1(int32_t height, uint32_t weight, 
     __wire.weight = weight;
     __wire.charset = charset;
     __wire.name = name;
-    __wire.nameLength = name ? 1 : 0;
-     while (name[__wire.nameLength]) __wire.nameLength++;
+    __wire.nameLength = 0;
+    if (name) while (name[__wire.nameLength]) __wire.nameLength++;
 
     asm volatile(
         "int $0x80"
@@ -133,7 +133,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateBitmapV1(uint32_t width, uint32_t height
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_DeleteObjectV1(uint32_t object)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_DeleteObjectV1(HANDLER object)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_DELETEOBJECT_V1 __wire;
@@ -148,7 +148,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_DeleteObjectV1(uint32_t object)
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_MoveToV1(uint32_t dc, int32_t x, int32_t y)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_MoveToV1(HANDLER dc, int32_t x, int32_t y)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_MOVETO_V1 __wire;
@@ -165,7 +165,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_MoveToV1(uint32_t dc, int32_t x, int32_t y)
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_LineToV1(uint32_t dc, int32_t x, int32_t y)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_LineToV1(HANDLER dc, int32_t x, int32_t y)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_LINETO_V1 __wire;
@@ -182,7 +182,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_LineToV1(uint32_t dc, int32_t x, int32_t y)
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_RectangleV1(uint32_t dc, int32_t left, int32_t top, int32_t right, int32_t bottom)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_RectangleV1(HANDLER dc, int32_t left, int32_t top, int32_t right, int32_t bottom)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_RECTANGLE_V1 __wire;
@@ -201,7 +201,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_RectangleV1(uint32_t dc, int32_t left, int32_t
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_EllipseV1(uint32_t dc, int32_t left, int32_t top, int32_t right, int32_t bottom)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_EllipseV1(HANDLER dc, int32_t left, int32_t top, int32_t right, int32_t bottom)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_ELLIPSE_V1 __wire;
@@ -220,7 +220,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_EllipseV1(uint32_t dc, int32_t left, int32_t t
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_TextOutV1(uint32_t dc, int32_t x, int32_t y, const char* text)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_TextOutV1(HANDLER dc, int32_t x, int32_t y, const char* text)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_TEXTOUT_V1 __wire;
@@ -228,8 +228,8 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_TextOutV1(uint32_t dc, int32_t x, int32_t y, c
     __wire.x = x;
     __wire.y = y;
     __wire.text = text;
-    __wire.textLength = text ? 1 : 0;
-     while (text[__wire.textLength]) __wire.textLength++;
+    __wire.textLength = 0;
+    if (text) while (text[__wire.textLength]) __wire.textLength++;
 
     asm volatile(
         "int $0x80"
@@ -240,7 +240,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_TextOutV1(uint32_t dc, int32_t x, int32_t y, c
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_BitBltV1(uint32_t dstDC, int32_t x, int32_t y, uint32_t width, uint32_t height, uint32_t srcDC, int32_t srcX, int32_t srcY, enum RasterOp rop)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_BitBltV1(HANDLER dstDC, int32_t x, int32_t y, uint32_t width, uint32_t height, HANDLER srcDC, int32_t srcX, int32_t srcY, enum RasterOp rop)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_BITBLT_V1 __wire;
@@ -263,7 +263,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_BitBltV1(uint32_t dstDC, int32_t x, int32_t y,
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_StretchBltV1(uint32_t dstDC, int32_t x, int32_t y, uint32_t dstWidth, uint32_t dstHeight, uint32_t srcDC, int32_t srcX, int32_t srcY, uint32_t srcWidth, uint32_t srcHeight, enum RasterOp rop)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_StretchBltV1(HANDLER dstDC, int32_t x, int32_t y, uint32_t dstWidth, uint32_t dstHeight, HANDLER srcDC, int32_t srcX, int32_t srcY, uint32_t srcWidth, uint32_t srcHeight, enum RasterOp rop)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_STRETCHBLT_V1 __wire;
@@ -288,7 +288,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_StretchBltV1(uint32_t dstDC, int32_t x, int32_
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_AlphaBlendV1(uint32_t dstDC, uint32_t srcDC, const struct Rect* dstRect, const struct Rect* srcRect, uint8_t alpha)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_AlphaBlendV1(HANDLER dstDC, HANDLER srcDC, const struct Rect* dstRect, const struct Rect* srcRect, uint8_t alpha)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_ALPHABLEND_V1 __wire;
@@ -323,7 +323,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateRegionV1(const struct Rect* rects, uint3
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_SelectClipRegionV1(uint32_t dc, uint32_t region)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SelectClipRegionV1(HANDLER dc, HANDLER region)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_SELECTCLIPREGION_V1 __wire;
@@ -339,7 +339,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_SelectClipRegionV1(uint32_t dc, uint32_t regio
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_CombineRegionV1(uint32_t dest, uint32_t src1, uint32_t src2, enum RegionCombineMode mode)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CombineRegionV1(HANDLER dest, HANDLER src1, HANDLER src2, enum RegionCombineMode mode)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_COMBINEREGION_V1 __wire;
@@ -357,7 +357,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CombineRegionV1(uint32_t dest, uint32_t src1, 
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetViewportOrgV1(uint32_t dc, int32_t x, int32_t y)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetViewportOrgV1(HANDLER dc, int32_t x, int32_t y)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_SETVIEWPORTORG_V1 __wire;
@@ -374,7 +374,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetViewportOrgV1(uint32_t dc, int32_t x, int32
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetWindowOrgV1(uint32_t dc, int32_t x, int32_t y)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetWindowOrgV1(HANDLER dc, int32_t x, int32_t y)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_SETWINDOWORG_V1 __wire;
@@ -391,7 +391,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetWindowOrgV1(uint32_t dc, int32_t x, int32_t
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetTextMetricsV1(uint32_t dc, struct DeviceCaps* metrics)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetTextMetricsV1(HANDLER dc, struct TextMetrics* metrics)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_GETTEXTMETRICS_V1 __wire;
@@ -407,7 +407,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetTextMetricsV1(uint32_t dc, struct DeviceCap
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetBitmapBitsV1(uint32_t bitmap, uint8_t* buffer, uint32_t* bufferLength)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetBitmapBitsV1(HANDLER bitmap, uint8_t* buffer, uint32_t* bufferLength)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_GETBITMAPBITS_V1 __wire;
@@ -426,7 +426,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetBitmapBitsV1(uint32_t bitmap, uint8_t* buff
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetBitmapBitsV1(uint32_t bitmap, const uint8_t* buffer, uint32_t bufferLength)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetBitmapBitsV1(HANDLER bitmap, const uint8_t* buffer, uint32_t bufferLength)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_SETBITMAPBITS_V1 __wire;
@@ -443,7 +443,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetBitmapBitsV1(uint32_t bitmap, const uint8_t
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetDeviceCapsV1(uint32_t dc, struct DeviceCaps* caps)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetDeviceCapsV1(HANDLER dc, struct DeviceCaps* caps)
 {
     uint32_t ret = 0;
     struct __SYS_GFX_GETDEVICECAPS_V1 __wire;
@@ -459,14 +459,114 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetDeviceCapsV1(uint32_t dc, struct DeviceCaps
     return ret;
 }
 
-/** Registers a window class; wndProc is stored opaquely and called by userland. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_RegisterClassV1(const char* name, uint32_t wndProc, uint32_t background)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetDrawColorsV1(uint32_t dc, COLORREF foreground, COLORREF background, uint32_t opaque)
+{
+    uint32_t ret = 0;
+    struct __SYS_GFX_SETDRAWCOLORS_V1 __wire;
+    __wire.dc = dc;
+    __wire.foreground = foreground;
+    __wire.background = background;
+    __wire.opaque = opaque;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(344), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_QueryFontEngineV1(uint32_t* version, uint32_t* capabilities)
+{
+    uint32_t ret = 0;
+    struct __SYS_GFX_QUERYFONTENGINE_V1 __wire;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(345), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *version = __wire.version;
+    *capabilities = __wire.capabilities;
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_BeginFontUploadV1(uint32_t totalBytes, uint32_t* upload)
+{
+    uint32_t ret = 0;
+    struct __SYS_GFX_BEGINFONTUPLOAD_V1 __wire;
+    __wire.totalBytes = totalBytes;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(346), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *upload = __wire.upload;
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_AppendFontUploadV1(uint32_t upload, uint32_t offset, const uint8_t* data, uint32_t dataLength)
+{
+    uint32_t ret = 0;
+    struct __SYS_GFX_APPENDFONTUPLOAD_V1 __wire;
+    __wire.upload = upload;
+    __wire.offset = offset;
+    __wire.data = data;
+    __wire.dataLength = dataLength;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(347), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CommitFontUploadV1(uint32_t upload, uint32_t* face, uint32_t* validationError)
+{
+    uint32_t ret = 0;
+    struct __SYS_GFX_COMMITFONTUPLOAD_V1 __wire;
+    __wire.upload = upload;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(348), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *face = __wire.face;
+    *validationError = __wire.validationError;
+    return ret;
+}
+
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CloseFontResourceV1(uint32_t handle)
+{
+    uint32_t ret = 0;
+    struct __SYS_GFX_CLOSEFONTRESOURCE_V1 __wire;
+    __wire.handle = handle;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(349), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** Registers a process-scoped window class; wndProc is opaque and called by userland. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_RegisterClassV1(const char* name, uint32_t wndProc, COLORREF background)
 {
     uint32_t ret = 0;
     struct __SYS_USER_REGISTERCLASS_V1 __wire;
     __wire.name = name;
-    __wire.nameLength = name ? 1 : 0;
-     while (name[__wire.nameLength]) __wire.nameLength++;
+    __wire.nameLength = 0;
+    if (name) while (name[__wire.nameLength]) __wire.nameLength++;
     __wire.wndProc = wndProc;
     __wire.background = background;
 
@@ -479,17 +579,21 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_RegisterClassV1(const char* name, uint32_t wnd
     return ret;
 }
 
-/** Creates a top-level window owned by the calling thread. */
+/**
+ * Creates a window owned by the calling thread. Child requires a same-process
+ * parent; x/y are relative to its client origin. Otherwise parent must be zero.
+ * Coordinates and dimensions must fit the signed 16-bit screen range.
+ */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateWindowV1(const char* className, const char* title, enum WindowStyle style, int32_t x, int32_t y, int32_t width, int32_t height, uint32_t parent, uint32_t userData, uint32_t* hwnd)
 {
     uint32_t ret = 0;
     struct __SYS_USER_CREATEWINDOW_V1 __wire;
     __wire.className = className;
-    __wire.classNameLength = className ? 1 : 0;
-     while (className[__wire.classNameLength]) __wire.classNameLength++;
+    __wire.classNameLength = 0;
+    if (className) while (className[__wire.classNameLength]) __wire.classNameLength++;
     __wire.title = title;
-    __wire.titleLength = title ? 1 : 0;
-     while (title[__wire.titleLength]) __wire.titleLength++;
+    __wire.titleLength = 0;
+    if (title) while (title[__wire.titleLength]) __wire.titleLength++;
     __wire.style = style;
     __wire.x = x;
     __wire.y = y;
@@ -508,6 +612,11 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateWindowV1(const char* className, const ch
     return ret;
 }
 
+/**
+ * Immediately destroys the window and descendants and removes their queued
+ * messages. Userland dispatches any Destroy callback before this syscall;
+ * no message may subsequently target an invalidated handle.
+ */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_DestroyWindowV1(uint32_t hwnd)
 {
     uint32_t ret = 0;
@@ -523,7 +632,14 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_DestroyWindowV1(uint32_t hwnd)
     return ret;
 }
 
-/** One of ShowCommand. */
+/**
+ * Hide preserves state, Show preserves state, Restore restores saved geometry.
+ * Minimize creates an icon plus label for children in the parent client
+ * (roots retain a desktop caption). Click selects a child icon, double-click
+ * or Enter restores it; Ctrl+Tab/F6 cycles including minimized child icons.
+ * Maximize fills the parent client or desktop. Parent hide/minimize suppresses
+ * descendant visibility.
+ */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_ShowWindowV1(uint32_t hwnd, uint32_t command)
 {
     uint32_t ret = 0;
@@ -576,7 +692,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetWindowRectV1(uint32_t hwnd, struct Rect* re
     return ret;
 }
 
-/** Adds rect (window coordinates) to the invalid area; whole != 0 invalidates everything. */
+/** Adds rect (client coordinates) to the invalid area; whole != 0 invalidates the client. */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_InvalidateRectV1(uint32_t hwnd, const struct Rect* rect, uint32_t whole)
 {
     uint32_t ret = 0;
@@ -594,7 +710,10 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_InvalidateRectV1(uint32_t hwnd, const struct R
     return ret;
 }
 
-/** Returns a DC clipped to the visible part of the invalid area, origin at the window. */
+/**
+ * Returns a DC clipped to the visible invalid client, origin at the client.
+ * Only one paint DC per window; EndPaint must match its hwnd/DC pair.
+ */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_BeginPaintV1(uint32_t hwnd, uint32_t* dc, struct PaintInfo* paint)
 {
     uint32_t ret = 0;
@@ -746,13 +865,92 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_ReleaseCaptureV1(uint32_t unused)
     return ret;
 }
 
+/** Client bounds {0,0,width,height}; empty while minimized. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetClientRectV1(uint32_t hwnd, struct Rect* rect)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_GETCLIENTRECT_V1 __wire;
+    __wire.hwnd = hwnd;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(416), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *rect = __wire.rect;
+    return ret;
+}
+
+/**
+ * Focus a visible same-process window and activate its root. A minimized
+ * child icon may receive focus for Enter/Alt+Space; minimized roots cannot.
+ * hwnd == 0 clears this process's focus without changing activation.
+ * Key lParam: bits 0..7 scan code, 8..10 key_flags, 16..24 modifier_flags.
+ * Char lParam carries the same metadata. Mouse wParam low bits: left=1,right=2;
+ * modifier_flags occupy bits 16..24. Mouse lParam packs signed client x/y.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetFocusV1(uint32_t hwnd)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_SETFOCUS_V1 __wire;
+    __wire.hwnd = hwnd;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(417), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/** Set a same-process window title (at most 63 bytes plus terminator). */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetWindowTextV1(uint32_t hwnd, const char* text)
+{
+    uint32_t ret = 0;
+    struct __SYS_USER_SETWINDOWTEXT_V1 __wire;
+    __wire.hwnd = hwnd;
+    __wire.text = text;
+    __wire.textLength = 0;
+    if (text) while (text[__wire.textLength]) __wire.textLength++;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(418), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/**
+ * Reports usable FPU support, not merely the presence of an x87 unit.
+ * Native is only valid when the kernel initializes and preserves each thread's
+ * FPU state; Emulated is only valid when an instruction emulator is active.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_QueryFpuV1(enum FpuCapability* capability)
+{
+    uint32_t ret = 0;
+    struct __SYS_ABI_QUERYFPU_V1 __wire;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(207), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *capability = __wire.capability;
+    return ret;
+}
+
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_PrintV1(const char* message)
 {
     uint32_t ret = 0;
     struct __SYS_DEBUG_PRINT_V1 __wire;
     __wire.message = message;
-    __wire.messageLength = message ? 1 : 0;
-     while (message[__wire.messageLength]) __wire.messageLength++;
+    __wire.messageLength = 0;
+    if (message) while (message[__wire.messageLength]) __wire.messageLength++;
 
     asm volatile(
         "int $0x80"
@@ -763,23 +961,62 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_PrintV1(const char* message)
     return ret;
 }
 
-/** Creates a new process from the executable at `path`. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateProcessV1(const char* path, const char* argument, uint32_t flags, uint32_t* handle)
+/**
+ * Creates a new process from the executable at `path`. Waits only for loader
+ * mapping/dependency/relocation completion, not constructors or child exit.
+ * There is no timeout: the bounded loader must signal readiness or exit on
+ * failure, so failure never leaves a running child without an owned handle.
+ * On failure no process handle is returned.
+ * Successful handles may be closed immediately without terminating the child.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateProcessV1(const char* path, const char* argument, uint32_t flags, HANDLE* handle)
 {
     uint32_t ret = 0;
     struct __SYS_PROC_CREATEPROCESS_V1 __wire;
     __wire.path = path;
-    __wire.pathLength = path ? 1 : 0;
-     while (path[__wire.pathLength]) __wire.pathLength++;
+    __wire.pathLength = 0;
+    if (path) while (path[__wire.pathLength]) __wire.pathLength++;
     __wire.argument = argument;
-    __wire.argumentLength = argument ? 1 : 0;
-     while (argument[__wire.argumentLength]) __wire.argumentLength++;
+    __wire.argumentLength = 0;
+    if (argument) while (argument[__wire.argumentLength]) __wire.argumentLength++;
     __wire.flags = flags;
 
     asm volatile(
         "int $0x80"
         : "=a"(ret)
         : "a"(200), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *handle = __wire.handle;
+    return ret;
+}
+
+/**
+ * Creates a process with explicit standard streams. Same path, argument,
+ * flags, readiness and handle ownership contract as CreateProcessV1.
+ * Only these streams are inherited; unrelated handles are not inherited.
+ * Handles are caller-local open I/O objects, stdin requires read access,
+ * stdout/stderr require write access. Child handles are independent copies.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateProcessV2(const char* path, const char* argument, uint32_t flags, HANDLE stdinHandle, HANDLE stdoutHandle, HANDLE stderrHandle, HANDLE* handle)
+{
+    uint32_t ret = 0;
+    struct __SYS_PROC_CREATEPROCESS_V2 __wire;
+    __wire.path = path;
+    __wire.pathLength = 0;
+    if (path) while (path[__wire.pathLength]) __wire.pathLength++;
+    __wire.argument = argument;
+    __wire.argumentLength = 0;
+    if (argument) while (argument[__wire.argumentLength]) __wire.argumentLength++;
+    __wire.flags = flags;
+    __wire.stdinHandle = stdinHandle;
+    __wire.stdoutHandle = stdoutHandle;
+    __wire.stderrHandle = stderrHandle;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(208), "b"(sizeof __wire), "c"(&__wire), "d"(0)
         : "memory");
 
     *handle = __wire.handle;
@@ -823,7 +1060,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_ExitV1(uint32_t exitCode)
 }
 
 /** Blocks until a waitable handle (event or process) is signalled. Returns TIMEOUT on expiry. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_WaitForObjectV1(uint32_t handle, uint32_t timeoutMs)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_WaitForObjectV1(HANDLE handle, uint32_t timeoutMs)
 {
     uint32_t ret = 0;
     struct __SYS_PROC_WAITFOROBJECT_V1 __wire;
@@ -840,7 +1077,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_WaitForObjectV1(uint32_t handle, uint32_t time
 }
 
 /** Blocks until a process exits and returns its exit code. Returns TIMEOUT on expiry. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_WaitProcessV1(uint32_t handle, uint32_t timeoutMs, uint32_t* exitCode)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_WaitProcessV1(HANDLE handle, uint32_t timeoutMs, uint32_t* exitCode)
 {
     uint32_t ret = 0;
     struct __SYS_PROC_WAITPROCESS_V1 __wire;
@@ -858,7 +1095,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_WaitProcessV1(uint32_t handle, uint32_t timeou
 }
 
 /** Creates an event object. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateEventV1(enum EventFlags flags, uint32_t* handle)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateEventV1(enum EventFlags flags, HANDLE* handle)
 {
     uint32_t ret = 0;
     struct __SYS_PROC_CREATEEVENT_V1 __wire;
@@ -875,7 +1112,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateEventV1(enum EventFlags flags, uint32_t*
 }
 
 /** Signals an event. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetEventV1(uint32_t handle)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetEventV1(HANDLE handle)
 {
     uint32_t ret = 0;
     struct __SYS_PROC_SETEVENT_V1 __wire;
@@ -890,7 +1127,10 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetEventV1(uint32_t handle)
     return ret;
 }
 
-/** Allocates `size` bytes of pages with the given protection. */
+/**
+ * Allocates zeroed pages, rounding size up to 4096. Read is required; unknown
+ * flags and no-access/write-only mappings reject. i386 does not enforce NX.
+ */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_AllocatePagesV1(uint32_t size, enum MemoryProtectFlags flags, uint32_t* address)
 {
     uint32_t ret = 0;
@@ -908,7 +1148,10 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_AllocatePagesV1(uint32_t size, enum MemoryProt
     return ret;
 }
 
-/** Frees a previously allocated page range. */
+/**
+ * Frees a whole eager anonymous region; base must be page aligned and size,
+ * rounded up to 4096, must equal the region size. No partial frees or aliases.
+ */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_FreePagesV1(uint32_t address, uint32_t size)
 {
     uint32_t ret = 0;
@@ -925,7 +1168,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_FreePagesV1(uint32_t address, uint32_t size)
     return ret;
 }
 
-/** Changes the protection of an existing page range (e.g. mark executable). */
+/** Reserved: currently rejects with INVALID_ARGUMENT (no partial VAD updates). */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_ProtectV1(uint32_t address, uint32_t size, enum MemoryProtectFlags flags)
 {
     uint32_t ret = 0;
@@ -943,7 +1186,11 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_ProtectV1(uint32_t address, uint32_t size, enu
     return ret;
 }
 
-/** Maps anonymous user pages at a page-aligned address selected by the caller. */
+/**
+ * Maps zeroed anonymous user pages at a page-aligned address selected by the
+ * caller. Read is required; unknown flags and no-access/write-only mappings
+ * reject. i386 does not enforce NX.
+ */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_MapFixedPagesV1(uint32_t address, uint32_t size, enum MemoryProtectFlags flags)
 {
     uint32_t ret = 0;
@@ -961,13 +1208,13 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_MapFixedPagesV1(uint32_t address, uint32_t siz
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_OpenV1(const char* path, enum FileOpenMode mode, uint32_t* handle)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_OpenV1(const char* path, enum FileOpenMode mode, HANDLE* handle)
 {
     uint32_t ret = 0;
     struct __SYS_IO_OPEN_V1 __wire;
     __wire.path = path;
-    __wire.pathLength = path ? 1 : 0;
-     while (path[__wire.pathLength]) __wire.pathLength++;
+    __wire.pathLength = 0;
+    if (path) while (path[__wire.pathLength]) __wire.pathLength++;
     __wire.mode = mode;
 
     asm volatile(
@@ -980,7 +1227,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_OpenV1(const char* path, enum FileOpenMode mod
     return ret;
 }
 
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_CloseV1(uint32_t handle)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CloseV1(HANDLE handle)
 {
     uint32_t ret = 0;
     struct __SYS_IO_CLOSE_V1 __wire;
@@ -996,7 +1243,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CloseV1(uint32_t handle)
 }
 
 /** Reads data from an open object handle into `data`. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_ReadV1(uint32_t handle, uint8_t* data, uint32_t* dataLength)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_ReadV1(HANDLE handle, uint8_t* data, uint32_t* dataLength)
 {
     uint32_t ret = 0;
     struct __SYS_IO_READ_V1 __wire;
@@ -1016,7 +1263,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_ReadV1(uint32_t handle, uint8_t* data, uint32_
 }
 
 /** Writes data from `data` to an open object handle. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_WriteV1(uint32_t handle, const uint8_t* data, uint32_t dataLength)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_WriteV1(HANDLE handle, const uint8_t* data, uint32_t dataLength)
 {
     uint32_t ret = 0;
     struct __SYS_IO_WRITE_V1 __wire;
@@ -1033,8 +1280,27 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_WriteV1(uint32_t handle, const uint8_t* data, 
     return ret;
 }
 
+/** Writes bytes and reports short writes. V1 remains available unchanged. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_WriteV2(HANDLE handle, const uint8_t* data, uint32_t dataLength, uint32_t* transferred)
+{
+    uint32_t ret = 0;
+    struct __SYS_IO_WRITE_V2 __wire;
+    __wire.handle = handle;
+    __wire.data = data;
+    __wire.dataLength = dataLength;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(226), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *transferred = __wire.transferred;
+    return ret;
+}
+
 /** Sends a control code to the device behind an open handle. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_ControlV1(uint32_t handle, uint32_t code, const uint8_t* input, uint32_t inputLength, uint8_t* output, uint32_t* outputLength)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_ControlV1(HANDLE handle, uint32_t code, const uint8_t* input, uint32_t inputLength, uint8_t* output, uint32_t* outputLength)
 {
     uint32_t ret = 0;
     struct __SYS_IO_CONTROL_V1 __wire;
@@ -1056,8 +1322,28 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_ControlV1(uint32_t handle, uint32_t code, cons
     return ret;
 }
 
+/**
+ * Returns the opaque handle assigned to a standard stream, or
+ * INVALID_ARGUMENT if that stream is not available to the calling process.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetStdHandleV1(enum StdHandleSelector selector, HANDLE* handle)
+{
+    uint32_t ret = 0;
+    struct __SYS_IO_GETSTDHANDLE_V1 __wire;
+    __wire.selector = selector;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(225), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *handle = __wire.handle;
+    return ret;
+}
+
 /** Creates a paired virtual TTY returning source and sink handles. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateV1(uint32_t* sourceHandle, uint32_t* sinkHandle)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateV1(HANDLE* sourceHandle, HANDLE* sinkHandle)
 {
     uint32_t ret = 0;
     struct __SYS_TTY_CREATE_V1 __wire;
@@ -1074,7 +1360,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateV1(uint32_t* sourceHandle, uint32_t* sin
 }
 
 /** Sets TTY configuration flags and window dimensions. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetConfigV1(uint32_t handle, enum TtyModeFlags flags, uint16_t rows, uint16_t cols)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetConfigV1(HANDLE handle, enum TtyModeFlags flags, uint16_t rows, uint16_t cols)
 {
     uint32_t ret = 0;
     struct __SYS_TTY_SETCONFIG_V1 __wire;
@@ -1093,7 +1379,7 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_SetConfigV1(uint32_t handle, enum TtyModeFlags
 }
 
 /** Retrieves TTY configuration flags and window dimensions. */
-UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetConfigV1(uint32_t handle, enum TtyModeFlags* flags, uint16_t* rows, uint16_t* cols)
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetConfigV1(HANDLE handle, enum TtyModeFlags* flags, uint16_t* rows, uint16_t* cols)
 {
     uint32_t ret = 0;
     struct __SYS_TTY_GETCONFIG_V1 __wire;

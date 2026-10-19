@@ -3,33 +3,26 @@
  * libundoscrt.
  *
  * The ELF loader (userland/elf_loader/loader.cpp) hands control to `_start`
- * with ESP pointing at a small block it built on the new process's stack:
+ * with ESP pointing at a 16-byte-aligned entry frame:
  *
- *     esp+0: argc   (uint32_t)
- *     esp+4: argv   (pointer to argc+1 char* entries, NULL-terminated)
+ *     esp+0: zero (reserved)
+ *     esp+4: pointer to UnDOSStartupInfoV1
  *
- * `_start` grabs both words before doing anything else that could touch the
- * stack, calls the application's `main(argc, argv)`, and terminates the
- * process with its return value via the PROC Exit syscall -- there is no
- * caller to return to.
+ * The CRT owns initialization, main, and normal process cleanup.
  */
 .text
 .global _start
 .type _start, @function
 _start:
-    movl (%esp), %eax      /* argc */
-    movl 4(%esp), %ebx     /* argv */
-
-    pushl %ebx
+    cld
+    movl 4(%esp), %eax
+    subl $12, %esp
     pushl %eax
-    call main
-
-    /* main's return value (eax) becomes the process exit code. */
-    pushl %eax
-    call crt_exit
+    call crt_start
 
     /* crt_exit never returns; hang here if it somehow does. */
 .Lhang:
     hlt
     jmp .Lhang
 .size _start, . - _start
+.section .note.GNU-stack,"",@progbits

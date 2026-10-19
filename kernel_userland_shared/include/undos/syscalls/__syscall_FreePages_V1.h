@@ -5,7 +5,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/** Frees a previously allocated page range. */
+/**
+ * Frees a whole eager anonymous region; base must be page aligned and size,
+ * rounded up to 4096, must equal the region size. No partial frees or aliases.
+ */
 struct __SYS_MEM_FREEPAGES_V1 {
     /** Base address of the region to free. */
     uint32_t address;

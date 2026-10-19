@@ -4,20 +4,26 @@
 #include <undoscrt/process.h>
 #include <userspace.h>
 #include <undos/syscalls.h>
+#include <undosgui/gui.hpp>
 
 namespace {
 
-constexpr uint16_t TERM_ROWS = 25;
-constexpr uint16_t TERM_COLS = 80;
+constexpr uint16_t TERM_ROWS = 23;
+constexpr uint16_t TERM_COLS = 72;
 
 constexpr int32_t CHAR_WIDTH = 8;
 constexpr int32_t CHAR_HEIGHT = 16;
 constexpr int32_t TERM_PADDING = 4;
 
 struct TerminalState {
-  uint32_t sourceHandle{0};
-  uint32_t sinkHandle{0};
-  uint32_t hdc{0};
+  HANDLE sourceHandle{0};
+  HANDLE sinkHandle{0};
+  uint32_t hwnd{0};
+  bool running{true};
+  uint16_t commandLength{0};
+  uint32_t modifiers{0};
+  HANDLE childHandle{0};
+  bool childRunning{false};
 
   char grid[TERM_ROWS][TERM_COLS]{};
   uint8_t cursorRow{0};
@@ -145,11 +151,10 @@ struct TerminalState {
   }
 
   void render() {
-    if (hdc == 0) return;
-
-    // Clear background
-    (void) UD_SYS_RectangleV1(hdc, 0, 0, TERM_COLS * CHAR_WIDTH + 2 * TERM_PADDING,
-                              TERM_ROWS * CHAR_HEIGHT + 2 * TERM_PADDING);
+    gui::Paint paint(hwnd);
+    if (!paint) return;
+    const Rect area = gui::client(hwnd);
+    paint.fill(0, 0, area.right, area.bottom, 0);
 
     // Draw text rows
     char lineBuf[TERM_COLS + 1];
@@ -166,13 +171,105 @@ struct TerminalState {
       if (lastNonSpace >= 0) {
         int32_t x = TERM_PADDING;
         int32_t y = TERM_PADDING + r * CHAR_HEIGHT;
-        (void) UD_SYS_TextOutV1(hdc, x, y, lineBuf);
+        paint.text(x, y, lineBuf, 7, 0);
       }
     }
   }
 };
 
 static TerminalState s_term;
+
+void drain_output() {
+  uint8_t buffer[256];
+  bool changed = false;
+  for (;;) {
+    uint32_t count = sizeof(buffer);
+    if (!gui::check(UD_SYS_ReadV1(s_term.sourceHandle, buffer, &count), "Read terminal")) {
+      s_term.running = false;
+      return;
+    }
+    if (!count) break;
+    changed = true;
+    for (uint32_t i = 0; i < count; ++i) s_term.put_char(static_cast<char>(buffer[i]));
+  }
+  if (changed) gui::invalidate(s_term.hwnd);
+}
+
+void output(const char *text) {
+  if (!gui::check(UD_SYS_WriteV1(s_term.sinkHandle, reinterpret_cast<const uint8_t *>(text),
+                                static_cast<uint32_t>(strlen(text))), "Write terminal"))
+    s_term.running = false;
+}
+
+void command(char *line) {
+  if (char *end = strchr(line, '\n')) *end = 0;
+  if (char *end = strchr(line, '\r')) *end = 0;
+  if (!strcmp(line, "clear")) {
+    s_term.init();
+    s_term.cursorRow = s_term.cursorCol = 0;
+  } else if (!strcmp(line, "help")) {
+    output("help, clear, echo TEXT, run /System/APP.elf [ARGS], exit\n"
+           "run connects child stdin/stdout/stderr here until it exits.\n");
+  } else if (!strcmp(line, "exit")) s_term.running = false;
+  else if (!strncmp(line, "echo ", 5)) { output(line + 5); output("\n"); }
+  else if (!strncmp(line, "run ", 4)) {
+    char *path = line + 4;
+    char *args = strchr(path, ' ');
+    if (args) *args++ = 0;
+    HANDLE handle = 0;
+    if (UD_SYS_CreateProcessV2(path, args ? args : "", ProcessFlags_None,
+                              s_term.sinkHandle, s_term.sinkHandle, s_term.sinkHandle,
+                              &handle) != SyscallReturnCode_OKAY)
+      output("Cannot launch program. Check absolute path and serial log.\n");
+    else {
+      s_term.childHandle = handle;
+      s_term.childRunning = true;
+      (void) UD_SYS_PrintV1("term: foreground child started");
+    }
+  } else if (*line) output("Unknown command. Type help.\n");
+  if (s_term.running && !s_term.childRunning) output("> ");
+}
+
+void terminal_input(uint8_t ch) {
+  if (!s_term.childRunning && (ch >= 32 || ch == '\t') && s_term.commandLength >= 240) {
+    gui::message("Command too long", "Commands are limited to 240 characters.");
+    gui::check(UD_SYS_SetFocusV1(s_term.hwnd), "SetFocus");
+    return;
+  }
+  if (ch == '\n' || ch == 0x15) s_term.commandLength = 0;
+  else if (ch == '\b') { if (s_term.commandLength) --s_term.commandLength; }
+  else ++s_term.commandLength;
+  if (!gui::check(UD_SYS_WriteV1(s_term.sourceHandle, &ch, 1), "Terminal input")) {
+    s_term.running = false;
+    return;
+  }
+  drain_output();
+  if (ch == '\n' && !s_term.childRunning) {
+    char line[256]{};
+    uint32_t n = sizeof(line) - 1;
+    if (gui::check(UD_SYS_ReadV1(s_term.sinkHandle, reinterpret_cast<uint8_t *>(line), &n), "Read command")) {
+      line[n] = 0;
+      command(line);
+      drain_output();
+    }
+  }
+}
+
+void procedure(const Msg &msg) {
+  if (msg.message == WindowMessage_Close) s_term.running = false;
+  else if (msg.message == WindowMessage_Paint) s_term.render();
+  else if (msg.message == WindowMessage_Size) gui::invalidate(msg.hwnd);
+  else if (msg.message == WindowMessage_KeyDown || msg.message == WindowMessage_KeyUp) {
+    s_term.modifiers = msg.lParam >> 16;
+    if (msg.message == WindowMessage_KeyUp) return;
+    if (msg.wParam == 13) terminal_input('\n');
+    else if (msg.wParam == 8) terminal_input('\b');
+    else if (msg.wParam == 9) terminal_input('\t');
+    else if (msg.wParam == 'U' && (s_term.modifiers & 0x0c)) terminal_input(0x15);
+    else if (msg.wParam == 'D' && (s_term.modifiers & 0x0c) && s_term.childRunning) terminal_input(0x04);
+  } else if (msg.message == WindowMessage_Char && msg.wParam >= 32 && msg.wParam < 127 &&
+             !(s_term.modifiers & 0x3c)) terminal_input(static_cast<uint8_t>(msg.wParam));
+}
 
 } // namespace
 
@@ -188,32 +285,57 @@ extern "C" int main(int argc, char **argv) {
     return 1;
   }
 
-  // 2. Configure window dimensions (25 rows, 80 cols) and flags (echo, canonical, CRLF)
-  (void) UD_SYS_SetConfigV1(s_term.sourceHandle,
+  if (!gui::check(UD_SYS_SetConfigV1(s_term.sourceHandle,
                             static_cast<TtyModeFlags>(TtyModeFlags_Echo | TtyModeFlags_Canonical | TtyModeFlags_CrToNl | TtyModeFlags_NlToCrNl),
-                            TERM_ROWS, TERM_COLS);
+                            TERM_ROWS, TERM_COLS), "Configure TTY")) return 1;
 
-  // 3. Create primary graphics DC
-  (void) UD_SYS_CreateDCV1("", "", DCInitFlags_Primary, &s_term.hdc);
+  if (!gui::register_class("Terminal", procedure, 0)) return 1;
+  s_term.hwnd = gui::window("Terminal", "UnDOS Terminal", 24, 34,
+                            TERM_COLS * CHAR_WIDTH + 2 * TERM_PADDING + 6,
+                            TERM_ROWS * CHAR_HEIGHT + 2 * TERM_PADDING + 24);
+  if (!s_term.hwnd) return 1;
+  gui::check(UD_SYS_SetFocusV1(s_term.hwnd), "SetFocus");
 
   // Initial banner into the terminal
-  const char *banner = "\033[2JUnDOS Virtual Terminal (term.elf)\r\n"
-                       "Virtual TTY subsystem connected. Type commands below.\r\n\r\n";
-  (void) UD_SYS_WriteV1(s_term.sourceHandle, reinterpret_cast<const uint8_t *>(banner), static_cast<uint32_t>(strlen(banner)));
+  output("UnDOS windowed virtual terminal\nType help for commands.\n\n> ");
+  drain_output();
 
-  // 4. Initial render
-  s_term.render();
-
-  uint8_t buffer[256];
-  for (int iter = 0; iter < 100; ++iter) {
-    uint32_t nRead = sizeof(buffer);
-    if (UD_SYS_ReadV1(s_term.sourceHandle, buffer, &nRead) == SyscallReturnCode_OKAY && nRead > 0) {
-      for (uint32_t i = 0; i < nRead; ++i) {
-        s_term.put_char(static_cast<char>(buffer[i]));
-      }
-      s_term.render();
+  Msg msg{};
+  while (s_term.running) {
+    if (!s_term.childRunning) {
+      if (!gui::next(msg)) break;
+      gui::dispatch(msg);
+      continue;
+    }
+    const auto message = UD_SYS_PeekMessageV1(&msg, 1);
+    if (message == SyscallReturnCode_OKAY) {
+      if (msg.message == WindowMessage_Quit) break;
+      gui::dispatch(msg);
+    } else if (message != SyscallReturnCode_TIMEOUT) {
+      gui::check(message, "PeekMessage");
+      break;
+    }
+    drain_output();
+    uint32_t status = 0;
+    const auto waited = UD_SYS_WaitProcessV1(s_term.childHandle, 10, &status);
+    if (waited == SyscallReturnCode_OKAY) {
+      drain_output();
+      gui::check(UD_SYS_CloseV1(s_term.childHandle), "Close process");
+      s_term.childRunning = false;
+      (void) UD_SYS_PrintV1("term: foreground child exited");
+      s_term.commandLength = 0;
+      output("\n> ");
+      drain_output();
+    } else if (waited != SyscallReturnCode_TIMEOUT) {
+      gui::check(waited, "WaitProcess");
+      break;
     }
   }
+  if (s_term.childRunning) gui::check(UD_SYS_CloseV1(s_term.childHandle), "Close process");
+  gui::destroy(s_term.hwnd);
+  gui::check(UD_SYS_CloseV1(s_term.sourceHandle), "Close TTY source");
+  gui::check(UD_SYS_CloseV1(s_term.sinkHandle), "Close TTY sink");
+  (void) UD_SYS_PrintV1("term: session ended");
 
   return 0;
 }

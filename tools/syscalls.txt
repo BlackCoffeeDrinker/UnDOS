@@ -3,6 +3,13 @@
 // table (see kernel/src/gfx/gfx_management.cpp and kernel/src/syscalls/GFX.cpp).
 include "gfxsyscall.txt";
 include "usersyscall.txt";
+include "abisyscall.txt";
+
+/** Opaque 32-bit process-local object handle, not a pointer or a stream index.
+ * Zero is a valid handle. Passing a handle to another process requires an
+ * explicit inheritance or duplication operation; its numeric value may change.
+ * Syscall status determines whether an output handle is valid. */
+using HANDLE = c<uint32_t>;
 
 enum SyscallReturnCode {
     OKAY = 0,
@@ -31,17 +38,39 @@ syscall V1 DEBUG Print [100] {
 };
 
 /**
- * Creates a new process from the executable at `path`.
+ * Creates a new process from the executable at `path`. Waits only for loader
+ * mapping/dependency/relocation completion, not constructors or child exit.
+ * There is no timeout: the bounded loader must signal readiness or exit on
+ * failure, so failure never leaves a running child without an owned handle.
+ * On failure no process handle is returned.
+ * Successful handles may be closed immediately without terminating the child.
  */
 syscall V1 PROC CreateProcess [200] {
-    /** Path to the executable to load. */
+    /** Nonempty executable path, at most 255 bytes; becomes argv[0] verbatim. */
     path: IN string;
-    /** Command-line argument string passed to the new process. */
+    /** At most 1023 bytes, split on ASCII whitespace outside double quotes.
+     * Quotes are removed, adjacent fragments concatenate, "" is an empty arg.
+     * Backslashes are literal; unmatched quotes/NULs reject. Max argc is 32. */
     argument: IN string;
-    /** Combination of ProcessFlags controlling the new process. */
+    /** Only ProcessFlags_None (zero) is supported; all other flags reject. */
     flags: IN c<uint32_t>;
     /** Handle to the new process (waitable with WaitProcess). */
-    handle: OUT c<uint32_t>;
+    handle: OUT HANDLE;
+};
+
+/** Creates a process with explicit standard streams. Same path, argument,
+ * flags, readiness and handle ownership contract as CreateProcessV1.
+ * Only these streams are inherited; unrelated handles are not inherited.
+ * Handles are caller-local open I/O objects, stdin requires read access,
+ * stdout/stderr require write access. Child handles are independent copies. */
+syscall V2 PROC CreateProcess [208] {
+    path: IN string;
+    argument: IN string;
+    flags: IN c<uint32_t>;
+    stdinHandle: IN HANDLE;
+    stdoutHandle: IN HANDLE;
+    stderrHandle: IN HANDLE;
+    handle: OUT HANDLE;
 };
 
 /** Retrieves information about a running or exited process. */
@@ -68,7 +97,7 @@ enum WaitTimeout {
 /** Blocks until a waitable handle (event or process) is signalled. Returns TIMEOUT on expiry. */
 syscall V1 PROC WaitForObject [203] {
     /** Handle to wait on. */
-    handle: IN c<uint32_t>;
+    handle: IN HANDLE;
     /** Timeout in milliseconds; 0 polls, WaitTimeout_Infinite never expires. */
     timeoutMs: IN c<uint32_t>;
 };
@@ -76,7 +105,7 @@ syscall V1 PROC WaitForObject [203] {
 /** Blocks until a process exits and returns its exit code. Returns TIMEOUT on expiry. */
 syscall V1 PROC WaitProcess [204] {
     /** Process handle from CreateProcess. */
-    handle: IN c<uint32_t>;
+    handle: IN HANDLE;
     /** Timeout in milliseconds; 0 polls, WaitTimeout_Infinite never expires. */
     timeoutMs: IN c<uint32_t>;
     /** Exit code of the process. */
@@ -93,13 +122,13 @@ syscall V1 PROC CreateEvent [205] {
     /** Combination of EventFlags. */
     flags: IN flags<EventFlags>;
     /** Handle to the new event. */
-    handle: OUT c<uint32_t>;
+    handle: OUT HANDLE;
 };
 
 /** Signals an event. */
 syscall V1 PROC SetEvent [206] {
     /** Event handle. */
-    handle: IN c<uint32_t>;
+    handle: IN HANDLE;
 };
 
 /** Memory protection bit flags, mirrors kernel::vmm::ProtectFlags. */
@@ -114,7 +143,8 @@ enum MemoryProtectFlags {
     Execute    = 4,
 };
 
-/** Allocates `size` bytes of pages with the given protection. */
+/** Allocates zeroed pages, rounding size up to 4096. Read is required; unknown
+ * flags and no-access/write-only mappings reject. i386 does not enforce NX. */
 syscall V1 MEM AllocatePages [210] {
     /** Number of bytes to allocate (rounded up to a page boundary). */
     size: IN c<uint32_t>;
@@ -124,7 +154,8 @@ syscall V1 MEM AllocatePages [210] {
     address: OUT c<uint32_t>;
 };
 
-/** Frees a previously allocated page range. */
+/** Frees a whole eager anonymous region; base must be page aligned and size,
+ * rounded up to 4096, must equal the region size. No partial frees or aliases. */
 syscall V1 MEM FreePages [211] {
     /** Base address of the region to free. */
     address: IN c<uint32_t>;
@@ -132,7 +163,7 @@ syscall V1 MEM FreePages [211] {
     size: IN c<uint32_t>;
 };
 
-/** Changes the protection of an existing page range (e.g. mark executable). */
+/** Reserved: currently rejects with INVALID_ARGUMENT (no partial VAD updates). */
 syscall V1 MEM Protect [212] {
     /** Base address of the region to reprotect. */
     address: IN c<uint32_t>;
@@ -142,7 +173,9 @@ syscall V1 MEM Protect [212] {
     flags: IN enum<MemoryProtectFlags>;
 };
 
-/** Maps anonymous user pages at a page-aligned address selected by the caller. */
+/** Maps zeroed anonymous user pages at a page-aligned address selected by the
+ * caller. Read is required; unknown flags and no-access/write-only mappings
+ * reject. i386 does not enforce NX. */
 syscall V1 MEM MapFixedPages [213] {
     address: IN c<uint32_t>;
     size: IN c<uint32_t>;
@@ -168,18 +201,18 @@ syscall V1 IO Open [220] {
     /** Open mode (read, write, append). */
     mode: IN flags<FileOpenMode>;
     /** Handle to receive the opened object. */
-    handle: OUT c<uint32_t>;
+    handle: OUT HANDLE;
 };
 
 syscall V1 IO Close [221] {
     /** Open handle to close. */
-    handle: IN c<uint32_t>;
+    handle: IN HANDLE;
 };
 
 /** Reads data from an open object handle into `data`. */
 syscall V1 IO Read [222] {
     /** Open handle to read from. */
-    handle: IN c<uint32_t>;
+    handle: IN HANDLE;
     /** Buffer that receives the data read. */
     data: OUT buffer<c<uint8_t>>;
 };
@@ -187,9 +220,20 @@ syscall V1 IO Read [222] {
 /** Writes data from `data` to an open object handle. */
 syscall V1 IO Write [223] {
     /** Open handle to write to. */
-    handle: IN c<uint32_t>;
+    handle: IN HANDLE;
     /** Buffer containing the data to write. */
     data: IN buffer<c<uint8_t>>;
+};
+
+/** Writes bytes and reports short writes. V1 remains available unchanged. */
+syscall V2 IO Write [226] {
+    /** Open handle with write access. */
+    handle: IN HANDLE;
+    /** Bytes to write, at most 4096 per call. Use null with length zero for an empty write. */
+    data: IN buffer<c<uint8_t>>;
+    /** Actual bytes accepted, at most dataLength. Zero on handler failure;
+     * undefined if dispatcher validation rejects the call before the handler. */
+    transferred: OUT c<uint32_t>;
 };
 
 /** Device control codes understood by IO Control. */
@@ -260,13 +304,30 @@ struct IoctlGamepadCaps {
 /** Sends a control code to the device behind an open handle. */
 syscall V1 IO Control [224] {
     /** Open handle to the device. */
-    handle: IN c<uint32_t>;
+    handle: IN HANDLE;
     /** One of IoControlCode. */
     code: IN c<uint32_t>;
     /** Code-specific input payload. */
     input: IN buffer<c<uint8_t>>;
     /** Code-specific output payload; receives the number of bytes written. */
     output: OUT buffer<c<uint8_t>>;
+};
+
+/** Identifies one of the calling process's standard streams. */
+enum StdHandleSelector {
+    Stdin = 0,
+    Stdout = 1,
+    Stderr = 2,
+};
+
+/** Returns the opaque handle assigned to a standard stream, or
+ * INVALID_ARGUMENT if that stream is not available to the calling process.
+ */
+syscall V1 IO GetStdHandle [225] {
+    /** One of StdHandleSelector. */
+    selector: IN enum<StdHandleSelector>;
+    /** Process-local opaque handle for the selected stream. */
+    handle: OUT HANDLE;
 };
 
 flags TtyModeFlags : uint32_t {
@@ -278,13 +339,13 @@ flags TtyModeFlags : uint32_t {
 
 /** Creates a paired virtual TTY returning source and sink handles. */
 syscall V1 TTY Create [250] {
-    sourceHandle: OUT c<uint32_t>;
-    sinkHandle: OUT c<uint32_t>;
+    sourceHandle: OUT HANDLE;
+    sinkHandle: OUT HANDLE;
 };
 
 /** Sets TTY configuration flags and window dimensions. */
 syscall V1 TTY SetConfig [251] {
-    handle: IN c<uint32_t>;
+    handle: IN HANDLE;
     flags: IN flags<TtyModeFlags>;
     rows: IN c<uint16_t>;
     cols: IN c<uint16_t>;
@@ -292,9 +353,8 @@ syscall V1 TTY SetConfig [251] {
 
 /** Retrieves TTY configuration flags and window dimensions. */
 syscall V1 TTY GetConfig [252] {
-    handle: IN c<uint32_t>;
+    handle: IN HANDLE;
     flags: OUT flags<TtyModeFlags>;
     rows: OUT c<uint16_t>;
     cols: OUT c<uint16_t>;
 };
-

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/** Adds rect (window coordinates) to the invalid area; whole != 0 invalidates everything. */
+/** Adds rect (client coordinates) to the invalid area; whole != 0 invalidates the client. */
 struct __SYS_USER_INVALIDATERECT_V1 {
     uint32_t hwnd;
     struct Rect rect;

@@ -5,8 +5,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 struct __SYS_GFX_SETBITMAPBITS_V1 {
-    uint32_t bitmap;
+    HANDLER bitmap;
     const uint8_t* buffer;
     uint32_t bufferLength;
 };

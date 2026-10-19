@@ -75,12 +75,14 @@ void destroy_user_address_space(AddressSpace &as) noexcept {
 }
 
 void *allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept {
+  if (!size || size > SIZE_MAX - (g_page_size - 1)) return nullptr;
   const size_t count = (size + g_page_size - 1) / g_page_size;
   const PhysicalAddress phys = HAL_PMM_AllocateFrames(count);
   if (!phys) return nullptr;
 
   // Use the AddressSpace's VAD tree to find a free region
-  void *virt = KE_VMM_AllocateRegion(as, size, flags);
+  const ProtectFlags map_flags = (&as != &g_kernel_address_space) ? (flags | ProtectFlags::USER) : flags;
+  void *virt = KE_VMM_AllocateRegion(as, count * g_page_size, map_flags);
   if (!virt) {
     HAL_PMM_FreeFrames(phys, count);
     return nullptr;
@@ -103,13 +105,31 @@ void *allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcep
 
   bool ok = true;
   const VirtualAddress v_addr = VirtualAddress::from_ptr(virt);
-  const ProtectFlags map_flags = (&as != &g_kernel_address_space) ? (flags | ProtectFlags::USER) : flags;
-  for (size_t i = 0; i < count; ++i) {
-    if (!HAL_VMM_MapPage(v_addr + i * g_page_size, phys + i * g_page_size, map_flags)) {
+  size_t mapped = 0;
+  for (; mapped < count; ++mapped) {
+    const auto page = v_addr + mapped * g_page_size;
+    if (!HAL_VMM_MapPage(page, phys + mapped * g_page_size, map_flags | ProtectFlags::WRITE)) {
       ok = false;
       break;
     }
-    HAL_SMP_ShootdownTlb(v_addr + i * g_page_size);
+    HAL_SMP_ShootdownTlb(page);
+    __builtin_memset(page.as_ptr(), 0, g_page_size);
+    if (!has_flag(map_flags, ProtectFlags::WRITE)) {
+      HAL_VMM_UnmapPage(page);
+      HAL_SMP_ShootdownTlb(page);
+      if (!HAL_VMM_MapPage(page, phys + mapped * g_page_size, map_flags)) {
+        ok = false;
+        break;
+      }
+    }
+    HAL_SMP_ShootdownTlb(page);
+  }
+  if (!ok) {
+    for (size_t i = 0; i < mapped; ++i) {
+      HAL_VMM_UnmapPage(v_addr + i * g_page_size);
+      HAL_SMP_ShootdownTlb(v_addr + i * g_page_size);
+    }
+    KE_VMM_FreeRegion(as, virt);
   }
 
   if (switch_as) {
@@ -147,24 +167,36 @@ bool map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, ProtectF
     irq_state = HAL_CPU_SaveAndDisableInterrupts();
     HAL_VMM_SwitchAddressSpace(as.translation_root);
   }
+  const ProtectFlags map_flags = flags | ProtectFlags::USER;
+  const ProtectFlags initialize_flags = map_flags | ProtectFlags::WRITE;
   size_t mapped = 0;
   for (; mapped < aligned; mapped += g_page_size) {
-    if (HAL_VMM_GetPhysicalAddress(VirtualAddress(address + mapped))) break;
+    const VirtualAddress page(address + mapped);
+    if (HAL_VMM_GetPhysicalAddress(page)) break;
     const auto phys = HAL_PMM_AllocateFrames(1);
     if (!phys) break;
-    if (!HAL_VMM_MapPage(VirtualAddress(address + mapped), phys,
-                         flags | ProtectFlags::USER | ProtectFlags::WRITE)) {
+    if (!HAL_VMM_MapPage(page, phys, initialize_flags)) {
       HAL_PMM_FreeFrames(phys, 1);
       break;
     }
-    HAL_SMP_ShootdownTlb(VirtualAddress(address + mapped));
-    __builtin_memset(reinterpret_cast<void *>(address + mapped), 0, g_page_size);
+    HAL_SMP_ShootdownTlb(page);
+    __builtin_memset(page.as_ptr(), 0, g_page_size);
+    if (!has_flag(map_flags, ProtectFlags::WRITE)) {
+      HAL_VMM_UnmapPage(page);
+      HAL_SMP_ShootdownTlb(page);
+      if (!HAL_VMM_MapPage(page, phys, map_flags)) {
+        HAL_PMM_FreeFrames(phys, 1);
+        break;
+      }
+      HAL_SMP_ShootdownTlb(page);
+    }
   }
   if (mapped != aligned) {
     for (size_t offset = 0; offset < mapped; offset += g_page_size) {
       const auto page = VirtualAddress(address + offset);
       const auto phys = HAL_VMM_GetPhysicalAddress(page);
       HAL_VMM_UnmapPage(page);
+      HAL_SMP_ShootdownTlb(page);
       HAL_PMM_FreeFrames(phys, 1);
     }
   }
@@ -175,7 +207,7 @@ bool map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, ProtectF
   if (mapped != aligned) return false;
   vad->start = VirtualAddress(address);
   vad->end = VirtualAddress(address + aligned);
-  vad->flags = flags | ProtectFlags::USER;
+  vad->flags = map_flags;
   as.vads.insert(*vad.release());
   return true;
 }

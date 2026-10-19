@@ -1,20 +1,24 @@
 #include "../userspace.h"
 #include <undos/syscalls.h>
+#include <undos/abi.h>
+#include <undos/abi_note.hpp>
 
-// The kernel hands control to `_start` with ESP pointing straight at the
-// pushed exec_path pointer (see KE_USER_CreateProcess). A normal C++
-// function's prologue (push ebp / sub esp, N for locals) would move ESP
-// before we could read that word, so `_start` is a bare assembly trampoline
-// that grabs [esp] first -- before anything else touches the stack -- and
-// hands it off to loader_main as a regular cdecl argument.
+// Preserve the kernel's argc/argv block above the loader's working stack.
 extern "C" void _start();
+extern "C" char __loader_image_start[];
+extern "C" char __loader_image_end[];
 asm(
     ".text\n\t"
     ".global _start\n\t"
     ".type _start, @function\n\t"
     "_start:\n\t"
-    "    movl (%esp), %eax\n\t"
+    "    movl 4(%esp), %eax\n\t"
+    "    movl 12(%eax), %eax\n\t"
+    "    movl (%eax), %eax\n\t"
     "    movl %esp, %edx\n\t"
+    "    movl 8(%esp), %ecx\n\t"
+    "    subl $4, %esp\n\t"
+    "    pushl %ecx\n\t"
     "    pushl %edx\n\t"
     "    pushl %eax\n\t"
     "    call loader_main\n\t"
@@ -44,6 +48,9 @@ constexpr uint32_t EV_CURRENT = 1;
 // Program Header Types & Permission Flags
 constexpr uint32_t PT_LOAD = 1;
 constexpr uint32_t PT_DYNAMIC = 2;
+constexpr uint32_t PT_INTERP = 3;
+constexpr uint32_t PT_NOTE = 4;
+constexpr uint32_t PT_TLS = 7;
 constexpr uint32_t PF_X = 1;
 constexpr uint32_t PF_W = 2;
 constexpr uint32_t PF_R = 4;
@@ -58,13 +65,16 @@ constexpr int32_t DT_SYMTAB = 6;
 constexpr int32_t DT_STRSZ = 10;
 constexpr int32_t DT_SYMENT = 11;
 constexpr int32_t DT_INIT = 12;
+constexpr int32_t DT_FINI = 13;
 constexpr int32_t DT_REL = 17;
 constexpr int32_t DT_RELSZ = 18;
 constexpr int32_t DT_RELENT = 19;
 constexpr int32_t DT_PLTREL = 20;
 constexpr int32_t DT_JMPREL = 23;
 constexpr int32_t DT_INIT_ARRAY = 25;
+constexpr int32_t DT_FINI_ARRAY = 26;
 constexpr int32_t DT_INIT_ARRAYSZ = 27;
+constexpr int32_t DT_FINI_ARRAYSZ = 28;
 
 // Symbol Binding, Visibility, and Special Section Indices
 constexpr uint8_t STB_LOCAL = 0;
@@ -96,8 +106,6 @@ constexpr uint32_t MAX_PATH_LENGTH = 256;
 
 // Address Space Layout Invariants
 constexpr uint32_t USER_SPACE_MIN_ADDR = 0x00010000;    // Lower 64KB reserved (null page trap)
-constexpr uint32_t LOADER_RESERVED_BASE = 0x00020000;  // ELoader text & data start (see linker.ld)
-constexpr uint32_t LOADER_RESERVED_LIMIT = 0x00030000; // ELoader text & data end
 constexpr uint32_t USER_SPACE_MAX_ADDR = 0xC0000000;    // 3GB userland limit (kernel boundary)
 constexpr uint32_t SHARED_LIB_BASE_WINDOW = 0x10000000;// Base virtual address for shared libraries
 constexpr uint32_t SHARED_LIB_SLOT_SIZE = 0x01000000;  // 16 MiB virtual slot per loaded shared library
@@ -180,8 +188,12 @@ struct LoadedObject {
   uint32_t init_func_vaddr{0};    // Single initialization function (DT_INIT)
   uint32_t init_array_vaddr{0};   // Array of initialization functions (DT_INIT_ARRAY)
   uint32_t init_array_size{0};    // Size in bytes of DT_INIT_ARRAY
+  uint32_t fini_func_vaddr{0};
+  uint32_t fini_array_vaddr{0};
+  uint32_t fini_array_size{0};
 
   uint32_t needed_offsets[MAX_DEPENDENCIES]; // Offsets into strtab for DT_NEEDED
+  uint32_t dependencies[MAX_DEPENDENCIES]{};
   uint32_t needed_count{0};
 };
 
@@ -189,6 +201,10 @@ LoadedObject objects[MAX_OBJECTS]{};
 uint32_t object_count = 0;
 uint32_t total_mapped_bytes = 0;
 const char *load_failure_reason = "ELoader: invalid ELF header\n";
+uint32_t initialization_order[MAX_OBJECTS]{};
+uint32_t initialization_count{};
+uint32_t initialized_count{};
+uint8_t visit_state[MAX_OBJECTS]{};
 
 // ============================================================================
 // Virtual Address & Memory Range Validation Helpers
@@ -269,7 +285,7 @@ bool get_symbol_at(const LoadedObject &obj, uint32_t index, Symbol &symbol) {
 
 // Reads exact byte count from handle into destination, breaking requests into small chunks
 // to handle partial reads from the kernel I/O subsystem.
-bool read_exact_bytes(uint32_t handle, void *destination, uint32_t size) {
+bool read_exact_bytes(HANDLE handle, void *destination, uint32_t size) {
   auto *bytes = static_cast<uint8_t *>(destination);
   while (size > 0) {
     const uint32_t chunk_request = (size < 1024) ? size : 1024;
@@ -285,7 +301,7 @@ bool read_exact_bytes(uint32_t handle, void *destination, uint32_t size) {
 }
 
 // Advances file offset by reading and discarding bytes.
-bool skip_bytes(uint32_t handle, uint32_t size) {
+bool skip_bytes(HANDLE handle, uint32_t size) {
   uint8_t scratch[128];
   while (size > 0) {
     const uint32_t chunk = (size < sizeof(scratch)) ? size : sizeof(scratch);
@@ -302,7 +318,7 @@ bool skip_bytes(uint32_t handle, uint32_t size) {
 // ============================================================================
 
 // Reads and validates the ELF header and program header table from an open file.
-bool read_and_validate_headers(LoadedObject &obj, uint32_t handle, ElfHeader &header) {
+bool read_and_validate_headers(LoadedObject &obj, HANDLE handle, ElfHeader &header) {
   load_failure_reason = "ELoader: invalid ELF header\n";
   if (!read_exact_bytes(handle, &header, sizeof(header))) {
     return false;
@@ -405,6 +421,8 @@ bool calculate_bounds_and_bias(LoadedObject &obj, const ElfHeader &header) {
 // Maps userland pages with fixed virtual addresses and loads segment contents from disk.
 bool map_and_load_segments(LoadedObject &obj) {
   load_failure_reason = "ELoader: cannot map image pages\n";
+  const auto loader_begin = reinterpret_cast<uintptr_t>(__loader_image_start);
+  const auto loader_end = reinterpret_cast<uintptr_t>(__loader_image_end);
 
   for (uint32_t i = 0; i < obj.phnum; ++i) {
     const auto &p = obj.program_headers[i];
@@ -415,10 +433,10 @@ bool map_and_load_segments(LoadedObject &obj) {
     const uint32_t begin = (p.vaddr + obj.bias) & PAGE_MASK;
     const uint32_t end = (p.vaddr + p.memsz + obj.bias + (PAGE_SIZE - 1)) & PAGE_MASK;
 
-    // Reject mappings in low memory (<64KB), the loader's own region (0x20000..0x30000), or kernel space (>=3GB)
+    // Protect the loader's complete linked image, including page-rounded BSS.
     load_failure_reason = "ELoader: image overlaps reserved memory\n";
     if (begin < USER_SPACE_MIN_ADDR ||
-        (begin < LOADER_RESERVED_LIMIT && end > LOADER_RESERVED_BASE) ||
+        (begin < loader_end && end > loader_begin) ||
         end > USER_SPACE_MAX_ADDR) {
       return false;
     }
@@ -456,7 +474,7 @@ bool map_and_load_segments(LoadedObject &obj) {
     // Read segment file data from disk into mapped memory
     load_failure_reason = "ELoader: failed to read image segment\n";
     if (p.filesz > 0) {
-      uint32_t handle = 0;
+      HANDLE handle = 0;
       if (UD_SYS_OpenV1(obj.path, FileOpenMode_Read, &handle) != SyscallReturnCode_OKAY) {
         return false;
       }
@@ -553,6 +571,25 @@ bool parse_dynamic_segment(LoadedObject &obj) {
         case DT_INIT:
           obj.init_func_vaddr = d.value;
           break;
+        case DT_FINI:
+          obj.fini_func_vaddr = d.value;
+          break;
+        case DT_FINI_ARRAY:
+          obj.fini_array_vaddr = d.value;
+          break;
+        case DT_FINI_ARRAYSZ:
+          obj.fini_array_size = d.value;
+          break;
+        case 7: // DT_RELA: i386 ABI v1 supports REL only.
+        case 8: // DT_RELASZ
+        case 35: // DT_RELRSZ
+        case 36: // DT_RELR
+        case 37: // DT_RELRENT
+        case 0x6ffffff0: // DT_VERSYM
+        case 0x6ffffffc: // DT_VERDEF
+        case 0x6ffffffe: // DT_VERNEED
+          if (d.value) return false;
+          break;
         case DT_INIT_ARRAY:
           obj.init_array_vaddr = d.value;
           break;
@@ -574,7 +611,7 @@ bool parse_dynamic_segment(LoadedObject &obj) {
 
 // Validates symbol table and string table boundaries against loaded image size.
 bool validate_symbol_tables(LoadedObject &obj) {
-  if (obj.needed_count > 0 || obj.rel_size > 0 || obj.plt_rel_size > 0) {
+  if (obj.symbol_count > 0 || obj.needed_count > 0 || obj.rel_size > 0 || obj.plt_rel_size > 0) {
     load_failure_reason = "ELoader: invalid symbol tables\n";
     uint32_t host_addr = 0;
     if (obj.syment_size != sizeof(Symbol) || obj.symbol_count == 0 ||
@@ -585,13 +622,22 @@ bool validate_symbol_tables(LoadedObject &obj) {
       return false;
     }
   }
+  for (uint32_t i = 0; i < obj.symbol_count; ++i) {
+    Symbol symbol{};
+    if (!get_symbol_at(obj, i, symbol)) return false;
+    const auto type = symbol.info & 15;
+    if (type == 6 || type == 10) {
+      load_failure_reason = "ELoader: TLS and IFUNC symbols are unsupported\n";
+      return false;
+    }
+  }
   return true;
 }
 
 // Coordinates the full loading pipeline for a single ELF object (executable or shared library).
 bool load_object(LoadedObject &obj) {
   load_failure_reason = "ELoader: cannot open image\n";
-  uint32_t handle = 0;
+  HANDLE handle = 0;
   if (UD_SYS_OpenV1(obj.path, FileOpenMode_Read, &handle) != SyscallReturnCode_OKAY) {
     return false;
   }
@@ -610,6 +656,25 @@ bool load_object(LoadedObject &obj) {
   if (!map_and_load_segments(obj)) {
     return false;
   }
+
+  load_failure_reason = "ELoader: missing or incompatible UnDOS ABI note\n";
+  uint32_t notes = 0;
+  for (uint32_t i = 0; i < obj.phnum; ++i) {
+    const auto &p = obj.program_headers[i];
+    if (p.type == PT_INTERP) {
+      load_failure_reason = "ELoader: external ELF interpreters are unsupported\n";
+      return false;
+    }
+    if (p.type == PT_TLS) {
+      load_failure_reason = "ELoader: TLS is unsupported by ABI v1\n";
+      return false;
+    }
+    if (p.type != PT_NOTE) continue;
+    uint32_t address = 0;
+    if (!resolve_virtual_to_host_address(obj, p.vaddr, p.filesz, address) ||
+        !undos::abi::scan_notes(reinterpret_cast<const uint8_t *>(address), p.filesz, notes)) return false;
+  }
+  if (notes != 1) return false;
 
   if (!parse_dynamic_segment(obj)) {
     return false;
@@ -801,7 +866,7 @@ bool relocate_table(LoadedObject &obj, uint32_t virtual_address, uint32_t bytes,
 
 // Formulates and tests library file paths (executable directory first, then /System/),
 // registers the library if not already loaded, and initiates its loading.
-bool find_and_load_dependency(const char *name, const char *executable_path) {
+bool find_and_load_dependency(const char *name, const char *executable_path, uint32_t &index) {
   // Validate dependency name length and prohibit path traversal characters
   uint32_t name_len = 0;
   while (name[name_len] != '\0' && name_len < 127) {
@@ -833,7 +898,7 @@ bool find_and_load_dependency(const char *name, const char *executable_path) {
     for (uint32_t i = 0; i <= name_len; ++i) {
       path[dir_len + i] = name[i];
     }
-    uint32_t test_handle = 0;
+    HANDLE test_handle = 0;
     if (UD_SYS_OpenV1(path, FileOpenMode_Read, &test_handle) == SyscallReturnCode_OKAY) {
       (void) UD_SYS_CloseV1(test_handle);
     } else {
@@ -857,6 +922,7 @@ bool find_and_load_dependency(const char *name, const char *executable_path) {
   // Deduplicate against already-loaded objects to prevent cycles and duplicate loads
   for (uint32_t i = 0; i < object_count; ++i) {
     if (string_equals(objects[i].path, path)) {
+      index = i;
       return true;
     }
   }
@@ -865,7 +931,8 @@ bool find_and_load_dependency(const char *name, const char *executable_path) {
     return false;
   }
 
-  LoadedObject &new_obj = objects[object_count++];
+  index = object_count++;
+  LoadedObject &new_obj = objects[index];
   for (uint32_t i = 0; i < sizeof(path); ++i) {
     new_obj.path[i] = path[i];
   }
@@ -879,34 +946,88 @@ bool find_and_load_dependency(const char *name, const char *executable_path) {
 
 // Executes DT_INIT functions and DT_INIT_ARRAY function pointers in reverse discovery order
 // so that lower-level dependencies are initialized before dependents.
-bool execute_initializers() {
-  for (uint32_t i = object_count; i-- > 0;) {
-    const LoadedObject &obj = objects[i];
-    uint32_t host_addr = 0;
-
-    // Call DT_INIT single constructor function if present
-    if (obj.init_func_vaddr != 0) {
-      if (!resolve_virtual_to_host_address(obj, obj.init_func_vaddr, 1, host_addr)) {
-        return false;
-      }
-      reinterpret_cast<void (*)()>(host_addr)();
-    }
-
-    // Call DT_INIT_ARRAY constructors if present
-    if (obj.init_array_size != 0) {
-      if ((obj.init_array_size % sizeof(uint32_t)) != 0 ||
-          !resolve_table_address(obj, obj.init_array_vaddr, obj.init_array_size / sizeof(uint32_t),
-                                 sizeof(uint32_t), host_addr)) {
-        return false;
-      }
-      const uint32_t func_count = obj.init_array_size / sizeof(uint32_t);
-      const auto *funcs = reinterpret_cast<const uint32_t *>(host_addr);
-      for (uint32_t j = 0; j < func_count; ++j) {
-        reinterpret_cast<void (*)()>(funcs[j])();
-      }
+bool executable_address(uint32_t address) {
+  for (uint32_t i = 0; i < object_count; ++i) {
+    const auto &obj = objects[i];
+    if (address < obj.bias) continue;
+    const auto vaddr = address - obj.bias;
+    for (uint32_t j = 0; j < obj.phnum; ++j) {
+      const auto &p = obj.program_headers[j];
+      if (p.type == PT_LOAD && (p.flags & PF_X) && vaddr >= p.vaddr && vaddr - p.vaddr < p.memsz)
+        return true;
     }
   }
+  return false;
+}
+
+bool visit_dependencies(uint32_t index) {
+  if (visit_state[index] == 2) return true;
+  if (visit_state[index] == 1) return false;
+  visit_state[index] = 1;
+  const auto &obj = objects[index];
+  for (uint32_t i = 0; i < obj.needed_count; ++i) {
+    if (!visit_dependencies(obj.dependencies[i])) return false;
+  }
+  visit_state[index] = 2;
+  if (index) initialization_order[initialization_count++] = index;
   return true;
+}
+
+bool lifecycle_function(const LoadedObject &obj, uint32_t address, bool run) {
+  if (!address) return true;
+  uint32_t host = 0;
+  if (!resolve_virtual_to_host_address(obj, address, 1, host) || !executable_address(host)) return false;
+  if (run) reinterpret_cast<void (*)()>(host)();
+  return true;
+}
+
+bool lifecycle_array(const LoadedObject &obj, uint32_t address, uint32_t size, bool reverse, bool run) {
+  if (!size) return true;
+  uint32_t host = 0;
+  if (size % 4 || !resolve_virtual_to_host_address(obj, address, size, host)) return false;
+  const auto *functions = reinterpret_cast<const uint32_t *>(host);
+  for (uint32_t i = 0; i < size / 4; ++i) {
+    const auto function = functions[reverse ? size / 4 - i - 1 : i];
+    if (!function || function == UINT32_MAX) continue;
+    if (!executable_address(function)) return false;
+    if (run) reinterpret_cast<void (*)()>(function)();
+  }
+  return true;
+}
+
+bool validate_lifecycle() {
+  for (uint32_t i = 1; i < object_count; ++i) {
+    const auto &obj = objects[i];
+    if (!lifecycle_function(obj, obj.init_func_vaddr, false) ||
+        !lifecycle_function(obj, obj.fini_func_vaddr, false) ||
+        !lifecycle_array(obj, obj.init_array_vaddr, obj.init_array_size, false, false) ||
+        !lifecycle_array(obj, obj.fini_array_vaddr, obj.fini_array_size, true, false)) return false;
+  }
+  return true;
+}
+
+void lifecycle_failure() {
+  (void) UD_SYS_PrintV1("ELoader: invalid shared-library lifecycle callback\n");
+  (void) UD_SYS_ExitV1(255);
+  __builtin_trap();
+}
+
+void initialize_shared() {
+  if (initialized_count) lifecycle_failure();
+  for (uint32_t i = 0; i < initialization_count; ++i) {
+    const auto &obj = objects[initialization_order[i]];
+    if (!lifecycle_function(obj, obj.init_func_vaddr, true) ||
+        !lifecycle_array(obj, obj.init_array_vaddr, obj.init_array_size, false, true)) lifecycle_failure();
+    ++initialized_count;
+  }
+}
+
+void finalize_shared() {
+  while (initialized_count) {
+    const auto &obj = objects[initialization_order[--initialized_count]];
+    if (!lifecycle_array(obj, obj.fini_array_vaddr, obj.fini_array_size, true, true) ||
+        !lifecycle_function(obj, obj.fini_func_vaddr, true)) lifecycle_failure();
+  }
 }
 
 } // namespace
@@ -915,7 +1036,7 @@ bool execute_initializers() {
 // Loader Entry Point
 // ============================================================================
 
-extern "C" [[noreturn]] void loader_main(const char *exec_path, uint32_t *initial_stack) {
+extern "C" [[noreturn]] void loader_main(const char *exec_path, uint32_t *initial_stack, HANDLE startup_event) {
   const char *failure = "ELoader: invalid executable path\n";
   if (!exec_path) {
     goto fail;
@@ -944,7 +1065,8 @@ extern "C" [[noreturn]] void loader_main(const char *exec_path, uint32_t *initia
     const LoadedObject &obj = objects[i];
     for (uint32_t j = 0; j < obj.needed_count; ++j) {
       const char *lib_name = nullptr;
-      if (!get_string_at(obj, obj.needed_offsets[j], lib_name) || !find_and_load_dependency(lib_name, exec_path)) {
+      if (!get_string_at(obj, obj.needed_offsets[j], lib_name) ||
+          !find_and_load_dependency(lib_name, exec_path, objects[i].dependencies[j])) {
         goto fail;
       }
     }
@@ -967,18 +1089,30 @@ extern "C" [[noreturn]] void loader_main(const char *exec_path, uint32_t *initia
     goto fail;
   }
 
-  // Execute constructors in reverse dependency order
-  failure = "ELoader: invalid initializer\n";
-  if (!execute_initializers()) {
-    goto fail;
+  failure = "ELoader: cyclic dependency or invalid lifecycle metadata\n";
+  if (!visit_dependencies(0) || !validate_lifecycle()) goto fail;
+
+  {
+    auto *info = reinterpret_cast<UnDOSStartupInfoV1 *>(initial_stack[1]);
+    if (!info || !undos::abi::valid_startup(*info)) {
+      failure = "ELoader: invalid startup ABI\n";
+      goto fail;
+    }
+    info->initialize_shared = reinterpret_cast<uint32_t>(&initialize_shared);
+    info->finalize_shared = reinterpret_cast<uint32_t>(&finalize_shared);
   }
 
-  // Restore initial stack layout expected by application entry trampoline
-  initial_stack[0] = 0;
-  initial_stack[1] = reinterpret_cast<uint32_t>(initial_stack + 2);
+  // Resolve and map all images before reporting launch success. Constructors
+  // run as application code after this handshake, so they cannot stall the
+  // creator or masquerade as a loader failure.
+  failure = "ELoader: startup notification failed\n";
+  if (UD_SYS_SetEventV1(startup_event) != SyscallReturnCode_OKAY) goto fail;
+  (void) UD_SYS_CloseV1(startup_event);
+
+  // The CRT initializes its streams before invoking shared-library constructors.
   initial_stack[2] = 0;
 
-  // Jump to executable entry point with restored stack pointer
+  // Pass through argc, argv and strings without touching their storage.
   asm volatile("movl %0, %%esp; jmp *%1" :: "r"(initial_stack), "r"(objects[0].entry + objects[0].bias) : "memory");
   __builtin_unreachable();
 

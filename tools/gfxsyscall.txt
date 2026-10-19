@@ -13,6 +13,8 @@
 
 using HANDLER = c<uint32_t>;
 using COLORREF = c<uint32_t>;
+// COLORREF is a palette16 index (0..15), shared with USER class backgrounds.
+// Packed RGB targets receive the corresponding canonical VGA RGB color.
 using POINT = struct<Point>;
 using RECT  = struct<Rect>;
 
@@ -81,6 +83,16 @@ struct DeviceCaps {
     accelFlags: c<uint32_t>;
 };
 
+struct TextMetrics {
+    cellWidth:   c<uint32_t>;
+    cellHeight:  c<uint32_t>;
+    ascent:      c<uint32_t>;
+    descent:     c<uint32_t>;
+    firstChar:   c<uint32_t>;
+    lastChar:    c<uint32_t>;
+    defaultChar: c<uint32_t>;
+};
+
 
 // -----------------------------------------------------
 //  Pixel Formats & Raster Ops (Enums)
@@ -105,6 +117,9 @@ enum RasterOp {
 //  Device Context & Object Lifecycle
 // -----------------------------------------------------
 
+// Zero/Primary selects the screen. Memory/Offscreen creates a DC with no target
+// until SelectObject selects a bitmap. Primary cannot combine with these flags.
+// NoAccel bypasses packed acceleration, never the required planar adapter path.
 syscall V1 GFX CreateDC [300] {
     driverName: IN string;
     deviceName: IN string;
@@ -116,6 +131,7 @@ syscall V1 GFX DeleteDC [301] {
     dc: IN HANDLER;
 };
 
+// Only bitmap selection into Memory/Offscreen DCs is supported.
 syscall V1 GFX SelectObject [302] {
     dc:     IN HANDLER;
     object: IN HANDLER;
@@ -139,6 +155,8 @@ syscall V1 GFX CreateFont [305] {
     name:    IN string;
 };
 
+// Top-down packed bitmap, zero initialized; maximum backing allocation 16 MiB.
+// INDEX8 uses palette16 indices; RGB24/ARGB32 stores native BGR/BGRA bytes.
 syscall V1 GFX CreateBitmap [306] {
     width:   IN c<uint32_t>;
     height:  IN c<uint32_t>;
@@ -184,6 +202,8 @@ syscall V1 GFX Ellipse [313] {
     bottom: IN c<int32_t>;
 };
 
+// Original fixed 8x16 single-line ASCII32..126; other bytes render '?'.
+// No wrapping, shaping, font objects, newlines or cursor advancement.
 syscall V1 GFX TextOut [314] {
     dc:   IN HANDLER;
     x:    IN c<int32_t>;
@@ -196,6 +216,8 @@ syscall V1 GFX TextOut [314] {
 //  Blits & Raster Ops
 // -----------------------------------------------------
 
+// Only SRCCOPY is supported; source/destination are clipped in lockstep.
+// Planar-to-packed transfers are unsupported (no unsafe packed fallback).
 syscall V1 GFX BitBlt [320] {
     dstDC:   IN HANDLER;
     x:       IN c<int32_t>;
@@ -270,7 +292,7 @@ syscall V1 GFX SetWindowOrg [334] {
 
 syscall V1 GFX GetTextMetrics [340] {
     dc:      IN HANDLER;
-    metrics: OUT struct<DeviceCaps>;
+    metrics: OUT struct<TextMetrics>;
 };
 
 syscall V1 GFX GetBitmapBits [341] {
@@ -288,5 +310,47 @@ syscall V1 GFX GetDeviceCaps [343] {
     caps: OUT struct<DeviceCaps>;
 };
 
-// endregion
+// Sets Rectangle/LineTo/TextOut foreground and TextOut background.
+// opaque is 0 (transparent) or 1 (fill each complete 8x16 character cell).
+syscall V1 GFX SetDrawColors [344] {
+    dc:         IN c<uint32_t>;
+    foreground: IN COLORREF;
+    background: IN COLORREF;
+    opaque:     IN c<uint32_t>;
+};
 
+// Normalized UFT1 resources only, never original TTF bytes. Font resource
+// handles are process-local and distinct from DC/general object handles.
+// Capability bit 0: private resource registration; no rendering bit yet.
+syscall V1 GFX QueryFontEngine [345] {
+    version: OUT c<uint32_t>;
+    capabilities: OUT c<uint32_t>;
+};
+
+syscall V1 GFX BeginFontUpload [346] {
+    totalBytes: IN c<uint32_t>;
+    upload: OUT c<uint32_t>;
+};
+
+// Ordered, nonempty chunks of at most 4096 bytes; offset must equal bytes sent.
+syscall V1 GFX AppendFontUpload [347] {
+    upload: IN c<uint32_t>;
+    offset: IN c<uint32_t>;
+    data: IN buffer<c<uint8_t>>;
+};
+
+// Success consumes the upload and returns a new-generation immutable face
+// handle. Invalid normalized data consumes/releases the upload and reports
+// undos::font::Error. Incomplete uploads remain open and can be continued.
+// Structural registration does not assert instruction execution support.
+syscall V1 GFX CommitFontUpload [348] {
+    upload: IN c<uint32_t>;
+    face: OUT c<uint32_t>;
+    validationError: OUT c<uint32_t>;
+};
+
+syscall V1 GFX CloseFontResource [349] {
+    handle: IN c<uint32_t>;
+};
+
+// endregion

@@ -5,9 +5,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 struct __SYS_GFX_SELECTCLIPREGION_V1 {
-    uint32_t dc;
-    uint32_t region;
+    HANDLER dc;
+    HANDLER region;
 };
 
 constexpr size_t   __SYS_GFX_SELECTCLIPREGION_V1_SIZE = sizeof(struct __SYS_GFX_SELECTCLIPREGION_V1);

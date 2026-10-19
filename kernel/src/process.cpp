@@ -18,6 +18,7 @@
 
     // Windows, classes and message queues die with their process.
     kernel::user::on_process_exit(*process);
+    process->fontResources.clear();
 
     // Release WaitProcess/WaitForObject callers.
     KE_EVENT_Signal(process->exitHeader, true);

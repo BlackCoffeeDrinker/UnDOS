@@ -5,8 +5,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 struct __SYS_GFX_DELETEOBJECT_V1 {
-    uint32_t object;
+    HANDLER object;
 };
 
 constexpr size_t   __SYS_GFX_DELETEOBJECT_V1_SIZE = sizeof(struct __SYS_GFX_DELETEOBJECT_V1);

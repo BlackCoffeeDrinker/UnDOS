@@ -2,6 +2,7 @@
 #include <Kernel.hpp>
 
 #include "vga_registers.hpp"
+#include "vga_palette.hpp"
 
 #include <undos/syscalls/__enum_IoControlCode.h>
 #include <undos/syscalls/__struct_IoctlDisplayMode.h>
@@ -53,6 +54,8 @@ void Vga_ProgramMode12h() {
     HAL_IO_Out8(vga_regs::kAttributeControllerIndexData, i);
     HAL_IO_Out8(vga_regs::kAttributeControllerIndexData, vga_regs::kAttributeController[i]);
   }
+
+  vga_regs::ProgramPalette16([](uint16_t port, uint8_t value) { HAL_IO_Out8(port, value); });
 
   // Re-enable video output (set the Palette Address Source bit).
   HAL_IO_In8(vga_regs::kInputStatus1);
@@ -283,6 +286,18 @@ bool Vga_DrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter
   return true;
 }
 
+bool Vga_ReadSurfacePixel(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &,
+                          const kernel::KObjectPtr<kernel::KSurface> &src,
+                          int x, int y, uint32_t &color) {
+  if (!src || !src->backing || !src->backing->directAddress ||
+      x < 0 || y < 0 || static_cast<uint32_t>(x) >= src->width ||
+      static_cast<uint32_t>(y) >= src->height) return false;
+  color = Vga_ReadPixel(src->backing->directAddress.as_ptr<uint8_t>(), x, y);
+  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcReadMapSelect);
+  HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0);
+  return true;
+}
+
 bool Vga_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
                 const kernel::KObjectPtr<kernel::KSurface> &dst,
                 int dstX, int dstY,
@@ -399,6 +414,7 @@ void Vga_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   ctx_vga->adapter->ProbeDisplay = Vga_ProbeDisplay;
   ctx_vga->adapter->ConfigureDisplay = Vga_ConfigureDisplay;
   ctx_vga->adapter->FillRect = Vga_FillRect;
+  ctx_vga->adapter->ReadPixel = Vga_ReadSurfacePixel;
   ctx_vga->adapter->DrawLine = Vga_DrawLine;
   ctx_vga->adapter->BitBlt = Vga_BitBlt;
   ctx_vga->adapter->Present = Vga_Present;

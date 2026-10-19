@@ -14,11 +14,16 @@ enum WindowMessage {
     Move        = 0x0003,
     Size        = 0x0005,
     Activate    = 0x0006,
+    SetFocus    = 0x0007,
+    KillFocus   = 0x0008,
     Paint       = 0x000F,
     Close       = 0x0010,
     Quit        = 0x0012,
     NcHitTest   = 0x0084,
     NcMouseMove = 0x00A0,
+    /** Single system-box click: wParam=SysMenu (3), lParam signed screen x/y.
+     * Userland presents the system menu; system-box double-click sends Close.
+     */
     NcLButtonDown = 0x00A1,
     NcLButtonUp   = 0x00A2,
     KeyDown     = 0x0100,
@@ -27,8 +32,10 @@ enum WindowMessage {
     MouseMove   = 0x0200,
     LButtonDown = 0x0201,
     LButtonUp   = 0x0202,
+    LButtonDblClk = 0x0203,
     RButtonDown = 0x0204,
     RButtonUp   = 0x0205,
+    CaptureChanged = 0x0215,
     User        = 0x0400,
 };
 
@@ -42,6 +49,9 @@ flags WindowStyle : uint32 {
 enum ShowCommand {
     Hide = 0,
     Show = 1,
+    Minimize = 2,
+    Maximize = 3,
+    Restore = 4,
 };
 
 enum HitTest {
@@ -68,6 +78,8 @@ enum WindowLongIndex {
     WndProc  = 0,
     UserData = 1,
     Style    = 2,
+    /** Parent HWND, or zero for a root. Read-only. */
+    Parent   = 3,
 };
 
 struct Msg {
@@ -79,20 +91,23 @@ struct Msg {
 };
 
 struct PaintInfo {
-    /** Invalid area in window coordinates. */
+    /** Invalid area in client coordinates (half-open). */
     rcPaint: struct<Rect>;
     /** Non-zero when the background was erased by the kernel. */
     erased:  c<uint32_t>;
 };
 
-/** Registers a window class; wndProc is stored opaquely and called by userland. */
+/** Registers a process-scoped window class; wndProc is opaque and called by userland. */
 syscall V1 USER RegisterClass [400] {
     name:       IN string;
     wndProc:    IN c<uint32_t>;
     background: IN COLORREF;
 };
 
-/** Creates a top-level window owned by the calling thread. */
+/** Creates a window owned by the calling thread. Child requires a same-process
+ * parent; x/y are relative to its client origin. Otherwise parent must be zero.
+ * Coordinates and dimensions must fit the signed 16-bit screen range.
+ */
 syscall V1 USER CreateWindow [401] {
     className: IN string;
     title:     IN string;
@@ -106,11 +121,21 @@ syscall V1 USER CreateWindow [401] {
     hwnd:      OUT c<uint32_t>;
 };
 
+/** Immediately destroys the window and descendants and removes their queued
+ * messages. Userland dispatches any Destroy callback before this syscall;
+ * no message may subsequently target an invalidated handle.
+ */
 syscall V1 USER DestroyWindow [402] {
     hwnd: IN c<uint32_t>;
 };
 
-/** One of ShowCommand. */
+/** Hide preserves state, Show preserves state, Restore restores saved geometry.
+ * Minimize creates an icon plus label for children in the parent client
+ * (roots retain a desktop caption). Click selects a child icon, double-click
+ * or Enter restores it; Ctrl+Tab/F6 cycles including minimized child icons.
+ * Maximize fills the parent client or desktop. Parent hide/minimize suppresses
+ * descendant visibility.
+ */
 syscall V1 USER ShowWindow [403] {
     hwnd:    IN c<uint32_t>;
     command: IN c<uint32_t>;
@@ -130,14 +155,16 @@ syscall V1 USER GetWindowRect [405] {
     rect: OUT RECT;
 };
 
-/** Adds rect (window coordinates) to the invalid area; whole != 0 invalidates everything. */
+/** Adds rect (client coordinates) to the invalid area; whole != 0 invalidates the client. */
 syscall V1 USER InvalidateRect [406] {
     hwnd:  IN c<uint32_t>;
     rect:  IN RECT;
     whole: IN c<uint32_t>;
 };
 
-/** Returns a DC clipped to the visible part of the invalid area, origin at the window. */
+/** Returns a DC clipped to the visible invalid client, origin at the client.
+ * Only one paint DC per window; EndPaint must match its hwnd/DC pair.
+ */
 syscall V1 USER BeginPaint [407] {
     hwnd:  IN c<uint32_t>;
     dc:    OUT c<uint32_t>;
@@ -188,6 +215,29 @@ syscall V1 USER SetCapture [414] {
 
 syscall V1 USER ReleaseCapture [415] {
     unused: IN c<uint32_t>;
+};
+
+/** Client bounds {0,0,width,height}; empty while minimized. */
+syscall V1 USER GetClientRect [416] {
+    hwnd: IN c<uint32_t>;
+    rect: OUT RECT;
+};
+
+/** Focus a visible same-process window and activate its root. A minimized
+ * child icon may receive focus for Enter/Alt+Space; minimized roots cannot.
+ * hwnd == 0 clears this process's focus without changing activation.
+ * Key lParam: bits 0..7 scan code, 8..10 key_flags, 16..24 modifier_flags.
+ * Char lParam carries the same metadata. Mouse wParam low bits: left=1,right=2;
+ * modifier_flags occupy bits 16..24. Mouse lParam packs signed client x/y.
+ */
+syscall V1 USER SetFocus [417] {
+    hwnd: IN c<uint32_t>;
+};
+
+/** Set a same-process window title (at most 63 bytes plus terminator). */
+syscall V1 USER SetWindowText [418] {
+    hwnd: IN c<uint32_t>;
+    text: IN string;
 };
 
 // endregion

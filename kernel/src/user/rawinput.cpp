@@ -1,133 +1,214 @@
 #include "user/user.hpp"
 #include <kernel/input.hpp>
 #include <kernel/scheduler.hpp>
-#include <kernel/gfx.hpp>
-#include <kernel/kobject/KDisplay.hpp>
 
 namespace kernel::user {
-
+namespace {
 struct InputState {
-  int32_t mouseX{0};
-  int32_t mouseY{0};
-  uint32_t buttons{0};
-  
+  int32_t mouseX{0}, mouseY{0};
+  uint32_t buttons{0}, modifiers{0};
   uint32_t dragHwnd{0};
-  int32_t dragOffX{0};
-  int32_t dragOffY{0};
-};
+  HitTest dragHit{HitTest::Nowhere};
+  int32_t dragX{0}, dragY{0};
+  URect dragRect{};
+  uint32_t lastClickHwnd{0}, lastClickTime{0};
+  int32_t lastClickX{0}, lastClickY{0};
+  HitTest lastClickHit{HitTest::Nowhere};
+} g_input;
 
-static InputState g_input;
-
-static void draw_cursor(int32_t x, int32_t y) noexcept {
-  // White crosshair with black outline
-  Guard g;
-  fill_screen_locked({x - 4, y - 1, x + 5, y + 2}, 0);
-  fill_screen_locked({x - 1, y - 4, x + 2, y + 5}, 0);
-  fill_screen_locked({x - 3, y, x + 4, y + 1}, 15);
-  fill_screen_locked({x, y - 3, x + 1, y + 4}, 15);
+uint32_t packed_point(const KWindowObject &window) noexcept {
+  const auto point = screen_to_client_locked(window, {g_input.mouseX, g_input.mouseY, 0, 0});
+  return (static_cast<uint32_t>(point.top & 0xFFFF) << 16) |
+         static_cast<uint32_t>(point.left & 0xFFFF);
 }
 
-static void erase_cursor(int32_t x, int32_t y) noexcept {
-  URect r = {x - 4, y - 4, x + 5, y + 5};
-  Guard g;
-  expose_locked(r);
+void post_mouse(KWindowObject &window, uint32_t message) noexcept {
+  if (window.queue)
+    post_locked(*window.queue, window.hwnd, message,
+                g_input.buttons | ((g_input.modifiers & 0x1FF) << 16), packed_point(window));
 }
 
-static void raw_input_thread(void *) {
-  URect screen = screen_rect();
-  g_input.mouseX = (screen.left + screen.right) / 2;
-  g_input.mouseY = (screen.top + screen.bottom) / 2;
-  
-  draw_cursor(g_input.mouseX, g_input.mouseY);
+bool resize_hit(HitTest hit) noexcept {
+  return hit >= HitTest::Left && hit <= HitTest::BottomRight;
+}
 
+void drag_locked() noexcept {
+  auto *window = lookup_locked(g_input.dragHwnd);
+  if (!window || !effectively_visible_locked(*window) || window->state != 0) {
+    g_input.dragHwnd = 0;
+    return;
+  }
+  auto rect = g_input.dragRect;
+  const int32_t dx = g_input.mouseX - g_input.dragX, dy = g_input.mouseY - g_input.dragY;
+  const auto hit = g_input.dragHit;
+  if (hit == HitTest::Caption) rect = rect.Offset(dx, dy);
+  else {
+    if (hit == HitTest::Left || hit == HitTest::TopLeft || hit == HitTest::BottomLeft) rect.left += dx;
+    if (hit == HitTest::Right || hit == HitTest::TopRight || hit == HitTest::BottomRight) rect.right += dx;
+    if (hit == HitTest::Top || hit == HitTest::TopLeft || hit == HitTest::TopRight) rect.top += dy;
+    if (hit == HitTest::Bottom || hit == HitTest::BottomLeft || hit == HitTest::BottomRight) rect.bottom += dy;
+    const int32_t minWidth = 4 * kCaptionHeight, minHeight = 2 * kBorderWidth + kCaptionHeight + 16;
+    if (rect.right - rect.left < minWidth) {
+      if (hit == HitTest::Left || hit == HitTest::TopLeft || hit == HitTest::BottomLeft) rect.left = rect.right - minWidth;
+      else rect.right = rect.left + minWidth;
+    }
+    if (rect.bottom - rect.top < minHeight) {
+      if (hit == HitTest::Top || hit == HitTest::TopLeft || hit == HitTest::TopRight) rect.top = rect.bottom - minHeight;
+      else rect.bottom = rect.top + minHeight;
+    }
+  }
+  // Interactive child movement stays within the parent's client. The syscall
+  // also permits partially clipped children for intentional layouts.
+  if (auto *parent = lookup_locked(window->parent)) {
+    const auto bounds = client_to_screen_locked(*parent, client_rect_locked(*parent));
+    if (g_input.dragHit == HitTest::Caption) {
+      if (rect.left < bounds.left) rect = rect.Offset(bounds.left - rect.left, 0);
+      if (rect.top < bounds.top) rect = rect.Offset(0, bounds.top - rect.top);
+      if (rect.right > bounds.right) rect = rect.Offset(bounds.right - rect.right, 0);
+      if (rect.bottom > bounds.bottom) rect = rect.Offset(0, bounds.bottom - rect.bottom);
+    } else rect = rect.Intersect(bounds);
+  }
+  if (!rect.Empty() && rect.left >= -32768 && rect.top >= -32768 &&
+      rect.right <= 32767 && rect.bottom <= 32767 && move_window_locked(*window, rect))
+    window->restoredRect = rect;
+}
+
+void mouse_locked(const input::MouseInputEvent &event) noexcept {
+  const auto screen = screen_rect();
+  if (screen.Empty()) return;
+  const int64_t x = event.isMovementAbsolute ? event.lastX : static_cast<int64_t>(g_input.mouseX) + event.lastX;
+  const int64_t y = event.isMovementAbsolute ? event.lastY : static_cast<int64_t>(g_input.mouseY) + event.lastY;
+  g_input.mouseX = static_cast<int32_t>(x < screen.left ? screen.left : x >= screen.right ? screen.right - 1 : x);
+  g_input.mouseY = static_cast<int32_t>(y < screen.top ? screen.top : y >= screen.bottom ? screen.bottom - 1 : y);
+  cursor_hide_locked();
+  if (g_input.dragHwnd) drag_locked();
+
+  auto *captured = lookup_locked(capture_locked());
+  auto *target = mouse_target_locked(g_input.mouseX, g_input.mouseY);
+  const bool dragging = g_input.dragHwnd != 0;
+  if (event.buttonFlags & input::mouse_button_flags::LeftDown) {
+    g_input.buttons |= 1;
+    if (captured) post_mouse(*captured, kMsgLButtonDown);
+    else if (target) {
+      const auto hit = hit_test_locked(*target, g_input.mouseX, g_input.mouseY);
+      const auto time = static_cast<uint32_t>(event.timestamp.count() / 1000000);
+      const int32_t dx = g_input.mouseX - g_input.lastClickX, dy = g_input.mouseY - g_input.lastClickY;
+      const bool doubleClick = g_input.lastClickHwnd == target->hwnd && g_input.lastClickHit == hit &&
+                               time - g_input.lastClickTime <= 500 && dx >= -4 && dx <= 4 && dy >= -4 && dy <= 4;
+      g_input.lastClickHwnd = doubleClick ? 0 : target->hwnd;
+      g_input.lastClickTime = time;
+      g_input.lastClickX = g_input.mouseX;
+      g_input.lastClickY = g_input.mouseY;
+      g_input.lastClickHit = hit;
+      if (target->state != 2) set_focus_locked(target->hwnd);
+      if (target->state == 2) {
+        if (doubleClick || !target->parent) show_command_locked(*target, 4);
+        else set_focus_locked(target->hwnd);
+      } else if (hit == HitTest::Client) {
+        post_mouse(*target, doubleClick ? kMsgLButtonDoubleClick : kMsgLButtonDown);
+      } else if (hit == HitTest::SysMenu) {
+        if (doubleClick && target->queue) post_locked(*target->queue, target->hwnd, kMsgClose, 0, 0);
+        else if (target->queue)
+          post_locked(*target->queue, target->hwnd, 0x00A1, static_cast<uint32_t>(HitTest::SysMenu),
+                      (static_cast<uint32_t>(g_input.mouseY & 0xFFFF) << 16) |
+                      static_cast<uint32_t>(g_input.mouseX & 0xFFFF));
+      } else if (hit == HitTest::MinButton) show_command_locked(*target, 2);
+      else if (hit == HitTest::MaxButton || (hit == HitTest::Caption && doubleClick))
+        show_command_locked(*target, target->state == 3 ? 4 : 3);
+      else if (target->state == 0 && (hit == HitTest::Caption || resize_hit(hit))) {
+        g_input.dragHwnd = target->hwnd;
+        g_input.dragHit = hit;
+        g_input.dragX = g_input.mouseX;
+        g_input.dragY = g_input.mouseY;
+        g_input.dragRect = target->rect;
+      }
+    } else {
+      set_focus_locked(0);
+      set_active_window_locked(0);
+    }
+  }
+  if (event.buttonFlags & input::mouse_button_flags::LeftUp) {
+    g_input.buttons &= ~1u;
+    if (!g_input.dragHwnd && target && (captured || hit_test_locked(*target, g_input.mouseX, g_input.mouseY) == HitTest::Client))
+      post_mouse(*target, kMsgLButtonUp);
+    g_input.dragHwnd = 0;
+  }
+  if (event.buttonFlags & input::mouse_button_flags::RightDown) {
+    g_input.buttons |= 2;
+    if (target && (captured || hit_test_locked(*target, g_input.mouseX, g_input.mouseY) == HitTest::Client))
+      post_mouse(*target, kMsgRButtonDown);
+  }
+  if (event.buttonFlags & input::mouse_button_flags::RightUp) {
+    g_input.buttons &= ~2u;
+    if (target && (captured || hit_test_locked(*target, g_input.mouseX, g_input.mouseY) == HitTest::Client))
+      post_mouse(*target, kMsgRButtonUp);
+  }
+  if (!dragging && !g_input.dragHwnd && target && (event.lastX || event.lastY) &&
+      (captured || hit_test_locked(*target, g_input.mouseX, g_input.mouseY) == HitTest::Client))
+    post_mouse(*target, kMsgMouseMove);
+  cursor_move_locked(g_input.mouseX, g_input.mouseY);
+}
+
+void keyboard_locked(const input::KeyboardInputEvent &event) noexcept {
+  g_input.modifiers = event.modifiers;
+  const bool released = (event.keyFlags & input::key_flags::Break) != 0;
+  const bool control = (event.modifiers & input::modifier_flags::Control) != 0;
+  const bool alt = (event.modifiers & input::modifier_flags::Alt) != 0;
+  const bool shift = (event.modifiers & input::modifier_flags::Shift) != 0;
+  if (!released && !(event.keyFlags & input::key_flags::Repeat)) {
+    if ((event.virtualKey == 0x09 && (alt || control)) || (event.virtualKey == 0x75 && control)) {
+      cycle_window_locked(control && !alt, shift); // Alt+Tab roots, Ctrl+Tab/F6 groups.
+      return;
+    }
+    if (alt && event.virtualKey == 0x73) { // Alt+F4
+      if (auto *w = focused_window_locked(); w && w->queue) post_locked(*w->queue, w->hwnd, kMsgClose, 0, 0);
+      return;
+    }
+    if (alt && event.virtualKey == 0x20) { // Alt+Space opens the focused frame's system menu.
+      auto *window = focused_window_locked();
+      if (!window) window = active_window_locked();
+      if (window && window->state == 2 && window->parent && !released && event.virtualKey == 0x0D) {
+        show_command_locked(*window, 4);
+        return;
+      }
+      if (window && window->queue && effectively_visible_locked(*window)) {
+        const int32_t border = (window->style & kStyleBorder) ? kBorderWidth : 0;
+        const int32_t x = window->rect.left + border;
+        const int32_t y = window->rect.top + border + kCaptionHeight;
+        post_locked(*window->queue, window->hwnd, 0x00A1, static_cast<uint32_t>(HitTest::SysMenu),
+                    (static_cast<uint32_t>(y & 0xFFFF) << 16) | static_cast<uint32_t>(x & 0xFFFF));
+      }
+      return;
+    }
+  }
+  auto *window = focused_window_locked();
+  if (!window) window = active_window_locked();
+  if (!window || !window->queue || !effectively_visible_locked(*window) || window->state == 2) return;
+  const uint32_t metadata = event.scanCode | ((event.keyFlags & 7u) << 8) | ((event.modifiers & 0x1FF) << 16);
+  post_locked(*window->queue, window->hwnd, released ? kMsgKeyUp : kMsgKeyDown, event.virtualKey, metadata);
+  if (event.character && !released && !alt && !control)
+    post_locked(*window->queue, window->hwnd, kMsgChar, static_cast<uint8_t>(event.character), metadata);
+}
+
+void raw_input_thread(void *) {
+  {
+    Guard guard;
+    const auto screen = screen_rect();
+    g_input.mouseX = (screen.left + screen.right) / 2;
+    g_input.mouseY = (screen.top + screen.bottom) / 2;
+    cursor_move_locked(g_input.mouseX, g_input.mouseY);
+  }
   for (;;) {
     input::AnyInputEvent event;
     if (!KE_INPUT_WaitEvent(event, kstd::chrono::milliseconds(1000))) continue;
-    
-    if (event.base.is<input::MouseInputEvent>()) {
-      auto &me = event.mouse;
-      
-      erase_cursor(g_input.mouseX, g_input.mouseY);
-      
-      g_input.mouseX += me.lastX;
-      g_input.mouseY += me.lastY;
-      
-      if (g_input.mouseX < screen.left) g_input.mouseX = screen.left;
-      if (g_input.mouseX >= screen.right) g_input.mouseX = screen.right - 1;
-      if (g_input.mouseY < screen.top) g_input.mouseY = screen.top;
-      if (g_input.mouseY >= screen.bottom) g_input.mouseY = screen.bottom - 1;
-      
-      draw_cursor(g_input.mouseX, g_input.mouseY);
-      
-      Guard g;
-      KWindowObject *target = nullptr;
-      
-      if (g_input.dragHwnd) {
-         target = lookup_locked(g_input.dragHwnd);
-         if (target) {
-            URect nr = target->rect;
-            nr = nr.Offset(g_input.mouseX - (nr.left + g_input.dragOffX), g_input.mouseY - (nr.top + g_input.dragOffY));
-            move_window_locked(*target, nr);
-         }
-      }
-
-      if (me.buttonFlags != 0) {
-          if (me.buttonFlags & input::mouse_button_flags::LeftDown) {
-              target = window_from_point_locked(g_input.mouseX, g_input.mouseY);
-              if (target) {
-                  set_active_window_locked(target->hwnd);
-                  HitTest ht = hit_test_locked(*target, g_input.mouseX, g_input.mouseY);
-                  if (ht == HitTest::Caption) {
-                      g_input.dragHwnd = target->hwnd;
-                      g_input.dragOffX = g_input.mouseX - target->rect.left;
-                      g_input.dragOffY = g_input.mouseY - target->rect.top;
-                  } else if (ht == HitTest::Close) {
-                      if (target->queue) post_locked(*target->queue, target->hwnd, kMsgClose, 0, 0);
-                  } else if (ht == HitTest::Client) {
-                      if (target->queue) {
-                          URect cr = screen_to_client_locked(*target, {g_input.mouseX, g_input.mouseY, 0, 0});
-                          post_locked(*target->queue, target->hwnd, kMsgLButtonDown, 0, (static_cast<uint32_t>(cr.top & 0xFFFF) << 16) | (static_cast<uint32_t>(cr.left) & 0xFFFF));
-                      }
-                  }
-              } else {
-                  set_active_window_locked(0);
-              }
-              g_input.buttons |= 1;
-          } else if (me.buttonFlags & input::mouse_button_flags::LeftUp) {
-              if (g_input.dragHwnd) g_input.dragHwnd = 0;
-              target = window_from_point_locked(g_input.mouseX, g_input.mouseY);
-              if (target && target->queue) {
-                  URect cr = screen_to_client_locked(*target, {g_input.mouseX, g_input.mouseY, 0, 0});
-                  post_locked(*target->queue, target->hwnd, kMsgLButtonUp, 0, (static_cast<uint32_t>(cr.top & 0xFFFF) << 16) | (static_cast<uint32_t>(cr.left) & 0xFFFF));
-              }
-              g_input.buttons &= ~1u;
-          }
-      }
-      
-      if (!g_input.dragHwnd) {
-          target = window_from_point_locked(g_input.mouseX, g_input.mouseY);
-          if (target && target->queue) {
-              URect cr = screen_to_client_locked(*target, {g_input.mouseX, g_input.mouseY, 0, 0});
-              post_locked(*target->queue, target->hwnd, kMsgMouseMove, 0, (static_cast<uint32_t>(cr.top & 0xFFFF) << 16) | (static_cast<uint32_t>(cr.left) & 0xFFFF));
-          }
-      }
-    } else if (event.base.is<input::KeyboardInputEvent>()) {
-       auto &ke = event.keyboard;
-       Guard g;
-       KWindowObject *active = active_window_locked();
-       if (active && active->queue) {
-           uint32_t msg = (ke.keyFlags & input::key_flags::Break) ? kMsgKeyUp : kMsgKeyDown;
-           post_locked(*active->queue, active->hwnd, msg, ke.virtualKey, ke.scanCode);
-           if (ke.character && !(ke.keyFlags & input::key_flags::Break)) {
-               post_locked(*active->queue, active->hwnd, kMsgChar, static_cast<uint32_t>(static_cast<uint8_t>(ke.character)), 0);
-           }
-       }
-    }
+    Guard guard;
+    if (event.base.is<input::MouseInputEvent>()) mouse_locked(event.mouse);
+    else if (event.base.is<input::KeyboardInputEvent>()) keyboard_locked(event.keyboard);
   }
 }
+} // namespace
 
 void init_raw_input() noexcept {
-    KE_SCHED_CreateThread(raw_input_thread, nullptr, 2);
+  if (!KE_SCHED_CreateThread(raw_input_thread, nullptr, 2)) KE_Print("USER: cannot create raw input worker");
 }
-
 } // namespace kernel::user

@@ -5,10 +5,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 /** Writes data from `data` to an open object handle. */
 struct __SYS_IO_WRITE_V1 {
     /** Open handle to write to. */
-    uint32_t handle;
+    HANDLE handle;
     /** Buffer containing the data to write. */
     const uint8_t* data;
     uint32_t dataLength;

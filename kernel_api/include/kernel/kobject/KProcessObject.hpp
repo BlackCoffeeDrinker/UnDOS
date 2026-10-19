@@ -4,7 +4,9 @@
 
 #include <kernel/__core.hpp>
 #include <kernel/gfx/KDeviceContextTable.hpp>
+#include <kernel/gfx/KFontResourceTable.hpp>
 #include <kernel/kobject/KDispatcherHeader.hpp>
+#include <kernel/kobject/KEventObject.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/kobject/ObjectType.hpp>
@@ -14,6 +16,11 @@ namespace kernel {
 struct KSubsystemObject;
 
 enum class KHandle : uint32_t {};
+enum class StandardStream : uint32_t {
+  Stdin,
+  Stdout,
+  Stderr,
+};
 
 struct ProcessHandleTable {
   enum class HandleAccess : uint32_t {
@@ -41,6 +48,41 @@ struct ProcessHandleTable {
   kstd::list<Entry> entries;
   kstd::list<KHandle> free_list;
   uint32_t next_raw_handle{0};
+  struct StandardStreamHandle {
+    KHandle value{};
+    bool available{false};
+  };
+  StandardStreamHandle standard_streams[3]{};
+
+  bool GetStandardHandle(StandardStream stream, KHandle &handle) const {
+    const auto index = static_cast<uint32_t>(stream);
+    if (index >= 3 || !standard_streams[index].available) return false;
+    for (const auto &entry : entries) {
+      if (entry.handle == standard_streams[index].value && entry.object) {
+        handle = entry.handle;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool SetStandardHandle(StandardStream stream, KHandle handle) {
+    const auto index = static_cast<uint32_t>(stream);
+    if (index >= 3) return false;
+    const auto *entry = Lookup(handle);
+    if (!entry || !entry->object) return false;
+    standard_streams[index] = {handle, true};
+    return true;
+  }
+
+  bool AllocateStandardHandle(StandardStream stream, const KObjectPtr<KObject> &object,
+                              HandleAccess access) {
+    if (!object || static_cast<uint32_t>(stream) >= 3) return false;
+    const auto count = entries.size();
+    const auto handle = Allocate(object, access, HandleFlags::Inheritable);
+    if (entries.size() != count + 1) return false;
+    return SetStandardHandle(stream, handle);
+  }
 
   KHandle Allocate(KObjectPtr<KObject> obj,
                    HandleAccess access,
@@ -85,6 +127,9 @@ struct ProcessHandleTable {
           return false;
 
         if (--it->refcount == 0) {
+          for (auto &stream : standard_streams) {
+            if (stream.available && stream.value == h) stream.available = false;
+          }
           free_list.push_back(h);
           entries.erase(it);
         }
@@ -110,23 +155,37 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
   State state{State::Running};
   // Signalled (manual-reset) when the process exits.
   KDispatcherHeader exitHeader;
+  // Loader completion, not process exit. Exit before completion signals failure.
+  KObjectPtr<KEventObject> startupEvent;
+  bool startupReady{false};
 
   ProcessHandleTable handles;
   DeviceContextTable dcTable;
+  font::ResourceTable fontResources;
 
-  void AttachStandardStreams(const KObjectPtr<KObject> &sink) {
-    if (!sink) return;
-    handles.Allocate(sink, ProcessHandleTable::HandleAccess::Read, ProcessHandleTable::HandleFlags::Inheritable);
-    handles.Allocate(sink, ProcessHandleTable::HandleAccess::Write, ProcessHandleTable::HandleFlags::Inheritable);
-    handles.Allocate(sink, ProcessHandleTable::HandleAccess::Write, ProcessHandleTable::HandleFlags::Inheritable);
+  bool AttachStandardStreams(const KObjectPtr<KObject> &sink) {
+    if (!handles.AllocateStandardHandle(StandardStream::Stdin, sink, ProcessHandleTable::HandleAccess::Read)) return false;
+    if (!handles.AllocateStandardHandle(StandardStream::Stdout, sink, ProcessHandleTable::HandleAccess::Write)) return false;
+    return handles.AllocateStandardHandle(StandardStream::Stderr, sink, ProcessHandleTable::HandleAccess::Write);
   }
 
-  void InheritHandlesFrom(ProcessHandleTable &parentHandles) {
+  bool InheritHandlesFrom(ProcessHandleTable &parentHandles) {
     for (const auto &entry : parentHandles.entries) {
       if ((static_cast<uint32_t>(entry.flags) & static_cast<uint32_t>(ProcessHandleTable::HandleFlags::Inheritable)) != 0) {
-        handles.Allocate(entry.object, entry.access, entry.flags);
+        const auto count = handles.entries.size();
+        const auto inheritedHandle = handles.Allocate(entry.object, entry.access, entry.flags);
+        if (handles.entries.size() != count + 1 || !handles.Lookup(inheritedHandle)) return false;
+        for (uint32_t i = 0; i < 3; ++i) {
+          const auto stream = static_cast<StandardStream>(i);
+          KHandle parentStandardHandle{};
+          if (parentHandles.GetStandardHandle(stream, parentStandardHandle) &&
+              parentStandardHandle == entry.handle) {
+            handles.SetStandardHandle(stream, inheritedHandle);
+          }
+        }
       }
     }
+    return true;
   }
 };
 

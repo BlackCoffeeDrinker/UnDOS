@@ -5,8 +5,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 struct __SYS_GFX_GETDEVICECAPS_V1 {
-    uint32_t dc;
+    HANDLER dc;
     struct DeviceCaps caps;
 };
 

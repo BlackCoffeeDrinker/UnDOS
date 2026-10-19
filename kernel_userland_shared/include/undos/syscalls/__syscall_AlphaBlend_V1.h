@@ -5,9 +5,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 struct __SYS_GFX_ALPHABLEND_V1 {
-    uint32_t dstDC;
-    uint32_t srcDC;
+    HANDLER dstDC;
+    HANDLER srcDC;
     struct Rect dstRect;
     struct Rect srcRect;
     uint8_t alpha;

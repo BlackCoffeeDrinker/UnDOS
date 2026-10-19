@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/** Changes the protection of an existing page range (e.g. mark executable). */
+/** Reserved: currently rejects with INVALID_ARGUMENT (no partial VAD updates). */
 struct __SYS_MEM_PROTECT_V1 {
     /** Base address of the region to reprotect. */
     uint32_t address;

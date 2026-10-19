@@ -1,0 +1,28 @@
+set(CMAKE_SYSTEM_NAME UnDOS)
+set(CMAKE_SYSTEM_PROCESSOR i386)
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
+
+# The source copy bootstraps the SDK; the installed copy describes its sysroot.
+get_filename_component(_undos_sdk_root "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+if (EXISTS "${CMAKE_CURRENT_LIST_DIR}/UnDOSConfig.cmake")
+    if (NOT IS_DIRECTORY "${_undos_sdk_root}/sysroot")
+        message(FATAL_ERROR "The installed UnDOS SDK is missing its sysroot")
+    endif ()
+    set(CMAKE_SYSROOT "${_undos_sdk_root}/sysroot")
+    list(PREPEND CMAKE_FIND_ROOT_PATH "${_undos_sdk_root}")
+    list(PREPEND CMAKE_PREFIX_PATH "${_undos_sdk_root}")
+endif ()
+
+find_program(CMAKE_C_COMPILER NAMES i686-elf-gcc REQUIRED)
+find_program(CMAKE_CXX_COMPILER NAMES i686-elf-g++ REQUIRED)
+find_program(CMAKE_ASM_COMPILER NAMES i686-elf-gcc REQUIRED)
+find_program(CMAKE_AR NAMES i686-elf-ar REQUIRED)
+find_program(CMAKE_RANLIB NAMES i686-elf-ranlib REQUIRED)
+find_program(CMAKE_OBJCOPY NAMES i686-elf-objcopy REQUIRED)
+find_program(CMAKE_LINKER NAMES i686-elf-ld REQUIRED)
+
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)

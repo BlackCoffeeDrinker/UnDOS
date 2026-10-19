@@ -526,7 +526,8 @@ void I8042_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   // very first captured byte already has something to drain it.
   ctx->wake.manualReset = false;
   ctx->wake.signalled = false;
-  ctx->pumpThread = KE_SCHED_CreateThread(&ps2::I8042_PumpThread, ctx, 0);
+  // Input decoding must not compete at idle priority with a polling application.
+  ctx->pumpThread = KE_SCHED_CreateThread(&ps2::I8042_PumpThread, ctx, 2);
   if (!ctx->pumpThread) {
     KE_Print("i8042: Failed to create pump thread; no input will be decoded");
     return;

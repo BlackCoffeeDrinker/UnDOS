@@ -1,0 +1,5 @@
+add_executable(demo main.cpp)
+target_link_libraries(demo PRIVATE undosgui)
+set_target_properties(demo PROPERTIES POSITION_INDEPENDENT_CODE OFF)
+target_compile_options(demo PRIVATE -ffreestanding -nostdlib -fno-exceptions -fno-rtti -fno-pic -fno-pie -m32)
+target_link_options(demo PRIVATE -nostdlib -no-pie -Wl,-T,${CMAKE_SOURCE_DIR}/userland/apps/term/linker.ld)

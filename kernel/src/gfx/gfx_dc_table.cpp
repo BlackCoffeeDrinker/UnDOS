@@ -34,6 +34,12 @@ kstd::pair<KDeviceContextSlot *, HDC> DeviceContextTable::Allocate() noexcept {
   slot.target = nullptr;
   slot.selectedBitmap = nullptr;
   slot.penColor = 0;
+  slot.backgroundColor = 7;
+  slot.opaqueText = false;
+  slot.memoryDC = false;
+  slot.noAccel = false;
+  slot.presentationDirty = false;
+  slot.presentationBounds = {};
   slot.currentX = 0;
   slot.currentY = 0;
   slot.originX = 0;

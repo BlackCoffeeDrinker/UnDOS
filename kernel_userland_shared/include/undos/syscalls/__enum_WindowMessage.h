@@ -12,11 +12,17 @@ enum WindowMessage {
     WindowMessage_Move = 3,
     WindowMessage_Size = 5,
     WindowMessage_Activate = 6,
+    WindowMessage_SetFocus = 7,
+    WindowMessage_KillFocus = 8,
     WindowMessage_Paint = 15,
     WindowMessage_Close = 16,
     WindowMessage_Quit = 18,
     WindowMessage_NcHitTest = 132,
     WindowMessage_NcMouseMove = 160,
+    /**
+     * Single system-box click: wParam=SysMenu (3), lParam signed screen x/y.
+     * Userland presents the system menu; system-box double-click sends Close.
+     */
     WindowMessage_NcLButtonDown = 161,
     WindowMessage_NcLButtonUp = 162,
     WindowMessage_KeyDown = 256,
@@ -25,7 +31,9 @@ enum WindowMessage {
     WindowMessage_MouseMove = 512,
     WindowMessage_LButtonDown = 513,
     WindowMessage_LButtonUp = 514,
+    WindowMessage_LButtonDblClk = 515,
     WindowMessage_RButtonDown = 516,
     WindowMessage_RButtonUp = 517,
+    WindowMessage_CaptureChanged = 533,
     WindowMessage_User = 1024,
 };

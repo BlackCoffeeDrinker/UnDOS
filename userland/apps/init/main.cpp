@@ -8,7 +8,7 @@ extern "C" const char *init_shared_message();
 
 namespace {
 void init_probe_device_control() {
-  uint32_t mouse = 0;
+  HANDLE mouse = 0;
   if (UD_SYS_OpenV1("\\Device\\PointerPort0", FileOpenMode_Read, &mouse) == SyscallReturnCode_OKAY) {
     constexpr IoctlMouseConfig config{.enable = 1, .sampleRate = 60};
     uint32_t outLen = 0;
@@ -20,7 +20,7 @@ void init_probe_device_control() {
 }
 
 void init_probe_wait() {
-  uint32_t event = 0;
+  HANDLE event = 0;
   if (UD_SYS_CreateEventV1(EventFlags_ManualReset, &event) == SyscallReturnCode_OKAY) {
     const auto before = UD_SYS_WaitForObjectV1(event, 50);
     (void) UD_SYS_SetEventV1(event);
@@ -29,7 +29,7 @@ void init_probe_wait() {
     (void) UD_SYS_CloseV1(event);
   }
 
-  uint32_t term = 0;
+  HANDLE term = 0;
   const auto created = UD_SYS_CreateProcessV1("/System/term.elf", "", ProcessFlags_None, &term);
   if (created != SyscallReturnCode_OKAY) {
     crt_printf("init: CreateProcess term.elf ret=%x\n", created);
@@ -42,7 +42,7 @@ void init_probe_wait() {
 }
 
 void init_probe_input() {
-  uint32_t input = 0;
+  HANDLE input = 0;
   const auto opened = UD_SYS_OpenV1("\\Device\\Input", FileOpenMode_Read, &input);
   if (opened != SyscallReturnCode_OKAY) {
     crt_printf("init: open Device\\Input ret=%x\n", opened);
@@ -97,12 +97,69 @@ void init_probe_windows() {
 } // namespace
 
 extern "C" int main(int argc, char **argv) {
-  (void) argc;
-  (void) argv;
+  if (argc == 2 && !strcmp(argv[1], "--abi-test")) {
+    HANDLE child = 0;
+    if (UD_SYS_CreateProcessV1("/System/abitest.elf", "\"two words\" \"\" last",
+                              ProcessFlags_None, &child) != SyscallReturnCode_OKAY) {
+      (void) UD_SYS_PrintV1("ABI probe: child creation FAIL");
+      return 1;
+    }
+    uint32_t status = 0;
+    const auto waited = UD_SYS_WaitProcessV1(child, WaitTimeout_Infinite, &status);
+    (void) UD_SYS_CloseV1(child);
+    if (waited != SyscallReturnCode_OKAY || status != 0x12345678) {
+      (void) UD_SYS_PrintV1("ABI probe: exit status FAIL");
+      return 1;
+    }
+    if (UD_SYS_CreateProcessV1("/System/abitest.elf", "--immediate",
+                              ProcessFlags_None, &child) != SyscallReturnCode_OKAY) {
+      (void) UD_SYS_PrintV1("ABI probe: immediate child creation FAIL");
+      return 1;
+    }
+    const auto immediate_wait = UD_SYS_WaitProcessV1(child, WaitTimeout_Infinite, &status);
+    (void) UD_SYS_CloseV1(child);
+    if (immediate_wait != SyscallReturnCode_OKAY || status != 0x87654321u) {
+      (void) UD_SYS_PrintV1("ABI probe: immediate exit status FAIL");
+      return 1;
+    }
+    if (UD_SYS_CreateProcessV1("/System/abimiss.elf", "", ProcessFlags_None, &child) ==
+        SyscallReturnCode_OKAY) {
+      (void) UD_SYS_CloseV1(child);
+      (void) UD_SYS_PrintV1("ABI probe: missing note accepted FAIL");
+      return 1;
+    }
+    (void) UD_SYS_PrintV1("ABI probe: exit status and missing-note rejection PASS");
+    return 0;
+  }
+  if (argc < 2 || strcmp(argv[1], "--diagnostic") != 0) {
+    init_probe_device_control();
+    for (unsigned attempt = 0; attempt < 3; ++attempt) {
+      HANDLE shell = 0;
+      const auto created = UD_SYS_CreateProcessV1("/System/progman.elf", "", ProcessFlags_None, &shell);
+      if (created != SyscallReturnCode_OKAY) {
+        crt_printf("init: Program Manager startup failed (%x), attempt %u/3\n", created, attempt + 1);
+        continue;
+      }
+      uint32_t exitCode = 0;
+      const auto waited = UD_SYS_WaitProcessV1(shell, WaitTimeout_Infinite, &exitCode);
+      (void) UD_SYS_CloseV1(shell);
+      if (waited != SyscallReturnCode_OKAY) {
+        crt_printf("init: cannot supervise Program Manager (%x)\n", waited);
+        return 1;
+      }
+      if (exitCode == 0) {
+        crt_puts("init: GUI session ended normally\n");
+        return 0;
+      }
+      crt_printf("init: Program Manager exited with %u, attempt %u/3\n", exitCode, attempt + 1);
+    }
+    crt_puts("init: GUI recovery limit reached. Run init --diagnostic to exercise subsystems.\n");
+    return 1;
+  }
 
   crt_printf("\n=================================================\n");
   crt_printf("  UnDOS Interactive Console Shell (/System/init.elf)\n");
-  crt_printf("  Virtual TTY subsystem active on stdio (handles 0, 1)\n");
+  crt_printf("  Standard streams are queried through GetStdHandle\n");
   crt_printf("=================================================\n\n");
   crt_printf("%s", init_shared_message());
 

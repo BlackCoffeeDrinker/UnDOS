@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.27)
+project(TerminalProbe LANGUAGES C)
+find_package(UnDOS CONFIG REQUIRED)
+add_executable(terminal main.c)
+target_link_libraries(terminal PRIVATE UnDOS::Application)

@@ -165,6 +165,26 @@ SyscallReturnCode handle_Write_V1(__KRN_IO_WRITE_V1 &&args) {
   return SyscallReturnCode_OKAY;
 }
 
+/** Versioned byte-counting write, preserving the V1 ABI. */
+SyscallReturnCode handle_Write_V2(__KRN_IO_WRITE_V2 &&args) {
+  args.transferred = 0;
+  const auto thread = KE_SCHED_GetCurrentThread();
+  if (!thread || !thread->owner_process) return SyscallReturnCode_INVALID_ARGUMENT;
+  auto &handles = thread->owner_process->handles;
+  const auto h = static_cast<kernel::KHandle>(args.handle);
+  const auto entry = handles.Lookup(h);
+  if (!entry || !handles.HasAccess(h, kernel::ProcessHandleTable::HandleAccess::Write))
+    return SyscallReturnCode_INVALID_ARGUMENT;
+  const auto object = entry->object.As<kernel::KIOObject>();
+  if (!object) return SyscallReturnCode_INVALID_ARGUMENT;
+  size_t transferred = 0;
+  const auto status = object->Write({args.data.get(), args.data.size()}, transferred);
+  if (status != kernel::IoStatus::Success || transferred > args.data.size())
+    return SyscallReturnCode_INVALID_ARGUMENT;
+  args.transferred = static_cast<uint32_t>(transferred);
+  return SyscallReturnCode_OKAY;
+}
+
 /** Sends a control code to the device behind an open handle. */
 SyscallReturnCode handle_Control_V1(__KRN_IO_CONTROL_V1 &&args) {
   const auto currentThread = KE_SCHED_GetCurrentThread();

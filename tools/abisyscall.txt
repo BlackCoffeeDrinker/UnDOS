@@ -1,0 +1,17 @@
+/** FPU capability reported by QueryFpu. */
+enum FpuCapability {
+    /** Native x87 execution is not safely managed by the kernel. */
+    Unavailable = 0,
+    /** Native x87 execution is supported with per-thread state preservation. */
+    Native = 1,
+    /** Native x87 execution is provided by a kernel emulator. */
+    Emulated = 2,
+};
+
+/** Reports usable FPU support, not merely the presence of an x87 unit.
+ * Native is only valid when the kernel initializes and preserves each thread's
+ * FPU state; Emulated is only valid when an instruction emulator is active.
+ */
+syscall V1 ABI QueryFpu [207] {
+    capability: OUT enum<FpuCapability>;
+};

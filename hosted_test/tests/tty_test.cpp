@@ -10,6 +10,51 @@
 #include "ob_test_support.hpp"
 #include <string.h>
 
+TEST_CASE("Blocking TTY reads distinguish data and EOF", "[tty][blocking]") {
+  kernel::tty::KVtty tty;
+  uint8_t buffer[16]{};
+  size_t transferred = 99;
+  REQUIRE(tty.sink_read_wait(buffer, 0, transferred));
+  REQUIRE(transferred == 0);
+
+  SECTION("Committed data is available without waiting") {
+    const uint8_t input[] = {'o', 'k', '\n'};
+    REQUIRE(tty.source_write(input, sizeof(input)) == sizeof(input));
+    REQUIRE(tty.sink_read_wait(buffer, 2, transferred));
+    REQUIRE(transferred == 2);
+    REQUIRE(memcmp(buffer, "ok", 2) == 0);
+    REQUIRE(tty.sink_read_wait(buffer, sizeof(buffer), transferred));
+    REQUIRE(transferred == 1);
+    REQUIRE(buffer[0] == '\n');
+  }
+  SECTION("Ctrl+D EOF is consumed without closing the next session") {
+    const uint8_t eof = 4;
+    REQUIRE(tty.source_write(&eof, 1) == 1);
+    REQUIRE(tty.sink_read_wait(buffer, sizeof(buffer), transferred));
+    REQUIRE(transferred == 0);
+    const uint8_t input[] = {'x', '\n'};
+    REQUIRE(tty.source_write(input, sizeof(input)) == sizeof(input));
+    REQUIRE(tty.sink_read_wait(buffer, sizeof(buffer), transferred));
+    REQUIRE(transferred == 2);
+    REQUIRE(memcmp(buffer, input, transferred) == 0);
+  }
+  SECTION("Closing source produces EOF") {
+    tty.close_source();
+    REQUIRE(tty.sink_read_wait(buffer, sizeof(buffer), transferred));
+    REQUIRE(transferred == 0);
+  }
+  SECTION("Closing sink produces EOF") {
+    tty.close_sink();
+    REQUIRE(tty.sink_read_wait(buffer, sizeof(buffer), transferred));
+    REQUIRE(transferred == 0);
+  }
+  SECTION("A failed wait is not reported as EOF") {
+    // The hosted scheduler cannot block and returns Timeout on an empty header.
+    REQUIRE_FALSE(tty.sink_read_wait(buffer, sizeof(buffer), transferred));
+    REQUIRE(transferred == 0);
+  }
+}
+
 TEST_CASE("RingBuffer basic push, pop, read, write semantics", "[tty][ringbuffer]") {
   kernel::tty::RingBuffer<uint8_t, 8> ring;
   REQUIRE(ring.empty());

@@ -5,9 +5,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 struct __SYS_GFX_SELECTOBJECT_V1 {
-    uint32_t dc;
-    uint32_t object;
+    HANDLER dc;
+    HANDLER object;
 };
 
 constexpr size_t   __SYS_GFX_SELECTOBJECT_V1_SIZE = sizeof(struct __SYS_GFX_SELECTOBJECT_V1);

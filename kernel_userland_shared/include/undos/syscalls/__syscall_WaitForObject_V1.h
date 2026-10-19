@@ -5,10 +5,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 /** Blocks until a waitable handle (event or process) is signalled. Returns TIMEOUT on expiry. */
 struct __SYS_PROC_WAITFOROBJECT_V1 {
     /** Handle to wait on. */
-    uint32_t handle;
+    HANDLE handle;
     /** Timeout in milliseconds; 0 polls, WaitTimeout_Infinite never expires. */
     uint32_t timeoutMs;
 };

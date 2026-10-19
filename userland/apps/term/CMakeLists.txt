@@ -4,7 +4,7 @@ project(term CXX ASM)
 add_executable(term main.cpp)
 
 target_include_directories(term PRIVATE ${CMAKE_SOURCE_DIR}/userland)
-target_link_libraries(term PRIVATE undoscrt KernelUserlandShared)
+target_link_libraries(term PRIVATE undosgui)
 
 set_target_properties(term PROPERTIES POSITION_INDEPENDENT_CODE OFF)
 

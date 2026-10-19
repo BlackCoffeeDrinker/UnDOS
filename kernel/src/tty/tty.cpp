@@ -1,4 +1,6 @@
 #include <kernel/tty/tty.hpp>
+#include <kernel/scheduler.hpp>
+#include <kernel/hal_interface.hpp>
 
 namespace kernel::tty {
 
@@ -91,6 +93,7 @@ size_t KVtty::source_write(const uint8_t *src, size_t count) {
     }
   }
 
+  if (!m_sinkInRing.empty() || m_eofSignaled) KE_EVENT_Signal(m_inputReady, true);
   return processed;
 }
 
@@ -108,6 +111,7 @@ bool KVtty::source_has_data() const {
 void KVtty::close_source() {
   kstd::unique_lock lock(m_lock);
   m_sourceClosed = true;
+  KE_EVENT_Signal(m_inputReady, true);
 }
 
 bool KVtty::is_source_closed() const {
@@ -164,9 +168,34 @@ bool KVtty::sink_has_data() const {
   return !m_sinkInRing.empty();
 }
 
+bool KVtty::sink_read_wait(uint8_t *dst, size_t count, size_t &transferred) {
+  transferred = 0;
+  if (!count) return true;
+  for (;;) {
+    {
+      kstd::unique_lock lock(m_lock);
+      if (!m_sinkInRing.empty()) {
+        transferred = m_sinkInRing.read(dst, count);
+        return true;
+      }
+      if (m_eofSignaled || m_sourceClosed || m_sinkClosed) {
+        m_eofSignaled = false;
+        return true;
+      }
+      // Reset under the TTY lock; a writer after unlock leaves a sticky signal.
+      const uintptr_t state = HAL_CPU_SaveAndDisableInterrupts();
+      m_inputReady.Reset();
+      HAL_CPU_RestoreInterrupts(state);
+    }
+    if (KE_SCHED_WaitForHeader(m_inputReady, kernel::WAIT_INFINITE) != kernel::WaitStatus::Signalled)
+      return false;
+  }
+}
+
 void KVtty::close_sink() {
   kstd::unique_lock lock(m_lock);
   m_sinkClosed = true;
+  KE_EVENT_Signal(m_inputReady, true);
 }
 
 bool KVtty::is_sink_closed() const {

@@ -78,8 +78,8 @@ class FlagsType(FieldType):
 
 class AliasType(FieldType):
     """An unresolved reference to a `using`-declared name. Replaced with the
-    concrete FieldType it refers to by resolver.resolve_aliases() before any
-    codegen pass runs."""
+    concrete FieldType by resolver.resolve_aliases() before codegen. Scalar
+    aliases become CType references to their generated typedef names."""
 
     def __init__(self, name: str):
         self.name = name

@@ -46,6 +46,14 @@ struct KDeviceContextSlot {
   KObjectPtr<KSurface> selectedBitmap;// last SelectObject'd bitmap, if any
 
   uint32_t penColor = 0;
+  uint32_t backgroundColor = 7;
+  bool opaqueText = false;
+  bool memoryDC = false;
+  bool noAccel = false;
+  // Presentation damage is independent of the live USER occlusion clip, which
+  // can change while a paint DC is active.
+  bool presentationDirty = false;
+  KClipRect presentationBounds{};
 
   // MoveTo/LineTo cursor
   int32_t currentX = 0;

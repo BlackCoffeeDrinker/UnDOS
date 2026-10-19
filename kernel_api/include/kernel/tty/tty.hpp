@@ -7,6 +7,7 @@
 #include <kernel/__core.hpp>
 #include <kernel/mutex.hpp>
 #include <kernel/fwd/KPtr.hpp>
+#include <kernel/kobject/KDispatcherHeader.hpp>
 
 namespace kernel::tty {
 
@@ -117,6 +118,7 @@ public:
   // Sink endpoint operations
   size_t sink_write(const uint8_t *src, size_t count);
   size_t sink_read(uint8_t *dst, size_t count);
+  bool sink_read_wait(uint8_t *dst, size_t count, size_t &transferred);
   [[nodiscard]] bool sink_has_data() const;
   void close_sink();
   [[nodiscard]] bool is_sink_closed() const;
@@ -160,6 +162,7 @@ private:
   bool m_sourceClosed{false};
   bool m_sinkClosed{false};
   bool m_eofSignaled{false};
+  kernel::KDispatcherHeader m_inputReady{false, true, nullptr};
 };
 
 } // namespace kernel::tty

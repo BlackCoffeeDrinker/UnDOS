@@ -320,6 +320,9 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
     KE_Print("Last-resort drivers: no display registered, loading fallbacks");
     kernel::driver::LoadLastResortDrivers();
     KE_PNP_WaitForQuiescence();
+    // PnP queues Started notifications; the event pump still has to enumerate
+    // the fallback adapter and select a mode before GUI processes can paint.
+    kernel::gfx::wait_for_drivers();
   }
 
   kernel::user::init_raw_input();

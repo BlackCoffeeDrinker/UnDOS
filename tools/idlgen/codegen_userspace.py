@@ -89,8 +89,8 @@ def generate_userspace(module: IDLModule, out_h_dir: str):
             for field in sc.fields:
                 if field in inline_fields:
                     f.write(f"    __wire.{field.name} = {field.name};\n")
-                    f.write(f"    __wire.{field.name}Length = {field.name} ? 1 : 0;\n")
-                    f.write(f"     while ({field.name}[__wire.{field.name}Length]) __wire.{field.name}Length++;\n")
+                    f.write(f"    __wire.{field.name}Length = 0;\n")
+                    f.write(f"    if ({field.name}) while ({field.name}[__wire.{field.name}Length]) __wire.{field.name}Length++;\n")
                     continue
                 if field.direction == "OUT":
                     if isinstance(field.ftype, StringType):

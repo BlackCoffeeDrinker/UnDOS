@@ -2,6 +2,7 @@
 
 #include <Kernel.hpp>
 #include <kernel/kobject/KThreadObject.hpp>
+#include <kernel/kobject/KProcessObject.hpp>
 #include <kernel/scheduler.hpp>
 #include <kernel/time.hpp>
 
@@ -13,7 +14,13 @@ MessageQueue *g_queues{nullptr};
 // synthesised from it instead of being queued, which coalesces repaints.
 KWindowObject *paint_candidate_locked(const MessageQueue &queue) noexcept {
   for (auto *w = topmost_locked(); w; w = w->below) {
-    if (w->queue == &queue && w->Visible() && !w->invalid.Empty()) return w;
+    if (w->paintDC && w->process && !w->process->dcTable.Resolve(w->paintDC)) {
+      w->invalid = w->invalid.Union(w->painting);
+      w->paintDC = 0;
+      w->painting = {};
+      w->paintClip.Clear();
+    }
+    if (w->queue == &queue && effectively_visible_locked(*w) && !w->paintDC && !w->invalid.Empty()) return w;
   }
   return nullptr;
 }
@@ -55,6 +62,19 @@ bool post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t 
   return true;
 }
 
+bool geometry_message_locked(const MessageQueue &queue, QueuedMessage &out, bool remove) noexcept {
+  for (auto *w = topmost_locked(); w; w = w->below) {
+    if (w->queue != &queue || !w->pendingGeometry) continue;
+    const bool move = (w->pendingGeometry & 1) != 0;
+    out = QueuedMessage{w->hwnd, move ? kMsgMove : kMsgSize, move ? 0 : w->state,
+                        move ? w->moveParam : w->sizeParam,
+                        static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
+    if (remove) w->pendingGeometry &= static_cast<uint8_t>(move ? ~1u : ~2u);
+    return true;
+  }
+  return false;
+}
+
 bool get_message(QueuedMessage &out, bool block, bool remove) noexcept {
   for (;;) {
     lock();
@@ -64,6 +84,10 @@ bool get_message(QueuedMessage &out, bool block, bool remove) noexcept {
       return false;
     }
     if (remove ? q->ring.Pop(out) : q->ring.Peek(out)) {
+      unlock();
+      return true;
+    }
+    if (geometry_message_locked(*q, out, remove)) {
       unlock();
       return true;
     }

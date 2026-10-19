@@ -1,3 +1,10 @@
+add_test(NAME libc_streams
+        COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../sdk/tests/check-libc.py
+            --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER})
+
+add_test(NAME syscall_idl
+        COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/tests/test_idlgen.py)
+
 add_executable(KernelTests
         str_test.cpp
         array_test.cpp
@@ -18,6 +25,13 @@ add_executable(KernelTests
         cpu_context_test.cpp
         wait_test.cpp
         user_test.cpp
+        progman_test.cpp
+        process_startup_test.cpp
+        application_abi_test.cpp
+        standard_handles_test.cpp
+        font_resource_test.cpp
+        font_loader_test.cpp
+        ../../userland/fontloader/decoder.cpp
         percpu_test.cpp
         input_scancode_test.cpp
         mouse_packet_test.cpp
@@ -48,6 +62,7 @@ add_executable(KernelTests
         ../../kernel/src/gfx/gfx_management.cpp
         ../../kernel/src/gfx/gfx_software_fallback.cpp
         ../../kernel/src/gfx/gfx_dc_table.cpp
+        ../../kernel/src/gfx/font/font_resources.cpp
         ../../kernel/src/gfx/monitor_config.cpp
         ../../kernel/src/tty/tty.cpp
         ../../kernel/src/tty/tty_device.cpp
@@ -62,6 +77,7 @@ add_executable(KernelTests
         object_creation_leak_test.cpp
         configuration_manager_test.cpp
         gfx_test.cpp
+        gfx_bitmap_test.cpp
         tty_test.cpp
         io_object_test.cpp
 
@@ -74,6 +90,8 @@ add_executable(KernelTests
 )
 
 target_include_directories(KernelTests PRIVATE ../../kernel/src ../../drivers/disk_fake
+        ../../kernel_userland_shared/include
+        ../../userland/fontloader
         ../../drivers/input_hid ../../drivers/input_i8042 ../../drivers/input_gameport)
 
 # object_manager.cpp/io.cpp/vfs.cpp already work around the hosted
@@ -83,6 +101,7 @@ target_include_directories(KernelTests PRIVATE ../../kernel/src ../../drivers/di
 target_compile_options(KernelTests PRIVATE -include new)
 
 target_link_libraries(KernelTests PRIVATE libkcpp KernelHeaders undos_warnings)
+target_link_libraries(KernelTests PRIVATE undos_font_resource)
 target_link_libraries(KernelTests PRIVATE Catch2::Catch2WithMain)
 
 # The real fs_fat/volmgr driver sources define their own `extern "C" DriverEntry`,
@@ -116,4 +135,6 @@ target_link_libraries(KernelTests PRIVATE ${CMAKE_DL_LIBS})
 add_dependencies(KernelTests fake_fs_fat_driver fake_volmgr_driver)
 
 catch_discover_tests(KernelTests)
-
+add_test(NAME process_startup_trampoline
+        COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/process_startup_trampoline_test.py
+        --build-dir ${CMAKE_BINARY_DIR})

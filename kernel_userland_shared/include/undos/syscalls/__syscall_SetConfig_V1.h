@@ -5,9 +5,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 /** Sets TTY configuration flags and window dimensions. */
 struct __SYS_TTY_SETCONFIG_V1 {
-    uint32_t handle;
+    HANDLE handle;
     enum TtyModeFlags flags;
     uint16_t rows;
     uint16_t cols;

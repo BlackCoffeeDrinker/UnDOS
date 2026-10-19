@@ -49,7 +49,7 @@ constexpr kstd::array<uint8_t, 25> kCrtc = {
 constexpr kstd::array<uint8_t, 9> kGraphicsController = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x0F, 0xFF};
 
-// Palette registers 0x0-0xF map 1:1 to the default 16-color EGA palette,
+// Palette registers 0x0-0xF map 1:1 to the explicitly initialized palette16 DAC,
 // followed by mode control / overscan / color-plane-enable / pel-panning /
 // color-select.
 constexpr kstd::array<uint8_t, 21> kAttributeController = {

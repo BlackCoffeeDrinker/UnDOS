@@ -1,0 +1,10 @@
+.section .note.undos,"a",@note
+.balign 4
+.long 6
+.long 8
+.long 1
+.asciz "UnDOS"
+.balign 4
+.long 1
+.long 0
+.section .note.GNU-stack,"",@progbits

@@ -5,13 +5,15 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 struct __SYS_GFX_STRETCHBLT_V1 {
-    uint32_t dstDC;
+    HANDLER dstDC;
     int32_t x;
     int32_t y;
     uint32_t dstWidth;
     uint32_t dstHeight;
-    uint32_t srcDC;
+    HANDLER srcDC;
     int32_t srcX;
     int32_t srcY;
     uint32_t srcWidth;

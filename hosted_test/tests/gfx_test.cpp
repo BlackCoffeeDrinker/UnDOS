@@ -320,6 +320,8 @@ TEST_CASE("DeviceContextTable rejects a stale HDC after the slot is reused", "[g
 
   auto [slotA, hdcA] = table.Allocate();
   REQUIRE(slotA != nullptr);
+  slotA->presentationDirty = true;
+  slotA->presentationBounds = {1, 2, 3, 4};
 
   REQUIRE(table.Close(hdcA));
 
@@ -328,6 +330,11 @@ TEST_CASE("DeviceContextTable rejects a stale HDC after the slot is reused", "[g
   auto [slotB, hdcB] = table.Allocate();
   REQUIRE(slotB == slotA);
   REQUIRE(hdcB != hdcA);
+  REQUIRE_FALSE(slotB->presentationDirty);
+  REQUIRE(slotB->presentationBounds.left == 0);
+  REQUIRE(slotB->presentationBounds.top == 0);
+  REQUIRE(slotB->presentationBounds.right == 0);
+  REQUIRE(slotB->presentationBounds.bottom == 0);
 
   // The stale handle captured before the slot was reused must not resolve.
   REQUIRE(table.Resolve(hdcA) == nullptr);
@@ -475,6 +482,56 @@ TEST_CASE("DeviceContextTable slot fields round-trip through the SpinLock-guarde
   REQUIRE(resolved->currentY == 20);
 }
 
+TEST_CASE("Packed raster bounds and self-overlap preserve source pixels", "[gfx][software_fallback]") {
+  EnsureObjectManagerInitialized();
+  auto &as = KE_VMM_GetKernelAddressSpace();
+  void *region = KE_VMM_AllocateRegion(as, 64, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+  REQUIRE(region);
+  auto surface = kernel::CreateKObject<kernel::KSurface>("ClippedCopyBitmap");
+  REQUIRE(surface);
+  surface->backing = KE_VMM_CreateDirectBacking(kernel::VirtualAddress::from_ptr(region), 64);
+  surface->width = 8;
+  surface->height = 8;
+  surface->pitch = 8;
+  surface->pixelFormat = kernel::PixelFormat::INDEX8;
+  auto *pixels = static_cast<uint8_t *>(region);
+  for (uint32_t i = 0; i < 64; ++i) pixels[i] = static_cast<uint8_t>(i);
+
+  REQUIRE(KE_GFX_SoftwareBitBlt(surface, 1, 1, surface, 0, 0, 7, 7, kernel::RasterOp::SRCCOPY));
+  for (uint32_t y = 1; y < 8; ++y)
+    for (uint32_t x = 1; x < 8; ++x) REQUIRE(pixels[y * 8 + x] == (y - 1) * 8 + x - 1);
+
+  for (uint32_t i = 0; i < 64; ++i) pixels[i] = static_cast<uint8_t>(i);
+  REQUIRE(KE_GFX_SoftwareBitBlt(surface, -2, 0, surface, 1, 0, 8, 8, kernel::RasterOp::SRCCOPY));
+  for (uint32_t y = 0; y < 8; ++y)
+    for (uint32_t x = 0; x < 5; ++x) REQUIRE(pixels[y * 8 + x] == y * 8 + x + 3);
+
+  REQUIRE(KE_GFX_SoftwareFillRect(surface, -20, -20, 22, 22, 0xee));
+  REQUIRE(pixels[0] == 0xee);
+  REQUIRE(pixels[9] == 0xee);
+  REQUIRE(pixels[2] != 0xee);
+  REQUIRE(pixels[16] != 0xee);
+  REQUIRE(KE_GFX_SoftwareDrawLine(surface, INT32_MIN, 7, INT32_MAX, 7, 0xcc));
+  for (uint32_t x = 0; x < 8; ++x) REQUIRE(pixels[56 + x] == 0xcc);
+
+  surface->type = kernel::SurfaceType::Framebuffer;
+  surface->flags = kernel::SurfaceFlags::TopDown;
+  REQUIRE_FALSE(KE_GFX_SoftwareFillRect(surface, 0, 0, 8, 8, 0xff));
+  REQUIRE_FALSE(KE_GFX_SoftwareBitBlt(surface, 0, 0, surface, 0, 0, 8, 8, kernel::RasterOp::SRCCOPY));
+  REQUIRE(pixels[0] == 0xee);
+
+  surface->type = kernel::SurfaceType::OffscreenBitmap;
+  surface->backing->size = 63;
+  REQUIRE_FALSE(KE_GFX_SoftwareFillRect(surface, 0, 0, 1, 1, 0xff));
+  surface->backing->size = 64;
+  surface->pitch = -8;
+  surface->backing->directAddress = kernel::VirtualAddress::from_ptr(pixels + 56);
+  REQUIRE(KE_GFX_SoftwareFillRect(surface, 0, 0, 2, 2, 0xab));
+  REQUIRE(pixels[56] == 0xab);
+  REQUIRE(pixels[49] == 0xab);
+  REQUIRE(pixels[48 + 2] != 0xab);
+}
+
 TEST_CASE("Software fallbacks treat RGB15/RGB16 as two bytes per pixel", "[gfx][software_fallback]") {
   EnsureObjectManagerInitialized();
 
@@ -516,12 +573,20 @@ TEST_CASE("Software fallbacks treat RGB15/RGB16 as two bytes per pixel", "[gfx][
   REQUIRE(dstPixels[pitch / 2 + 1] == 0xF81F);
   REQUIRE(dstPixels[pitch / 2 + 0] == 0);
 
-  // Converting path: 16bpp source read as a 16-bit value, written as one index byte.
+  // Direct RGB magenta quantizes to the closest canonical VGA palette color.
   const auto index = make(kernel::PixelFormat::INDEX8, "Index8Dst");
   index->pitch = width;
   REQUIRE(KE_GFX_SoftwareBitBlt(index, 0, 0, src, 0, 0, 4, 1, kernel::RasterOp::SRCCOPY));
   auto *indexPixels = index->backing->directAddress.as_ptr<uint8_t>();
-  REQUIRE(indexPixels[0] == 0x1F);
+  REQUIRE(indexPixels[0] == 13);
+  REQUIRE(KE_GFX_SoftwareFillRect(index, 0, 0, 2, 1, 1));
+  REQUIRE(KE_GFX_SoftwareBitBlt(dst, 0, 0, index, 0, 0, 2, 1, kernel::RasterOp::SRCCOPY));
+  REQUIRE(dstPixels[0] == 0x0015);// Palette blue = 0x0000aa, not raw integer 1.
+  index->type = kernel::SurfaceType::Framebuffer;
+  index->flags = kernel::SurfaceFlags::Linear;
+  REQUIRE(KE_GFX_SoftwareFillRect(index, 0, 0, 2, 1, 2));// Cirrus 3:3:2 blue.
+  REQUIRE(KE_GFX_SoftwareBitBlt(dst, 0, 0, index, 0, 0, 2, 1, kernel::RasterOp::SRCCOPY));
+  REQUIRE(dstPixels[0] == 0x0015);
 
   // RGB15 shares the two-byte layout.
   const auto rgb15 = make(kernel::PixelFormat::RGB15, "Rgb15Dst");

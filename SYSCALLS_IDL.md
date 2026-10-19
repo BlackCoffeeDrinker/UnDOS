@@ -92,10 +92,16 @@ syscall V1 GFX CombineRegion [332] {
 };
 ```
 
-Here `dest: IN HANDLER;` behaves exactly as if you had written `dest: IN c<uint32_t>;` directly, and
+Here `dest: IN HANDLER;` has the same wire layout as `dest: IN c<uint32_t>;`, but generated
+fields and wrapper parameters retain the `HANDLER` typedef name. Scalar aliases are emitted
+as C-compatible typedefs in `__aliases.h`, included by the generated headers that use them.
+For example, `using HANDLE = c<uint32_t>;` produces `typedef uint32_t HANDLE;`, with
+`HANDLE` for inputs and `HANDLE*` for wrapper outputs. This is a named API type, not a
+compiler-enforced strong type. Non-scalar aliases are expanded as before.
+
+Meanwhile,
 `flags Testing : HANDLER { ... }` behaves exactly as if you had written `flags Testing : uint32_t
-{ ... }` directly — aliases are fully resolved before any code is generated, so generated output is
-byte-for-byte identical either way.
+{ ... }` directly: flags still use the fully resolved underlying integer type.
 
 Aliases may chain (`using A = B; using B = c<uint32_t>;`) and may be declared in any order relative
 to their use. A `using` that references an undefined name, forms a circular chain (`using A = B;

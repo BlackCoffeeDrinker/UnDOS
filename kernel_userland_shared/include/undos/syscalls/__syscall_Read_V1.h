@@ -5,10 +5,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 /** Reads data from an open object handle into `data`. */
 struct __SYS_IO_READ_V1 {
     /** Open handle to read from. */
-    uint32_t handle;
+    HANDLE handle;
     /** Buffer that receives the data read. */
     uint8_t* data;
     uint32_t dataLength;

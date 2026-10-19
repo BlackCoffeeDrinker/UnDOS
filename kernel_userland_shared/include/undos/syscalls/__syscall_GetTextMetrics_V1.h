@@ -5,9 +5,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 struct __SYS_GFX_GETTEXTMETRICS_V1 {
-    uint32_t dc;
-    struct DeviceCaps metrics;
+    HANDLER dc;
+    struct TextMetrics metrics;
 };
 
 constexpr size_t   __SYS_GFX_GETTEXTMETRICS_V1_SIZE = sizeof(struct __SYS_GFX_GETTEXTMETRICS_V1);

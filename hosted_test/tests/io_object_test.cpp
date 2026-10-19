@@ -83,6 +83,35 @@ TEST_CASE("KIOObject TTY stream operations", "[io][kioobject][tty]") {
   }
 }
 
+TEST_CASE("Child TTY reader does not own the terminal endpoint", "[io][tty][standard-handles]") {
+  EnsureObjectManagerInitialized();
+  kernel::tty::VttyPtr tty(new kernel::tty::KVtty());
+  auto terminal = KE_IO_CreateTtySinkStream(tty);
+  REQUIRE(terminal != nullptr);
+  {
+    auto reader = KE_IO_CreateTtySinkStream(tty);
+    REQUIRE(reader != nullptr);
+    reader->blockingRead = true;
+    reader->ownsTtyEndpoint = false;
+    const uint8_t line[] = {'x', '\n'};
+    REQUIRE(tty->source_write(line, sizeof(line)) == sizeof(line));
+    uint8_t buffer[8]{};
+    size_t transferred = 0;
+    REQUIRE(reader->Read(buffer, transferred) == kernel::IoStatus::Success);
+    REQUIRE(transferred == sizeof(line));
+    REQUIRE(memcmp(buffer, line, transferred) == 0);
+    REQUIRE(reader->Close() == kernel::IoStatus::Success);
+    REQUIRE_FALSE(tty->is_sink_closed());
+  }
+  REQUIRE_FALSE(tty->is_sink_closed());
+  const uint8_t output[] = {'o', 'k'};
+  size_t transferred = 0;
+  REQUIRE(terminal->Write(output, transferred) == kernel::IoStatus::Success);
+  REQUIRE(transferred == sizeof(output));
+  REQUIRE(terminal->Close() == kernel::IoStatus::Success);
+  REQUIRE(tty->is_sink_closed());
+}
+
 TEST_CASE("KIOObject Device stream dispatch", "[io][kioobject][device]") {
   EnsureObjectManagerInitialized();
   static uint8_t devStorage[64] = {0};

@@ -235,7 +235,11 @@ namespace {
 IoStatus TtySinkRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
   if (!io.vtty) return IoStatus::InvalidParameter;
   KE_TTY_PumpDevice(io.vtty);
-  transferred = io.vtty->sink_read(buffer.data(), buffer.size());
+  if (io.blockingRead) {
+    if (!io.vtty->sink_read_wait(buffer.data(), buffer.size(), transferred)) return IoStatus::DeviceError;
+  } else {
+    transferred = io.vtty->sink_read(buffer.data(), buffer.size());
+  }
   io.offset += transferred;
   return IoStatus::Success;
 }
@@ -250,7 +254,7 @@ IoStatus TtySinkWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &t
 
 IoStatus TtySinkClose(KIOObject &io) {
   io.isClosed = true;
-  if (io.vtty) io.vtty->close_sink();
+  if (io.vtty && io.ownsTtyEndpoint) io.vtty->close_sink();
   return IoStatus::Success;
 }
 

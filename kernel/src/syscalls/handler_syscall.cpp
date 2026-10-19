@@ -14,11 +14,13 @@
 #include <undos/syscalls/__enum_ShowCommand.h>
 #include <undos/syscalls/__enum_HitTest.h>
 #include <undos/syscalls/__enum_WindowLongIndex.h>
+#include <undos/syscalls/__enum_FpuCapability.h>
 #include <undos/syscalls/__enum_SyscallReturnCode.h>
 #include <undos/syscalls/__enum_ProcessFlags.h>
 #include <undos/syscalls/__enum_WaitTimeout.h>
 #include <undos/syscalls/__enum_MemoryProtectFlags.h>
 #include <undos/syscalls/__enum_IoControlCode.h>
+#include <undos/syscalls/__enum_StdHandleSelector.h>
 
 #include <undos/syscalls/__flags_DCInitFlags.h>
 #include <undos/syscalls/__flags_PenStyle.h>
@@ -33,6 +35,7 @@
 #include <undos/syscalls/__struct_Point.h>
 #include <undos/syscalls/__struct_Rect.h>
 #include <undos/syscalls/__struct_DeviceCaps.h>
+#include <undos/syscalls/__struct_TextMetrics.h>
 #include <undos/syscalls/__struct_Msg.h>
 #include <undos/syscalls/__struct_PaintInfo.h>
 #include <undos/syscalls/__struct_IoctlDisplayMode.h>
@@ -65,6 +68,12 @@
 #include <undos/syscalls/__syscall_GetBitmapBits_V1.h>
 #include <undos/syscalls/__syscall_SetBitmapBits_V1.h>
 #include <undos/syscalls/__syscall_GetDeviceCaps_V1.h>
+#include <undos/syscalls/__syscall_SetDrawColors_V1.h>
+#include <undos/syscalls/__syscall_QueryFontEngine_V1.h>
+#include <undos/syscalls/__syscall_BeginFontUpload_V1.h>
+#include <undos/syscalls/__syscall_AppendFontUpload_V1.h>
+#include <undos/syscalls/__syscall_CommitFontUpload_V1.h>
+#include <undos/syscalls/__syscall_CloseFontResource_V1.h>
 #include <undos/syscalls/__syscall_RegisterClass_V1.h>
 #include <undos/syscalls/__syscall_CreateWindow_V1.h>
 #include <undos/syscalls/__syscall_DestroyWindow_V1.h>
@@ -81,8 +90,13 @@
 #include <undos/syscalls/__syscall_SetWindowLongPtr_V1.h>
 #include <undos/syscalls/__syscall_SetCapture_V1.h>
 #include <undos/syscalls/__syscall_ReleaseCapture_V1.h>
+#include <undos/syscalls/__syscall_GetClientRect_V1.h>
+#include <undos/syscalls/__syscall_SetFocus_V1.h>
+#include <undos/syscalls/__syscall_SetWindowText_V1.h>
+#include <undos/syscalls/__syscall_QueryFpu_V1.h>
 #include <undos/syscalls/__syscall_Print_V1.h>
 #include <undos/syscalls/__syscall_CreateProcess_V1.h>
+#include <undos/syscalls/__syscall_CreateProcess_V2.h>
 #include <undos/syscalls/__syscall_GetInfo_V1.h>
 #include <undos/syscalls/__syscall_Exit_V1.h>
 #include <undos/syscalls/__syscall_WaitForObject_V1.h>
@@ -97,7 +111,9 @@
 #include <undos/syscalls/__syscall_Close_V1.h>
 #include <undos/syscalls/__syscall_Read_V1.h>
 #include <undos/syscalls/__syscall_Write_V1.h>
+#include <undos/syscalls/__syscall_Write_V2.h>
 #include <undos/syscalls/__syscall_Control_V1.h>
+#include <undos/syscalls/__syscall_GetStdHandle_V1.h>
 #include <undos/syscalls/__syscall_Create_V1.h>
 #include <undos/syscalls/__syscall_SetConfig_V1.h>
 #include <undos/syscalls/__syscall_GetConfig_V1.h>
@@ -129,12 +145,10 @@ static uint32_t Dispatch_CreateDC_V1(void *userData, size_t size, uint32_t flags
 
   if (headerCopy.driverName != nullptr) {
     if (headerCopy.driverNameLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.driverNameLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
   if (headerCopy.deviceName != nullptr) {
     if (headerCopy.deviceNameLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.deviceNameLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
   __KRN_GFX_CREATEDC_V1 args {};
@@ -279,7 +293,6 @@ static uint32_t Dispatch_CreateFont_V1(void *userData, size_t size, uint32_t fla
 
   if (headerCopy.name != nullptr) {
     if (headerCopy.nameLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.nameLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
   __KRN_GFX_CREATEFONT_V1 args {};
@@ -484,7 +497,6 @@ static uint32_t Dispatch_TextOut_V1(void *userData, size_t size, uint32_t flags)
 
   if (headerCopy.text != nullptr) {
     if (headerCopy.textLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.textLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
   __KRN_GFX_TEXTOUT_V1 args {};
@@ -853,6 +865,164 @@ static uint32_t Dispatch_GetDeviceCaps_V1(void *userData, size_t size, uint32_t 
   return ret;
 }
 
+static uint32_t Dispatch_SetDrawColors_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_SETDRAWCOLORS_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_GFX_SETDRAWCOLORS_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_GFX_SETDRAWCOLORS_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETDRAWCOLORS_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_SETDRAWCOLORS_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_SETDRAWCOLORS_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_GFX_SETDRAWCOLORS_V1 args {};
+  args.dc = headerCopy.dc;
+  args.foreground = headerCopy.foreground;
+  args.background = headerCopy.background;
+  args.opaque = headerCopy.opaque;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_SetDrawColors_V1(kstd::move(args));
+
+  return ret;
+}
+
+static uint32_t Dispatch_QueryFontEngine_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_QUERYFONTENGINE_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_GFX_QUERYFONTENGINE_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_GFX_QUERYFONTENGINE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_QUERYFONTENGINE_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_QUERYFONTENGINE_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_QUERYFONTENGINE_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_GFX_QUERYFONTENGINE_V1 args {};
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_QueryFontEngine_V1(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_QUERYFONTENGINE_V1, version), &args.version, sizeof(args.version));
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_QUERYFONTENGINE_V1, capabilities), &args.capabilities, sizeof(args.capabilities));
+  return ret;
+}
+
+static uint32_t Dispatch_BeginFontUpload_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_GFX_BEGINFONTUPLOAD_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_GFX_BEGINFONTUPLOAD_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_GFX_BEGINFONTUPLOAD_V1 args {};
+  args.totalBytes = headerCopy.totalBytes;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_BeginFontUpload_V1(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_BEGINFONTUPLOAD_V1, upload), &args.upload, sizeof(args.upload));
+  return ret;
+}
+
+static uint32_t Dispatch_AppendFontUpload_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_GFX_APPENDFONTUPLOAD_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_GFX_APPENDFONTUPLOAD_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  if (headerCopy.data != nullptr) {
+    if (headerCopy.dataLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.dataLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+  }
+
+  __KRN_GFX_APPENDFONTUPLOAD_V1 args {};
+  args.upload = headerCopy.upload;
+  args.offset = headerCopy.offset;
+  if (headerCopy.data != nullptr) {
+    if (auto* mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.data), headerCopy.dataLength * sizeof(uint8_t), address_space)) {
+      args.data = kernel::borrowed_ptr<uint8_t>(const_cast<uint8_t *>(static_cast<const uint8_t *>(mapped)), headerCopy.dataLength, address_space);
+    } else {
+      return SyscallReturnCode_INVALID_ADDRESS;
+    }
+  }
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_AppendFontUpload_V1(kstd::move(args));
+
+  return ret;
+}
+
+static uint32_t Dispatch_CommitFontUpload_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_GFX_COMMITFONTUPLOAD_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_GFX_COMMITFONTUPLOAD_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_GFX_COMMITFONTUPLOAD_V1 args {};
+  args.upload = headerCopy.upload;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_CommitFontUpload_V1(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_COMMITFONTUPLOAD_V1, face), &args.face, sizeof(args.face));
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_COMMITFONTUPLOAD_V1, validationError), &args.validationError, sizeof(args.validationError));
+  return ret;
+}
+
+static uint32_t Dispatch_CloseFontResource_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_GFX_CLOSEFONTRESOURCE_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_GFX_CLOSEFONTRESOURCE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_GFX_CLOSEFONTRESOURCE_V1 args {};
+  args.handle = headerCopy.handle;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_CloseFontResource_V1(kstd::move(args));
+
+  return ret;
+}
+
 static uint32_t Dispatch_RegisterClass_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_REGISTERCLASS_V1)) return SyscallReturnCode_INVALID_SIZE;
 
@@ -869,7 +1039,6 @@ static uint32_t Dispatch_RegisterClass_V1(void *userData, size_t size, uint32_t 
 
   if (headerCopy.name != nullptr) {
     if (headerCopy.nameLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.nameLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
   __KRN_USER_REGISTERCLASS_V1 args {};
@@ -908,12 +1077,10 @@ static uint32_t Dispatch_CreateWindow_V1(void *userData, size_t size, uint32_t f
 
   if (headerCopy.className != nullptr) {
     if (headerCopy.classNameLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.classNameLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
   if (headerCopy.title != nullptr) {
     if (headerCopy.titleLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.titleLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
   __KRN_USER_CREATEWINDOW_V1 args {};
@@ -1294,6 +1461,113 @@ static uint32_t Dispatch_ReleaseCapture_V1(void *userData, size_t size, uint32_t
   return ret;
 }
 
+static uint32_t Dispatch_GetClientRect_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_GETCLIENTRECT_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_USER_GETCLIENTRECT_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_USER_GETCLIENTRECT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETCLIENTRECT_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_GETCLIENTRECT_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_GETCLIENTRECT_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_USER_GETCLIENTRECT_V1 args {};
+  args.hwnd = headerCopy.hwnd;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_GetClientRect_V1(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETCLIENTRECT_V1, rect), &args.rect, sizeof(args.rect));
+  return ret;
+}
+
+static uint32_t Dispatch_SetFocus_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_SETFOCUS_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_USER_SETFOCUS_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_USER_SETFOCUS_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETFOCUS_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_SETFOCUS_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_SETFOCUS_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_USER_SETFOCUS_V1 args {};
+  args.hwnd = headerCopy.hwnd;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_SetFocus_V1(kstd::move(args));
+
+  return ret;
+}
+
+static uint32_t Dispatch_SetWindowText_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_USER_SETWINDOWTEXT_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_USER_SETWINDOWTEXT_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_USER_SETWINDOWTEXT_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETWINDOWTEXT_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_USER_SETWINDOWTEXT_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_USER_SETWINDOWTEXT_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  if (headerCopy.text != nullptr) {
+    if (headerCopy.textLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+  }
+
+  __KRN_USER_SETWINDOWTEXT_V1 args {};
+  args.hwnd = headerCopy.hwnd;
+  if (headerCopy.text != nullptr && headerCopy.textLength > 0) {
+    args.text.resize(headerCopy.textLength);
+    if (args.text.data() == nullptr || args.text.size() != headerCopy.textLength) return SyscallReturnCode_OUT_OF_MEMORY;
+    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.text), headerCopy.textLength, address_space)) {
+      kstd::memcpy(args.text.data(), mapped, headerCopy.textLength);
+      KE_VMM_UnmapBorrowed(mapped, headerCopy.textLength, address_space);
+    } else {
+      return SyscallReturnCode_INVALID_ADDRESS;
+    }
+  }
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_SetWindowText_V1(kstd::move(args));
+
+  return ret;
+}
+
+static uint32_t Dispatch_QueryFpu_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_ABI_QUERYFPU_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_ABI_QUERYFPU_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_ABI_QUERYFPU_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_ABI_QUERYFPU_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_ABI_QUERYFPU_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_ABI_QUERYFPU_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_ABI_QUERYFPU_V1 args {};
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_QueryFpu_V1(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_ABI_QUERYFPU_V1, capability), &args.capability, sizeof(args.capability));
+  return ret;
+}
+
 static uint32_t Dispatch_Print_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_DEBUG_PRINT_V1)) return SyscallReturnCode_INVALID_SIZE;
 
@@ -1310,7 +1584,6 @@ static uint32_t Dispatch_Print_V1(void *userData, size_t size, uint32_t flags) {
 
   if (headerCopy.message != nullptr) {
     if (headerCopy.messageLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.messageLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
   __KRN_DEBUG_PRINT_V1 args {};
@@ -1347,12 +1620,10 @@ static uint32_t Dispatch_CreateProcess_V1(void *userData, size_t size, uint32_t 
 
   if (headerCopy.path != nullptr) {
     if (headerCopy.pathLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.pathLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
   if (headerCopy.argument != nullptr) {
     if (headerCopy.argumentLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.argumentLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
   __KRN_PROC_CREATEPROCESS_V1 args {};
@@ -1382,6 +1653,61 @@ static uint32_t Dispatch_CreateProcess_V1(void *userData, size_t size, uint32_t 
   const SyscallReturnCode ret = handle_CreateProcess_V1(kstd::move(args));
 
   KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEPROCESS_V1, handle), &args.handle, sizeof(args.handle));
+  return ret;
+}
+
+static uint32_t Dispatch_CreateProcess_V2(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_PROC_CREATEPROCESS_V2)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_PROC_CREATEPROCESS_V2 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_PROC_CREATEPROCESS_V2 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_CREATEPROCESS_V2), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_PROC_CREATEPROCESS_V2));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_PROC_CREATEPROCESS_V2), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  if (headerCopy.path != nullptr) {
+    if (headerCopy.pathLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+  }
+
+  if (headerCopy.argument != nullptr) {
+    if (headerCopy.argumentLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+  }
+
+  __KRN_PROC_CREATEPROCESS_V2 args {};
+  if (headerCopy.path != nullptr && headerCopy.pathLength > 0) {
+    args.path.resize(headerCopy.pathLength);
+    if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return SyscallReturnCode_OUT_OF_MEMORY;
+    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
+      kstd::memcpy(args.path.data(), mapped, headerCopy.pathLength);
+      KE_VMM_UnmapBorrowed(mapped, headerCopy.pathLength, address_space);
+    } else {
+      return SyscallReturnCode_INVALID_ADDRESS;
+    }
+  }
+  if (headerCopy.argument != nullptr && headerCopy.argumentLength > 0) {
+    args.argument.resize(headerCopy.argumentLength);
+    if (args.argument.data() == nullptr || args.argument.size() != headerCopy.argumentLength) return SyscallReturnCode_OUT_OF_MEMORY;
+    if (auto *mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.argument), headerCopy.argumentLength, address_space)) {
+      kstd::memcpy(args.argument.data(), mapped, headerCopy.argumentLength);
+      KE_VMM_UnmapBorrowed(mapped, headerCopy.argumentLength, address_space);
+    } else {
+      return SyscallReturnCode_INVALID_ADDRESS;
+    }
+  }
+  args.flags = headerCopy.flags;
+  args.stdinHandle = headerCopy.stdinHandle;
+  args.stdoutHandle = headerCopy.stdoutHandle;
+  args.stderrHandle = headerCopy.stderrHandle;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_CreateProcess_V2(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEPROCESS_V2, handle), &args.handle, sizeof(args.handle));
   return ret;
 }
 
@@ -1657,7 +1983,6 @@ static uint32_t Dispatch_Open_V1(void *userData, size_t size, uint32_t flags) {
 
   if (headerCopy.path != nullptr) {
     if (headerCopy.pathLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
-    if (headerCopy.pathLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
   }
 
   __KRN_IO_OPEN_V1 args {};
@@ -1775,6 +2100,42 @@ static uint32_t Dispatch_Write_V1(void *userData, size_t size, uint32_t flags) {
   return ret;
 }
 
+static uint32_t Dispatch_Write_V2(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_WRITE_V2)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_IO_WRITE_V2 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_IO_WRITE_V2 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_WRITE_V2), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_WRITE_V2));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_WRITE_V2), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  if (headerCopy.data != nullptr) {
+    if (headerCopy.dataLength > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;
+    if (headerCopy.dataLength == 0) return SyscallReturnCode_INVALID_ARGUMENT;
+  }
+
+  __KRN_IO_WRITE_V2 args {};
+  args.handle = headerCopy.handle;
+  if (headerCopy.data != nullptr) {
+    if (auto* mapped = KE_VMM_MapBorrowed(const_cast<uint8_t *>(headerCopy.data), headerCopy.dataLength * sizeof(uint8_t), address_space)) {
+      args.data = kernel::borrowed_ptr<uint8_t>(const_cast<uint8_t *>(static_cast<const uint8_t *>(mapped)), headerCopy.dataLength, address_space);
+    } else {
+      return SyscallReturnCode_INVALID_ADDRESS;
+    }
+  }
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_Write_V2(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_WRITE_V2, transferred), &args.transferred, sizeof(args.transferred));
+  return ret;
+}
+
 static uint32_t Dispatch_Control_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_IO_CONTROL_V1)) return SyscallReturnCode_INVALID_SIZE;
 
@@ -1822,6 +2183,30 @@ static uint32_t Dispatch_Control_V1(void *userData, size_t size, uint32_t flags)
     const auto len = static_cast<uint32_t>(args.output_len);
     KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_CONTROL_V1, outputLength), &len, sizeof(len));
   }
+  return ret;
+}
+
+static uint32_t Dispatch_GetStdHandle_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_GETSTDHANDLE_V1)) return SyscallReturnCode_INVALID_SIZE;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_IO_GETSTDHANDLE_V1 headerCopy {};
+  if (auto* mapped = static_cast<__SYS_IO_GETSTDHANDLE_V1 *>(KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_GETSTDHANDLE_V1), address_space))) {
+    kstd::memcpy(&headerCopy, mapped, sizeof(__SYS_IO_GETSTDHANDLE_V1));
+    KE_VMM_UnmapBorrowed(mapped, sizeof(__SYS_IO_GETSTDHANDLE_V1), address_space);
+  } else {
+    return SyscallReturnCode_INVALID_ADDRESS;
+  }
+
+  __KRN_IO_GETSTDHANDLE_V1 args {};
+  args.selector = headerCopy.selector;
+
+  (void)flags;
+  const SyscallReturnCode ret = handle_GetStdHandle_V1(kstd::move(args));
+
+  KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_GETSTDHANDLE_V1, handle), &args.handle, sizeof(args.handle));
   return ret;
 }
 
@@ -1929,6 +2314,12 @@ UNDOS_KERNEL_API_DEF uint32_t KE_SYSCALL_Dispatch(uint32_t number, uint32_t size
     case 341: return Dispatch_GetBitmapBits_V1(data, size, flags);
     case 342: return Dispatch_SetBitmapBits_V1(data, size, flags);
     case 343: return Dispatch_GetDeviceCaps_V1(data, size, flags);
+    case 344: return Dispatch_SetDrawColors_V1(data, size, flags);
+    case 345: return Dispatch_QueryFontEngine_V1(data, size, flags);
+    case 346: return Dispatch_BeginFontUpload_V1(data, size, flags);
+    case 347: return Dispatch_AppendFontUpload_V1(data, size, flags);
+    case 348: return Dispatch_CommitFontUpload_V1(data, size, flags);
+    case 349: return Dispatch_CloseFontResource_V1(data, size, flags);
     case 400: return Dispatch_RegisterClass_V1(data, size, flags);
     case 401: return Dispatch_CreateWindow_V1(data, size, flags);
     case 402: return Dispatch_DestroyWindow_V1(data, size, flags);
@@ -1945,8 +2336,13 @@ UNDOS_KERNEL_API_DEF uint32_t KE_SYSCALL_Dispatch(uint32_t number, uint32_t size
     case 413: return Dispatch_SetWindowLongPtr_V1(data, size, flags);
     case 414: return Dispatch_SetCapture_V1(data, size, flags);
     case 415: return Dispatch_ReleaseCapture_V1(data, size, flags);
+    case 416: return Dispatch_GetClientRect_V1(data, size, flags);
+    case 417: return Dispatch_SetFocus_V1(data, size, flags);
+    case 418: return Dispatch_SetWindowText_V1(data, size, flags);
+    case 207: return Dispatch_QueryFpu_V1(data, size, flags);
     case 100: return Dispatch_Print_V1(data, size, flags);
     case 200: return Dispatch_CreateProcess_V1(data, size, flags);
+    case 208: return Dispatch_CreateProcess_V2(data, size, flags);
     case 201: return Dispatch_GetInfo_V1(data, size, flags);
     case 202: return Dispatch_Exit_V1(data, size, flags);
     case 203: return Dispatch_WaitForObject_V1(data, size, flags);
@@ -1961,7 +2357,9 @@ UNDOS_KERNEL_API_DEF uint32_t KE_SYSCALL_Dispatch(uint32_t number, uint32_t size
     case 221: return Dispatch_Close_V1(data, size, flags);
     case 222: return Dispatch_Read_V1(data, size, flags);
     case 223: return Dispatch_Write_V1(data, size, flags);
+    case 226: return Dispatch_Write_V2(data, size, flags);
     case 224: return Dispatch_Control_V1(data, size, flags);
+    case 225: return Dispatch_GetStdHandle_V1(data, size, flags);
     case 250: return Dispatch_Create_V1(data, size, flags);
     case 251: return Dispatch_SetConfig_V1(data, size, flags);
     case 252: return Dispatch_GetConfig_V1(data, size, flags);

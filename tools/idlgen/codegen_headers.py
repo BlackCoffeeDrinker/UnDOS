@@ -18,7 +18,21 @@ from .ast_nodes import (
 from .codegen_common import c_type_for, flags_underlying_ctype, generate_file_header, make_filename, write_doc_comment
 
 
+def uses_scalar_alias(ftype, names):
+    if isinstance(ftype, (ArrayType, DynArrayType, BufferType)):
+        return uses_scalar_alias(ftype.elem_type, names)
+    return isinstance(ftype, CType) and ftype.ctype in names
+
+
 def generate_headers(module: IDLModule, out_h_dir: str):
+    scalar_names = {alias.name for alias in module.usings if isinstance(alias.aliased, CType)}
+    with open(os.path.join(out_h_dir, "__aliases.h"), "w", encoding="utf-8") as f:
+        generate_file_header(f, include_aliases=False)
+        for alias in module.usings:
+            if isinstance(alias.aliased, CType):
+                write_doc_comment(f, alias.doc)
+                f.write(f"typedef {alias.aliased.ctype} {alias.name};\n")
+
     # ---- Enums ----
     for enum in module.enums:
         filename = os.path.join(out_h_dir, make_filename(enum))
@@ -49,7 +63,8 @@ def generate_headers(module: IDLModule, out_h_dir: str):
     for struct in module.structs:
         filename = os.path.join(out_h_dir, make_filename(struct))
         with open(filename, "w", encoding="utf-8") as f:
-            generate_file_header(f)
+            generate_file_header(f, include_aliases=any(
+                uses_scalar_alias(field.ftype, scalar_names) for field in struct.fields))
             write_doc_comment(f, struct.doc)
             f.write(f"struct {struct.name} {{\n")
             for field in struct.fields:
@@ -61,12 +76,14 @@ def generate_headers(module: IDLModule, out_h_dir: str):
     for sc in module.syscalls:
         filename = os.path.join(out_h_dir, make_filename(sc))
         with open(filename, "w", encoding="utf-8") as f:
-            generate_file_header(f)
+            generate_file_header(f, include_aliases=any(
+                uses_scalar_alias(field.ftype, scalar_names) for field in sc.fields))
             write_syscall_struct_to_file(f, sc)
 
     include_all_file = os.path.join(out_h_dir, "syscalls.h")
     with open(include_all_file, "w", encoding="utf-8") as f:
         f.write("#pragma once\n\n")
+        f.write('#include "__aliases.h"\n\n')
         for enum in module.enums:
             f.write(f"#include \"{make_filename(enum)}\"\n")
         f.write("\n")

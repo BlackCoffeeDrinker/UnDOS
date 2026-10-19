@@ -5,7 +5,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/** Allocates `size` bytes of pages with the given protection. */
+/**
+ * Allocates zeroed pages, rounding size up to 4096. Read is required; unknown
+ * flags and no-access/write-only mappings reject. i386 does not enforce NX.
+ */
 struct __SYS_MEM_ALLOCATEPAGES_V1 {
     /** Number of bytes to allocate (rounded up to a page boundary). */
     uint32_t size;

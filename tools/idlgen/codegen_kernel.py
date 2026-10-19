@@ -27,6 +27,7 @@ def generate_kernel_types(module: IDLModule, out_h_dir: str, out_h_syscall_dir: 
         template = Template(f, type="header")
 
         template.write_include_system("stdint.h")
+        template.write_include_system("undos/syscalls/__aliases.h")
         template.write_include_system("kernel/memory/borrowed_ptr.hpp")
         template.write_include_system("string_view.hpp")
 
@@ -178,7 +179,8 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
                 if isinstance(field.ftype, (StringType, DynArrayType, BufferType)):
                     f.write(f"  if (headerCopy.{field.name} != nullptr) {{\n")
                     f.write(f"    if (headerCopy.{field.name}Length > UNDOS_MAX_COPY_SIZE) return SyscallReturnCode_INVALID_SIZE;\n")
-                    f.write(f"    if (headerCopy.{field.name}Length == 0) return SyscallReturnCode_INVALID_ARGUMENT;\n")
+                    if not (isinstance(field.ftype, StringType) and field.mode == "COPY" and field.direction == "IN"):
+                        f.write(f"    if (headerCopy.{field.name}Length == 0) return SyscallReturnCode_INVALID_ARGUMENT;\n")
                     f.write(f"  }}\n\n")
 
             # Step 4/5: build the decoupled kernel-side struct from the

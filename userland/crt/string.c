@@ -1,9 +1,8 @@
 #include <undoscrt/string.h>
 
-extern "C" {
 void *memcpy(void *dst, const void *src, size_t n) {
-  unsigned char *d = static_cast<unsigned char *>(dst);
-  const unsigned char *s = static_cast<const unsigned char *>(src);
+  unsigned char *d = dst;
+  const unsigned char *s = src;
 
   for (size_t i = 0; i < n; i++)
     d[i] = s[i];
@@ -12,8 +11,8 @@ void *memcpy(void *dst, const void *src, size_t n) {
 }
 
 void *memmove(void *dst, const void *src, size_t n) {
-  unsigned char *d = static_cast<unsigned char *>(dst);
-  const unsigned char *s = static_cast<const unsigned char *>(src);
+  unsigned char *d = dst;
+  const unsigned char *s = src;
 
   if (d == s || n == 0)
     return dst;
@@ -32,8 +31,8 @@ void *memmove(void *dst, const void *src, size_t n) {
 }
 
 void *memset(void *dst, int value, size_t n) {
-  unsigned char *d = static_cast<unsigned char *>(dst);
-  unsigned char v = static_cast<unsigned char>(value);
+  unsigned char *d = dst;
+  unsigned char v = (unsigned char)value;
 
   for (size_t i = 0; i < n; i++)
     d[i] = v;
@@ -42,8 +41,8 @@ void *memset(void *dst, int value, size_t n) {
 }
 
 int memcmp(const void *a, const void *b, size_t n) {
-  const unsigned char *x = static_cast<const unsigned char *>(a);
-  const unsigned char *y = static_cast<const unsigned char *>(b);
+  const unsigned char *x = a;
+  const unsigned char *y = b;
 
   for (size_t i = 0; i < n; i++) {
     if (x[i] != y[i])
@@ -64,7 +63,7 @@ int strcmp(const char *a, const char *b) {
     ++a;
     ++b;
   }
-  return static_cast<unsigned char>(*a) - static_cast<unsigned char>(*b);
+  return (unsigned char)*a - (unsigned char)*b;
 }
 
 int strncmp(const char *a, const char *b, size_t n) {
@@ -74,7 +73,7 @@ int strncmp(const char *a, const char *b, size_t n) {
     --n;
   }
   if (n == 0) return 0;
-  return static_cast<unsigned char>(*a) - static_cast<unsigned char>(*b);
+  return (unsigned char)*a - (unsigned char)*b;
 }
 
 char *strcpy(char *dst, const char *src) {
@@ -102,17 +101,15 @@ char *strcat(char *dst, const char *src) {
 
 char *strchr(const char *s, int c) {
   for (; *s; ++s) {
-    if (*s == static_cast<char>(c)) return const_cast<char *>(s);
+    if (*s == (char)c) return (char *)s;
   }
-  return (c == '\0') ? const_cast<char *>(s) : nullptr;
+  return (c == '\0') ? (char *)s : NULL;
 }
 
 char *strrchr(const char *s, int c) {
-  const char *last = (c == '\0') ? s + strlen(s) : nullptr;
+  const char *last = (c == '\0') ? s + strlen(s) : NULL;
   for (; *s; ++s) {
-    if (*s == static_cast<char>(c)) last = s;
+    if (*s == (char)c) last = s;
   }
-  return const_cast<char *>(last);
+  return (char *)last;
 }
-
-}// extern "C"

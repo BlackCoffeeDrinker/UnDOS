@@ -1,0 +1,55 @@
+@PACKAGE_INIT@
+
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "UnDOS" OR NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "i386")
+    message(FATAL_ERROR "Use the SDK's UnDOS-toolchain.cmake to build UnDOS applications")
+endif ()
+if (NOT CMAKE_C_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    message(FATAL_ERROR "This SDK currently supports the i686-elf GCC toolchain only")
+endif ()
+
+set_and_check(UnDOS_SYSROOT "${PACKAGE_PREFIX_DIR}/sysroot")
+set(_undos_lib "${UnDOS_SYSROOT}/usr/lib")
+set_and_check(_undos_crt "${_undos_lib}/libundoscrt.a")
+set_and_check(_undos_gui "${_undos_lib}/libundosgui.a")
+set_and_check(_undos_font "${_undos_lib}/libundos_font_resource.a")
+set_and_check(_undos_entry "${_undos_lib}/crt0.o")
+set_and_check(_undos_note "${_undos_lib}/undos-abi-note.o")
+set_and_check(_undos_dso "${_undos_lib}/undos-dso.o")
+set_and_check(_undos_script "${_undos_lib}/application.ld")
+
+if (NOT TARGET UnDOS::Common)
+    add_library(UnDOS::Common INTERFACE IMPORTED)
+    set_target_properties(UnDOS::Common PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${UnDOS_SYSROOT}/usr/include"
+        INTERFACE_COMPILE_OPTIONS "-m32;-march=i386;-ffreestanding;-fno-stack-protector;$<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions;-fno-rtti;-fuse-cxa-atexit>"
+        INTERFACE_LINK_OPTIONS "-m32;-nostdlib;-Wl,--hash-style=sysv;-Wl,--no-dynamic-linker")
+
+    add_library(UnDOS::CRT STATIC IMPORTED)
+    set_target_properties(UnDOS::CRT PROPERTIES
+        IMPORTED_LOCATION "${_undos_crt}"
+        INTERFACE_LINK_LIBRARIES "UnDOS::Common;gcc")
+
+    add_library(UnDOS::Application INTERFACE IMPORTED)
+    set_target_properties(UnDOS::Application PROPERTIES
+        INTERFACE_COMPILE_OPTIONS "-fno-pic;-fno-pie"
+        INTERFACE_LINK_OPTIONS "-no-pie;-Wl,--export-dynamic;LINKER:-T,${_undos_script}"
+        INTERFACE_LINK_DEPENDS "${_undos_script}"
+        INTERFACE_LINK_LIBRARIES "${_undos_entry};${_undos_note};UnDOS::CRT")
+
+    add_library(UnDOS::GUI STATIC IMPORTED)
+    set_target_properties(UnDOS::GUI PROPERTIES
+        IMPORTED_LOCATION "${_undos_gui}"
+        INTERFACE_LINK_LIBRARIES "UnDOS::Application")
+
+    add_library(UnDOS::Shared INTERFACE IMPORTED)
+    set_target_properties(UnDOS::Shared PROPERTIES
+        INTERFACE_COMPILE_OPTIONS "-fPIC;-fvisibility=default"
+        INTERFACE_LINK_OPTIONS "LINKER:-shared"
+        INTERFACE_LINK_LIBRARIES "UnDOS::Common;${_undos_note};${_undos_dso};gcc")
+
+    add_library(UnDOS::FontResource STATIC IMPORTED)
+    set_target_properties(UnDOS::FontResource PROPERTIES
+        IMPORTED_LOCATION "${_undos_font}"
+        INTERFACE_LINK_LIBRARIES "UnDOS::Common;gcc")
+endif ()
+check_required_components(UnDOS)

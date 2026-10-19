@@ -102,6 +102,12 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
              uint32_t colorIndex)>
       DrawLine;
 
+  // Optional native-pixel readback for saved-under cursors on non-linear
+  // device surfaces. Return false without modifying color when unsupported.
+  cfunc<bool(const KObjectPtr<KGraphicsAdapter> &,
+             const KObjectPtr<KSurface> &src, int x, int y, uint32_t &color)>
+      ReadPixel;
+
   // Optional present / flush hook. `rects` is a list of `count` screen
   // rectangles to transfer; nullptr / count == 0 means the whole surface.
   cfunc<void(const KObjectPtr<KGraphicsAdapter> &,

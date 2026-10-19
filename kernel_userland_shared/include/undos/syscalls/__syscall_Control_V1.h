@@ -5,10 +5,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <undos/syscalls/__aliases.h>
+
 /** Sends a control code to the device behind an open handle. */
 struct __SYS_IO_CONTROL_V1 {
     /** Open handle to the device. */
-    uint32_t handle;
+    HANDLE handle;
     /** One of IoControlCode. */
     uint32_t code;
     /** Code-specific input payload. */
