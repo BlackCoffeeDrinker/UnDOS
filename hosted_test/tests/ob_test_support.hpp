@@ -37,7 +37,7 @@ inline void EnsureObjectManagerInitialized() {
     kernel_as.current_base = HAL_TEST_GetFakeRamBase();
     kernel_as.limit = kernel_as.current_base + HAL_TEST_GetFakeRamSize();
 
-    REQUIRE(kernel::objectmanager::init() == kernel::KernelError::Success);
+    kernel::objectmanager::init();
     kernel::vmm::late_init();
     initialized = true;
   }

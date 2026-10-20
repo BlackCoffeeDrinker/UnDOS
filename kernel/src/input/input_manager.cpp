@@ -154,16 +154,16 @@ kstd::error_code InputClose(kernel::KIOObject &) { return kernel::KernelError::S
 
 const kernel::KIOOps InputOps{.Read = InputRead, .Write = {}, .Control = {}, .Close = InputClose};
 
-kstd::error_code RegisterInputStream() noexcept {
+void RegisterInputStream() noexcept {
   const auto dir = KE_OB_GetDeviceDirectory();
   if (!dir) {
     KE_Print("Input manager: cannot register \\Device\\Input: no \\Device directory");
-    return kernel::KernelError::NotFound;
+    HAL_PLATFORM_Panic("Failed to initialize input", __FILE__, __LINE__);
   }
   auto created = kernel::CreateKObject<kernel::KIOObject>("Input");
   if (!created) {
     KE_Print("Input manager: cannot create \\Device\\Input: {}", created.error().message());
-    return created.error();
+    HAL_PLATFORM_Panic("Failed to initialize input", __FILE__, __LINE__);
   }
   const auto stream = kstd::move(*created);
   stream->ops = &InputOps;
@@ -172,28 +172,23 @@ kstd::error_code RegisterInputStream() noexcept {
   if (const kstd::error_code inserted = KE_OB_InsertObject(dir, kernel::KObjectPtr<kernel::KObject>(stream.get()));
       inserted) {
     KE_Print("Input manager: cannot register \\Device\\Input: {}", inserted.message());
-    return inserted;
+    HAL_PLATFORM_Panic("Failed to initialize input", __FILE__, __LINE__);
   }
   g_inputStream = stream;
-  return kernel::KernelError::Success;
 }
 
 }// namespace
 
 namespace kernel::input {
-kstd::error_code init() {
+void init() {
   g_eventRing = EventRing();
   for (auto &unit: g_units) unit = UnitSlot{};
   for (auto &pad: g_gamepads) pad = GamepadSlot{};
   g_modifiers = 0;
   g_eventHeader = kernel::KDispatcherHeader();
-  return RegisterInputStream();
+  RegisterInputStream();
 }
 }// namespace kernel::input
-
-UNDOS_KERNEL_API_DEF kstd::error_code KE_INPUT_Initialize() noexcept {
-  return kernel::input::init();
-}
 
 // PASSIVE LEVEL ONLY -- see the contract in kernel/input.hpp. Routing is
 // decided here, by report kind, so a driver cannot accidentally push axis

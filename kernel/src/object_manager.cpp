@@ -68,6 +68,16 @@ kernel::KObjectPtr<kernel::KObject> LookupPathFrom(
 
   return nullptr;
 }
+
+kernel::KObjectPtr<kernel::KDirectoryObject> EnsureNoError(const kstd::expected<kernel::KObjectPtr<kernel::KDirectoryObject>, kstd::error_code> &expected) {
+  if (!expected) {
+    KE_Print("Error: {}", expected.error().message());
+    HAL_PLATFORM_Panic("Error Fatal OM encountered", __FILE__, __LINE__);
+  }
+
+  return *expected;
+}
+
 }// namespace
 
 namespace kernel::objectmanager {
@@ -75,57 +85,44 @@ bool is_initialized() {
   return g_root != nullptr;
 }
 
-kstd::error_code init() {
-  auto root = kernel::CreateKObject<KDirectoryObject>("<Root>");
-  if (!root) return root.error();
-  auto device = kernel::CreateKObject<KDirectoryObject>(kOBDevicesPath);
-  if (!device) return device.error();
-  auto driver = kernel::CreateKObject<KDirectoryObject>(kOBDriversPath);
-  if (!driver) return driver.error();
-  auto memory = kernel::CreateKObject<KDirectoryObject>(kOBMemoryPath);
-  if (!memory) return memory.error();
-  auto thread = kernel::CreateKObject<KDirectoryObject>(kOBThreadPath);
-  if (!thread) return thread.error();
-  auto process = kernel::CreateKObject<KDirectoryObject>(kOBProcessesPath);
-  if (!process) return process.error();
-  auto filesystem = kernel::CreateKObject<KDirectoryObject>(kOBFileSystemPath);
-  if (!filesystem) return filesystem.error();
-  auto vfs = kernel::CreateKObject<KDirectoryObject>(kOBVFSPath);
-  if (!vfs) return vfs.error();
-  auto file = kernel::CreateKObject<KDirectoryObject>(kOBFilePath);
-  if (!file) return file.error();
-  auto subsystem = kernel::CreateKObject<KDirectoryObject>(kOBSubsystemsPath);
-  if (!subsystem) return subsystem.error();
-  auto configroots = kernel::CreateKObject<KDirectoryObject>(kOBHivePath);
-  if (!configroots) return configroots.error();
-  auto gfx = kernel::CreateKObject<KDirectoryObject>(kOBGfxPath);
-  if (!gfx) return gfx.error();
-  auto system = kernel::CreateKObject<KDirectoryObject>(kOBSystemPath);
-  if (!system) return system.error();
+void init() {
+  auto root = EnsureNoError(kernel::CreateKObject<KDirectoryObject>("<Root>"));
+  auto device = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBDevicesPath));
+  auto driver = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBDriversPath));
+  auto memory = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBMemoryPath));
+  auto thread = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBThreadPath));
+  auto process = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBProcessesPath));
+  auto filesystem = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBFileSystemPath));
+  auto vfs = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBVFSPath));
+  auto file = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBFilePath));
+  auto subsystem = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBSubsystemsPath));
+  auto configroots = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBHivePath));
+  auto gfx = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBGfxPath));
+  auto system = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBSystemPath));
 
   const KObjectPtr<KObject> children[] = {
-      *device, *driver, *memory, *filesystem, *thread, *process, *vfs,
-      *file, *subsystem, *configroots, *gfx, *system};
+      device, driver, memory, filesystem, thread, process, vfs,
+      file, subsystem, configroots, gfx, system};
 
   for (const auto &child: children) {
-    if (const auto status = KE_OB_InsertObject(*root, child)) {
-      return status;
+    if (const auto status = KE_OB_InsertObject(root, child)) {
+      KE_Print("Error: {}", status.message());
+      HAL_PLATFORM_Panic("Failed to populate the object manager root", __FILE__, __LINE__);
     }
   }
 
-  g_root = kstd::move(*root);
-  g_device = kstd::move(*device);
-  g_driver = kstd::move(*driver);
-  g_memory = kstd::move(*memory);
-  g_thread = kstd::move(*thread);
-  g_process = kstd::move(*process);
-  g_filesystem = kstd::move(*filesystem);
-  g_vfs = kstd::move(*vfs);
-  g_file = kstd::move(*file);
-  g_subsystem = kstd::move(*subsystem);
-  g_configroots = kstd::move(*configroots);
-  g_gfx = kstd::move(*gfx);
-  return KernelError::Success;
+  g_root = kstd::move(root);
+  g_device = kstd::move(device);
+  g_driver = kstd::move(driver);
+  g_memory = kstd::move(memory);
+  g_thread = kstd::move(thread);
+  g_process = kstd::move(process);
+  g_filesystem = kstd::move(filesystem);
+  g_vfs = kstd::move(vfs);
+  g_file = kstd::move(file);
+  g_subsystem = kstd::move(subsystem);
+  g_configroots = kstd::move(configroots);
+  g_gfx = kstd::move(gfx);
 }
 }// namespace kernel::objectmanager
 

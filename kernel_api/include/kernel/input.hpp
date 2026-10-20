@@ -223,17 +223,6 @@ using InputEventResult = kstd::expected<AnyInputEvent, kstd::error_code>;
 
 /**
  * @ingroup INPUT
- * @brief Method KE_INPUT_Initialize
- *
- * Initializes the kernel input manager's event ring, gamepad snapshot store
- * and \Device\Input stream. Must be called once at boot before any driver
- * pushes a report. The ring is usable even when publishing \Device\Input
- * fails; that failure is returned.
- */
-UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_INPUT_Initialize);
-
-/**
- * @ingroup INPUT
  * @brief Method KE_INPUT_PushEvent
  *
  * The single input ingestion point. Every code it carries is a HID usage ID

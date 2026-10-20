@@ -97,18 +97,23 @@ void PnPThread(void *) {
   }
 }
 
-kstd::error_code init() {
+void init() {
   // Create the kernel-owned root enumerator (\Device\Root). It has no driver
   // object; its child PDOs are tracked in the PnpRootContext extension.
   auto root = KE_IO_CreateBus(nullptr, 0, "System");
-  if (!root) return root.error();
+  if (!root) {
+    KE_Print("Failed to initialize PnP: {}", root.error().message());
+    HAL_PLATFORM_Panic("Failed to initialize PnP", __FILE__, __LINE__);
+  }
   s_rootDevice = *root;
   s_workAvailable.manualReset = false;
   s_workAvailable.signalled = false;
   auto worker = KE_SCHED_CreateThread(&PnPThread, nullptr, 0);
-  if (!worker) return worker.error();
+  if (!worker) {
+    KE_Print("Failed to initialize PnP: {}", worker.error().message());
+    HAL_PLATFORM_Panic("Failed to initialize PnP", __FILE__, __LINE__);
+  }
   s_pnpThread = *worker;
-  return KernelError::Success;
 }
 }// namespace kernel::pnp
 

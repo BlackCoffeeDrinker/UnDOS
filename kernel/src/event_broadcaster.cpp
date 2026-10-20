@@ -201,17 +201,19 @@ public:
   return s_systemCategory;
 }
 
-kstd::error_code init() {
+void init() {
   s_pumpWake.manualReset = false;
   s_pumpWake.signalled = false;
   auto thread = KE_SCHED_CreateThread(&EventThread, nullptr, 0);
-  if (!thread) return thread.error();
+  if (!thread) {
+    KE_Print("Failed to initialize events: {}", thread.error().message());
+    HAL_PLATFORM_Panic("Failed to initialize events", __FILE__, __LINE__);
+  }
   s_eventPumpThread = *thread;
 
   // Anything broadcast before now is already queued; make sure the freshly
   // created pump sees it.
   KE_EVENT_Signal(s_pumpWake, false);
-  return KernelError::Success;
 }
 
 // Safe to call from interrupt context and before init(): this only touches the

@@ -126,13 +126,13 @@ kstd::expected<uint64_t, kstd::error_code> BootDeviceVFS_ReadHandle(const kernel
 }// namespace
 
 namespace kernel::initial {
-kstd::error_code init_boot_device_volume() {
+void init_boot_device_volume() {
   const auto created = KE_IO_CreateDevice(
       nullptr, 0,
       "BootDeviceVolume", device_type::Volume);
   if (!created) {
     KE_Print("Failed to create BootDeviceVolume: {}", created.error().message());
-    return created.error();
+    HAL_PLATFORM_Panic("Failed to initialize boot volume", __FILE__, __LINE__);
   }
   const auto &volume = *created;
 
@@ -141,7 +141,7 @@ kstd::error_code init_boot_device_volume() {
 
     if (!registered) {
       KE_Print("Failed to register BootDeviceVolume filesystem: {}", registered.error().message());
-      return registered.error();
+      HAL_PLATFORM_Panic("Failed to initialize boot volume", __FILE__, __LINE__);
     }
     const auto &filesystem = *registered;
 
@@ -154,7 +154,10 @@ kstd::error_code init_boot_device_volume() {
   }
 
 
-  return KE_VFS_Mount(volume, "BootDeviceVolume", "/", {});
+  if (const auto mounted = KE_VFS_Mount(volume, "BootDeviceVolume", "/", {})) {
+    KE_Print("Failed to mount BootDeviceVolume: {}", mounted.message());
+    HAL_PLATFORM_Panic("Failed to initialize boot volume", __FILE__, __LINE__);
+  }
 }
 
 }// namespace kernel::initial

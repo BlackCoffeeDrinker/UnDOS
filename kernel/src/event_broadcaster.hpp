@@ -9,7 +9,7 @@ namespace kernel::event {
  * broadcast() is usable before this is called - records simply queue up and are
  * delivered once the pump exists.
  */
-kstd::error_code init();
+void init();
 
 /**
  * @brief Queues @p eventId for every subscriber interested in @p target.

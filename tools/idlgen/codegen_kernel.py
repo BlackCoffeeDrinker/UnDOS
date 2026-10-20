@@ -89,7 +89,7 @@ def generate_kernel_handle_definition(module: IDLModule, out_h_dir: str, out_h_s
 
         for sc in module.syscalls:
             template.write_doc(sc.doc)
-            template.write_method_def(name = f"handle_{sc.name}_{sc.version}", return_type = "kernel::KernelError", args = [
+            template.write_method_def(name = f"handle_{sc.name}_{sc.version}", return_type = "kstd::error_code", args = [
                 {'name': "args", 'type': f"{kernel_struct_name(sc)} &&"}
             ])
         template.write_newline()
@@ -145,7 +145,7 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
         # them, and unmaps again. This is the one-time, per-field version of
         # KE_VMM_CopyToUserspace(as, userPtr, kernelPtr, length) described by
         # the syscall codegen spec.
-        f.write("static kernel::KernelError KE_VMM_CopyToUserspace(kernel::vmm::AddressSpace &as, void *userPtr, const void *kernelPtr, size_t length) {\n")
+        f.write("static kstd::error_code KE_VMM_CopyToUserspace(kernel::vmm::AddressSpace &as, void *userPtr, const void *kernelPtr, size_t length) {\n")
         f.write("  if (length == 0) return kernel::KernelError::Success;\n")
         f.write("  if (userPtr == nullptr) [[unlikely]] return kernel::KernelError::InvalidAddress;\n")
         f.write("  const auto mapped = KE_VMM_MapBorrowed(userPtr, length, as);\n")
@@ -163,7 +163,7 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
                 if isinstance(field.ftype, StringType) and field.mode == "COPY" and field.direction == "IN"
             ]
 
-            f.write(f"static kernel::KernelError Dispatch_{sc.name}_{sc.version}(void *userData, size_t size, uint32_t flags) {{\n")
+            f.write(f"static kstd::error_code Dispatch_{sc.name}_{sc.version}(void *userData, size_t size, uint32_t flags) {{\n")
             f.write(f"  if (size < sizeof({wire_name})) return kernel::KernelError::InvalidSize;\n\n")
             f.write("  const auto currentThread = KE_SCHED_GetCurrentThread();\n")
             f.write("  if (!currentThread) return kernel::KernelError::NoCurrentThread;\n")
@@ -174,7 +174,7 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
             f.write(f"  {wire_name} headerCopy {{}};\n")
             f.write(f"  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof({wire_name}), address_space)) {{\n")
             f.write(f"    kstd::memcpy(&headerCopy, *mapped, sizeof({wire_name}));\n")
-            f.write(f"    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof({wire_name}), address_space); error != kernel::KernelError::Success) return error;\n")
+            f.write(f"    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof({wire_name}), address_space); error) return error;\n")
             f.write("  } else {\n")
             f.write("    return mapped.error();\n")
             f.write("  }\n\n")
@@ -201,7 +201,7 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
                         f.write(f"    if (args.{field.name}.data() == nullptr || args.{field.name}.size() != headerCopy.{field.name}Length) return kernel::KernelError::OutOfMemory;\n")
                         f.write(f"    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.{field.name}), headerCopy.{field.name}Length, address_space)) {{\n")
                         f.write(f"      kstd::memcpy(args.{field.name}.data(), *mapped, headerCopy.{field.name}Length);\n")
-                        f.write(f"      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.{field.name}Length, address_space); error != kernel::KernelError::Success) return error;\n")
+                        f.write(f"      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.{field.name}Length, address_space); error) return error;\n")
                         f.write(f"    }} else {{\n")
                         f.write(f"      return mapped.error();\n")
                         f.write(f"    }}\n")
@@ -248,7 +248,7 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
                 f.write("  }\n")
 
             f.write("\n  (void)flags;\n")
-            f.write(f"  const kernel::KernelError ret = handle_{sc.name}_{sc.version}(kstd::move(args));\n\n")
+            f.write(f"  const kstd::error_code ret = handle_{sc.name}_{sc.version}(kstd::move(args));\n\n")
 
             # Step 6: copy every OUT (non-buffer) field back to the original
             # user struct, one field at a time; buffer<T>/OUT-string content
@@ -260,7 +260,7 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
                 if isinstance(field.ftype, StringType):
                     f.write(f"  // content was written directly into the mapped user buffer; report the actual/required length.\n")
                     f.write(f"  {{\n    const auto len = static_cast<uint32_t>(args.{field.name}_len);\n")
-                    f.write(f"    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof({wire_name}, {field.name}Length), &len, sizeof(len)); error != kernel::KernelError::Success) return error;\n")
+                    f.write(f"    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof({wire_name}, {field.name}Length), &len, sizeof(len)); error) return error;\n")
                     f.write(f"  }}\n")
                 elif isinstance(field.ftype, DynArrayType):
                     f.write(f"  /* OUT dynarray fields must be copied back manually by the handler */\n")
@@ -268,14 +268,14 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
                     f.write(f"  // buffer was mapped and filled by the kernel directly; report actual length written.\n")
                     f.write(f"  {{\n")
                     f.write(f"    const auto len = static_cast<uint32_t>(args.{field.name}_len);\n")
-                    f.write(f"    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof({wire_name}, {field.name}Length), &len, sizeof(len)); error != kernel::KernelError::Success) return error;\n")
+                    f.write(f"    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof({wire_name}, {field.name}Length), &len, sizeof(len)); error) return error;\n")
                     f.write(f"  }}\n")
                 elif isinstance(field.ftype, ArrayType):
                     f.write(
-                        f"  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof({wire_name}, {field.name}), args.{field.name}, sizeof(args.{field.name})); error != kernel::KernelError::Success) return error;\n")
+                        f"  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof({wire_name}, {field.name}), args.{field.name}, sizeof(args.{field.name})); error) return error;\n")
                 else:
                     f.write(
-                        f"  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof({wire_name}, {field.name}), &args.{field.name}, sizeof(args.{field.name})); error != kernel::KernelError::Success) return error;\n")
+                        f"  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof({wire_name}, {field.name}), &args.{field.name}, sizeof(args.{field.name})); error) return error;\n")
 
             f.write("  return ret;\n")
             f.write("}\n\n")

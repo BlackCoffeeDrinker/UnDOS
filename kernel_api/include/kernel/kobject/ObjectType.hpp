@@ -30,6 +30,7 @@ constexpr auto TYPE_VOLUME_MOUNT = "volume_mount"_type;
 constexpr auto TYPE_FILE_SYSTEM = "file_system"_type;
 constexpr auto TYPE_SUBSYSTEM = "subsystem"_type;
 constexpr auto TYPE_MEMORY_SECTION = "memory_section"_type;
+constexpr auto TYPE_MAPPED_REGION = "mapped_region"_type;
 constexpr auto TYPE_CONFIGROOT_SECTION = "configroot"_type;
 constexpr auto TYPE_GRAPHICS_ADAPTER = "graphics_adapter"_type;
 constexpr auto TYPE_DISPLAY = "display"_type;

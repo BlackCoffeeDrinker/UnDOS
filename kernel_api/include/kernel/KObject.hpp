@@ -11,6 +11,7 @@
 #include <kernel/kobject/KGraphicsAdapter.hpp>
 #include <kernel/kobject/KIOObject.hpp>
 #include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
+#include <kernel/kobject/KMappedRegionObject.hpp>
 #include <kernel/kobject/KMemoryBackingObject.hpp>
 #include <kernel/kobject/KModuleObject.hpp>
 #include <kernel/kobject/KObject.hpp>

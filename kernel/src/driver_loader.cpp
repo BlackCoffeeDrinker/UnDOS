@@ -140,13 +140,14 @@ void LoadDriversWithStart(const kstd::string_view &startFilter, const kstd::stri
 }// namespace
 
 namespace kernel::driver {
-kstd::error_code init(const BootInfoT &boot_info) {
+void init(const BootInfoT &boot_info) {
   for (const auto &sym: boot_info.boot_symbols) {
     if (sym.name.empty()) continue;
-    if (const auto status = g_SymbolTable.Register(sym.name, static_cast<uintptr_t>(sym.address)))
-      return status;
+    if (const auto status = g_SymbolTable.Register(sym.name, static_cast<uintptr_t>(sym.address))) {
+      KE_Print("Failed to initialize driver loader: {}", status.message());
+      HAL_PLATFORM_Panic("Failed to initialize driver loader", __FILE__, __LINE__);
+    }
   }
-  return {};
 }
 
 void LoadBootDrivers() {

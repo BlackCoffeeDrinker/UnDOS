@@ -102,6 +102,7 @@ add_executable(kernel
         src/kerror.cpp
         src/syscalls/KErrorToSysReturnCode.cpp
         src/syscalls/KErrorToSysReturnCode.hpp
+        src/CommandLineParser.hpp
 )
 
 add_dependencies(kernel undos-syscalls-gen)

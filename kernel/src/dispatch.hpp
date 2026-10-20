@@ -4,7 +4,7 @@
 
 namespace kernel::dispatch {
 
-kstd::error_code init() noexcept;
+void init() noexcept;
 
 InterruptRecordRing &get_ring() noexcept;
 

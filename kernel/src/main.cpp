@@ -1,6 +1,6 @@
 #include "stdkrn.hpp"
 
-
+#include "CommandLineParser.hpp"
 #include "configuration_manager.hpp"
 #include "dispatch.hpp"
 #include "driver_loader.hpp"
@@ -21,109 +21,77 @@
 uint32_t g_page_size;
 
 namespace {
-class CommandLineParser {
-  kstd::string_view _cmd;
 
-  // Extract next token starting at index i
-  kstd::string_view next_token(size_t &i) const {
-    // Skip whitespace
-    while (i < _cmd.size() && (_cmd[i] == ' ' || _cmd[i] == '\t')) {
-      i++;
-    }
-
-    if (i >= _cmd.size()) {
-      return {};
-    }
-
-    const auto start = i;
-
-    // Quoted token
-    if (_cmd[i] == '"') {
-      i++;// skip opening quote
-      const auto token_start = i;
-
-      while (i < _cmd.size()) {
-        if (_cmd[i] == '\\' && i + 1 < _cmd.size()) {
-          i += 2;// skip escaped char
-          continue;
-        }
-        if (_cmd[i] == '"') {
-          const auto tok = _cmd.substr(token_start, i - token_start);
-          i++;// skip closing quote
-          return tok;
-        }
-        i++;
-      }
-
-      // Unterminated quote → return rest
-      return _cmd.substr(token_start);
-    }
-
-    // Unquoted token
-    while (i < _cmd.size() && _cmd[i] != ' ' && _cmd[i] != '\t') {
-      i++;
-    }
-
-    return _cmd.substr(start, i - start);
+const char *MappedRegionBaseName(kernel::MappedMemoryRegionType type) {
+  switch (type) {
+    case kernel::MappedMemoryRegionType::Identity: return "Identity";
+    case kernel::MappedMemoryRegionType::KernelCore: return "KernelCore";
+    case kernel::MappedMemoryRegionType::HalModule: return "HalModule";
+    case kernel::MappedMemoryRegionType::BootStack: return "BootStack";
+    case kernel::MappedMemoryRegionType::BootInfo: return "BootInfo";
+    case kernel::MappedMemoryRegionType::PagingStructures: return "PagingStructures";
+    case kernel::MappedMemoryRegionType::None: break;
   }
+  return "Unknown";
+}
 
-  // Split key=value
-  static bool split_key_value(const kstd::string_view &tok,
-                              kstd::string_view &key,
-                              kstd::string_view &value) {
-    const auto eq = tok.find('=');
-    if (eq == kstd::string_view::npos) {
-      return false;
+// Publishes Stage 1.5's mapped regions under \Memory so they remain
+// inspectable (and the BootInfo region reclaimable) once BootInfoT is gone.
+void RegisterBootMappedRegions(const kernel::BootInfoT &boot_info) {
+  const auto memoryDirectory = KE_OB_GetMemoryDirectory();
+  size_t pagingIndex = 0;
+  for (const auto &region: boot_info.mapped_memory) {
+    if (region.type == kernel::MappedMemoryRegionType::None) continue;
+
+    kstd::static_string<64> name;
+    if (region.type == kernel::MappedMemoryRegionType::PagingStructures) {
+      kstd::format(name, "PagingStructures{}", pagingIndex++);
+    } else {
+      name = MappedRegionBaseName(region.type);
     }
 
-    key = tok.substr(0, eq);
-    value = tok.substr(eq + 1);
-    return true;
-  }
-
-
-  public:
-  explicit CommandLineParser(const kstd::string_view &cmd) : _cmd(cmd) {}
-  [[nodiscard]] kstd::string_view get_command_line() const { return _cmd; }
-
-  [[nodiscard]] bool has_key(const kstd::string_view &key) const {
-    size_t i = 0;
-    while (true) {
-      auto tok = next_token(i);
-      if (tok.empty())
-        return false;
-
-      kstd::string_view k, v;
-      if (split_key_value(tok, k, v)) {
-        if (k == key)
-          return true;
-      } else {
-        if (tok == key)
-          return true;
-      }
+    auto object = kernel::CreateKObject<kernel::KMappedRegionObject>(name);
+    if (!object) {
+      KE_Print("Failed to create mapped region object {}: {}", name, object.error().message());
+      HAL_PLATFORM_Panic("Failed to create mapped region object", __FILE__, __LINE__);
+      continue;
+    }
+    object.value()->regionType = region.type;
+    object.value()->physicalBase = region.physical_base;
+    object.value()->virtualBase = region.virtual_base;
+    object.value()->length = region.length;
+    if (const auto status = KE_OB_InsertObject(memoryDirectory, *object)) {
+      KE_Print("Failed to register mapped region {}: {}", name, status.message());
+      HAL_PLATFORM_Panic("Failed to register mapped region", __FILE__, __LINE__);
     }
   }
+}
 
-  [[nodiscard]] kstd::string_view get(const kstd::string_view &key,
-                                      const kstd::string_view &default_value = "") const {
-    size_t i = 0;
-    while (true) {
-      auto tok = next_token(i);
-      if (tok.empty())
-        return default_value;
+// Releases the Stage 1.5 BootInfo pages back to the PMM. Everything still needed
+// (symbols, command line) must already be copied out; the BootInfoT passed to
+// kernel_core_main and any view into it are invalid afterwards.
+void MemoryReclaim_BootStructures() {
+  const auto memoryDirectory = KE_OB_GetMemoryDirectory();
+  const auto region = KE_OB_FindDirectChildOfType<kernel::KMappedRegionObject>(memoryDirectory, "BootInfo");
+  if (!region) return;
 
-      kstd::string_view k, v;
-      if (split_key_value(tok, k, v)) {
-        if (k == key)
-          return v;
-      } else {
-        if (tok == key)
-          return "on";
-      }
-    }
+  const size_t pages = (region->length + g_page_size - 1) / g_page_size;
+  const auto physicalBase = region->physicalBase;
+  const auto virtualBase = region->virtualBase;
+
+  if (const auto status = KE_OB_RemoveObject(memoryDirectory, region)) {
+    KE_Print("Failed to remove BootInfo region object: {}", status.message());
+    HAL_PLATFORM_Panic("Failed to remove BootInfo region object", __FILE__, __LINE__);
   }
-};
 
+  for (size_t i = 0; i < pages; ++i) {
+    const auto page = virtualBase + i * g_page_size;
+    HAL_VMM_UnmapPage(page);
+    HAL_VMM_Flush(page);
+  }
+  HAL_PMM_FreeFrames(physicalBase, pages);
+  KE_Print("Reclaimed {} boot info pages", pages);
+}
 
 const char *GetObjectTypeName(kernel::ObjectType type) {
   if (type == kernel::TYPE_DIRECTORY) return "Directory";
@@ -216,7 +184,6 @@ void DumpDevice(const kernel::KDevicePtr<kernel::KDevice> &dev, int depth, bool 
 }// namespace
 
 UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT &boot_info) noexcept {
-  const CommandLineParser parser(boot_info.command_line);
   g_page_size = boot_info.page_size;
 
   KE_Print("UnDOS Kernel INIT with page size {}", g_page_size);
@@ -224,41 +191,24 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
 
   HAL_PLATFORM_Init(boot_info, KE_VMM_GetKernelAddressSpace());
   kernel::vmm::init();
-  if (const auto error = kernel::objectmanager::init(); error) {
-    KE_Print("Failed to initialize object manager: {}", error.message());
-    HAL_PLATFORM_Panic("Failed to initialize object manager", __FILE__, __LINE__);
-  }
+  kernel::objectmanager::init();
   kernel::vmm::late_init();
-  if (const auto error = kernel::driver::init(boot_info); error) {
-    KE_Print("Failed to initialize driver loader: {}", error.message());
-    HAL_PLATFORM_Panic("Failed to initialize driver loader", __FILE__, __LINE__);
-  }
+
+  // The parser copies the command line; it needs the heap, and the original is reclaimed below.
+  const kernel::CommandLineParser parser(boot_info.command_line);
+  RegisterBootMappedRegions(boot_info);
+  kernel::driver::init(boot_info);
   HAL_VMM_FinalizeInit();
   kernel::sched::init_bsp();
-  if (const auto error = kernel::dispatch::init(); error) {
-    KE_Print("Failed to initialize dispatch: {}", error.message());
-    HAL_PLATFORM_Panic("Failed to initialize dispatch", __FILE__, __LINE__);
-  }
+  kernel::dispatch::init();
   HAL_PLATFORM_InitializeSystemTimer();
   HAL_CPU_EnableInterrupts();
-  if (const auto error = kernel::event::init(); error) {
-    KE_Print("Failed to initialize events: {}", error.message());
-    HAL_PLATFORM_Panic("Failed to initialize events", __FILE__, __LINE__);
-  }
-  if (const auto error = kernel::pnp::init(); error) {
-    KE_Print("Failed to initialize PnP: {}", error.message());
-    HAL_PLATFORM_Panic("Failed to initialize PnP", __FILE__, __LINE__);
-  }
+  kernel::event::init();
+  kernel::pnp::init();
   kernel::resource::init();
-  if (const auto error = kernel::input::init(); error) {
-    KE_Print("Failed to initialize input: {}", error.message());
-    HAL_PLATFORM_Panic("Failed to initialize input", __FILE__, __LINE__);
-  }
+  kernel::input::init();
   kernel::vfs::init();
-  if (const auto error = kernel::initial::init_boot_device_volume(); error) {
-    KE_Print("Failed to initialize boot volume: {}", error.message());
-    HAL_PLATFORM_Panic("Failed to initialize boot volume", __FILE__, __LINE__);
-  }
+  kernel::initial::init_boot_device_volume();
   kernel::configuration_manager::init();
   kernel::driver::LoadBootDrivers();
 
@@ -273,7 +223,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   // asynchronously on the PnP worker thread; wait for the queue to fully
   // drain so the root-fs lookup below still sees a fully-started tree.
   KE_PNP_WaitForQuiescence();
-  //MemoryReclaim_BootStructures(boot_info);
+  MemoryReclaim_BootStructures();
 
   // Bring every CPU the HAL reports online. On a uniprocessor HAL this is a
   // no-op and online_count() stays 1.
