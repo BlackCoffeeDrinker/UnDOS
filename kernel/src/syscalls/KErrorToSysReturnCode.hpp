@@ -5,6 +5,5 @@
 #include <kernel/kerror.hpp>
 
 namespace kernel {
-SyscallReturnCode KErrorToSysReturnCode(KernelError error);
 SyscallReturnCode KErrorToSysReturnCode(const kstd::error_code &error);
 }

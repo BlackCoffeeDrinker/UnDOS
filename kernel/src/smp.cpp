@@ -13,7 +13,7 @@ namespace {
 // it. Purely a spin count: there is no wall clock this early on the AP.
 constexpr uint32_t AP_START_SPIN_LIMIT = 100'000'000u;
 
-KernelError wait_until_online(const cpu::CpuContext &ctx) noexcept {
+kstd::error_code wait_until_online(const cpu::CpuContext &ctx) noexcept {
   for (uint32_t spins = 0; spins < AP_START_SPIN_LIMIT; ++spins) {
     HAL_ATOMIC_ThreadFence(PlatformMemoryOrder::Acquire);
     if (ctx.online) return KernelError::Success;
@@ -63,7 +63,7 @@ void start_secondary_cpus() noexcept {
       continue;
     }
 
-    if (wait_until_online(cpu::contexts()[id]) != KernelError::Success) {
+    if (wait_until_online(cpu::contexts()[id])) {
       KE_Print("SMP: CPU {} never came online, left offline", id);
       continue;
     }

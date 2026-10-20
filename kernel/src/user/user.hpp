@@ -88,7 +88,7 @@ void set_active_window_locked(uint32_t hwnd) noexcept;
 KWindowObject *focused_window_locked() noexcept;
 // Errors: InvalidHandle (unknown hwnd), InvalidState (hidden, or a minimized
 // root window). hwnd 0 clears the focus.
-KernelError set_focus_locked(uint32_t hwnd) noexcept;
+kstd::error_code set_focus_locked(uint32_t hwnd) noexcept;
 bool effectively_visible_locked(const KWindowObject &window) noexcept;
 bool descendant_locked(const KWindowObject &window, const KWindowObject &ancestor) noexcept;
 URect clipped_rect_locked(const KWindowObject &window) noexcept;
@@ -96,24 +96,24 @@ URect client_rect_locked(const KWindowObject &window) noexcept;
 // Converts parent-client placement to a screen rectangle. Errors:
 // InvalidSize (non-positive extent), InvalidHandle (stale parent),
 // OutOfRange (outside the 16-bit coordinate space).
-kstd::expected<URect, KernelError> placement_rect_locked(const KWindowObject &window, int32_t x, int32_t y,
+kstd::expected<URect, kstd::error_code> placement_rect_locked(const KWindowObject &window, int32_t x, int32_t y,
                                                          int32_t width, int32_t height) noexcept;
 KWindowObject *window_from_point_locked(int32_t x, int32_t y) noexcept;
 KWindowObject *mouse_target_locked(int32_t x, int32_t y) noexcept;
 int32_t find_class_locked(const kstd::string_view &name, const KProcessObject *process = nullptr) noexcept;
 WindowClass *class_at_locked(uint32_t index) noexcept;
 // Errors: ResourceLimitExceeded (class table full).
-KernelError register_class_locked(KProcessObject &proc, const kstd::string_view &name, uint32_t wndProc, uint32_t background) noexcept;
+kstd::error_code register_class_locked(KProcessObject &proc, const kstd::string_view &name, uint32_t wndProc, uint32_t background) noexcept;
 // Returns the new hwnd. Errors: ResourceLimitExceeded (window table full).
-kstd::expected<uint32_t, KernelError> insert_window_locked(const KObjectPtr<KWindowObject> &window) noexcept;
+kstd::expected<uint32_t, kstd::error_code> insert_window_locked(const KObjectPtr<KWindowObject> &window) noexcept;
 void destroy_window_locked(KWindowObject &window) noexcept;
 // Errors: InvalidSize (empty rect), OutOfRange (window or a descendant would
 // leave the 16-bit coordinate space). Nothing changes on failure.
-KernelError move_window_locked(KWindowObject &window, const URect &rect) noexcept;
+kstd::error_code move_window_locked(KWindowObject &window, const URect &rect) noexcept;
 void show_window_locked(KWindowObject &window, bool show) noexcept;
 // Errors: InvalidArgument (unknown command), InvalidState (no room in the
 // parent client area), or the move_window_locked error.
-KernelError show_command_locked(KWindowObject &window, uint32_t command) noexcept;
+kstd::error_code show_command_locked(KWindowObject &window, uint32_t command) noexcept;
 void cycle_window_locked(bool children, bool reverse) noexcept;
 void set_capture_locked(uint32_t hwnd) noexcept;
 uint32_t capture_locked() noexcept;
@@ -146,13 +146,13 @@ void display_input_changed_locked(bool firstActivation) noexcept;
 // msgqueue.cpp
 // Errors: NoCurrentThread, NotFound (no queue and !create), NoCurrentProcess
 // (kernel thread cannot own a queue), OutOfMemory.
-kstd::expected<MessageQueue *, KernelError> queue_for_current_locked(bool create) noexcept;
+kstd::expected<MessageQueue *, kstd::error_code> queue_for_current_locked(bool create) noexcept;
 // Errors: QueueFull (message dropped).
-KernelError post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept;
+kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept;
 void wake_locked(MessageQueue &queue) noexcept;
 // Self-locking. Errors: WouldBlock (nothing pending and !block), the
 // queue_for_current_locked errors, or the scheduler's wait error.
-kstd::expected<QueuedMessage, KernelError> get_message(bool block, bool remove) noexcept;
+kstd::expected<QueuedMessage, kstd::error_code> get_message(bool block, bool remove) noexcept;
 bool geometry_message_locked(const MessageQueue &queue, QueuedMessage &out, bool remove) noexcept;
 void free_queues_locked(KProcessObject &proc) noexcept;
 
@@ -167,10 +167,10 @@ struct PaintBegin {
 };
 // Errors: InvalidState (a paint DC is already live), DeviceNotReady (no
 // primary display surface), or the DC table allocation error.
-kstd::expected<PaintBegin, KernelError> begin_paint_locked(KProcessObject &proc, KWindowObject &window) noexcept;
+kstd::expected<PaintBegin, kstd::error_code> begin_paint_locked(KProcessObject &proc, KWindowObject &window) noexcept;
 // Errors: InvalidHandle (hdc is not this window's live paint DC) or the DC
 // table close error.
-KernelError end_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t hdc) noexcept;
+kstd::error_code end_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t hdc) noexcept;
 // Hands the damaged screen rectangles to the adapter; one call per paint cycle.
 void present_locked(const URegion &region) noexcept;
 void present_locked(const URect &r) noexcept;
@@ -186,10 +186,10 @@ void on_process_exit(KProcessObject &proc) noexcept;
 // ---------------------------------------------------------------------------
 
 // The calling thread's process. Errors: NoCurrentThread, NoCurrentProcess.
-kstd::expected<KProcessObject *, KernelError> caller_process() noexcept;
+kstd::expected<KProcessObject *, kstd::error_code> caller_process() noexcept;
 
 // Errors: InvalidArgument (empty name), NameTooLong, ResourceLimitExceeded.
-KernelError register_class(KProcessObject &caller, const kstd::string_view &name, uint32_t wndProc,
+kstd::error_code register_class(KProcessObject &caller, const kstd::string_view &name, uint32_t wndProc,
                            uint32_t background) noexcept;
 
 struct CreateWindowParams {
@@ -208,41 +208,41 @@ struct CreateWindowParams {
 // InvalidHandle/AccessDenied (parent), OutOfRange (placement), NotFound
 // (class not registered by the caller), OutOfMemory, QueueFull,
 // ResourceLimitExceeded (window table full), NoCurrentThread.
-kstd::expected<uint32_t, KernelError> create_window(KProcessObject &caller, const CreateWindowParams &params) noexcept;
-KernelError destroy_window(KProcessObject &caller, uint32_t hwnd) noexcept;
+kstd::expected<uint32_t, kstd::error_code> create_window(KProcessObject &caller, const CreateWindowParams &params) noexcept;
+kstd::error_code destroy_window(KProcessObject &caller, uint32_t hwnd) noexcept;
 // See show_command_locked.
-KernelError show_window(KProcessObject &caller, uint32_t hwnd, uint32_t command) noexcept;
+kstd::error_code show_window(KProcessObject &caller, uint32_t hwnd, uint32_t command) noexcept;
 // Placement is relative to the parent client area. See placement_rect_locked
 // and move_window_locked.
-KernelError move_window(KProcessObject &caller, uint32_t hwnd, int32_t x, int32_t y, int32_t width,
+kstd::error_code move_window(KProcessObject &caller, uint32_t hwnd, int32_t x, int32_t y, int32_t width,
                         int32_t height) noexcept;
 // Any process may query geometry. Errors: InvalidHandle.
-kstd::expected<URect, KernelError> get_window_rect(uint32_t hwnd) noexcept;
-kstd::expected<URect, KernelError> get_client_rect(uint32_t hwnd) noexcept;
+kstd::expected<URect, kstd::error_code> get_window_rect(uint32_t hwnd) noexcept;
+kstd::expected<URect, kstd::error_code> get_client_rect(uint32_t hwnd) noexcept;
 // `clientRect` null invalidates the whole client area. Errors:
 // InvalidArgument (inverted rectangle).
-KernelError invalidate_rect(KProcessObject &caller, uint32_t hwnd, const URect *clientRect) noexcept;
+kstd::error_code invalidate_rect(KProcessObject &caller, uint32_t hwnd, const URect *clientRect) noexcept;
 // See begin_paint_locked / end_paint_locked.
-kstd::expected<PaintBegin, KernelError> begin_paint(KProcessObject &caller, uint32_t hwnd) noexcept;
-KernelError end_paint(KProcessObject &caller, uint32_t hwnd, HDC dc) noexcept;
+kstd::expected<PaintBegin, kstd::error_code> begin_paint(KProcessObject &caller, uint32_t hwnd) noexcept;
+kstd::error_code end_paint(KProcessObject &caller, uint32_t hwnd, HDC dc) noexcept;
 // hwnd 0 posts to the calling thread's queue. Errors: InvalidState (target
 // window has no queue), QueueFull, plus queue_for_current_locked errors.
-KernelError post_message(uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept;
+kstd::error_code post_message(uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept;
 // `index` is a WindowLongIndex. Errors: InvalidArgument (unknown index).
-kstd::expected<uint32_t, KernelError> get_window_long(uint32_t hwnd, uint32_t index) noexcept;
+kstd::expected<uint32_t, kstd::error_code> get_window_long(uint32_t hwnd, uint32_t index) noexcept;
 // Returns the previous value. Errors: InvalidArgument (unknown or read-only
 // index, or toggling the child style), OutOfRange (a descendant would leave
 // the coordinate space after a frame change).
-kstd::expected<uint32_t, KernelError> set_window_long(KProcessObject &caller, uint32_t hwnd, uint32_t index,
+kstd::expected<uint32_t, kstd::error_code> set_window_long(KProcessObject &caller, uint32_t hwnd, uint32_t index,
                                                       uint32_t value) noexcept;
 // Errors: InvalidState (window hidden or minimized).
-KernelError set_capture(KProcessObject &caller, uint32_t hwnd) noexcept;
+kstd::error_code set_capture(KProcessObject &caller, uint32_t hwnd) noexcept;
 // Releases the capture only when it is held by one of the caller's windows.
-KernelError release_capture(KProcessObject &caller) noexcept;
+kstd::error_code release_capture(KProcessObject &caller) noexcept;
 // hwnd 0 clears focus; fails with AccessDenied while another process's
 // window is focused. Otherwise see set_focus_locked.
-KernelError set_focus(KProcessObject &caller, uint32_t hwnd) noexcept;
+kstd::error_code set_focus(KProcessObject &caller, uint32_t hwnd) noexcept;
 // Errors: InvalidSize (text longer than the title capacity).
-KernelError set_window_text(KProcessObject &caller, uint32_t hwnd, const kstd::string_view &text) noexcept;
+kstd::error_code set_window_text(KProcessObject &caller, uint32_t hwnd, const kstd::string_view &text) noexcept;
 
 }// namespace kernel::user

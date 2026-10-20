@@ -15,10 +15,10 @@ namespace diskfake {
 struct IBackingStore {
   virtual ~IBackingStore() = default;
 
-  [[nodiscard]] virtual kstd::expected<size_t, kernel::KernelError> Size() const = 0;
-  virtual kernel::KernelError Resize(size_t newSize) = 0;
-  virtual kernel::KernelError ReadAt(uint64_t offset, kstd::span<uint8_t> buffer) = 0;
-  virtual kernel::KernelError WriteAt(uint64_t offset, kstd::span<const uint8_t> buffer) = 0;
+  [[nodiscard]] virtual kstd::expected<size_t, kstd::error_code> Size() const = 0;
+  virtual kstd::error_code Resize(size_t newSize) = 0;
+  virtual kstd::error_code ReadAt(uint64_t offset, kstd::span<uint8_t> buffer) = 0;
+  virtual kstd::error_code WriteAt(uint64_t offset, kstd::span<const uint8_t> buffer) = 0;
 };
 
 // Device extension for a disk_fake PDO. `backing` is owned externally (by the
@@ -30,18 +30,18 @@ struct FakeDiskContext {
 };
 
 // Pre-loads `content` into the backing store, growing it if necessary.
-inline kernel::KernelError Seed(const FakeDiskContext &context, kstd::span<const uint8_t> content) {
+inline kstd::error_code Seed(const FakeDiskContext &context, kstd::span<const uint8_t> content) {
   if (!context.backing) return kernel::KernelError::InvalidState;
   const auto size = context.backing->Size();
   if (!size) return size.error();
   if (*size < content.size()) {
     const auto status = context.backing->Resize(content.size());
-    if (status != kernel::KernelError::Success) return status;
+    if (status) return status;
   }
   return context.backing->WriteAt(0, content);
 }
 
-inline kernel::KernelError Read(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<uint8_t> buffer, size_t &transferred) {
+inline kstd::error_code Read(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<uint8_t> buffer, size_t &transferred) {
   transferred = 0;
   if (!device) return kernel::KernelError::InvalidArgument;
   if (device->deviceType != kernel::device_type::Disk) return kernel::KernelError::Unsupported;
@@ -55,13 +55,13 @@ inline kernel::KernelError Read(const kernel::KDevicePtr<kernel::KDevice> &devic
     return kernel::KernelError::OutOfRange;
   }
 
-  if (const auto status = ctx->backing->ReadAt(offset, buffer); status != kernel::KernelError::Success) return status;
+  if (const auto status = ctx->backing->ReadAt(offset, buffer); status) return status;
 
   transferred = buffer.size();
   return kernel::KernelError::Success;
 }
 
-inline kernel::KernelError Write(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<const uint8_t> buffer, size_t &transferred) {
+inline kstd::error_code Write(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<const uint8_t> buffer, size_t &transferred) {
   transferred = 0;
   if (!device) return kernel::KernelError::InvalidArgument;
   if (device->deviceType != kernel::device_type::Disk) return kernel::KernelError::Unsupported;
@@ -75,7 +75,7 @@ inline kernel::KernelError Write(const kernel::KDevicePtr<kernel::KDevice> &devi
     return kernel::KernelError::OutOfRange;
   }
 
-  if (const auto status = ctx->backing->WriteAt(offset, buffer); status != kernel::KernelError::Success) return status;
+  if (const auto status = ctx->backing->WriteAt(offset, buffer); status) return status;
 
   transferred = buffer.size();
   return kernel::KernelError::Success;

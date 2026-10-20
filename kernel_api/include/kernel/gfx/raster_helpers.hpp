@@ -28,7 +28,7 @@ inline bool ClipBlit(BlitRect &r, uint32_t dstWidth, uint32_t dstHeight,
 // The unsigned product fits because validated endpoints are signed 32-bit.
 // Endpoints outside the signed 32-bit range fail with OutOfRange.
 template<typename Plot>
-KernelError ForEachLinePixel(int64_t x0, int64_t y0, int64_t x1, int64_t y1,
+kstd::error_code ForEachLinePixel(int64_t x0, int64_t y0, int64_t x1, int64_t y1,
                       uint32_t width, uint32_t height, Plot &&plot) {
   if (x0 < INT32_MIN || x0 > INT32_MAX || y0 < INT32_MIN || y0 > INT32_MAX ||
       x1 < INT32_MIN || x1 > INT32_MAX || y1 < INT32_MIN || y1 > INT32_MAX) return KernelError::OutOfRange;

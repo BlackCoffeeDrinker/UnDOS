@@ -8,6 +8,7 @@
 #include "string_view.hpp"
 #include "type_traits.hpp"
 #include "static_string.hpp"
+#include "span.hpp"
 
 namespace kstd {
 namespace detail {
@@ -141,63 +142,59 @@ constexpr unsigned int num_digits(T number) {
   return digits;
 }
 
+inline size_t format_unsigned(char (&buffer)[32], unsigned long long value, unsigned int base) {
+  size_t size = 0;
+  do {
+    const auto remainder = static_cast<unsigned int>(value % base);
+    buffer[size++] = static_cast<char>((remainder < 10) ? (remainder + '0') : (remainder - 10 + 'a'));
+    value /= base;
+  } while (value != 0);
+  return size;
+}
+
 template<typename DESTINATION>
 inline void handlePrintArgument(DESTINATION &target, const format_arg &arg, const format_options &options) {
-  auto print_uint = [&](unsigned long long val, unsigned int base) {
-    char buf[32];
-    int i = 0;
-    if (val == 0) {
-      target('0');
-      return;
-    }
-    while (val > 0) {
-      const auto rem = static_cast<unsigned int>(val % base);
-      buf[i++] = static_cast<char>((rem < 10) ? (rem + '0') : (rem - 10 + 'a'));
-      val /= base;
-    }
-    while (i > 0) {
-      target(buf[--i]);
-    }
-  };
-
+  unsigned long long value = 0;
+  unsigned int base = options.integer_format == format_options::NumberFormat::hexadecimal ? 16 : 10;
   switch (arg.type) {
     case format_arg::arg_type::uint_type:
-      print_uint(arg.uint_value, options.integer_format == format_options::NumberFormat::hexadecimal ? 16 : 10);
+      value = arg.uint_value;
       break;
     case format_arg::arg_type::int_type:
+      value = static_cast<unsigned long long>(arg.int_value);
       if (arg.int_value < 0) {
         target('-');
-        print_uint(static_cast<unsigned long long>(-arg.int_value), 10);
-      } else {
-        print_uint(static_cast<unsigned long long>(arg.int_value), options.integer_format == format_options::NumberFormat::hexadecimal ? 16 : 10);
+        value = 0ull - value;
+        base = 10;
       }
       break;
     case format_arg::arg_type::ulong_type:
-      print_uint(arg.ulong_value, options.integer_format == format_options::NumberFormat::hexadecimal ? 16 : 10);
+      value = arg.ulong_value;
       break;
     case format_arg::arg_type::slong_type:
+      value = static_cast<unsigned long long>(arg.slong_value);
       if (arg.slong_value < 0) {
         target('-');
-        print_uint(static_cast<unsigned long long>(-arg.slong_value), 10);
-      } else {
-        print_uint(static_cast<unsigned long long>(arg.slong_value), options.integer_format == format_options::NumberFormat::hexadecimal ? 16 : 10);
+        value = 0ull - value;
+        base = 10;
       }
       break;
     case format_arg::arg_type::ulong_long_type:
-      print_uint(arg.ulong_long_value, options.integer_format == format_options::NumberFormat::hexadecimal ? 16 : 10);
+      value = arg.ulong_long_value;
       break;
     case format_arg::arg_type::string_view_type:
       for (size_t i = 0; i < arg.str_view.length(); ++i) {
         target(arg.str_view[i]);
       }
-      break;
+      return;
     case format_arg::arg_type::char_type:
       target(arg.char_value);
-      break;
+      return;
     case format_arg::arg_type::pointer_type:
       target('0');
       target('x');
-      print_uint(reinterpret_cast<uintptr_t>(arg.pointer), 16);
+      value = reinterpret_cast<uintptr_t>(arg.pointer);
+      base = 16;
       break;
     case format_arg::arg_type::bool_type:
       if (arg.bool_value) {
@@ -205,27 +202,26 @@ inline void handlePrintArgument(DESTINATION &target, const format_arg &arg, cons
         target('r');
         target('u');
         target('e');
-      }
-      else {
+      } else {
         target('F');
         target('a');
         target('l');
         target('s');
         target('e');
       }
-      break;
+      return;
     default:
       // Fallback for unhandled types
-      break;
+      return;
   }
+
+  char buffer[32];
+  size_t size = format_unsigned(buffer, value, base);
+  while (size > 0) target(buffer[--size]);
 }
 
-}// namespace detail
-
-template<typename DESTINATION, typename... Args>
-void format_dst(DESTINATION destination, const string_view &fmt, Args &&...args) {
-  const auto fmt_args = detail::make_args(args...);
-
+template<typename DESTINATION>
+void format_args_to(DESTINATION &destination, const string_view &fmt, span<const format_arg> fmt_args) {
   size_t current_pos = 0;
   size_t next_unnumbered_arg = 0;
 
@@ -261,25 +257,36 @@ void format_dst(DESTINATION destination, const string_view &fmt, Args &&...args)
   }
 }
 
+template<typename STRING>
+struct append_format_sink {
+  STRING &destination;
+
+  void operator()(char c) const {
+    destination.append(c);
+  }
+};
+
+}// namespace detail
+
+template<typename DESTINATION, typename... Args>
+void format_dst(DESTINATION destination, const string_view &fmt, Args &&...args) {
+  const auto fmt_args = detail::make_args(args...);
+  detail::format_args_to(destination, fmt, span<const detail::format_arg>(fmt_args));
+}
 
 template<typename... Args>
 void format(nomm_string &destination, string_view fmt, Args &&...args) {
   destination.clear();
-  auto target = [&](char c) {
-    destination.append(c);
-  };
+  detail::append_format_sink<nomm_string> target{destination};
   format_dst(target, fmt, kstd::forward<Args>(args)...);
 }
 
 template<size_t N, typename... Args>
 void format(static_string<N> &destination, string_view fmt, Args &&...args) {
   destination.clear();
-  auto target = [&](char c) {
-    destination.append(c);
-  };
+  detail::append_format_sink<static_string<N>> target{destination};
   format_dst(target, fmt, kstd::forward<Args>(args)...);
 }
-
 
 
 }// namespace kstd

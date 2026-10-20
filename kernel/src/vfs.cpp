@@ -4,7 +4,7 @@
 #include "stdkrn.hpp"
 
 namespace {
-// Object manager insertion/removal report success either as bool or KernelError.
+// Object manager insertion/removal report success either as bool or kstd::error_code.
 }
 
 namespace kernel {
@@ -55,7 +55,7 @@ bool mountPointIsSpecial(const kstd::string_view &mount_point) {
 }
 }// namespace
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_VFS_Mount(const kernel::KDevicePtr<kernel::KDevice> &volume,
+UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_Mount(const kernel::KDevicePtr<kernel::KDevice> &volume,
                                        const kstd::string_view &filesystem,
                                        const kstd::string_view &mountPoint,
                                        const kstd::string_view &options) noexcept {
@@ -88,14 +88,14 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_VFS_Mount(const kernel::KDevicePtr<k
       KE_Print("KE_VFS_Mount: Filesystem '{}' has no MountVolume handler", filesystem);
       return kernel::KernelError::Unsupported;
     }
-    if (const auto status = volumemount->fileSystem->MountVolume(volumemount, options); status != kernel::KernelError::Success) {
+    if (const auto status = volumemount->fileSystem->MountVolume(volumemount, options); status) {
       KE_Print("KE_VFS_Mount: Failed to mount volume");
       return status;
     }
 
     volumemount->isMounted = true;
     KE_Print("KE_VFS_Mount: Mounted volume '{}' on mount point '{}' with file system '{}'", volume->Name(), mountPoint, volumemount->fileSystem->name);
-    if (const auto status = KE_OB_InsertObject(KE_OB_GetVFSDirectory(), volumemount); status != kernel::KernelError::Success) {
+    if (const auto status = KE_OB_InsertObject(KE_OB_GetVFSDirectory(), volumemount); status) {
       volumemount->isMounted = false;
       if (volumemount->fileSystem->UnmountVolume) volumemount->fileSystem->UnmountVolume(volumemount);
       KE_Print("KE_VFS_Mount: Failed to publish mount point '{}'", mountPoint);
@@ -108,7 +108,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_VFS_Mount(const kernel::KDevicePtr<k
   return kernel::KernelError::NotFound;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_VFS_Unmount(const kstd::string_view &mountPoint) noexcept {
+UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_Unmount(const kstd::string_view &mountPoint) noexcept {
   const auto vfsRoot = KE_OB_GetVFSDirectory();
   if (!vfsRoot) return kernel::KernelError::NotInitialized;
 
@@ -119,19 +119,19 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_VFS_Unmount(const kstd::string_view 
   }
 
   if (mount->fileSystem && mount->fileSystem->UnmountVolume) {
-    if (const auto status = mount->fileSystem->UnmountVolume(mount); status != kernel::KernelError::Success) {
+    if (const auto status = mount->fileSystem->UnmountVolume(mount); status) {
       KE_Print("KE_VFS_Unmount: Filesystem refused to unmount '{}'", mountPoint);
       return status;
     }
   }
 
   mount->isMounted = false;
-  if (const auto status = KE_OB_RemoveObject(vfsRoot, mount); status != kernel::KernelError::Success) return status;
+  if (const auto status = KE_OB_RemoveObject(vfsRoot, mount); status) return status;
   KE_Print("KE_VFS_Unmount: Unmounted '{}'", mountPoint);
   return kernel::KernelError::Success;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KFilesystemObject>, kernel::KernelError> KE_VFS_RegisterFilesystemDriver(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KFilesystemObject>, kstd::error_code> KE_VFS_RegisterFilesystemDriver(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     const kstd::string_view &name) noexcept {
 
@@ -145,19 +145,19 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KFilesystemObject
   if (!created) return kstd::unexpected(created.error());
   auto fsko = kstd::move(*created);
   fsko->driver = kstd::move(driver);
-  if (const auto status = KE_OB_InsertObject(KE_OB_GetFilesystemDirectory(), fsko); status != kernel::KernelError::Success) {
+  if (const auto status = KE_OB_InsertObject(KE_OB_GetFilesystemDirectory(), fsko); status) {
     return kstd::unexpected(status);
   }
   KE_Print("KE_VFS_RegisterFilesystemDriver: Registered filesystem driver '{}'", name);
   return fsko;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_VFS_UnregisterFilesystemDriver(kernel::KObjectPtr<kernel::KFilesystemObject> filesystem) noexcept {
+UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_UnregisterFilesystemDriver(kernel::KObjectPtr<kernel::KFilesystemObject> filesystem) noexcept {
   (void) filesystem;
   return kernel::KernelError::NotImplemented;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kernel::KernelError> KE_VFS_OpenFile(const kstd::string_view &path, kernel::KIOObject::OpenMode mode) noexcept {
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd::error_code> KE_VFS_OpenFile(const kstd::string_view &path, kernel::KIOObject::OpenMode mode) noexcept {
   // Create a uniquely-named file object. Name is const on KObject, so it must
   // be chosen before construction: allocate, format the storage address as
   // hex (the previous intent of the unused fileObjectName local), then
@@ -207,7 +207,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kerne
   // Allocate owned node for the file; populate with root node
   file->vfsNode = kstd::make_unique<kernel::KVFSNode>();
   if (!file->vfsNode) return kstd::unexpected(kernel::KernelError::OutOfMemory);
-  if (const auto status = file->FileSystem()->GetRootNode(file->mountPoint, *file->vfsNode); status != kernel::KernelError::Success) {
+  if (const auto status = file->FileSystem()->GetRootNode(file->mountPoint, *file->vfsNode); status) {
     KE_Print("KE_VFS_OpenFile: Failed to get root node for mount {}", file->mountPoint->name);
     return kstd::unexpected(status);
   }
@@ -257,7 +257,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kerne
 
     // tmpnode now contains the parent node (borrowed copy we own)
     // file->vfsNode is the output storage for the child
-    if (const auto status = fsObj->Lookup(file->mountPoint, *tmpnode, name, *file->vfsNode); status != kernel::KernelError::Success) {
+    if (const auto status = fsObj->Lookup(file->mountPoint, *tmpnode, name, *file->vfsNode); status) {
       KE_Print("KE_VFS_OpenFile: Lookup failed for '{}' in '{}'",
                       name, rel);
       return kstd::unexpected(status);
@@ -290,7 +290,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kerne
   // ------------------------------------------------------------------
   // Create low-level filesystem handle for this vnode
   // ------------------------------------------------------------------
-  if (const auto status = fsObj->CreateHandle(file->mountPoint, *file->vfsNode, file->mode); status != kernel::KernelError::Success) {
+  if (const auto status = fsObj->CreateHandle(file->mountPoint, *file->vfsNode, file->mode); status) {
     KE_Print("KE_VFS_OpenFile: Filesystem CreateHandle failed for '{}'", path);
     return kstd::unexpected(status);
   }
@@ -299,7 +299,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kerne
   // ------------------------------------------------------------------
   // Insert into Object Manager
   // ------------------------------------------------------------------
-  if (const auto status = KE_OB_InsertObject(KE_OB_GetFileDirectory(), file); status != kernel::KernelError::Success) {
+  if (const auto status = KE_OB_InsertObject(KE_OB_GetFileDirectory(), file); status) {
     KE_Print("KE_VFS_OpenFile: Failed to insert file object for '{}'", path);
     KE_VFS_CloseFile(file);
     return kstd::unexpected(status);
@@ -308,7 +308,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kerne
   return file;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_VFS_CloseFile(const kernel::KObjectPtr<kernel::KIOObject> &file) noexcept {
+UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_CloseFile(const kernel::KObjectPtr<kernel::KIOObject> &file) noexcept {
   if (!file) [[unlikely]] { return kernel::KernelError::InvalidHandle; }
   if (file->isClosed) [[unlikely]] { return kernel::KernelError::Success; }
   if (file->ops != &kernel::io::FileOps) return kernel::KernelError::WrongObjectType;
@@ -324,7 +324,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_VFS_CloseFile(const kernel::KObjectP
   return kernel::KernelError::Success;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kernel::KernelError> KE_VFS_ReadFile(const kernel::KObjectPtr<kernel::KIOObject> &file, const kstd::span<uint8_t> &readInto) noexcept {
+UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kstd::error_code> KE_VFS_ReadFile(const kernel::KObjectPtr<kernel::KIOObject> &file, const kstd::span<uint8_t> &readInto) noexcept {
   if (!file) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidHandle); }
   if (file->ops != &kernel::io::FileOps) [[unlikely]] { return kstd::unexpected(kernel::KernelError::WrongObjectType); }
   if (file->isClosed || !file->vfsNode) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidState); }
@@ -341,7 +341,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kernel::KernelError> KE_VFS_ReadFi
   return read;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kernel::KernelError> KE_VFS_WriteFile(const kernel::KObjectPtr<kernel::KIOObject> &file, const kstd::span<const uint8_t> &buffer) noexcept {
+UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kstd::error_code> KE_VFS_WriteFile(const kernel::KObjectPtr<kernel::KIOObject> &file, const kstd::span<const uint8_t> &buffer) noexcept {
   if (!file) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidHandle); }
   if (file->ops != &kernel::io::FileOps) [[unlikely]] { return kstd::unexpected(kernel::KernelError::WrongObjectType); }
   if (file->isClosed || !file->vfsNode) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidState); }
@@ -357,21 +357,21 @@ UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kernel::KernelError> KE_VFS_WriteF
   return written;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kernel::KernelError> KE_VFS_SeekFile(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t absolute_offset) noexcept {
+UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kstd::error_code> KE_VFS_SeekFile(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t absolute_offset) noexcept {
   if (!file) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidHandle); }
   if (file->isClosed) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidState); }
 
   return file->offset = absolute_offset;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kernel::KernelError> KE_VFS_TellFile(const kernel::KObjectPtr<kernel::KIOObject> &file) noexcept {
+UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kstd::error_code> KE_VFS_TellFile(const kernel::KObjectPtr<kernel::KIOObject> &file) noexcept {
   if (!file) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidHandle); }
   return file->offset;
 }
 
 namespace kernel {
 namespace {
-KernelError FileRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
+kstd::error_code FileRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
   if (!(io.mode & KIOObject::OpenMode::Read)) return KernelError::AccessDenied;
   transferred = 0;
   const auto read = KE_VFS_ReadFile(&io, buffer);
@@ -380,7 +380,7 @@ KernelError FileRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transfer
   return KernelError::Success;
 }
 
-KernelError FileWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
+kstd::error_code FileWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
   if (!(io.mode & KIOObject::OpenMode::Write)) return KernelError::AccessDenied;
   transferred = 0;
   const auto written = KE_VFS_WriteFile(&io, buffer);
@@ -389,7 +389,7 @@ KernelError FileWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &t
   return KernelError::Success;
 }
 
-KernelError FileClose(KIOObject &io) {
+kstd::error_code FileClose(KIOObject &io) {
   return KE_VFS_CloseFile(&io);
 }
 } // namespace

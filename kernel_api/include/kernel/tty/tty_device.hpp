@@ -23,14 +23,14 @@ struct TtyPair {
 }// namespace kernel::tty
 
 namespace kernel {
-using KTtyPairResult = kstd::expected<tty::TtyPair, KernelError>;
+using KTtyPairResult = kstd::expected<tty::TtyPair, kstd::error_code>;
 }// namespace kernel
 
 UNDOS_KERNEL_PUBLIC_V1API(kernel::KTtyPairResult, KE_TTY_CreatePair,
                           const kstd::string_view &namePrefix);
 
 // ResourceLimitExceeded when every attachment slot is in use.
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_TTY_AttachDevice, const kernel::tty::VttyPtr &vtty, const kernel::KDevicePtr<kernel::KDevice> &device);
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_TTY_AttachDevice, const kernel::tty::VttyPtr &vtty, const kernel::KDevicePtr<kernel::KDevice> &device);
 UNDOS_KERNEL_PUBLIC_V1API(void, KE_TTY_DetachDevice, const kernel::tty::VttyPtr &vtty);
 UNDOS_KERNEL_PUBLIC_V1API(kernel::KDevicePtr<kernel::KDevice>, KE_TTY_GetAttachedDevice, const kernel::tty::VttyPtr &vtty);
 UNDOS_KERNEL_PUBLIC_V1API(kernel::tty::VttyPtr, KE_TTY_GetDeviceVtty, const kernel::KDevicePtr<kernel::KDevice> &device);

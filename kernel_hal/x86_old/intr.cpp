@@ -85,6 +85,11 @@ void remap_pic() noexcept {
   KE_TIME_UpdateSystemTime();
 }
 
+// GCC interrupt gates cannot call aggregate-returning functions directly.
+[[gnu::noinline, gnu::noclone]] static void enqueue_interrupt(const kernel::HalInterruptRecord &record) noexcept {
+  (void) KE_DISPATCH_EnqueueInterrupt(record);
+}
+
 // Vectors 33-47: Generic Hardware IRQ 1-15 Dispatchers.
 //
 // IRQ0 keeps its bespoke pit_irq_handler above (EOI first, then
@@ -102,7 +107,7 @@ template<uint8_t IRQ>
   record.irq = IRQ;
   record.timestamp = 0;
   record.flags = 0;
-  KE_DISPATCH_EnqueueInterrupt(record);
+  enqueue_interrupt(record);
 }
 
 // [Exception and Page Fault Handlers remain exactly as you wrote them]

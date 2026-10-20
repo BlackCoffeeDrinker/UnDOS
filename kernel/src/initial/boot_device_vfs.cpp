@@ -12,7 +12,7 @@ struct FS_NodeExtension {
   bool loaded = false;
 };
 
-kernel::KernelError BootDeviceVFS_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &volume, const kstd::string_view &options) {
+kstd::error_code BootDeviceVFS_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &volume, const kstd::string_view &options) {
   // We can only support BootDeviceVolume volumes
   if (volume->volume->Name() != "BootDeviceVolume") {
     KE_Print("Invalid volume type for BootDeviceVolume file handle");
@@ -25,13 +25,13 @@ kernel::KernelError BootDeviceVFS_MountVolume(const kernel::KObjectPtr<kernel::K
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError BootDeviceVFS_UnmountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &) {
+kstd::error_code BootDeviceVFS_UnmountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &) {
   // No per-volume state to tear down: minifat::ReadFile is fully
   // self-contained per call, so unmounting is always trivially successful.
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError BootDeviceVFS_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, kernel::KVFSNode &rootOut) {
+kstd::error_code BootDeviceVFS_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, kernel::KVFSNode &rootOut) {
   (void) mountPoint;
 
   rootOut.type = kernel::VFSNodeType::Directory;
@@ -42,7 +42,7 @@ kernel::KernelError BootDeviceVFS_GetRootNode(const kernel::KObjectPtr<kernel::K
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError BootDeviceVFS_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint,
+kstd::error_code BootDeviceVFS_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint,
                           const kernel::KVFSNode &parent,
                           kstd::string_view name,
                           kernel::KVFSNode &out) {
@@ -74,7 +74,7 @@ kernel::KernelError BootDeviceVFS_Lookup(const kernel::KObjectPtr<kernel::KVolum
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError BootDeviceVFS_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &vnode, kernel::KIOObject::OpenMode mode) {
+kstd::error_code BootDeviceVFS_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &vnode, kernel::KIOObject::OpenMode mode) {
   (void) mountPoint;
 
   auto *ctx = vnode.fsPrivate.as<FS_NodeExtension>();
@@ -94,7 +94,7 @@ kernel::KernelError BootDeviceVFS_CreateHandle(const kernel::KObjectPtr<kernel::
 
   if (!ctx->loaded) {
     if (const auto error = kernel::initial::minifat::ReadFile(ctx->path, ctx->data);
-        error != kernel::KernelError::Success) {
+        error) {
       KE_Print("BootDeviceVolume: failed to read '{}'", static_cast<kstd::string_view>(ctx->path));
       return error;
     }
@@ -104,7 +104,7 @@ kernel::KernelError BootDeviceVFS_CreateHandle(const kernel::KObjectPtr<kernel::
   return kernel::KernelError::Success;
 }
 
-kstd::expected<uint64_t, kernel::KernelError> BootDeviceVFS_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &vnode, uint64_t offset, const kstd::span<uint8_t> &buffer) {
+kstd::expected<uint64_t, kstd::error_code> BootDeviceVFS_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &vnode, uint64_t offset, const kstd::span<uint8_t> &buffer) {
   const auto *ctx = vnode.fsPrivate.as<FS_NodeExtension>();
   if (!ctx || !ctx->loaded) {
     return kstd::unexpected(kernel::KernelError::InvalidState);
@@ -126,12 +126,12 @@ kstd::expected<uint64_t, kernel::KernelError> BootDeviceVFS_ReadHandle(const ker
 }// namespace
 
 namespace kernel::initial {
-KernelError init_boot_device_volume() {
+kstd::error_code init_boot_device_volume() {
   const auto created = KE_IO_CreateDevice(
       nullptr, 0,
       "BootDeviceVolume", device_type::Volume);
   if (!created) {
-    KE_Print("Failed to create BootDeviceVolume: {}", make_error_code(created.error()).message());
+    KE_Print("Failed to create BootDeviceVolume: {}", created.error().message());
     return created.error();
   }
   const auto &volume = *created;
@@ -140,7 +140,7 @@ KernelError init_boot_device_volume() {
     const auto registered = KE_VFS_RegisterFilesystemDriver(nullptr, "BootDeviceVolume");
 
     if (!registered) {
-      KE_Print("Failed to register BootDeviceVolume filesystem: {}", make_error_code(registered.error()).message());
+      KE_Print("Failed to register BootDeviceVolume filesystem: {}", registered.error().message());
       return registered.error();
     }
     const auto &filesystem = *registered;

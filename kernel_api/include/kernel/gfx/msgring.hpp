@@ -27,7 +27,7 @@ struct MessageRing {
   [[nodiscard]] bool Full() const noexcept { return count == N; }
 
   // Fails with QueueFull when the ring is full (the message is dropped).
-  KernelError Push(const QueuedMessage &m) noexcept {
+  kstd::error_code Push(const QueuedMessage &m) noexcept {
     if (count > 0 && m.message == MouseMoveMessage) {
       if (QueuedMessage &last = slots[(head + count - 1) % N]; last.message == MouseMoveMessage && last.hwnd == m.hwnd) {
         last = m;

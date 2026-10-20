@@ -89,15 +89,15 @@ void PnPThread(void *) {
       }
     } else {
       const auto waitStatus = KE_SCHED_WaitForHeader(s_workAvailable, kernel::WAIT_INFINITE);
-      if (waitStatus != kernel::KernelError::Success) {
-        KE_Print("PnP worker wait failed: {}", kernel::make_error_code(waitStatus).message());
+      if (waitStatus) {
+        KE_Print("PnP worker wait failed: {}", waitStatus.message());
         KE_SCHED_Yield();
       }
     }
   }
 }
 
-KernelError init() {
+kstd::error_code init() {
   // Create the kernel-owned root enumerator (\Device\Root). It has no driver
   // object; its child PDOs are tracked in the PnpRootContext extension.
   auto root = KE_IO_CreateBus(nullptr, 0, "System");
@@ -116,7 +116,7 @@ UNDOS_KERNEL_API_DEF kernel::KDevicePtr<kernel::KDeviceBus> KE_PNP_GetRootDevice
   return s_rootDevice;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kernel::KernelError>
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kstd::error_code>
 KE_PNP_ReportRootDevice(const kstd::string_view &hardwareId) noexcept {
   // Create an unnamed PDO advertising the given hardware id.
   auto pdo = KE_IO_CreateDevice(
@@ -128,12 +128,12 @@ KE_PNP_ReportRootDevice(const kstd::string_view &hardwareId) noexcept {
   pdo.value()->hardwareId = hardwareId;
 
   const auto status = KE_PNP_ReportNewDevice(s_rootDevice, *pdo);
-  if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+  if (status) return kstd::unexpected(status);
 
   return *pdo;
 }
 
-kernel::KernelError KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
+kstd::error_code KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
   if (!driver) return kernel::KernelError::InvalidArgument;
   kstd::unique_lock guard(s_registryLock);
   for (const auto &registered : s_registeredDrivers) {
@@ -143,7 +143,7 @@ kernel::KernelError KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriv
   return kernel::KernelError::Success;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_PNP_RegisterDeviceInterest(
+UNDOS_KERNEL_API_DEF kstd::error_code KE_PNP_RegisterDeviceInterest(
     kernel::DeviceType type,
     const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept {
   if (!driver || type == kernel::device_type::Unknown) return kernel::KernelError::InvalidArgument;
@@ -161,8 +161,8 @@ static void TriggerDeviceStateChanged(const kernel::KDevicePtr<kernel::KDevice> 
   if (fdo && fdo->pnpState == kernel::KPnpState::Started) {
     const auto status =
         kernel::event::broadcast(fdo, kernel::event::make_event_code(KE_PNP_EventCategory(), kernel::pnp::DeviceEvent::Started));
-    if (status != kernel::KernelError::Success) {
-      KE_Print("PnP started event broadcast failed: {}", kernel::make_error_code(status).message());
+    if (status) {
+      KE_Print("PnP started event broadcast failed: {}", status.message());
     }
   }
 }
@@ -189,7 +189,7 @@ static void TriggerDeviceInterest(const kernel::KDevicePtr<kernel::KDevice> &fdo
     }
 
     const auto addStatus = driver->AddDevice(driver, fdo);
-    if (addStatus == kernel::KernelError::Success) {
+    if (!addStatus) {
       KE_Print("PnP: Attached interest driver {} to device (type hash 0x{x})", driver->name, fdo->deviceType.value);
       if (driver->StartDevice) {
         driver->StartDevice(fdo);
@@ -207,7 +207,7 @@ static void TriggerDeviceInterest(const kernel::KDevicePtr<kernel::KDevice> &fdo
       TriggerDeviceStateChanged(fdo);
     } else {
       KE_Print("PnP: AddDevice failed for interest driver {}: {}", driver->name,
-               kernel::make_error_code(addStatus).message());
+               addStatus.message());
     }
   }
 }
@@ -223,7 +223,7 @@ UNDOS_KERNEL_API_DEF const kernel::event::Category &KE_PNP_EventCategory() noexc
   return category;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_PNP_ReportNewDevice(
+UNDOS_KERNEL_API_DEF kstd::error_code KE_PNP_ReportNewDevice(
     const kernel::KDevicePtr<kernel::KDeviceBus> &parent,
     const kernel::KDevicePtr<kernel::KDevice> &pdo) noexcept {
   if (!pdo) [[unlikely]] {
@@ -238,7 +238,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_PNP_ReportNewDevice(
   // recursive enumerate, class-trigger) is deferred to the PnP worker thread.
   if (parent) {
     const auto status = KE_IO_AttachChildDevice(parent, pdo);
-    if (status != kernel::KernelError::Success) return status;
+    if (status) return status;
   }
 
   {
@@ -293,7 +293,7 @@ static void ProcessDevice(
       const auto requirements = pdo->driverObject->QueryResourceRequirements(pdo);
       if (!requirements) {
         KE_Print("PnP: failed to query resource requirements for {}: {}", hwid,
-                 kernel::make_error_code(requirements.error()).message());
+                 requirements.error().message());
         return;
       }
       req = *requirements;
@@ -302,7 +302,7 @@ static void ProcessDevice(
     // Binding
     if (driver->AddDevice) {
       const auto addStatus = driver->AddDevice(driver, pdo);
-      if (addStatus == kernel::KernelError::Success) {
+      if (!addStatus) {
         pdo->driverObject = driver;
         KE_Print("PnP: Bound driver {} to device {}", driver->name, hwid);
 
@@ -310,9 +310,9 @@ static void ProcessDevice(
         // (an overlapping range already held by another device) leaves the
         // device un-started.
         const auto resourceStatus = KE_RES_AssignResources(pdo, req);
-        if (resourceStatus != kernel::KernelError::Success) {
+        if (resourceStatus) {
           KE_Print("PnP: assigning resources for {} failed: {}", hwid,
-                   kernel::make_error_code(resourceStatus).message());
+                   resourceStatus.message());
           pdo->pnpState = resourceStatus == kernel::KernelError::ResourceConflict
                               ? kernel::KPnpState::StoppedConflicting
                               : kernel::KPnpState::Stopped;
@@ -337,9 +337,9 @@ static void ProcessDevice(
           // If the driver attached a Bus-type FDO, auto-enumerate its children.
           if (pdo->attachedDevice && pdo->attachedDevice->deviceType == kernel::device_type::Bus) {
             const auto enumerateStatus = KE_PNP_EnumerateBus(pdo->attachedDevice.As<kernel::KDeviceBus>());
-            if (enumerateStatus != kernel::KernelError::Success) {
+            if (enumerateStatus) {
               KE_Print("PnP child enumeration failed for {}: {}", hwid,
-                       kernel::make_error_code(enumerateStatus).message());
+                       enumerateStatus.message());
             }
           }
 
@@ -352,7 +352,7 @@ static void ProcessDevice(
         }
       } else {
         KE_Print("PnP: AddDevice failed for {}: {}", hwid,
-                 kernel::make_error_code(addStatus).message());
+                 addStatus.message());
       }
     }
 
@@ -367,7 +367,7 @@ static void ProcessDevice(
 }
 
 
-kernel::KernelError KE_PNP_EnumerateBus(const kernel::KDevicePtr<kernel::KDeviceBus> &busDevice) noexcept {
+kstd::error_code KE_PNP_EnumerateBus(const kernel::KDevicePtr<kernel::KDeviceBus> &busDevice) noexcept {
   if (!busDevice) return kernel::KernelError::InvalidArgument;
   if (!busDevice->driverObject) return kernel::KernelError::DeviceNotReady;
 
@@ -382,7 +382,7 @@ kernel::KernelError KE_PNP_EnumerateBus(const kernel::KDevicePtr<kernel::KDevice
     for (size_t i = 0; i < num_children; i++) {
       if (const auto child = busDevice->driverObject->GetChild(busDevice, i)) {
         const auto status = KE_PNP_ReportNewDevice(busDevice, child);
-        if (status != kernel::KernelError::Success) return status;
+        if (status) return status;
       }
     }
   }

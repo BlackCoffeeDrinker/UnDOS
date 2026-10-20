@@ -24,7 +24,7 @@ inline uint16_t AtaPort(uint16_t ioBase, uint8_t reg) {
   return static_cast<uint16_t>(ioBase + reg);
 }
 
-static kernel::KernelError AtaWait(uint16_t io) {
+static kstd::error_code AtaWait(uint16_t io) {
   // 400ns delay: read status port 4 times
   for (int i = 0; i < 4; i++) {
     HAL_IO_In8(AtaPort(io, kRegStatusCommand));
@@ -90,7 +90,7 @@ kstd::static_string<N> Ata_ExtractString(const kstd::span<uint16_t> &identify,
   return out;
 }
 
-kernel::KernelError Ata_ProbeDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo,
+kstd::error_code Ata_ProbeDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo,
                      const kernel::KDevicePtr<kernel::KDeviceBus> &fdo,
                      uint16_t ioBase,
                      const bool isMaster) {
@@ -199,7 +199,7 @@ kernel::KernelError Ata_ProbeDevice(const kernel::KDevicePtr<kernel::KDevice> &p
 }
 
 
-kernel::KernelError Ata_Read(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<uint8_t> buffer, size_t &transferred) {
+kstd::error_code Ata_Read(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<uint8_t> buffer, size_t &transferred) {
   transferred = 0;
   if (device->deviceType != kernel::device_type::Disk) return kernel::KernelError::Unsupported;
 
@@ -227,7 +227,7 @@ kernel::KernelError Ata_Read(const kernel::KDevicePtr<kernel::KDevice> &device, 
     HAL_IO_Out8(AtaPort(io, kRegStatusCommand), 0x20);// READ SECTORS
 
     // Wait
-    if (AtaWait(io) != kernel::KernelError::Success) {
+    if (AtaWait(io)) {
       return transferred > 0 ? kernel::KernelError::Success : kernel::KernelError::DeviceError;
     }
 
@@ -254,7 +254,7 @@ kernel::KernelError Ata_Read(const kernel::KDevicePtr<kernel::KDevice> &device, 
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError Ata_Write([[maybe_unused]] const kernel::KDevicePtr<kernel::KDevice> &device, [[maybe_unused]] uint64_t offset, [[maybe_unused]] kstd::span<const uint8_t> buffer, [[maybe_unused]] size_t &transferred) {
+kstd::error_code Ata_Write([[maybe_unused]] const kernel::KDevicePtr<kernel::KDevice> &device, [[maybe_unused]] uint64_t offset, [[maybe_unused]] kstd::span<const uint8_t> buffer, [[maybe_unused]] size_t &transferred) {
   return kernel::KernelError::Unsupported;
 }
 
@@ -313,7 +313,7 @@ void Ata_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   (void) Ata_ProbeDevice(pdo, fdo, ctx->ioBase, false);// slave
 }
 
-kernel::KernelError Ata_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
+kstd::error_code Ata_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto fdo = KE_IO_CreateBusWithContext<BusContext>(driver, {});
   if (!fdo) return fdo.error();
 

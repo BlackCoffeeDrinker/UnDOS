@@ -14,7 +14,7 @@ constexpr uint32_t ResourceSlots = 4;
 class ResourceBudget {
 public:
   // Fails with ResourceLimitExceeded when the system-wide budget is exhausted.
-  KernelError reserve(uint32_t size) noexcept;
+  kstd::error_code reserve(uint32_t size) noexcept;
   void release(uint32_t size) noexcept;
   uint32_t used() const noexcept;
 private:
@@ -33,17 +33,17 @@ public:
 
   // Reserves an upload slot and returns its handle. Errors: InvalidSize,
   // ResourceLimitExceeded (process/system budget or slots), OutOfMemory.
-  kstd::expected<uint32_t, KernelError> begin(ResourceBudget &budget, uint32_t size);
+  kstd::expected<uint32_t, kstd::error_code> begin(ResourceBudget &budget, uint32_t size);
   // Errors: InvalidSize, InvalidHandle, InvalidState (already committed),
   // InvalidOffset (non-sequential or overflowing chunk).
-  KernelError append(uint32_t handle, uint32_t offset, const uint8_t *data, size_t size);
+  kstd::error_code append(uint32_t handle, uint32_t offset, const uint8_t *data, size_t size);
   // Validates the upload and returns the committed face handle.
   // `validationError` always receives the undos::font::Error detail; a
   // validation failure returns InvalidResource and releases the upload.
   // Other errors: InvalidHandle, InvalidState, ResourceLimitExceeded
   // (handle generations exhausted).
-  kstd::expected<uint32_t, KernelError> commit(uint32_t handle, uint32_t &validationError);
-  KernelError close(uint32_t handle);
+  kstd::expected<uint32_t, kstd::error_code> commit(uint32_t handle, uint32_t &validationError);
+  kstd::error_code close(uint32_t handle);
   void clear();
   uint32_t bytes();
 

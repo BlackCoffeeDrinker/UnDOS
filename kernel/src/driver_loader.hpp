@@ -8,7 +8,7 @@
 #include <string_view.hpp>
 
 namespace kernel::driver {
-kernel::KernelError init(const kernel::BootInfoT &boot_info);
+kstd::error_code init(const kernel::BootInfoT &boot_info);
 void LoadBootDrivers();
 
 // Loads every driver declared under LocalMachine's "/Drivers" key whose

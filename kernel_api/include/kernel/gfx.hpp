@@ -6,8 +6,8 @@
 #include <kernel/kerror.hpp>
 
 namespace kernel {
-using KGraphicsAdapterResult = kstd::expected<KObjectPtr<KGraphicsAdapter>, KernelError>;
-using KSurfaceResult = kstd::expected<KObjectPtr<KSurface>, KernelError>;
+using KGraphicsAdapterResult = kstd::expected<KObjectPtr<KGraphicsAdapter>, kstd::error_code>;
+using KSurfaceResult = kstd::expected<KObjectPtr<KSurface>, kstd::error_code>;
 }// namespace kernel
 
 /**
@@ -52,7 +52,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * (surface object), or the driver's SetMode/Enable error.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_GFX_SetDisplayMode,
     const kernel::KObjectPtr<kernel::KDisplay> &display, size_t modeIndex);
 
@@ -77,7 +77,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * A non-positive width/height fails with InvalidSize.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_GFX_SoftwareFillRect,
     const kernel::KObjectPtr<kernel::KSurface> &dst,
     int x, int y, int w, int h,
@@ -90,7 +90,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * unrepresentable endpoints.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_GFX_SoftwareDrawLine,
     const kernel::KObjectPtr<kernel::KSurface> &dst,
     int x0, int y0, int x1, int y1,
@@ -103,7 +103,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * surface, or an incompatible overlapping layout fails with Unsupported.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_GFX_SoftwareBitBlt,
     const kernel::KObjectPtr<kernel::KSurface> &dst,
     int dstX, int dstY,

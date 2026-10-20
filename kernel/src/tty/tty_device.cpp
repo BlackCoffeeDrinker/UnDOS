@@ -19,7 +19,7 @@ kernel::Mutex s_attachLock;
 kernel::KObjectPtr<kernel::KVttySinkObject> s_defaultConsoleSink{nullptr};
 }// namespace
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::tty::TtyPair, kernel::KernelError> KE_TTY_CreatePair(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::tty::TtyPair, kstd::error_code> KE_TTY_CreatePair(
     const kstd::string_view &namePrefix) noexcept {
 
   kernel::tty::TtyPair pair;
@@ -43,7 +43,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::tty::TtyPair, kernel::KernelError> K
   return pair;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_TTY_AttachDevice(const kernel::tty::VttyPtr &vtty,
+UNDOS_KERNEL_API_DEF kstd::error_code KE_TTY_AttachDevice(const kernel::tty::VttyPtr &vtty,
                                                              const kernel::KDevicePtr<kernel::KDevice> &device) noexcept {
   if (!vtty || !device) return kernel::KernelError::InvalidArgument;
   kstd::unique_lock lock(s_attachLock);
@@ -121,7 +121,7 @@ UNDOS_KERNEL_API_DEF size_t KE_TTY_PumpDevice(const kernel::tty::VttyPtr &vtty) 
 
     size_t written = 0;
     if (const auto status = KE_IO_WriteDevice(device, 0, kstd::span<const uint8_t>(txBuf, nRead), written);
-      status != kernel::KernelError::Success || written == 0) {
+      status || written == 0) {
       break;
     }
     totalActivity += written;
@@ -131,7 +131,7 @@ UNDOS_KERNEL_API_DEF size_t KE_TTY_PumpDevice(const kernel::tty::VttyPtr &vtty) 
   uint8_t rxBuf[128];
   size_t readBytes = 0;
   if (const auto status = KE_IO_ReadDevice(device, 0, kstd::span(rxBuf, sizeof(rxBuf)), readBytes);
-      status == kernel::KernelError::Success && readBytes > 0) {
+      !status && readBytes > 0) {
     // A closed endpoint just drops the input.
     (void) vtty->source_write(rxBuf, readBytes);
     totalActivity += readBytes;
@@ -144,7 +144,7 @@ UNDOS_KERNEL_API_DEF size_t KE_TTY_PumpDevice(const kernel::tty::VttyPtr &vtty) 
 
       size_t written = 0;
       if (const auto st = KE_IO_WriteDevice(device, 0, kstd::span<const uint8_t>(txBuf, nRead), written);
-          st != kernel::KernelError::Success || written == 0) {
+          st || written == 0) {
         break;
       }
       totalActivity += written;

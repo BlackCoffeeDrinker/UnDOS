@@ -15,7 +15,7 @@ void init();
 // on disk, just reached through a different VFS mount once the real root
 // filesystem is up). Returns NotFound if the hive isn't registered, or the VFS error if the new
 // file can't be opened (see implementation for the exact failure handling).
-kernel::KernelError RebindHiveFile(const kstd::string_view &hiveName, const kstd::string_view &newFilePath);
+kstd::error_code RebindHiveFile(const kstd::string_view &hiveName, const kstd::string_view &newFilePath);
 
 // Once the real root filesystem is mounted, rebinds the "LocalMachine" hive
 // onto the same path "/System/Config/MACHI", now resolved through the

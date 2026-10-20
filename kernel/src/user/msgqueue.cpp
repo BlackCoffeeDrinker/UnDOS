@@ -32,7 +32,7 @@ void reset_header(MessageQueue &queue) noexcept {
 }
 }// namespace
 
-kstd::expected<MessageQueue *, KernelError> queue_for_current_locked(bool create) noexcept {
+kstd::expected<MessageQueue *, kstd::error_code> queue_for_current_locked(bool create) noexcept {
   const auto self = KE_SCHED_GetCurrentThread();
   if (!self) return kstd::unexpected(KernelError::NoCurrentThread);
   for (auto *q = g_queues; q; q = q->next) {
@@ -55,15 +55,15 @@ void wake_locked(MessageQueue &queue) noexcept {
   KE_EVENT_Signal(queue.header, true);
 }
 
-KernelError post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept {
+kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept {
   const QueuedMessage m{.hwnd = hwnd, .message = message, .wParam = wParam, .lParam = lParam,
                         .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
-  if (const KernelError pushed = queue.ring.Push(m); pushed != KernelError::Success) return pushed;
+  if (const kstd::error_code pushed = queue.ring.Push(m); pushed) return pushed;
   wake_locked(queue);
   return KernelError::Success;
 }
 
-KernelError post_message(uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept {
+kstd::error_code post_message(uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept {
   Guard guard;
   if (hwnd == 0) {
     const auto queue = queue_for_current_locked(true);
@@ -96,7 +96,7 @@ bool geometry_message_locked(const MessageQueue &queue, QueuedMessage &out, bool
   return false;
 }
 
-kstd::expected<QueuedMessage, KernelError> get_message(bool block, bool remove) noexcept {
+kstd::expected<QueuedMessage, kstd::error_code> get_message(bool block, bool remove) noexcept {
   for (;;) {
     lock();
     const auto queue = queue_for_current_locked(true);
@@ -124,8 +124,8 @@ kstd::expected<QueuedMessage, KernelError> get_message(bool block, bool remove) 
     reset_header(*q);
     unlock();
     if (!block) return kstd::unexpected(KernelError::WouldBlock);
-    if (const KernelError waited = KE_SCHED_WaitForHeader(q->header, kstd::chrono::milliseconds(-1));
-        waited != KernelError::Success) return kstd::unexpected(waited);
+    if (const kstd::error_code waited = KE_SCHED_WaitForHeader(q->header, kstd::chrono::milliseconds(-1));
+        waited) return kstd::unexpected(waited);
   }
 }
 

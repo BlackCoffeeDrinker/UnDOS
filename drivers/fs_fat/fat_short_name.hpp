@@ -10,7 +10,7 @@
 // otherwise used. Returns KernelError::NameTooLong (and leaves `out` in a partially-written
 // state) if the base name is longer than 8 characters or the extension is
 // longer than 3 characters.
-inline kernel::KernelError FAT_ToShortName(const kstd::string_view &name, kstd::string_view out) {
+inline kstd::error_code FAT_ToShortName(const kstd::string_view &name, kstd::string_view out) {
   for (size_t i = 0; i < 11; i++) out[i] = ' ';
 
   const auto dot = name.rfind('.');

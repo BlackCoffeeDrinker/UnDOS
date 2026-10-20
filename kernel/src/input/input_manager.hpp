@@ -9,5 +9,5 @@ namespace kernel::input {
 // so KE_INPUT_PushEvent is always safe to call by the time a driver's worker
 // thread starts reporting. The event ring is always usable afterwards; a
 // failure to publish \Device\Input is returned.
-KernelError init();
+kstd::error_code init();
 }// namespace kernel::input

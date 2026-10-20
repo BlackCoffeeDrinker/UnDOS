@@ -3,7 +3,7 @@
 
 #include <Kernel.hpp>
 
-kernel::KernelError kernel::elf::MapAndCopySegment(uintptr_t virt_start, const uint8_t *data, size_t file_size, size_t mem_size, kernel::vmm::ProtectFlags flags) noexcept {
+kstd::error_code kernel::elf::MapAndCopySegment(uintptr_t virt_start, const uint8_t *data, size_t file_size, size_t mem_size, kernel::vmm::ProtectFlags flags) noexcept {
   if ((file_size != 0 && !data) || file_size > mem_size) return kernel::KernelError::InvalidArgument;
   if (mem_size > UINTPTR_MAX - virt_start || virt_start + mem_size > UINTPTR_MAX - 4095) {
     return kernel::KernelError::ArithmeticOverflow;

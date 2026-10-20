@@ -14,7 +14,7 @@ using Access = ProcessHandleTable::HandleAccess;
 using Flags = ProcessHandleTable::HandleFlags;
 
 template<typename T>
-T TakeExpected(kstd::expected<T, KernelError> result) {
+T TakeExpected(kstd::expected<T, kstd::error_code> result) {
   REQUIRE(result.has_value());
   return kstd::move(*result);
 }

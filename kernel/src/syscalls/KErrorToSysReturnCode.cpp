@@ -2,8 +2,10 @@
 #include "KErrorToSysReturnCode.hpp"
 
 namespace kernel {
-SyscallReturnCode KErrorToSysReturnCode(KernelError error) {
-  switch (error) {
+SyscallReturnCode KErrorToSysReturnCode(const kstd::error_code &error) {
+  if (!error) return SyscallReturnCode_OKAY;
+  if (error.category() != kernel_error_category()) return SyscallReturnCode_UNKNOWN;
+  switch (static_cast<KernelError>(error.value())) {
     case KernelError::Success:
       return SyscallReturnCode_OKAY;
 
@@ -69,9 +71,4 @@ SyscallReturnCode KErrorToSysReturnCode(KernelError error) {
   return SyscallReturnCode_UNKNOWN;
 }
 
-SyscallReturnCode KErrorToSysReturnCode(const kstd::error_code &error) {
-  if (!error) return SyscallReturnCode_OKAY;
-  if (error.category() != kernel_error_category()) return SyscallReturnCode_UNKNOWN;
-  return KErrorToSysReturnCode(static_cast<KernelError>(error.value()));
-}
 }// namespace kernel

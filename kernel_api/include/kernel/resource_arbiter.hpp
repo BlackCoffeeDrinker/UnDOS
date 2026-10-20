@@ -43,7 +43,7 @@ bool ConflictsWithReserved(const IoResourceDescriptor *desc, const Reserved &res
 // Success; ResourceConflict on any conflict (nothing emitted) or OutOfMemory
 // if the allocator fails.
 template<typename Reserved, typename Allocator>
-KernelError TryReserveAlternative(const IoResourceList &alt, const Reserved &reserved, CmResourceList &out, Allocator alloc) {
+kstd::error_code TryReserveAlternative(const IoResourceList &alt, const Reserved &reserved, CmResourceList &out, Allocator alloc) {
   for (const auto desc: alt.descriptors) {
     if (ConflictsWithReserved(desc, reserved)) return KernelError::ResourceConflict;
   }

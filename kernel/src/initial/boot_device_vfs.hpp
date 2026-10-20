@@ -2,5 +2,5 @@
 #include "stdkrn.hpp"
 
 namespace kernel::initial {
-KernelError init_boot_device_volume();
+kstd::error_code init_boot_device_volume();
 }

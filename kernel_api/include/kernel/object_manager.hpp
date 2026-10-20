@@ -11,7 +11,7 @@
 namespace kernel {
 struct KObject;
 struct KDirectoryObject;
-using MakeUniqueNameResult = kstd::expected<uint32_t, KernelError>;
+using MakeUniqueNameResult = kstd::expected<uint32_t, kstd::error_code>;
 
 constexpr kstd::static_string kOBRootPath = "/";
 constexpr kstd::static_string kOBDevicesPath = "Device";
@@ -35,7 +35,7 @@ constexpr kstd::static_string kOBGfxPath = "Gfx";
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_OB_InsertObject,
     const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child);
 
@@ -59,7 +59,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_OB_RemoveObject,
     const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child);
 

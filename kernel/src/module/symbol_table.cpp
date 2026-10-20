@@ -13,10 +13,14 @@ SymbolTable::~SymbolTable() {
   });
 }
 
-KernelError SymbolTable::Register(kstd::string_view name, uintptr_t address) {
+kstd::error_code SymbolTable::Register(const kstd::string_view& name, uintptr_t address) {
   if (name.empty()) return KernelError::InvalidArgument;
-  if (name.size() >= 64) return KernelError::NameTooLong;
-  if (symbols.find(name)) return KernelError::AlreadyExists;
+  if (name.size() > decltype(SymbolEntry::name)::capacity()) return KernelError::NameTooLong;
+  if (const auto *existing = symbols.find(name)) {
+    KE_Print("SymbolTable: duplicate symbol '{}' (existing: {x}, incoming: {x})",
+             name, existing->address, address);
+    return KernelError::AlreadyExists;
+  }
   auto entry = KE_CreateObject<SymbolEntry>();
   if (!entry) return entry.error();
 
@@ -31,7 +35,7 @@ KernelError SymbolTable::Register(kstd::string_view name, uintptr_t address) {
   return KernelError::Success;
 }
 
- kstd::expected<uintptr_t, KernelError> SymbolTable::Resolve(kstd::string_view name) const {
+ kstd::expected<uintptr_t, kstd::error_code> SymbolTable::Resolve(kstd::string_view name) const {
   const auto *entry = symbols.find(name);
   if (!entry) return kstd::unexpected(KernelError::NotFound);
   return entry->address;

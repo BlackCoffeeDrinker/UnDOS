@@ -34,7 +34,7 @@ struct LoadPolicy {
   void *context = nullptr;
   // Resolves an undefined (SHN_UNDEF) symbol name to an address. Required
   // when relocatable is set; ignored otherwise.
-  cfunc<kstd::expected<uintptr_t, KernelError>(kstd::string_view)> resolve_symbol;
+  cfunc<kstd::expected<uintptr_t, kstd::error_code>(kstd::string_view)> resolve_symbol;
   // Invoked once per named section found in the section header table
   // (relocatable path only), with the section's bytes still resident in a
   // temporary buffer. Callers that need the data (e.g. ".driver_name")
@@ -57,17 +57,17 @@ struct LoadResult {
 // (when policy.relocatable) applies relocations and captures named
 // sections. Returns a LoadResult with ok == false on any VFS/ELF-format
 // failure.
-kstd::expected<LoadResult, KernelError> LoadElfFromVfs(const kstd::string_view &path, const LoadPolicy &policy) noexcept;
+kstd::expected<LoadResult, kstd::error_code> LoadElfFromVfs(const kstd::string_view &path, const LoadPolicy &policy) noexcept;
 
 // Applies a single ELF32 relocation record against symbol/string tables
 // already resident in memory, resolving SHN_UNDEF symbols via
 // `resolve_symbol`. Shared by the VFS-streaming loader above and the
 // physical-memory boot-driver loader (which parses an already-mapped blob).
-KernelError ApplyRelocation(const hal::Elf32_Rel &rel, const hal::Elf32_Sym *syms, const char *strings, uintptr_t delta, const cfunc<kstd::expected<uintptr_t, KernelError>(kstd::string_view)> &resolve_symbol) noexcept;
+kstd::error_code ApplyRelocation(const hal::Elf32_Rel &rel, const hal::Elf32_Sym *syms, const char *strings, uintptr_t delta, const cfunc<kstd::expected<uintptr_t, kstd::error_code>(kstd::string_view)> &resolve_symbol) noexcept;
 
 // Applies every SHT_REL relocation section found in a fully in-memory
 // ELF32 blob (section headers, symbol table, and string table are all
 // already resident in `raw_blob`). Used by the physical-memory boot-driver
 // loader, which never streams from the VFS.
-KernelError ProcessRelocationsFromBlob(const uint8_t *raw_blob, uintptr_t delta, const cfunc<kstd::expected<uintptr_t, KernelError>(kstd::string_view)> &resolve_symbol) noexcept;
+kstd::error_code ProcessRelocationsFromBlob(const uint8_t *raw_blob, uintptr_t delta, const cfunc<kstd::expected<uintptr_t, kstd::error_code>(kstd::string_view)> &resolve_symbol) noexcept;
 }// namespace kernel::elf

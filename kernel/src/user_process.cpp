@@ -32,13 +32,13 @@ kstd::static_string<64> make_process_name(const kstd::string_view &exec_path) no
 }
 }// namespace
 
-kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> create_process(
+kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> create_process(
     const kstd::string_view &exec_path, const kstd::string_view &arguments,
     const kernel::ProcessStreams *streams) noexcept {
   kernel::process_startup::Arguments startup;
   const auto parse_status = kernel::process_startup::parse(exec_path.data(), exec_path.size(),
                                                            arguments.data(), arguments.size(), startup);
-  if (parse_status != kernel::KernelError::Success) return kstd::unexpected(parse_status);
+  if (parse_status) return kstd::unexpected(parse_status);
   const auto startup_size = kernel::process_startup::stack_size(startup);
   if (startup_size > USER_STACK_SIZE / 2) return kstd::unexpected(kernel::KernelError::BufferTooSmall);
   // Step 1 — Create an isolated address space for the process.
@@ -53,17 +53,17 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> 
   if (streams) {
     auto status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stdin, streams->input,
             kernel::ProcessHandleTable::HandleAccess::Read);
-    if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+    if (status) return kstd::unexpected(status);
     status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stdout, streams->output,
             kernel::ProcessHandleTable::HandleAccess::Write);
-    if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+    if (status) return kstd::unexpected(status);
     status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stderr, streams->error,
             kernel::ProcessHandleTable::HandleAccess::Write);
-    if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+    if (status) return kstd::unexpected(status);
   } else if (const auto currentThread = KE_SCHED_GetCurrentThread()) {
     if (currentThread->owner_process) {
       const auto status = process.value()->InheritHandlesFrom(currentThread->owner_process->handles);
-      if (status != kernel::KernelError::Success) {
+      if (status) {
         KE_Print("KE_USER_CreateProcess: failed to inherit handles");
         return kstd::unexpected(status);
       }
@@ -76,7 +76,7 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> 
       const auto ioObj = KE_IO_FromObject(defaultSink);
       if (!ioObj) return kstd::unexpected(ioObj.error());
       const auto status = process.value()->AttachStandardStreams(*ioObj);
-      if (status != kernel::KernelError::Success) {
+      if (status) {
         KE_Print("KE_USER_CreateProcess: failed to attach standard streams");
         return kstd::unexpected(status);
       }
@@ -94,7 +94,7 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> 
   if (!process.value()->handles.Lookup(*startup_handle)) return kstd::unexpected(kernel::KernelError::OutOfMemory);
 
   const auto as_status = kernel::vmm::create_user_address_space(process.value()->address_space);
-  if (as_status != kernel::KernelError::Success) {
+  if (as_status) {
     KE_Print("KE_USER_CreateProcess: failed to create address space for {}", exec_path);
     return kstd::unexpected(as_status);
   }
@@ -150,7 +150,7 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> 
 
     HAL_VMM_SwitchAddressSpace(caller_root);
     HAL_CPU_RestoreInterrupts(irq_state);
-    if (written != kernel::KernelError::Success) {
+    if (written) {
       kernel::vmm::destroy_user_address_space(process.value()->address_space);
       return kstd::unexpected(written);
     }
@@ -159,7 +159,7 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> 
   // Step 4 — Register the process under \Processes before the thread can
   // run. This entry owns the process once the creator closes its handle.
   const auto insert_status = KE_OB_InsertObject(KE_OB_GetProcessDirectory(), kernel::KObjectPtr<kernel::KObject>(process.value().get()));
-  if (insert_status != kernel::KernelError::Success) {
+  if (insert_status) {
     kernel::vmm::destroy_user_address_space(process.value()->address_space);
     return kstd::unexpected(insert_status);
   }
@@ -170,9 +170,9 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> 
   if (!thread) {
     const auto rollback_status = KE_OB_RemoveObject(
         KE_OB_GetProcessDirectory(), kernel::KObjectPtr<kernel::KObject>(process.value().get()));
-    if (rollback_status != kernel::KernelError::Success) {
+    if (rollback_status) {
       KE_Print("KE_USER_CreateProcess: failed to roll back process registration: {}",
-               kernel::make_error_code(rollback_status).message());
+               rollback_status.message());
     }
     kernel::vmm::destroy_user_address_space(process.value()->address_space);
     return kstd::unexpected(thread.error());
@@ -187,12 +187,12 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> 
   return *process;
 }
 
-extern "C" UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> KE_USER_CreateProcess(
+extern "C" UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> KE_USER_CreateProcess(
     const kstd::string_view &exec_path, const kstd::string_view &arguments) noexcept {
   return create_process(exec_path, arguments, nullptr);
 }
 
-extern "C" UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kernel::KernelError> KE_USER_CreateProcessWithStreams(
+extern "C" UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> KE_USER_CreateProcessWithStreams(
     const kstd::string_view &exec_path, const kstd::string_view &arguments,
     const kernel::ProcessStreams &streams) noexcept {
   return create_process(exec_path, arguments, &streams);

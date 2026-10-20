@@ -126,7 +126,7 @@ class Edid {
   }
 
   // Assigns raw EDID data and validates headers/checksums
-  KernelError Assign(kstd::span<const uint8_t> data) {
+  kstd::error_code Assign(kstd::span<const uint8_t> data) {
     Clear();
 
     if (data.empty() || data.size() < BlockSize) {

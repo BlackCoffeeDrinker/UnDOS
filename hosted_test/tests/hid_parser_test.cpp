@@ -36,7 +36,7 @@ const kernel::hid::ReportField *FindField(const kernel::hid::ReportFormat &forma
 
 }// namespace
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_INPUT_PushEvent(const kernel::KDevicePtr<kernel::KDevice> &device,
+UNDOS_KERNEL_API_DEF kstd::error_code KE_INPUT_PushEvent(const kernel::KDevicePtr<kernel::KDevice> &device,
                                                             const kernel::input::KInputReport &report) noexcept {
   (void) device;
   g_pushed.push_back(report);

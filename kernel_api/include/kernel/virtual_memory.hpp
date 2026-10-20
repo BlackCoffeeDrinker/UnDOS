@@ -34,9 +34,9 @@ struct AddressSpace {
 }// namespace kernel::vmm
 
 namespace kernel {
-using VmmRegionResult = kstd::expected<void *, KernelError>;
-using VmmBackingObjectMapResult = kstd::expected<vmm::VirtualAddressDescriptor *, KernelError>;
-using VmmDirectBackingResult = kstd::expected<KObjectPtr<KMemoryBackingObject>, KernelError>;
+using VmmRegionResult = kstd::expected<void *, kstd::error_code>;
+using VmmBackingObjectMapResult = kstd::expected<vmm::VirtualAddressDescriptor *, kstd::error_code>;
+using VmmDirectBackingResult = kstd::expected<KObjectPtr<KMemoryBackingObject>, kstd::error_code>;
 }// namespace kernel
 
 /**
@@ -69,7 +69,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_VMM_FreeRegion,
     kernel::vmm::AddressSpace &as, void *addr);
 
@@ -113,7 +113,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_VMM_MapPhysical,
     kernel::vmm::AddressSpace &as, kernel::VirtualAddress virt, kernel::PhysicalAddress phys, kernel::vmm::ProtectFlags flags);
 
@@ -163,7 +163,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * and frees the kernel virtual region that was reserved for the borrow.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_VMM_UnmapBorrowed,
     void *addr, size_t size, kernel::vmm::AddressSpace &as);
 

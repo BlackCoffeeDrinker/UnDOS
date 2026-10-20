@@ -25,6 +25,39 @@ TEST_CASE("IO factories report invalid inputs rather than successful null object
   REQUIRE(object.error() == kernel::KernelError::InvalidHandle);
 }
 
+TEST_CASE("Device streams accept generic success and preserve foreign failures", "[io][kernel-error]") {
+  EnsureObjectManagerInitialized();
+  auto driver = kernel::CreateAnonymousKObject<kernel::KDriverObject>().value_or(nullptr);
+  REQUIRE(driver != nullptr);
+  driver->Read = [](const kernel::KDevicePtr<kernel::KDevice> &, uint64_t offset,
+                    kstd::span<uint8_t> buffer, size_t &transferred) -> kstd::error_code {
+    if (offset != 0) {
+      return {static_cast<int>(kernel::KernelError::DeviceError), kstd::generic_category()};
+    }
+    buffer[0] = 42;
+    transferred = 1;
+    return {};
+  };
+  auto device = KE_IO_CreateDevice(driver, 0, {}, kernel::device_type::Disk).value_or(nullptr);
+  REQUIRE(device != nullptr);
+  auto stream = KE_IO_CreateDeviceStream(device, kernel::KIOObject::OpenMode::Read).value_or(nullptr);
+  REQUIRE(stream != nullptr);
+  uint8_t buffer[1]{};
+  size_t transferred = 0;
+  REQUIRE_FALSE(stream->Read(buffer, transferred));
+  REQUIRE(transferred == 1);
+  REQUIRE(buffer[0] == 42);
+  REQUIRE(stream->offset == 1);
+
+  const auto error = stream->Read(buffer, transferred);
+  REQUIRE(error);
+  REQUIRE(error.value() == static_cast<int>(kernel::KernelError::DeviceError));
+  REQUIRE(&error.category() == &kstd::generic_category());
+  REQUIRE(error != kernel::KernelError::DeviceError);
+  REQUIRE(transferred == 0);
+  REQUIRE(stream->offset == 1);
+}
+
 TEST_CASE("KIOObject TTY stream operations", "[io][kioobject][tty]") {
   EnsureObjectManagerInitialized();
   kernel::tty::VttyPtr vtty(new kernel::tty::KVtty());
@@ -136,7 +169,7 @@ TEST_CASE("KIOObject Device stream dispatch", "[io][kioobject][device]") {
   REQUIRE(driver != nullptr);
 
   driver->Read = [](const kernel::KDevicePtr<kernel::KDevice> &, uint64_t offset,
-                    kstd::span<uint8_t> buffer, size_t &transferred) -> kernel::KernelError {
+                    kstd::span<uint8_t> buffer, size_t &transferred) -> kstd::error_code {
     if (offset >= sizeof(devStorage)) {
       transferred = 0;
       return kernel::KernelError::OutOfRange;
@@ -149,7 +182,7 @@ TEST_CASE("KIOObject Device stream dispatch", "[io][kioobject][device]") {
   };
 
   driver->Write = [](const kernel::KDevicePtr<kernel::KDevice> &, uint64_t offset,
-                     kstd::span<const uint8_t> buffer, size_t &transferred) -> kernel::KernelError {
+                     kstd::span<const uint8_t> buffer, size_t &transferred) -> kstd::error_code {
     if (offset >= sizeof(devStorage)) {
       transferred = 0;
       return kernel::KernelError::OutOfRange;

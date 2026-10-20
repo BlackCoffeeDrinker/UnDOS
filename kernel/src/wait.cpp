@@ -41,7 +41,7 @@ void tick(kstd::chrono::nanoseconds now) noexcept {
 
 using namespace kernel;
 
-UNDOS_KERNEL_API_DEF KernelError KE_SCHED_WaitForHeader(KDispatcherHeader &header,
+UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForHeader(KDispatcherHeader &header,
                                                         kstd::chrono::milliseconds timeout) noexcept {
   const auto self = KE_SCHED_GetCurrentThread();
   if (!self) return KernelError::NoCurrentThread;
@@ -82,7 +82,7 @@ UNDOS_KERNEL_API_DEF KernelError KE_SCHED_WaitForHeader(KDispatcherHeader &heade
   return wb.satisfied ? KernelError::Success : KernelError::Timeout;
 }
 
-UNDOS_KERNEL_API_DEF KernelError KE_SCHED_WaitForObject(const KObjectPtr<KObject> &object,
+UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForObject(const KObjectPtr<KObject> &object,
                                                         kstd::chrono::milliseconds timeout) noexcept {
   auto *header = wait::header_of(object);
   if (!header) return KernelError::NotWaitable;
@@ -100,7 +100,7 @@ UNDOS_KERNEL_API_DEF void KE_EVENT_Signal(KDispatcherHeader &header, bool wakeAl
   wait::lock().unlock_irqrestore(state);
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KEventObject>, KernelError>
+UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KEventObject>, kstd::error_code>
 KE_EVENT_Create(bool manualReset, bool initialState) noexcept {
   auto event = CreateKObject<KEventObject>("event");
   if (!event) return kstd::unexpected(event.error());

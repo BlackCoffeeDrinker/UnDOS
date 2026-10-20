@@ -19,10 +19,10 @@ public:
   FileBackingStore(const FileBackingStore &) = delete;
   FileBackingStore &operator=(const FileBackingStore &) = delete;
 
-  [[nodiscard]] kstd::expected<size_t, kernel::KernelError> Size() const override;
-  kernel::KernelError Resize(size_t newSize) override;
-  kernel::KernelError ReadAt(uint64_t offset, kstd::span<uint8_t> buffer) override;
-  kernel::KernelError WriteAt(uint64_t offset, kstd::span<const uint8_t> buffer) override;
+  [[nodiscard]] kstd::expected<size_t, kstd::error_code> Size() const override;
+  kstd::error_code Resize(size_t newSize) override;
+  kstd::error_code ReadAt(uint64_t offset, kstd::span<uint8_t> buffer) override;
+  kstd::error_code WriteAt(uint64_t offset, kstd::span<const uint8_t> buffer) override;
 
   [[nodiscard]] bool IsOpen() const { return fd_ >= 0; }
 

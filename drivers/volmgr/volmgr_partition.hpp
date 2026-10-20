@@ -80,7 +80,7 @@ inline PartitionScheme DetectScheme(ByteView sector0, ByteView lba1) {
 // Parses the 4 primary MBR partition entries (offset 446). Empty (type 0x00),
 // GPT-protective (type 0xEE) and zero-length entries are skipped. Returns the
 // number of entries written to `out` (bounded by `out.size()`).
-inline kstd::expected<size_t, kernel::KernelError> ParseMbr(ByteView sector0, kstd::span<PartitionInfo> out) {
+inline kstd::expected<size_t, kstd::error_code> ParseMbr(ByteView sector0, kstd::span<PartitionInfo> out) {
   if (!HasMbrSignature(sector0)) return kstd::unexpected(kernel::KernelError::InvalidFormat);
   size_t count = 0;
   for (size_t i = 0; i < 4 && count < out.size(); i++) {
@@ -100,7 +100,7 @@ inline kstd::expected<size_t, kernel::KernelError> ParseMbr(ByteView sector0, ks
 // Parses GPT partition entries from a contiguous `entries` buffer. `header` is
 // the GPT header (LBA 1). Unused entries (all-zero type GUID) and reversed
 // ranges are skipped. Returns the number of entries written to `out`.
-inline kstd::expected<size_t, kernel::KernelError> ParseGptEntries(ByteView header, ByteView entries, kstd::span<PartitionInfo> out) {
+inline kstd::expected<size_t, kstd::error_code> ParseGptEntries(ByteView header, ByteView entries, kstd::span<PartitionInfo> out) {
   if (header.size() < 88 || !HasGptSignature(header)) return kstd::unexpected(kernel::KernelError::InvalidFormat);
   const uint32_t numEntries = ReadLe32(header.subspan(80));
   const uint32_t entrySize = ReadLe32(header.subspan(84));
@@ -130,7 +130,7 @@ inline kstd::expected<size_t, kernel::KernelError> ParseGptEntries(ByteView head
 
 // Range-checks a volume-relative request and converts it to an absolute disk
 // byte offset, rejecting requests outside the partition or overflowing the disk offset.
-inline kstd::expected<uint64_t, kernel::KernelError> ComputeAbsoluteOffset(uint64_t baseOffsetBytes, uint64_t lengthBytes, uint64_t reqOffset, uint64_t reqLength) {
+inline kstd::expected<uint64_t, kstd::error_code> ComputeAbsoluteOffset(uint64_t baseOffsetBytes, uint64_t lengthBytes, uint64_t reqOffset, uint64_t reqLength) {
   if (reqOffset > lengthBytes || reqLength > lengthBytes - reqOffset ||
       reqOffset > UINT64_MAX - baseOffsetBytes ||
       reqLength > UINT64_MAX - baseOffsetBytes - reqOffset) {

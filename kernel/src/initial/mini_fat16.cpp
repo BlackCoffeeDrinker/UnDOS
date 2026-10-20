@@ -69,16 +69,16 @@ inline uint16_t read_le16(const uint8_t *p) {
   return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
 }
 
-KernelError read_abs_sectors(uint32_t lba, uint32_t count, kstd::span<uint8_t> buffer) {
+kstd::error_code read_abs_sectors(uint32_t lba, uint32_t count, kstd::span<uint8_t> buffer) {
   return HAL_BOOTDEV_ReadSectors(lba, count, buffer) ? KernelError::Success : KernelError::IoError;
 }
 
-KernelError read_part_sectors(const Volume &vol, uint32_t rel_lba, uint32_t count, kstd::span<uint8_t> buffer) {
+kstd::error_code read_part_sectors(const Volume &vol, uint32_t rel_lba, uint32_t count, kstd::span<uint8_t> buffer) {
   if (rel_lba > UINT32_MAX - vol.partitionLba) return KernelError::ArithmeticOverflow;
   return read_abs_sectors(vol.partitionLba + rel_lba, count, buffer);
 }
 
-KernelError to_short_name(kstd::string_view name, char out[11]) {
+kstd::error_code to_short_name(kstd::string_view name, char out[11]) {
   for (size_t i = 0; i < 11; ++i) {
     out[i] = ' ';
   }
@@ -139,14 +139,14 @@ bool names_equal(const char entry[11], const char want[11]) {
   return true;
 }
 
-KernelError open_volume(Volume &vol) {
+kstd::error_code open_volume(Volume &vol) {
   if (!HAL_BOOTDEV_IsPresent()) {
     return KernelError::DeviceNotReady;
   }
 
   uint8_t sector0[kSectorSize];
   if (const auto error = read_abs_sectors(0, 1, kstd::span<uint8_t>(sector0, kSectorSize));
-      error != KernelError::Success) {
+      error) {
     return error;
   }
 
@@ -174,7 +174,7 @@ KernelError open_volume(Volume &vol) {
 
   uint8_t bpb_sector[kSectorSize];
   if (const auto error = read_part_sectors(vol, 0, 1, kstd::span<uint8_t>(bpb_sector, kSectorSize));
-      error != KernelError::Success) {
+      error) {
     return error;
   }
   if (bpb_sector[510] != 0x55 || bpb_sector[511] != 0xAA) {
@@ -207,7 +207,7 @@ KernelError open_volume(Volume &vol) {
   return KernelError::Success;
 }
 
-KernelError read_fat_entry(const Volume &vol, uint16_t cluster, uint16_t &next_out) {
+kstd::error_code read_fat_entry(const Volume &vol, uint16_t cluster, uint16_t &next_out) {
   // Each FAT16 entry is 2 bytes. FAT begins at partition-relative reservedSectors.
   const uint32_t offset_bytes = static_cast<uint32_t>(cluster) * 2u;
   const uint32_t sector = vol.reservedSectors + (offset_bytes / vol.bytesPerSector);
@@ -215,14 +215,14 @@ KernelError read_fat_entry(const Volume &vol, uint16_t cluster, uint16_t &next_o
 
   uint8_t sector_buf[kSectorSize];
   if (const auto error = read_part_sectors(vol, sector, 1, kstd::span<uint8_t>(sector_buf, kSectorSize));
-      error != KernelError::Success) {
+      error) {
     return error;
   }
   next_out = read_le16(sector_buf + entry_off);
   return KernelError::Success;
 }
 
-KernelError cluster_to_lba(const Volume &vol, uint16_t cluster, uint32_t &rel_lba_out) {
+kstd::error_code cluster_to_lba(const Volume &vol, uint16_t cluster, uint32_t &rel_lba_out) {
   if (cluster < 2) {
     return KernelError::InvalidData;
   }
@@ -231,12 +231,12 @@ KernelError cluster_to_lba(const Volume &vol, uint16_t cluster, uint32_t &rel_lb
   return KernelError::Success;
 }
 
-KernelError read_cluster(const Volume &vol, uint16_t cluster, kstd::span<uint8_t> buffer) {
+kstd::error_code read_cluster(const Volume &vol, uint16_t cluster, kstd::span<uint8_t> buffer) {
   if (buffer.size() < vol.bytesPerCluster) {
     return KernelError::BufferTooSmall;
   }
   uint32_t rel_lba = 0;
-  if (const auto error = cluster_to_lba(vol, cluster, rel_lba); error != KernelError::Success) {
+  if (const auto error = cluster_to_lba(vol, cluster, rel_lba); error) {
     return error;
   }
   return read_part_sectors(vol, rel_lba, vol.sectorsPerCluster, buffer.first(vol.bytesPerCluster));
@@ -244,7 +244,7 @@ KernelError read_cluster(const Volume &vol, uint16_t cluster, kstd::span<uint8_t
 
 // Scans a contiguous directory image (`dir_bytes`) for an 8.3 name. On hit,
 // writes the entry fields.
-KernelError find_in_dir_bytes(kstd::span<const uint8_t> dir_bytes,
+kstd::error_code find_in_dir_bytes(kstd::span<const uint8_t> dir_bytes,
                        const char want[11],
                        bool want_dir,
                        FatDirEntry &entry_out) {
@@ -280,7 +280,7 @@ KernelError find_in_dir_bytes(kstd::span<const uint8_t> dir_bytes,
   return KernelError::NotFound;
 }
 
-KernelError load_root_dir(const Volume &vol, kstd::vector<uint8_t> &out) {
+kstd::error_code load_root_dir(const Volume &vol, kstd::vector<uint8_t> &out) {
   const uint32_t bytes = vol.rootDirSectors * vol.bytesPerSector;
   out.resize(bytes);
   if (out.size() != bytes) return KernelError::OutOfMemory;
@@ -288,7 +288,7 @@ KernelError load_root_dir(const Volume &vol, kstd::vector<uint8_t> &out) {
                            kstd::span<uint8_t>(out.data(), out.size()));
 }
 
-KernelError load_cluster_chain_dir(const Volume &vol, uint16_t start_cluster, kstd::vector<uint8_t> &out) {
+kstd::error_code load_cluster_chain_dir(const Volume &vol, uint16_t start_cluster, kstd::vector<uint8_t> &out) {
   out.clear();
   uint16_t cluster = start_cluster;
   // Hard cap to avoid infinite loops on a corrupt FAT.
@@ -298,11 +298,11 @@ KernelError load_cluster_chain_dir(const Volume &vol, uint16_t start_cluster, ks
     out.resize(old + vol.bytesPerCluster);
     if (out.size() != old + vol.bytesPerCluster) return KernelError::OutOfMemory;
     if (const auto error = read_cluster(vol, cluster, kstd::span<uint8_t>(out.data() + old, vol.bytesPerCluster));
-        error != KernelError::Success) {
+        error) {
       return error;
     }
     uint16_t next = 0;
-    if (const auto error = read_fat_entry(vol, cluster, next); error != KernelError::Success) {
+    if (const auto error = read_fat_entry(vol, cluster, next); error) {
       return error;
     }
     if (next >= kFatEofMin) {
@@ -313,7 +313,7 @@ KernelError load_cluster_chain_dir(const Volume &vol, uint16_t start_cluster, ks
   return KernelError::InvalidData;
 }
 
-KernelError read_file_clusters(const Volume &vol, uint16_t start_cluster, uint32_t file_size,
+kstd::error_code read_file_clusters(const Volume &vol, uint16_t start_cluster, uint32_t file_size,
                         kstd::vector<uint8_t> &out) {
   out.clear();
   if (file_size == 0) return KernelError::Success;
@@ -333,7 +333,7 @@ KernelError read_file_clusters(const Volume &vol, uint16_t start_cluster, uint32
       return KernelError::UnexpectedEndOfFile;
     }
     if (const auto error = read_cluster(vol, cluster, kstd::span<uint8_t>(cluster_buf.data(), cluster_buf.size()));
-        error != KernelError::Success) {
+        error) {
       return error;
     }
 
@@ -349,7 +349,7 @@ KernelError read_file_clusters(const Volume &vol, uint16_t start_cluster, uint32
     }
 
     uint16_t next = 0;
-    if (const auto error = read_fat_entry(vol, cluster, next); error != KernelError::Success) {
+    if (const auto error = read_fat_entry(vol, cluster, next); error) {
       return error;
     }
     if (next >= kFatEofMin) {
@@ -389,16 +389,16 @@ bool next_component(kstd::string_view &path, kstd::string_view &component) {
 
 }// namespace
 
-KernelError ReadFile(kstd::string_view path, kstd::vector<uint8_t> &out) {
+kstd::error_code ReadFile(kstd::string_view path, kstd::vector<uint8_t> &out) {
   out.clear();
 
   Volume vol{};
-  if (const auto error = open_volume(vol); error != KernelError::Success) {
+  if (const auto error = open_volume(vol); error) {
     return error;
   }
 
   kstd::vector<uint8_t> dir_bytes;
-  if (const auto error = load_root_dir(vol, dir_bytes); error != KernelError::Success) {
+  if (const auto error = load_root_dir(vol, dir_bytes); error) {
     return error;
   }
 
@@ -417,7 +417,7 @@ KernelError ReadFile(kstd::string_view path, kstd::vector<uint8_t> &out) {
     const bool has_more = next_component(rest, look);
 
     char short_name[11];
-    if (const auto error = to_short_name(component, short_name); error != KernelError::Success) {
+    if (const auto error = to_short_name(component, short_name); error) {
       return error;
     }
 
@@ -426,11 +426,11 @@ KernelError ReadFile(kstd::string_view path, kstd::vector<uint8_t> &out) {
       // Intermediate directory.
       if (const auto error = find_in_dir_bytes(kstd::span<const uint8_t>(dir_bytes.data(), dir_bytes.size()),
                                                short_name, true, entry);
-          error != KernelError::Success) {
+          error) {
         return error;
       }
       if (const auto error = load_cluster_chain_dir(vol, entry.firstClusterLow, dir_bytes);
-          error != KernelError::Success) {
+          error) {
         return error;
       }
       remaining = rest;
@@ -441,11 +441,11 @@ KernelError ReadFile(kstd::string_view path, kstd::vector<uint8_t> &out) {
     // Final component: the file itself.
     if (const auto error = find_in_dir_bytes(kstd::span<const uint8_t>(dir_bytes.data(), dir_bytes.size()),
                                              short_name, false, entry);
-        error != KernelError::Success) {
+        error) {
       return error;
     }
     const auto error = read_file_clusters(vol, entry.firstClusterLow, entry.fileSize, out);
-    if (error != KernelError::Success) out.clear();
+    if (error) out.clear();
     return error;
   }
 }

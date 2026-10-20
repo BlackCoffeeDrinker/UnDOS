@@ -15,9 +15,9 @@ namespace {
 // Number of timer ticks a thread runs before it is rotated out (round-robin).
 constexpr uint32_t DEFAULT_QUANTUM = 5;
 
-void log_cleanup_failure(const char *operation, KernelError status) noexcept {
-  if (status != KernelError::Success) {
-    KE_Print("{} cleanup failed: {}", operation, make_error_code(status).message());
+void log_cleanup_failure(const char *operation, kstd::error_code status) noexcept {
+  if (status) {
+    KE_Print("{} cleanup failed: {}", operation, status.message());
   }
 }
 
@@ -55,9 +55,12 @@ void idle_entry(void *) {
 
 // Create an idle thread pinned to `cpu_id`: lowest priority, so it is only
 // picked when that CPU's queue holds nothing else.
-kstd::expected<KObjectPtr<KThreadObject>, KernelError> create_idle_thread(const uint32_t cpu_id) noexcept {
+kstd::expected<KObjectPtr<KThreadObject>, kstd::error_code> create_idle_thread(const uint32_t cpu_id) noexcept {
   auto idle = KE_SCHED_CreateThread(cfunc<void(void *)>(&idle_entry), nullptr, 0);
-  if (!idle) return kstd::unexpected(idle.error());
+  if (!idle) {
+    KE_Print("Failed to create thread idle: {}", idle.error().message());
+    return kstd::unexpected(idle.error());
+  }
 
   // KE_SCHED_CreateThread placed it via pick_target_cpu(); move it onto the
   // CPU it must idle for.
@@ -71,12 +74,12 @@ kstd::expected<KObjectPtr<KThreadObject>, KernelError> create_idle_thread(const 
   return *idle;
 }
 
-} // namespace
+}// namespace
 
 // Allocate a fresh, page-backed kernel stack. Returns the allocation base, or a
 // null VirtualAddress on failure. Mirrors kernel::vmm::allocate_memory but
 // keeps the pages kernel-only (no USER flag).
- kstd::expected<VirtualAddress, KernelError> alloc_kernel_stack(size_t size) noexcept {
+kstd::expected<VirtualAddress, kstd::error_code> alloc_kernel_stack(size_t size) noexcept {
   const size_t ps = g_page_size;
   if (size == 0 || ps == 0 || size > SIZE_MAX - (ps - 1)) {
     return kstd::unexpected(KernelError::InvalidSize);
@@ -96,8 +99,9 @@ kstd::expected<KObjectPtr<KThreadObject>, KernelError> create_idle_thread(const 
   if (!backing) return kstd::unexpected(backing.error());
   backing.value()->kind = kernel::KMemoryBackingObject::Kind::Anonymous;
   backing.value()->size = bytes;
-  const KernelError insert_status = KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), *backing);
-  if (insert_status != KernelError::Success) return kstd::unexpected(insert_status);
+  if (const kstd::error_code insert_status = KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), *backing)) {
+    return kstd::unexpected(insert_status);
+  }
 
   auto &kas = KE_VMM_GetKernelAddressSpace();
   auto vad = KE_VMM_MapBackingObject(kas, *backing, bytes, vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
@@ -116,6 +120,8 @@ kstd::expected<KObjectPtr<KThreadObject>, KernelError> create_idle_thread(const 
   const VirtualAddress base = (*vad)->start;
   for (size_t i = 0; i < pages; ++i) {
     if (!HAL_VMM_MapPage(base + i * ps, phys + i * ps, vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE)) {
+      KE_Print("Kernel stack mapping failed at {x}: existing frame {x}, requested frame {x}",
+               (base + i * ps).value, HAL_VMM_GetPhysicalAddress(base + i * ps).value, (phys + i * ps).value);
       for (size_t mapped = 0; mapped < i; ++mapped) {
         const auto page = base + mapped * ps;
         HAL_VMM_UnmapPage(page);
@@ -251,14 +257,17 @@ void init_bsp() noexcept {
 
     // Register the bootstrap thread now that its directory exists.
     const auto status = KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(ctx.current.get()));
-    if (status != KernelError::Success) HAL_PLATFORM_Panic("Failed to register bootstrap thread", __FILE__, __LINE__);
+    if (status) HAL_PLATFORM_Panic("Failed to register bootstrap thread", __FILE__, __LINE__);
   } else {
     // Panic
     HAL_PLATFORM_Panic("Failed to create bootstrap thread", __FILE__, __LINE__);
   }
 
   auto idle = create_idle_thread(ctx.id);
-  if (!idle) HAL_PLATFORM_Panic("Failed to create BSP idle thread", __FILE__, __LINE__);
+  if (!idle) {
+    KE_Print("Failed to create thread idle: {}", idle.error().message());
+    HAL_PLATFORM_Panic("Failed to create BSP idle thread", __FILE__, __LINE__);
+  }
   ctx.idle = *idle;
 }
 
@@ -277,7 +286,7 @@ void init_ap(const uint32_t cpu_id) noexcept {
     (*boot)->translation_root = PhysicalAddress(0);
     ctx.current = *boot;
     const auto status = KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(ctx.current.get()));
-    if (status != KernelError::Success) HAL_PLATFORM_Panic("Failed to register AP bootstrap thread", __FILE__, __LINE__);
+    if (status) HAL_PLATFORM_Panic("Failed to register AP bootstrap thread", __FILE__, __LINE__);
   } else {
     HAL_PLATFORM_Panic("Failed to create bootstrap thread for CPU", __FILE__, __LINE__);
   }
@@ -320,16 +329,22 @@ void ready_locked(KThreadObject *thread) noexcept {
 
 using namespace kernel;
 
-UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KThreadObject>, KernelError>
+UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KThreadObject>, kstd::error_code>
 KE_SCHED_CreateThread(cfunc<void(void *)> entry, void *arg, uint8_t priority) noexcept {
   kstd::static_string<64> name;
   kstd::format(name, "thread{}", sched::next_thread_id());
 
   auto t = CreateKObject<KThreadObject>(name);
-  if (!t) return kstd::unexpected(t.error());
+  if (!t) {
+    KE_Print("Failed to create thread object: {}", t.error().message());
+    return kstd::unexpected(t.error());
+  }
 
   auto stack = sched::alloc_kernel_stack(sched::KERNEL_STACK_SIZE);
-  if (!stack) return kstd::unexpected(stack.error());
+  if (!stack) {
+    KE_Print("Failed to allocate kernel stack: {}", stack.error().message());
+    return kstd::unexpected(stack.error());
+  }
   const VirtualAddress base = *stack;
 
   const VirtualAddress top = base + sched::KERNEL_STACK_SIZE;
@@ -343,8 +358,7 @@ KE_SCHED_CreateThread(cfunc<void(void *)> entry, void *arg, uint8_t priority) no
   t.value()->kernel_stack_esp0 = top;
   t.value()->kernel_stack_top = HAL_CPU_InitThreadContext(top, cfunc<void()>(&sched::thread_trampoline));
 
-  const auto status = KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t->get()));
-  if (status != KernelError::Success) {
+  if (const auto status = KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t->get()))) {
     for (size_t i = 0; i < sched::KERNEL_STACK_SIZE / g_page_size; ++i) {
       const auto page = base + i * g_page_size;
       const auto phys = HAL_VMM_GetPhysicalAddress(page);
@@ -353,6 +367,8 @@ KE_SCHED_CreateThread(cfunc<void(void *)> entry, void *arg, uint8_t priority) no
     }
     sched::log_cleanup_failure("thread stack region release",
                                KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), base.as_ptr()));
+
+    KE_Print("Failed to insert thread object: {}", status.message());
     return kstd::unexpected(status);
   }
 
@@ -361,7 +377,7 @@ KE_SCHED_CreateThread(cfunc<void(void *)> entry, void *arg, uint8_t priority) no
   return *t;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KThreadObject>, KernelError>
+UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KThreadObject>, kstd::error_code>
 KE_SCHED_CreateUserThread(const vmm::AddressSpace &as, VirtualAddress user_entry, VirtualAddress user_stack_top) noexcept {
   kstd::static_string<64> name;
   kstd::format(name, "uthread{}", sched::next_thread_id());
@@ -385,7 +401,7 @@ KE_SCHED_CreateUserThread(const vmm::AddressSpace &as, VirtualAddress user_entry
   t.value()->kernel_stack_top = HAL_CPU_InitUserThreadContext(top, user_entry, user_stack_top);
 
   const auto status = KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t->get()));
-  if (status != KernelError::Success) {
+  if (status) {
     for (size_t i = 0; i < sched::KERNEL_STACK_SIZE / g_page_size; ++i) {
       const auto page = base + i * g_page_size;
       const auto phys = HAL_VMM_GetPhysicalAddress(page);
@@ -414,7 +430,7 @@ UNDOS_KERNEL_API_DEF void KE_SCHED_Block() noexcept {
   HAL_CPU_RestoreInterrupts(state);
 }
 
-UNDOS_KERNEL_API_DEF KernelError KE_SCHED_Unblock(const KObjectPtr<KThreadObject> &thread) noexcept {
+UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_Unblock(const KObjectPtr<KThreadObject> &thread) noexcept {
   if (!thread) return KernelError::InvalidArgument;
   const uintptr_t state = HAL_CPU_SaveAndDisableInterrupts();
   sched::ready_locked(thread.get());

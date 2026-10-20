@@ -2,9 +2,10 @@
 #pragma once
 
 #include "symbol_entry.hpp"
-#include <kernel/kerror.hpp>
-#include <kernel/adt/avl_tree.hpp>
 #include <expected.hpp>
+
+#include <kernel/adt/avl_tree.hpp>
+#include <kernel/kerror.hpp>
 
 namespace kernel::driver {
 class SymbolTable {
@@ -17,8 +18,8 @@ class SymbolTable {
   SymbolTable(const SymbolTable &) = delete;
   SymbolTable &operator=(const SymbolTable &) = delete;
 
-  KernelError Register(kstd::string_view name, uintptr_t address);
-  kstd::expected<uintptr_t, KernelError> Resolve(kstd::string_view name) const;
+  kstd::error_code Register(const kstd::string_view &name, uintptr_t address);
+  [[nodiscard]] kstd::expected<uintptr_t, kstd::error_code> Resolve(kstd::string_view name) const;
 };
 
 

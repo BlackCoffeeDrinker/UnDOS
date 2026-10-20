@@ -75,7 +75,7 @@ bool is_initialized() {
   return g_root != nullptr;
 }
 
-KernelError init() {
+kstd::error_code init() {
   auto root = kernel::CreateKObject<KDirectoryObject>("<Root>");
   if (!root) return root.error();
   auto device = kernel::CreateKObject<KDirectoryObject>(kOBDevicesPath);
@@ -103,24 +103,14 @@ KernelError init() {
   auto system = kernel::CreateKObject<KDirectoryObject>(kOBSystemPath);
   if (!system) return system.error();
 
-  const kernel::KObjectPtr<kernel::KObject> children[] = {
+  const KObjectPtr<KObject> children[] = {
       *device, *driver, *memory, *filesystem, *thread, *process, *vfs,
       *file, *subsystem, *configroots, *gfx, *system};
-  size_t inserted = 0;
-  for (const auto &child : children) {
-    const auto status = KE_OB_InsertObject(*root, child);
-    if (status != KernelError::Success) {
-      while (inserted != 0) {
-        --inserted;
-        const auto rollback_status = KE_OB_RemoveObject(*root, children[inserted]);
-        if (rollback_status != KernelError::Success) {
-          KE_Print("objectmanager::init: failed to roll back child insertion: {}",
-                   make_error_code(rollback_status).message());
-        }
-      }
+
+  for (const auto &child: children) {
+    if (const auto status = KE_OB_InsertObject(*root, child)) {
       return status;
     }
-    ++inserted;
   }
 
   g_root = kstd::move(*root);
@@ -139,7 +129,7 @@ KernelError init() {
 }
 }// namespace kernel::objectmanager
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_OB_InsertObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
+UNDOS_KERNEL_API_DEF kstd::error_code KE_OB_InsertObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
   if (!parent || !child) [[unlikely]] {
     KE_Print("KE_OB_InsertObject failed");
     return kernel::KernelError::InvalidArgument;
@@ -164,7 +154,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_OB_InsertObject(const kernel::KObjec
   return kernel::KernelError::Success;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<uint32_t, kernel::KernelError>
+UNDOS_KERNEL_API_DEF kstd::expected<uint32_t, kstd::error_code>
 KE_OB_MakeUniqueName(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kstd::string_view &baseName) noexcept {
   if (!parent) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidArgument); }
   if (baseName.empty()) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidArgument); }
@@ -187,7 +177,7 @@ KE_OB_MakeUniqueName(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent,
   }
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_OB_RemoveObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
+UNDOS_KERNEL_API_DEF kstd::error_code KE_OB_RemoveObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
   if (!parent || !child) [[unlikely]] {
     return kernel::KernelError::InvalidArgument;
   }
@@ -249,9 +239,9 @@ UNDOS_KERNEL_API_DEF void KE_OB_Release(kernel::KObject *obj) noexcept {
   const auto previous = obj->reference_count.fetch_sub(1, kstd::memory_order_acq_rel);
   if (previous == 2 && obj->type == kernel::TYPE_IO && obj->parent == KE_OB_GetFileDirectory().get()) {
     const auto close_status = KE_VFS_CloseFile(static_cast<kernel::KIOObject *>(obj));
-    if (close_status != kernel::KernelError::Success) {
+    if (close_status) {
       KE_Print("KE_OB_Release: failed to close file object: {}",
-               kernel::make_error_code(close_status).message());
+               close_status.message());
     }
     return;
   }

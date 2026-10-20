@@ -446,7 +446,7 @@ struct MockDeviceExtension {
   size_t txLen{0};
 };
 
-static kernel::KernelError MockRead(const kernel::KDevicePtr<kernel::KDevice> &device,
+static kstd::error_code MockRead(const kernel::KDevicePtr<kernel::KDevice> &device,
                                  uint64_t,
                                  kstd::span<uint8_t> buffer,
                                  size_t &transferred) {
@@ -461,7 +461,7 @@ static kernel::KernelError MockRead(const kernel::KDevicePtr<kernel::KDevice> &d
   return kernel::KernelError::Success;
 }
 
-static kernel::KernelError MockWrite(const kernel::KDevicePtr<kernel::KDevice> &device,
+static kstd::error_code MockWrite(const kernel::KDevicePtr<kernel::KDevice> &device,
                                   uint64_t,
                                   kstd::span<const uint8_t> buffer,
                                   size_t &transferred) {

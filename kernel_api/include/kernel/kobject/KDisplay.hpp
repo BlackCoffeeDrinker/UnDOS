@@ -71,17 +71,17 @@ struct KDisplay : KObjectT<KDisplay, 1, TYPE_DISPLAY> {
 
   // Driver Execution Entry Points
   // Probes mode info; modeIndex++ until this fails with KernelError::OutOfRange.
-  cfunc<kstd::expected<KDisplayModeInfo, KernelError>(const KObjectPtr<KDisplay> &display, size_t modeIndex)> GetModeInfo;
+  cfunc<kstd::expected<KDisplayModeInfo, kstd::error_code>(const KObjectPtr<KDisplay> &display, size_t modeIndex)> GetModeInfo;
 
   // Programs `modeIndex` in hardware and reports where the pixels live. The
   // driver does not touch KSurface; the kernel owns that.
-  cfunc<kstd::expected<KDisplaySurfaceBinding, KernelError>(const KObjectPtr<KDisplay> &display, size_t modeIndex)> SetMode;
-  cfunc<KernelError(const KObjectPtr<KDisplay> &display)> Enable;  // Enable output timings & DAC
+  cfunc<kstd::expected<KDisplaySurfaceBinding, kstd::error_code>(const KObjectPtr<KDisplay> &display, size_t modeIndex)> SetMode;
+  cfunc<kstd::error_code(const KObjectPtr<KDisplay> &display)> Enable;  // Enable output timings & DAC
   cfunc<void(const KObjectPtr<KDisplay> &display)> Disable;        // Blank CRTC and disable signal output
-  cfunc<KernelError(const KObjectPtr<KDisplay> &display)> Validate;// Re-verify DDC link and connection status
+  cfunc<kstd::error_code(const KObjectPtr<KDisplay> &display)> Validate;// Re-verify DDC link and connection status
 
   // Power & DPMS Control Hooks
-  cfunc<KernelError(const KObjectPtr<KDisplay> &display, DisplayPowerState state)> SetPowerState;
+  cfunc<kstd::error_code(const KObjectPtr<KDisplay> &display, DisplayPowerState state)> SetPowerState;
 };
 
 template<>

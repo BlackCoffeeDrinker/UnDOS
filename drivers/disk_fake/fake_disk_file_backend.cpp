@@ -30,19 +30,19 @@ FileBackingStore::~FileBackingStore() {
   }
 }
 
-kstd::expected<size_t, kernel::KernelError> FileBackingStore::Size() const {
+kstd::expected<size_t, kstd::error_code> FileBackingStore::Size() const {
   if (fd_ < 0) return kstd::unexpected(kernel::KernelError::InvalidState);
   struct stat st{};
   if (::fstat(fd_, &st) != 0) return kstd::unexpected(kernel::KernelError::DeviceError);
   return static_cast<size_t>(st.st_size);
 }
 
-kernel::KernelError FileBackingStore::Resize(size_t newSize) {
+kstd::error_code FileBackingStore::Resize(size_t newSize) {
   if (fd_ < 0) return kernel::KernelError::InvalidState;
   return ::ftruncate(fd_, static_cast<off_t>(newSize)) == 0 ? kernel::KernelError::Success : kernel::KernelError::DeviceError;
 }
 
-kernel::KernelError FileBackingStore::ReadAt(uint64_t offset, kstd::span<uint8_t> buffer) {
+kstd::error_code FileBackingStore::ReadAt(uint64_t offset, kstd::span<uint8_t> buffer) {
   if (fd_ < 0) return kernel::KernelError::InvalidState;
   size_t total = 0;
   while (total < buffer.size()) {
@@ -54,7 +54,7 @@ kernel::KernelError FileBackingStore::ReadAt(uint64_t offset, kstd::span<uint8_t
   return total == buffer.size() ? kernel::KernelError::Success : kernel::KernelError::UnexpectedEndOfFile;
 }
 
-kernel::KernelError FileBackingStore::WriteAt(uint64_t offset, kstd::span<const uint8_t> buffer) {
+kstd::error_code FileBackingStore::WriteAt(uint64_t offset, kstd::span<const uint8_t> buffer) {
   if (fd_ < 0) return kernel::KernelError::InvalidState;
   size_t total = 0;
   while (total < buffer.size()) {

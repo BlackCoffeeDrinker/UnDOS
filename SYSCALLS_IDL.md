@@ -26,11 +26,13 @@ This produces:
 - `kernel/src/syscalls/handler_syscall.cpp` + `__kernel_types.h` — kernel dispatch code and
   `handle_<Name>_<Version>()` declarations that you must implement.
 
-Handwritten kernel handlers return `kernel::KernelError`, not wire-level
+Handwritten kernel handlers return `kstd::error_code`, not wire-level
 `SyscallReturnCode`. The generated dispatcher preserves kernel errors until
 `KE_SYSCALL_Dispatch`, which converts them with `kernel::KErrorToSysReturnCode`.
-Subsystem operations return `KernelError` for status-only results or
-`kstd::expected<T, KernelError>` for fallible values. Normal EOF, optional absence,
+Subsystem operations return `kstd::error_code` for status-only results or
+`kstd::expected<T, kstd::error_code>` for fallible values. `kernel::KernelError`
+provides implicitly convertible values for the kernel error category.
+Normal EOF, optional absence,
 and predicates are not failures. Domain validation belongs in the subsystem;
 the dispatcher owns user-memory and wire-format validation. The public syscall
 enum and wire layouts remain unchanged.
@@ -276,7 +278,7 @@ uint32_t UD_SYS_ReadV1(uint32_t fileDescriptor, uint8_t* data, uint32_t* dataLen
 and a kernel-side declaration you implement:
 
 ```c++
-kernel::KernelError handle_Read_V1(__KRN_FS_READ_V1&& args) {
+kstd::error_code handle_Read_V1(__KRN_FS_READ_V1&& args) {
     // args.fileDescriptor: uint32_t
     // args.data: kernel::borrowed_ptr<uint8_t>, args.data_len: size (in/out)
     ...

@@ -6,7 +6,7 @@
 #include <expected.hpp>
 
 namespace {
-kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kernel::KernelError>
+kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd::error_code>
 resolve_io(uint32_t value, kernel::ProcessHandleTable::HandleAccess access) {
   const auto thread = KE_SCHED_GetCurrentThread();
   if (!thread) return kstd::unexpected(kernel::KernelError::NoCurrentThread);
@@ -23,7 +23,7 @@ resolve_io(uint32_t value, kernel::ProcessHandleTable::HandleAccess access) {
 }
 }// namespace
 
-kernel::KernelError handle_Open_V1(__KRN_IO_OPEN_V1 &&args) {
+kstd::error_code handle_Open_V1(__KRN_IO_OPEN_V1 &&args) {
   args.handle = UINT32_MAX;
   const auto currentThread = KE_SCHED_GetCurrentThread();
   if (currentThread == nullptr) return kernel::KernelError::NoCurrentThread;
@@ -36,7 +36,7 @@ kernel::KernelError handle_Open_V1(__KRN_IO_OPEN_V1 &&args) {
                                  FileOpenMode_Create | FileOpenMode_Truncate | FileOpenMode_Exclusive;
   if ((static_cast<uint32_t>(args.mode) & ~supported) != 0) return kernel::KernelError::InvalidArgument;
   const auto allocate = [&](const kernel::KObjectPtr<kernel::KIOObject> &object,
-                            kernel::ProcessHandleTable::HandleFlags flags) {
+                            kernel::ProcessHandleTable::HandleFlags flags) -> kstd::error_code {
     const auto result = proc->handles.Allocate(object, access, flags);
     if (!result) return result.error();
     args.handle = static_cast<uint32_t>(*result);
@@ -111,7 +111,7 @@ kernel::KernelError handle_Open_V1(__KRN_IO_OPEN_V1 &&args) {
   return allocate(*ioObj, kernel::ProcessHandleTable::HandleFlags::None);
 }
 
-kernel::KernelError handle_Close_V1(__KRN_IO_CLOSE_V1 &&args) {
+kstd::error_code handle_Close_V1(__KRN_IO_CLOSE_V1 &&args) {
   const auto currentThread = KE_SCHED_GetCurrentThread();
   if (currentThread == nullptr) return kernel::KernelError::NoCurrentThread;
   const auto proc = currentThread->owner_process;
@@ -122,13 +122,13 @@ kernel::KernelError handle_Close_V1(__KRN_IO_CLOSE_V1 &&args) {
 }
 
 /** Reads data from an open handle into `data`. */
-kernel::KernelError handle_Read_V1(__KRN_IO_READ_V1 &&args) {
+kstd::error_code handle_Read_V1(__KRN_IO_READ_V1 &&args) {
   const auto resolved = resolve_io(args.handle, kernel::ProcessHandleTable::HandleAccess::Read);
   if (!resolved) return resolved.error();
 
   size_t transferred = 0;
   const auto status = (*resolved)->Read(args.data, transferred);
-  if (status != kernel::KernelError::Success) return status;
+  if (status) return status;
   if (transferred > args.data.size()) return kernel::KernelError::IoError;
 
   args.data_len = static_cast<decltype(args.data_len)>(transferred);
@@ -136,13 +136,13 @@ kernel::KernelError handle_Read_V1(__KRN_IO_READ_V1 &&args) {
 }
 
 /** Writes data from `data` to an open handle. */
-kernel::KernelError handle_Write_V1(__KRN_IO_WRITE_V1 &&args) {
+kstd::error_code handle_Write_V1(__KRN_IO_WRITE_V1 &&args) {
   const auto resolved = resolve_io(args.handle, kernel::ProcessHandleTable::HandleAccess::Write);
   if (!resolved) return resolved.error();
 
   size_t transferred = 0;
   const auto status = (*resolved)->Write(kstd::span<const uint8_t>(args.data.get(), args.data.size()), transferred);
-  if (status != kernel::KernelError::Success) return status;
+  if (status) return status;
   if (transferred > args.data.size()) return kernel::KernelError::IoError;
 
   args.data_len = static_cast<decltype(args.data_len)>(transferred);
@@ -150,20 +150,20 @@ kernel::KernelError handle_Write_V1(__KRN_IO_WRITE_V1 &&args) {
 }
 
 /** Versioned byte-counting write, preserving the V1 ABI. */
-kernel::KernelError handle_Write_V2(__KRN_IO_WRITE_V2 &&args) {
+kstd::error_code handle_Write_V2(__KRN_IO_WRITE_V2 &&args) {
   args.transferred = 0;
   const auto resolved = resolve_io(args.handle, kernel::ProcessHandleTable::HandleAccess::Write);
   if (!resolved) return resolved.error();
   size_t transferred = 0;
   const auto status = (*resolved)->Write({args.data.get(), args.data.size()}, transferred);
-  if (status != kernel::KernelError::Success) return status;
+  if (status) return status;
   if (transferred > args.data.size()) return kernel::KernelError::IoError;
   args.transferred = static_cast<uint32_t>(transferred);
   return kernel::KernelError::Success;
 }
 
 /** Sends a control code to the device behind an open handle. */
-kernel::KernelError handle_Control_V1(__KRN_IO_CONTROL_V1 &&args) {
+kstd::error_code handle_Control_V1(__KRN_IO_CONTROL_V1 &&args) {
   const auto resolved = resolve_io(args.handle, kernel::ProcessHandleTable::HandleAccess::None);
   if (!resolved) return resolved.error();
 
@@ -173,7 +173,7 @@ kernel::KernelError handle_Control_V1(__KRN_IO_CONTROL_V1 &&args) {
       kstd::span<const uint8_t>(args.input.get(), args.input.size()),
       kstd::span<uint8_t>(args.output.get(), args.output_len),
       transferred);
-  if (status != kernel::KernelError::Success) return status;
+  if (status) return status;
   if (transferred > args.output.size()) return kernel::KernelError::IoError;
 
   args.output_len = static_cast<decltype(args.output_len)>(transferred);

@@ -130,7 +130,7 @@ bool ResetIfEmpty() noexcept {
 
 // \Device\Input: each Read returns whole AnyInputEvent records and blocks
 // until at least one is available.
-kernel::KernelError InputRead(kernel::KIOObject &, kstd::span<uint8_t> buffer, size_t &transferred) {
+kstd::error_code InputRead(kernel::KIOObject &, kstd::span<uint8_t> buffer, size_t &transferred) {
   using kernel::input::AnyInputEvent;
   transferred = 0;
   if (buffer.size() < sizeof(AnyInputEvent)) return kernel::KernelError::BufferTooSmall;
@@ -142,36 +142,36 @@ kernel::KernelError InputRead(kernel::KIOObject &, kstd::span<uint8_t> buffer, s
     }
     if (transferred) return kernel::KernelError::Success;
     if (ResetIfEmpty()) {
-      if (const kernel::KernelError waited = KE_SCHED_WaitForHeader(g_eventHeader, kernel::WAIT_INFINITE);
-          waited != kernel::KernelError::Success) {
+      if (const kstd::error_code waited = KE_SCHED_WaitForHeader(g_eventHeader, kernel::WAIT_INFINITE);
+          waited) {
         return waited;
       }
     }
   }
 }
 
-kernel::KernelError InputClose(kernel::KIOObject &) { return kernel::KernelError::Success; }
+kstd::error_code InputClose(kernel::KIOObject &) { return kernel::KernelError::Success; }
 
 const kernel::KIOOps InputOps{.Read = InputRead, .Write = {}, .Control = {}, .Close = InputClose};
 
-kernel::KernelError RegisterInputStream() noexcept {
-  const auto dir = KE_OB_LookupObject("\\Device").As<kernel::KDirectoryObject>();
+kstd::error_code RegisterInputStream() noexcept {
+  const auto dir = KE_OB_GetDeviceDirectory();
   if (!dir) {
     KE_Print("Input manager: cannot register \\Device\\Input: no \\Device directory");
     return kernel::KernelError::NotFound;
   }
   auto created = kernel::CreateKObject<kernel::KIOObject>("Input");
   if (!created) {
-    KE_Print("Input manager: cannot create \\Device\\Input: {}", created.error());
+    KE_Print("Input manager: cannot create \\Device\\Input: {}", created.error().message());
     return created.error();
   }
   const auto stream = kstd::move(*created);
   stream->ops = &InputOps;
   stream->mode = kernel::KIOObject::OpenMode::Read;
   stream->waitable = &g_eventHeader;
-  if (const kernel::KernelError inserted = KE_OB_InsertObject(dir, kernel::KObjectPtr<kernel::KObject>(stream.get()));
-      inserted != kernel::KernelError::Success) {
-    KE_Print("Input manager: cannot register \\Device\\Input: {}", inserted);
+  if (const kstd::error_code inserted = KE_OB_InsertObject(dir, kernel::KObjectPtr<kernel::KObject>(stream.get()));
+      inserted) {
+    KE_Print("Input manager: cannot register \\Device\\Input: {}", inserted.message());
     return inserted;
   }
   g_inputStream = stream;
@@ -181,7 +181,7 @@ kernel::KernelError RegisterInputStream() noexcept {
 }// namespace
 
 namespace kernel::input {
-KernelError init() {
+kstd::error_code init() {
   g_eventRing = EventRing();
   for (auto &unit: g_units) unit = UnitSlot{};
   for (auto &pad: g_gamepads) pad = GamepadSlot{};
@@ -191,7 +191,7 @@ KernelError init() {
 }
 }// namespace kernel::input
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_INPUT_Initialize() noexcept {
+UNDOS_KERNEL_API_DEF kstd::error_code KE_INPUT_Initialize() noexcept {
   return kernel::input::init();
 }
 
@@ -200,7 +200,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_INPUT_Initialize() noexcept {
 // state onto the event ring. There is deliberately no silent default: an
 // unknown kind is rejected without touching either the ring or the snapshot
 // store, but every known kind is handled explicitly.
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_INPUT_PushEvent(const kernel::KDevicePtr<kernel::KDevice> &device,
+UNDOS_KERNEL_API_DEF kstd::error_code KE_INPUT_PushEvent(const kernel::KDevicePtr<kernel::KDevice> &device,
                                                             const kernel::input::KInputReport &report) noexcept {
   using namespace kernel::input;
 
@@ -209,7 +209,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_INPUT_PushEvent(const kernel::KDevic
 
   AnyInputEvent event;
   bool queued = false;
-  kernel::KernelError status = kernel::KernelError::InvalidArgument;
+  kstd::error_code status = kernel::KernelError::InvalidArgument;
 
   const uintptr_t irq_state = g_eventLock.lock_irqsave();
   switch (report.kind) {
@@ -303,8 +303,8 @@ UNDOS_KERNEL_API_DEF kernel::input::InputEventResult KE_INPUT_WaitEvent(kstd::ch
   for (;;) {
     if (kernel::input::AnyInputEvent event; KE_INPUT_DequeueEvent(event)) return event;
     if (!ResetIfEmpty()) continue;
-    if (const kernel::KernelError waited = KE_SCHED_WaitForHeader(g_eventHeader, timeout);
-        waited != kernel::KernelError::Success) {
+    if (const kstd::error_code waited = KE_SCHED_WaitForHeader(g_eventHeader, timeout);
+        waited) {
       return kstd::unexpected(waited);
     }
   }

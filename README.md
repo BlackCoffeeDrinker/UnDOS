@@ -244,20 +244,57 @@ remain unimplemented. Existing bitmap text is unchanged.
 
 ### Kernel error conventions
 
-Kernel operations report status with `kernel::KernelError`; operations producing a
-value use `kstd::expected<T, kernel::KernelError>`. Propagate the original error
+Stage 1.5 exports only default/protected global or weak ELF symbols, excluding
+image-private hidden/internal definitions. Duplicate exports retain the first
+definition, matching boot relocation lookup. Boot handoff and driver lookup
+preserve symbol names up to 255 bytes; longer names fail explicitly rather than
+being truncated into false duplicates.
+
+Kernel operations report status with `kstd::error_code`; operations producing a
+value use `kstd::expected<T, kstd::error_code>`. `kernel::KernelError` names the
+kernel category's values and converts implicitly to an error code; other
+subsystems can use their own categories. Check status codes with their boolean
+conversion (zero means success), and compare specific failures with their
+category-aware error codes. Propagate the original error
 instead of replacing it with `false`, `nullptr`, a negative integer, or a
 successful zero-byte transfer. Predicates and optional lookup results still
 represent ordinary false/absent outcomes, and EOF remains a successful empty read.
 Subsystems own their domain validation, including size and format limits; syscall
 handlers adapt ABI arguments and resolve the caller's handles.
 
+The kernel error category has permanent, allocation-free storage: error codes
+may retain its reference for the kernel's lifetime. It does not register a
+static destructor or depend on the application's `atexit` runtime.
+The `kstd` generic and system categories also use permanent, allocation-free
+storage without destructor registration, including when default-constructing
+or clearing an error code.
+Cross-image callers use the exported C-linkage `KE_ERROR_GetCategory` entry
+point through the existing inline C++ helpers, so LTO cannot discard the category
+accessor required by the HAL or drivers. It returns a non-null pointer at the
+linkage boundary; C++ callers retain the reference-based category interface.
+Freestanding library contract violations use the C-linkage `KE_RUNTIME_Panic`
+hook, including pure-virtual calls; HAL and driver images do not depend on a
+mangled C++ panic export.
+
 Handwritten syscall handlers and generated internal dispatch functions return
-`KernelError`. Only the public dispatch boundary converts errors to the unchanged
+`kstd::error_code`. Only the public dispatch boundary converts errors to the unchanged
 `SyscallReturnCode` ABI through `kernel::KErrorToSysReturnCode`. The
-`kstd::error_code` overload checks the category before interpreting its value;
+mapper checks the category before interpreting its value;
 unrecognized categories or errors without a truthful ABI equivalent return
 `UNKNOWN`.
+
+### Kernel log formatting
+
+`KE_Print(message)` sends plain text directly to `KE_PrintBuffer`, without parsing
+braces or using a formatting buffer. String literals and fixed arrays use a
+bounded string view; dynamic strings and explicit views are also supported.
+
+`KE_Print("Device {} at {x}", name, address)` packages arguments into a stack
+array for a shared parser and integer conversion routine. Named output sinks
+keep the formatter independent of the variadic argument pack. Formatting remains
+allocation-free for early boot. The default 256-byte output buffer can be changed
+with `KE_Print<Size>`; overflowing output ends in `...`, while an exact fit is
+not truncated. Each call submits its message to `KE_PrintBuffer` once.
 
 ### Application ABI v1 (Phase 1)
 

@@ -61,8 +61,8 @@ struct IoResourceRequirementsList {
   common::DoubleList<IoResourceList> alternatives;
 };
 
-using KResourceListResult = kstd::expected<IoResourceList *, KernelError>;
-using KResourceRequirementsResult = kstd::expected<IoResourceRequirementsList *, KernelError>;
+using KResourceListResult = kstd::expected<IoResourceList *, kstd::error_code>;
+using KResourceRequirementsResult = kstd::expected<IoResourceRequirementsList *, kstd::error_code>;
 
 // A single granted resource (CM_PARTIAL_RESOURCE_DESCRIPTOR).
 struct CmPartialResourceDescriptor : common::Link<CmPartialResourceDescriptor> {
@@ -109,7 +109,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_RES_AddPort,
     kernel::IoResourceList *alt, uint32_t start, uint32_t length, kernel::ResourceOption option, kernel::ResourceShare share);
 
@@ -119,7 +119,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_RES_AddInterrupt,
     kernel::IoResourceList *alt, uint32_t vector, kernel::ResourceOption option, kernel::ResourceShare share);
 
@@ -129,7 +129,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_RES_AddMemory,
     kernel::IoResourceList *alt, uint32_t start, uint32_t length, kernel::ResourceOption option, kernel::ResourceShare share);
 
@@ -139,7 +139,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_RES_AddDma,
     kernel::IoResourceList *alt, uint32_t channel, kernel::ResourceOption option, kernel::ResourceShare share);
 
@@ -165,7 +165,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * range conflicts with an already-reserved range.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_RES_AssignResources,
     const kernel::KDevicePtr<kernel::KDevice> &device, kernel::IoResourceRequirementsList *requirements);
 

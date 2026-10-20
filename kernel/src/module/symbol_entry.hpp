@@ -2,13 +2,14 @@
 #pragma once
 
 #include "kernel/adt/avl_tree.hpp"
+#include <kernel/boot/boot_info.hpp>
 
 #include <static_string.hpp>
 
 namespace kernel::driver {
 
 struct SymbolEntry {
-  kstd::static_string<64> name;
+  decltype(BootSymbolsT::name) name;
   uintptr_t address;
   adt::AvlNode<SymbolEntry> node;
 

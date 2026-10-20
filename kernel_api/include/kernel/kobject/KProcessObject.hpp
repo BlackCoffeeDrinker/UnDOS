@@ -56,7 +56,7 @@ struct ProcessHandleTable {
   };
   StandardStreamHandle standard_streams[3]{};
 
-  KernelError GetStandardHandle(StandardStream stream, KHandle &handle) const {
+  kstd::error_code GetStandardHandle(StandardStream stream, KHandle &handle) const {
     const auto index = static_cast<uint32_t>(stream);
     if (index >= 3) return KernelError::InvalidArgument;
     if (!standard_streams[index].available) return KernelError::StandardStreamUnavailable;
@@ -69,7 +69,7 @@ struct ProcessHandleTable {
     return KernelError::InvalidHandle;
   }
 
-  KernelError SetStandardHandle(StandardStream stream, KHandle handle) {
+  kstd::error_code SetStandardHandle(StandardStream stream, KHandle handle) {
     const auto index = static_cast<uint32_t>(stream);
     if (index >= 3) return KernelError::InvalidArgument;
     const auto *entry = Lookup(handle);
@@ -78,21 +78,32 @@ struct ProcessHandleTable {
     return KernelError::Success;
   }
 
-  KernelError AllocateStandardHandle(StandardStream stream, const KObjectPtr<KObject> &object,
+  kstd::error_code AllocateStandardHandle(StandardStream stream, const KObjectPtr<KObject> &object,
                               HandleAccess access) {
     if (!object) return KernelError::InvalidArgument;
     if (static_cast<uint32_t>(stream) >= 3) return KernelError::InvalidArgument;
     auto handle = Allocate(object, access, HandleFlags::Inheritable);
     if (!handle) return handle.error();
     const auto status = SetStandardHandle(stream, *handle);
-    if (status != KernelError::Success) Close(*handle);
+    if (status) Close(*handle);
     return status;
   }
 
-  kstd::expected<KHandle, KernelError> Allocate(const KObjectPtr<KObject> &obj,
+  kstd::expected<KHandle, kstd::error_code> Allocate(const KObjectPtr<KObject> &obj,
                    HandleAccess access,
                    HandleFlags flags) {
     if (!obj) return kstd::unexpected(KernelError::InvalidArgument);
+    return AllocateEntry(obj, access, flags);
+  }
+
+  // Reserves a handle slot with no object yet; the caller publishes it later.
+  kstd::expected<KHandle, kstd::error_code> Reserve(HandleAccess access, HandleFlags flags) {
+    return AllocateEntry(nullptr, access, flags);
+  }
+
+  kstd::expected<KHandle, kstd::error_code> AllocateEntry(const KObjectPtr<KObject> &obj,
+                   HandleAccess access,
+                   HandleFlags flags) {
     uint32_t raw;
 
     if (!free_list.empty()) {
@@ -127,7 +138,7 @@ struct ProcessHandleTable {
     return entry && (static_cast<uint32_t>(entry->access) & static_cast<uint32_t>(required)) == static_cast<uint32_t>(required);
   }
 
-  KernelError Close(KHandle h) {
+  kstd::error_code Close(KHandle h) {
     for (auto it = entries.begin(); it != entries.end(); ++it) {
       if (it->handle == h) {
         if ((static_cast<uint32_t>(it->flags) & static_cast<uint32_t>(HandleFlags::ProtectFromClose)) != 0)
@@ -170,26 +181,26 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
   DeviceContextTable dcTable;
   font::ResourceTable fontResources;
 
-  KernelError AttachStandardStreams(const KObjectPtr<KObject> &sink) {
+  kstd::error_code AttachStandardStreams(const KObjectPtr<KObject> &sink) {
     if (!sink) return KernelError::InvalidArgument;
     const auto input = handles.AllocateStandardHandle(StandardStream::Stdin, sink, ProcessHandleTable::HandleAccess::Read);
-    if (input != KernelError::Success) return input;
+    if (input) return input;
     const auto output = handles.AllocateStandardHandle(StandardStream::Stdout, sink, ProcessHandleTable::HandleAccess::Write);
-    if (output != KernelError::Success) {
+    if (output) {
       KHandle handle{};
-      if (handles.GetStandardHandle(StandardStream::Stdin, handle) == KernelError::Success) handles.Close(handle);
+      if (!handles.GetStandardHandle(StandardStream::Stdin, handle)) handles.Close(handle);
       return output;
     }
     const auto error = handles.AllocateStandardHandle(StandardStream::Stderr, sink, ProcessHandleTable::HandleAccess::Write);
-    if (error != KernelError::Success) {
+    if (error) {
       KHandle handle{};
-      if (handles.GetStandardHandle(StandardStream::Stdin, handle) == KernelError::Success) handles.Close(handle);
-      if (handles.GetStandardHandle(StandardStream::Stdout, handle) == KernelError::Success) handles.Close(handle);
+      if (!handles.GetStandardHandle(StandardStream::Stdin, handle)) handles.Close(handle);
+      if (!handles.GetStandardHandle(StandardStream::Stdout, handle)) handles.Close(handle);
     }
     return error;
   }
 
-  KernelError InheritHandlesFrom(ProcessHandleTable &parentHandles) {
+  kstd::error_code InheritHandlesFrom(ProcessHandleTable &parentHandles) {
     const auto rollback = [this]() {
       while (!handles.entries.empty()) {
         const KHandle handle = handles.entries.front().handle;
@@ -212,10 +223,10 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
         for (uint32_t i = 0; i < 3; ++i) {
           const auto stream = static_cast<StandardStream>(i);
           KHandle parentStandardHandle{};
-          if (parentHandles.GetStandardHandle(stream, parentStandardHandle) == KernelError::Success &&
+          if (!parentHandles.GetStandardHandle(stream, parentStandardHandle) &&
               parentStandardHandle == entry.handle) {
             const auto status = handles.SetStandardHandle(stream, *inheritedHandle);
-            if (status != KernelError::Success) {
+            if (status) {
               rollback();
               return status;
             }

@@ -12,9 +12,9 @@
 #include <utility.hpp>
 
 namespace kernel {
-using KDeviceBusResult = kstd::expected<kernel::KDevicePtr<kernel::KDeviceBus>, KernelError>;
-using KDeviceResult = kstd::expected<kernel::KDevicePtr<kernel::KDevice>, KernelError>;
-using KInterruptRoutineResult = kstd::expected<kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject>, KernelError>;
+using KDeviceBusResult = kstd::expected<KDevicePtr<KDeviceBus>, kstd::error_code>;
+using KDeviceResult = kstd::expected<KDevicePtr<KDevice>, kstd::error_code>;
+using KInterruptRoutineResult = kstd::expected<KObjectPtr<KInterruptServiceRoutineObject>, kstd::error_code>;
 }// namespace kernel
 
 
@@ -74,7 +74,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * AlreadyAttached if the child already has a parent bus.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_IO_AttachChildDevice,
     const kernel::KDevicePtr<kernel::KDeviceBus> &bus, kernel::KDevicePtr<kernel::KDevice> child);
 
@@ -88,7 +88,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * KernelError::Unsupported when the device's driver has no handler.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_IO_ReadDevice,
     const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<uint8_t> buffer, size_t &transferred);
 
@@ -98,7 +98,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_IO_WriteDevice,
     const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<const uint8_t> buffer, size_t &transferred);
 
@@ -110,7 +110,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * Returns KernelError::Unsupported when the driver has no handler.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_IO_ControlDevice,
     const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
     kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred);
@@ -147,7 +147,7 @@ UNDOS_KERNEL_PUBLIC_V1API(void, KE_IO_DisconnectInterrupt, uint32_t irq);
 
 
 template<typename T>
-kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kernel::KernelError> KE_IO_CreateDeviceWithContext(
+kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kstd::error_code> KE_IO_CreateDeviceWithContext(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     const kstd::string_view &deviceName,
     kernel::DeviceType deviceType, CreateDeviceFlags flags = CreateDeviceFlags::None) {
@@ -158,7 +158,7 @@ kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kernel::KernelError> KE_IO_C
 }
 
 template<typename T>
-kstd::expected<kernel::KDevicePtr<kernel::KDeviceBus>, kernel::KernelError> KE_IO_CreateBusWithContext(
+kstd::expected<kernel::KDevicePtr<kernel::KDeviceBus>, kstd::error_code> KE_IO_CreateBusWithContext(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     const kstd::string_view &busName = {}, CreateDeviceFlags flags = CreateDeviceFlags::None) {
   auto dev = KE_IO_CreateBus(kstd::move(driver), sizeof(T), busName, flags);

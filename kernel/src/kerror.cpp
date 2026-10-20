@@ -1,5 +1,6 @@
 
 #include <kernel/kerror.hpp>
+#include <new.hpp>
 
 namespace {
 class KernelErrorCategory : public kstd::error_category {
@@ -60,15 +61,10 @@ class KernelErrorCategory : public kstd::error_category {
 
 }// namespace
 
-namespace kernel {
-
-kstd::error_category &kernel_error_category() {
-  static KernelErrorCategory category;
-  return category;
+extern "C" UNDOS_KERNEL_API_DEF kstd::error_category *KE_ERROR_GetCategory() noexcept {
+  // Error codes retain this reference for the kernel's lifetime; never register
+  // its virtual destructor with the application exit runtime.
+  alignas(KernelErrorCategory) static unsigned char storage[sizeof(KernelErrorCategory)];
+  static KernelErrorCategory &category = *new (storage) KernelErrorCategory;
+  return &category;
 }
-
-kstd::error_code make_error_code(KernelError e) {
-  return kstd::error_code(static_cast<int>(e), kernel_error_category());
-}
-
-}// namespace kernel

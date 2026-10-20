@@ -2,7 +2,7 @@
 
 namespace kernel {
 
-kstd::expected<kstd::pair<KDeviceContextSlot *, HDC>, KernelError> DeviceContextTable::Allocate() noexcept {
+kstd::expected<kstd::pair<KDeviceContextSlot *, HDC>, kstd::error_code> DeviceContextTable::Allocate() noexcept {
   table_lock.lock();
 
   uint32_t index;
@@ -78,7 +78,7 @@ KDeviceContextSlot *DeviceContextTable::Resolve(HDC hdc) noexcept {
   return &slot;
 }
 
-KernelError DeviceContextTable::Close(HDC hdc) noexcept {
+kstd::error_code DeviceContextTable::Close(HDC hdc) noexcept {
   const uint32_t index = hdc & 0xFFFF;
 
   KDeviceContextSlot *slot = Resolve(hdc);

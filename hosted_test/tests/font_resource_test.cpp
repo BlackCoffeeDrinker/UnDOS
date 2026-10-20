@@ -175,13 +175,13 @@ TEST_CASE("Font component depth accepts its exact ceiling and rejects overflow",
 namespace {
 // Adapts the expected-returning upload API to the status/out-parameter shape
 // these tests assert on; failed calls report handle 0.
-kernel::KernelError BeginUpload(kernel::font::ResourceTable &table, kernel::font::ResourceBudget &budget, uint32_t size, uint32_t &handle) {
+kstd::error_code BeginUpload(kernel::font::ResourceTable &table, kernel::font::ResourceBudget &budget, uint32_t size, uint32_t &handle) {
   const auto result = table.begin(budget, size);
   handle = result ? *result : 0;
   return result ? kernel::KernelError::Success : result.error();
 }
 
-kernel::KernelError CommitUpload(kernel::font::ResourceTable &table, uint32_t handle, uint32_t &face, uint32_t &validationError) {
+kstd::error_code CommitUpload(kernel::font::ResourceTable &table, uint32_t handle, uint32_t &face, uint32_t &validationError) {
   const auto result = table.commit(handle, validationError);
   face = result ? *result : 0;
   return result ? kernel::KernelError::Success : result.error();

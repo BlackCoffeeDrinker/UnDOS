@@ -9,7 +9,7 @@
 
 namespace kernel {
 struct KProcessObject;
-using CreateProcessResult = kstd::expected<KObjectPtr<KProcessObject>, KernelError>;
+using CreateProcessResult = kstd::expected<KObjectPtr<KProcessObject>, kstd::error_code>;
 struct ProcessStreams {
   KObjectPtr<KObject> input;
   KObjectPtr<KObject> output;

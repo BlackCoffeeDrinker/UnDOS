@@ -6,7 +6,7 @@ namespace kernel::tty {
 
 KVtty::KVtty() = default;
 
-kstd::expected<size_t, kernel::KernelError> KVtty::source_write(const uint8_t *src, size_t count) {
+kstd::expected<size_t, kstd::error_code> KVtty::source_write(const uint8_t *src, size_t count) {
   kstd::unique_lock lock(m_lock);
   if (m_sourceClosed || m_sinkClosed) {
     return kstd::unexpected(kernel::KernelError::InvalidState);
@@ -119,7 +119,7 @@ bool KVtty::is_source_closed() const {
   return m_sourceClosed;
 }
 
-kstd::expected<size_t, kernel::KernelError> KVtty::sink_write(const uint8_t *src, size_t count) {
+kstd::expected<size_t, kstd::error_code> KVtty::sink_write(const uint8_t *src, size_t count) {
   kstd::unique_lock lock(m_lock);
   if (m_sinkClosed || m_sourceClosed) {
     return kstd::unexpected(kernel::KernelError::InvalidState);
@@ -168,7 +168,7 @@ bool KVtty::sink_has_data() const {
   return !m_sinkInRing.empty();
 }
 
-kernel::KernelError KVtty::sink_read_wait(uint8_t *dst, size_t count, size_t &transferred) {
+kstd::error_code KVtty::sink_read_wait(uint8_t *dst, size_t count, size_t &transferred) {
   transferred = 0;
   if (!count) return kernel::KernelError::Success;
   for (;;) {
@@ -188,7 +188,7 @@ kernel::KernelError KVtty::sink_read_wait(uint8_t *dst, size_t count, size_t &tr
       m_inputReady.Reset();
       HAL_CPU_RestoreInterrupts(state);
     }
-    if (const auto status = KE_SCHED_WaitForHeader(m_inputReady, kernel::WAIT_INFINITE); status != kernel::KernelError::Success)
+    if (const auto status = KE_SCHED_WaitForHeader(m_inputReady, kernel::WAIT_INFINITE); status)
       return status;
   }
 }

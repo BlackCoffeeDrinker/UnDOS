@@ -10,13 +10,13 @@ namespace kernel::vmm {
 void init() noexcept;
 void late_init() noexcept;
 
- kstd::expected<void *, KernelError> allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept;
-KernelError map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, ProtectFlags flags) noexcept;
+ kstd::expected<void *, kstd::error_code> allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept;
+kstd::error_code map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, ProtectFlags flags) noexcept;
 
 // Creates a fully-initialized, isolated user address space backed by a fresh
 // HAL translation root (kernel higher-half cloned, user half empty).
 // Returns false if the underlying HAL allocation failed.
-KernelError create_user_address_space(AddressSpace &out_as) noexcept;
+kstd::error_code create_user_address_space(AddressSpace &out_as) noexcept;
 
 // Reclaims a user address space previously built by create_user_address_space:
 // frees any physical frames still tracked by its VADs, then destroys the

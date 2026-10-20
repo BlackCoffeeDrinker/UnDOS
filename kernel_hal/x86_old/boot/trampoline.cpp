@@ -135,9 +135,19 @@ uintptr_t get_elf_load_vaddr(uint32_t module_start) {
 }
 
 void register_global_symbol(const char *name, uint32_t value) {
+  if (kstd::string_view(name).size() > decltype(kernel::BootSymbolsT::name)::capacity()) {
+    write_fmt("Stage 1.5: Symbol name exceeds boot handoff capacity: {}\n\r", name);
+    panic("Stage 1.5: Symbol name too long");
+  }
+  for (size_t i = 0; i < g_symbol_count; ++i) {
+    if (kstrcmp(g_symbol_table[i].name, name)) {
+      write_fmt("Stage 1.5: Duplicate symbol '{}', retaining first definition\n\r", name);
+      return;
+    }
+  }
   if (g_symbol_count >= g_symbol_table.size()) {
     write_fmt("Stage 1.5: Failed to register symbol: {} g_symbol_count > {}\n\r", name, g_symbol_table.size());
-    return;
+    panic("Stage 1.5: Symbol registry full");
   }
   g_symbol_table[g_symbol_count++] = {.name = name, .value = value};
 }
@@ -192,9 +202,11 @@ void collect_symbols_from_module(uintptr_t module_start, uintptr_t v_base_overri
   const uintptr_t original_base = get_elf_load_vaddr(module_start);
 
   for (size_t i = 0; i < num_symbols; ++i) {
-    // Log all defined, globally visible or weak symbols
+    // Hidden/internal symbols belong to their own image, not the export registry.
     const uint8_t binding = symbols[i].st_info >> 4;
-    if (symbols[i].st_shndx != 0 && (binding == 1 || binding == 2)) {
+    const uint8_t visibility = symbols[i].st_other & 3;
+    if (symbols[i].st_shndx != 0 && (binding == 1 || binding == 2) &&
+        (visibility == 0 || visibility == 3)) {
       const char *sym_name = strings + symbols[i].st_name;
       if (*sym_name != '\0') {
         uint32_t val = symbols[i].st_value;

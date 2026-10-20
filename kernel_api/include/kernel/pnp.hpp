@@ -6,7 +6,7 @@
 #include <expected.hpp>
 
 namespace kernel {
-using ReportRootDeviceResult = kstd::expected<KDevicePtr<KDevice>, KernelError>;
+using ReportRootDeviceResult = kstd::expected<KDevicePtr<KDevice>, kstd::error_code>;
 }
 
 // NOTE: The KEvent/KPnpEvent dispatch layer was removed for now in favour of
@@ -36,7 +36,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_PNP_ReportNewDevice,
     const kernel::KDevicePtr<kernel::KDeviceBus> &parent, const kernel::KDevicePtr<kernel::KDevice> &pdo);
 
@@ -46,7 +46,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_PNP_EnumerateBus,
     const kernel::KDevicePtr<kernel::KDeviceBus> &busDevice);
 
@@ -62,7 +62,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * 
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_PNP_RegisterDeviceInterest,
     kernel::DeviceType type, const kernel::KObjectPtr<kernel::KDriverObject> &driver);
 

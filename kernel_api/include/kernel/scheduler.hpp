@@ -11,8 +11,8 @@
 
 namespace kernel {
 struct KEventObject;
-using CreateThreadResult = kstd::expected<KObjectPtr<KThreadObject>, KernelError>;
-using CreateEventResult = kstd::expected<KObjectPtr<KEventObject>, KernelError>;
+using CreateThreadResult = kstd::expected<KObjectPtr<KThreadObject>, kstd::error_code>;
+using CreateEventResult = kstd::expected<KObjectPtr<KEventObject>, kstd::error_code>;
 }
 
 // Platform-agnostic thread scheduler service. The core owns the policy (ready
@@ -72,7 +72,7 @@ UNDOS_KERNEL_PUBLIC_V1API(void, KE_SCHED_Block);
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_SCHED_Unblock,
     const kernel::KObjectPtr<kernel::KThreadObject> &thread);
 
@@ -105,7 +105,7 @@ constexpr kstd::chrono::milliseconds WAIT_INFINITE{-1};
  * times out.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_SCHED_WaitForObject,
     const kernel::KObjectPtr<kernel::KObject> &object, kstd::chrono::milliseconds timeout);
 
@@ -116,7 +116,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * Same as KE_SCHED_WaitForObject for a header embedded in a kernel structure.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_SCHED_WaitForHeader,
     kernel::KDispatcherHeader &header, kstd::chrono::milliseconds timeout);
 

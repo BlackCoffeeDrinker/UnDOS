@@ -104,7 +104,7 @@ uint32_t Vga_ReadPixel(uint8_t *base, int x, int y) {
 // endregion
 
 // region KGraphicsAdapter / KDisplay hooks
-kernel::KernelError Vga_Probe(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/) {
+kstd::error_code Vga_Probe(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/) {
   // Legacy VGA hardware is always present once the driver is loaded (no
   // PnP participation, see UNDOS_DRIVER_ENTRY below).
   return kernel::KernelError::Success;
@@ -112,7 +112,7 @@ kernel::KernelError Vga_Probe(const kernel::KObjectPtr<kernel::KGraphicsAdapter>
 
 // The single, fixed head this adapter drives. Identity only: the entry
 // points are bound later, from Vga_ConfigureDisplay.
-kernel::KernelError Vga_ProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+kstd::error_code Vga_ProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
                              const kernel::KGraphicsAdapterDisplayEnumInfo &enumInfo,
                              kernel::KGraphicsAdapterDisplayInfo &outInfo) {
   if (enumInfo.displayIndex != 0) {
@@ -127,7 +127,7 @@ kernel::KernelError Vga_ProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsA
   return kernel::KernelError::Success;
 }
 
-kstd::expected<kernel::KDisplayModeInfo, kernel::KernelError> Vga_GetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
+kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> Vga_GetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
                                                                        size_t modeIndex) {
   if (modeIndex != 0) {
     return kstd::unexpected(kernel::KernelError::OutOfRange);
@@ -151,7 +151,7 @@ kstd::expected<kernel::KDisplayModeInfo, kernel::KernelError> Vga_GetModeInfo(co
   return outInfo;
 }
 
-kstd::expected<kernel::KDisplaySurfaceBinding, kernel::KernelError> Vga_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
+kstd::expected<kernel::KDisplaySurfaceBinding, kstd::error_code> Vga_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
                                                                          size_t modeIndex) {
   if (modeIndex != 0) {
     return kstd::unexpected(kernel::KernelError::OutOfRange);
@@ -167,7 +167,7 @@ kstd::expected<kernel::KDisplaySurfaceBinding, kernel::KernelError> Vga_SetMode(
 
   auto backing = KE_VMM_CreateDirectBacking(ctx_vga->framebuffer, kVgaFramebufferSize);
   if (!backing) {
-    KE_Print("gfx_vga: could not allocate mode backing, keeping the current mode: {}", backing.error());
+    KE_Print("gfx_vga: could not allocate mode backing, keeping the current mode: {}", backing.error().message());
     return kstd::unexpected(backing.error());
   }
 
@@ -197,7 +197,7 @@ kstd::expected<kernel::KDisplaySurfaceBinding, kernel::KernelError> Vga_SetMode(
 // Video output is gated by the Attribute Controller's Palette Address Source
 // bit (0x20 written to the index port): set means "display", clear means
 // "blank, registers accessible".
-kernel::KernelError Vga_Enable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
+kstd::error_code Vga_Enable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
   HAL_IO_In8(vga_regs::kInputStatus1);// Reset the index/data flip-flop
   HAL_IO_Out8(vga_regs::kAttributeControllerIndexData, 0x20);
   return kernel::KernelError::Success;
@@ -210,7 +210,7 @@ void Vga_Disable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
 
 // Binds this driver's per-head entry points on the display the graphics
 // subsystem created for the head Vga_ProbeDisplay reported.
-kernel::KernelError Vga_ConfigureDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KDisplay> &display) {
+kstd::error_code Vga_ConfigureDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KDisplay> &display) {
   if (!display) {
     return kernel::KernelError::InvalidArgument;
   }
@@ -222,7 +222,7 @@ kernel::KernelError Vga_ConfigureDisplay(const kernel::KObjectPtr<kernel::KGraph
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError Vga_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KSurface> &dst, int x, int y, int w, int h, uint32_t colorIndex) {
+kstd::error_code Vga_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KSurface> &dst, int x, int y, int w, int h, uint32_t colorIndex) {
   if (!dst || !dst->backing || !dst->backing->directAddress) {
     return kernel::KernelError::Unsupported;
   }
@@ -268,7 +268,7 @@ kernel::KernelError Vga_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapt
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError Vga_DrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KSurface> &dst, int x0, int y0, int x1, int y1, uint32_t colorIndex) {
+kstd::error_code Vga_DrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KSurface> &dst, int x0, int y0, int x1, int y1, uint32_t colorIndex) {
   if (!dst || !dst->backing || !dst->backing->directAddress) {
     return kernel::KernelError::Unsupported;
   }
@@ -299,7 +299,7 @@ kernel::KernelError Vga_DrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapt
   return kernel::KernelError::Success;
 }
 
-kstd::expected<uint32_t, kernel::KernelError> Vga_ReadSurfacePixel(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &,
+kstd::expected<uint32_t, kstd::error_code> Vga_ReadSurfacePixel(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &,
                                                             const kernel::KObjectPtr<kernel::KSurface> &src,
                                                             int x, int y) {
   if (!src || !src->backing || !src->backing->directAddress) return kstd::unexpected(kernel::KernelError::Unsupported);
@@ -311,7 +311,7 @@ kstd::expected<uint32_t, kernel::KernelError> Vga_ReadSurfacePixel(const kernel:
   return color;
 }
 
-kernel::KernelError Vga_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+kstd::error_code Vga_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
                 const kernel::KObjectPtr<kernel::KSurface> &dst,
                 int dstX, int dstY,
                 const kernel::KObjectPtr<kernel::KSurface> &src,
@@ -350,21 +350,21 @@ void Vga_Present(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*
 }
 // endregion
 
-kernel::KernelError Vga_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
+kstd::error_code Vga_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto fdo = KE_IO_CreateDeviceWithContext<VgaContext>(driver, "VGA16", kernel::device_type::Video);
   if (!fdo) {
-    KE_Print("gfx_vga: Failed to create VGA16 device: {}", fdo.error());
+    KE_Print("gfx_vga: Failed to create VGA16 device: {}", fdo.error().message());
     return fdo.error();
   }
 
   if (const auto attached = KE_IO_AttachFilterDevice(*fdo, pdo); !attached) {
-    KE_Print("gfx_vga: Failed to attach VGA16 device: {}", attached.error());
+    KE_Print("gfx_vga: Failed to attach VGA16 device: {}", attached.error().message());
     return attached.error();
   }
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError Vga_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
+kstd::error_code Vga_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
                                    kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred) {
   (void) device;
   (void) input;
@@ -405,7 +405,7 @@ void Vga_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   auto &as = KE_VMM_GetKernelAddressSpace();
   const auto region = KE_VMM_AllocateRegion(as, fbRes->length, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
   if (!region) {
-    KE_Print("gfx_vga: Failed to reserve virtual address space for the framebuffer: {}", region.error());
+    KE_Print("gfx_vga: Failed to reserve virtual address space for the framebuffer: {}", region.error().message());
     return;
   }
 
@@ -417,8 +417,8 @@ void Vga_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
             virt + (i * kPageSize),
             kernel::PhysicalAddress(fbRes->start) + (i * kPageSize),
             kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
-        mapped != kernel::KernelError::Success) {
-      KE_Print("gfx_vga: Failed to map the framebuffer: {}", mapped);
+        mapped) {
+      KE_Print("gfx_vga: Failed to map the framebuffer: {}", mapped.message());
       return;
     }
   }
@@ -426,7 +426,7 @@ void Vga_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
 
   auto adapter = KE_GFX_RegisterGraphicsAdapter(driver, fdo, "VGA16");
   if (!adapter) {
-    KE_Print("gfx_vga: Failed to register graphics adapter: {}", adapter.error());
+    KE_Print("gfx_vga: Failed to register graphics adapter: {}", adapter.error().message());
     return;
   }
   ctx_vga->adapter = kstd::move(*adapter);

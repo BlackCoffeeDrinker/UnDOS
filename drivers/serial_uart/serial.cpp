@@ -1,18 +1,18 @@
 #include <Kernel.hpp>
 #include <kernel/device.hpp>
 #include <kernel/driver.hpp>
+#include <kernel/hal_interface.hpp>
 #include <kernel/resource.hpp>
 #include <kernel/tty/tty_device.hpp>
-#include <kernel/hal_interface.hpp>
 
 namespace {
 
 constexpr uint16_t UART_DATA = 0;
-constexpr uint16_t UART_IER  = 1;
-constexpr uint16_t UART_FCR  = 2;
-constexpr uint16_t UART_LCR  = 3;
-constexpr uint16_t UART_MCR  = 4;
-constexpr uint16_t UART_LSR  = 5;
+constexpr uint16_t UART_IER = 1;
+constexpr uint16_t UART_FCR = 2;
+constexpr uint16_t UART_LCR = 3;
+constexpr uint16_t UART_MCR = 4;
+constexpr uint16_t UART_LSR = 5;
 
 struct SerialDeviceExtension {
   uint16_t ioBase{0x3F8};
@@ -22,14 +22,14 @@ struct SerialDeviceExtension {
 void InitUart(uint16_t base) {
   HAL_IO_Out8(base + UART_IER, 0x00); // Disable interrupts (polled I/O)
   HAL_IO_Out8(base + UART_LCR, 0x80); // Enable DLAB
-  HAL_IO_Out8(base + UART_DATA, 0x03); // Divisor 3 (38400 baud)
+  HAL_IO_Out8(base + UART_DATA, 0x03);// Divisor 3 (38400 baud)
   HAL_IO_Out8(base + UART_IER, 0x00);
-  HAL_IO_Out8(base + UART_LCR, 0x03); // 8 bits, no parity, 1 stop bit
-  HAL_IO_Out8(base + UART_FCR, 0xC7); // Enable FIFO, clear RX/TX FIFOs, 14-byte threshold
-  HAL_IO_Out8(base + UART_MCR, 0x03); // RTS, DTR
+  HAL_IO_Out8(base + UART_LCR, 0x03);// 8 bits, no parity, 1 stop bit
+  HAL_IO_Out8(base + UART_FCR, 0xC7);// Enable FIFO, clear RX/TX FIFOs, 14-byte threshold
+  HAL_IO_Out8(base + UART_MCR, 0x03);// RTS, DTR
 }
 
-kernel::KernelError Serial_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
+kstd::error_code Serial_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto fdo = KE_IO_CreateDeviceWithContext<SerialDeviceExtension>(
       driver, "Serial", kernel::device_type::Serial, CreateDeviceFlags::MultipleAllowed);
   if (!fdo) {
@@ -37,9 +37,9 @@ kernel::KernelError Serial_AddDevice(const kernel::KObjectPtr<kernel::KDriverObj
     return fdo.error();
   }
 
-  const auto attached = KE_IO_AttachFilterDevice(*fdo, pdo);
-  if (!attached) return attached.error();
-  return kernel::KernelError::Success;
+  if (const auto attached = KE_IO_AttachFilterDevice(*fdo, pdo); !attached)
+    return attached.error();
+  return {};
 }
 
 void Serial_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
@@ -61,13 +61,13 @@ void Serial_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   InitUart(ext->ioBase);
 
   KE_Print("serial_uart: Serial device started at I/O 0x{:x}, IRQ {} -> linked to VTTY",
-                  ext->ioBase, ext->irq);
+           ext->ioBase, ext->irq);
 }
 
-kernel::KernelError Serial_Read(const kernel::KDevicePtr<kernel::KDevice> &device,
-                             uint64_t /*offset*/,
-                             kstd::span<uint8_t> buffer,
-                             size_t &transferred) {
+kstd::error_code Serial_Read(const kernel::KDevicePtr<kernel::KDevice> &device,
+                                uint64_t /*offset*/,
+                                kstd::span<uint8_t> buffer,
+                                size_t &transferred) {
   transferred = 0;
   if (!device || buffer.empty()) return kernel::KernelError::Success;
 
@@ -85,10 +85,10 @@ kernel::KernelError Serial_Read(const kernel::KDevicePtr<kernel::KDevice> &devic
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError Serial_Write(const kernel::KDevicePtr<kernel::KDevice> &device,
-                              uint64_t /*offset*/,
-                              kstd::span<const uint8_t> buffer,
-                              size_t &transferred) {
+kstd::error_code Serial_Write(const kernel::KDevicePtr<kernel::KDevice> &device,
+                                 uint64_t /*offset*/,
+                                 kstd::span<const uint8_t> buffer,
+                                 size_t &transferred) {
   transferred = 0;
   if (!device || buffer.empty()) return kernel::KernelError::Success;
 
@@ -106,7 +106,7 @@ kernel::KernelError Serial_Write(const kernel::KDevicePtr<kernel::KDevice> &devi
   return kernel::KernelError::Success;
 }
 
-} // namespace
+}// namespace
 
 UNDOS_DRIVER_ENTRY {
   (void) driverConfig;

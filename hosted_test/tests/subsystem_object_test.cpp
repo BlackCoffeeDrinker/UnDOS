@@ -11,7 +11,7 @@
 
 namespace {
 template<typename T>
-T TakeExpected(kstd::expected<T, kernel::KernelError> result) {
+T TakeExpected(kstd::expected<T, kstd::error_code> result) {
   REQUIRE(result.has_value());
   return kstd::move(*result);
 }

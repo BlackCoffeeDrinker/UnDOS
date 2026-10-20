@@ -120,7 +120,7 @@ using namespace kernel;
 using namespace kernel::user;
 
 template<typename T>
-T TakeExpected(kstd::expected<T, kernel::KernelError> result) {
+T TakeExpected(kstd::expected<T, kstd::error_code> result) {
   REQUIRE(result);
   return kstd::move(*result);
 }
@@ -133,7 +133,7 @@ bool BeginPaintInto(KProcessObject &process, KWindowObject &window, uint32_t &dc
   return true;
 }
 
-KernelError UserProbe(const KObjectPtr<KGraphicsAdapter> &, const KGraphicsAdapterDisplayEnumInfo &info,
+kstd::error_code UserProbe(const KObjectPtr<KGraphicsAdapter> &, const KGraphicsAdapterDisplayEnumInfo &info,
                       KGraphicsAdapterDisplayInfo &out) {
   if (info.displayIndex) return KernelError::OutOfRange;
   out.isPresent = true;
@@ -141,7 +141,7 @@ KernelError UserProbe(const KObjectPtr<KGraphicsAdapter> &, const KGraphicsAdapt
   return KernelError::Success;
 }
 
-kstd::expected<KDisplayModeInfo, KernelError> UserMode(const KObjectPtr<KDisplay> &, size_t index) {
+kstd::expected<KDisplayModeInfo, kstd::error_code> UserMode(const KObjectPtr<KDisplay> &, size_t index) {
   if (index) return kstd::unexpected(KernelError::OutOfRange);
   KDisplayModeInfo out{};
   out.width = 640; out.height = 480; out.pitch = 640;
@@ -149,25 +149,25 @@ kstd::expected<KDisplayModeInfo, KernelError> UserMode(const KObjectPtr<KDisplay
   return out;
 }
 
-kstd::expected<KDisplaySurfaceBinding, KernelError> UserSetMode(const KObjectPtr<KDisplay> &, size_t) {
+kstd::expected<KDisplaySurfaceBinding, kstd::error_code> UserSetMode(const KObjectPtr<KDisplay> &, size_t) {
   KDisplaySurfaceBinding binding{};
   binding.type = SurfaceType::OffscreenBitmap;
   binding.flags = SurfaceFlags::Linear | SurfaceFlags::TopDown;
   return binding;
 }
 
-KernelError UserConfigure(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display) {
+kstd::error_code UserConfigure(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display) {
   display->GetModeInfo = UserMode;
   display->SetMode = UserSetMode;
   return KernelError::Success;
 }
 
-kstd::expected<uint32_t, KernelError> UserReadPixel(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KSurface> &surface,
+kstd::expected<uint32_t, kstd::error_code> UserReadPixel(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KSurface> &surface,
                                                     int x, int y) {
   return surface->backing->directAddress.as_ptr<uint8_t>()[y * 640 + x];
 }
 
-KernelError UserPlanarFill(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KSurface> &surface,
+kstd::error_code UserPlanarFill(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KSurface> &surface,
                     int x, int y, int width, int height, uint32_t color) {
   auto *pixels = surface->backing->directAddress.as_ptr<uint8_t>();
   for (int row = y; row < y + height; ++row)

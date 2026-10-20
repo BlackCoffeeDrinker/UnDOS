@@ -4,7 +4,7 @@
 #include <kernel/kobject/KVttyObject.hpp>
 #include <kernel/object_manager.hpp>
 
-kernel::KernelError handle_Create_V1(__KRN_TTY_CREATE_V1 &&args) {
+kstd::error_code handle_Create_V1(__KRN_TTY_CREATE_V1 &&args) {
   args.sourceHandle = args.sinkHandle = UINT32_MAX;
   const auto currentThread = KE_SCHED_GetCurrentThread();
   if (currentThread == nullptr) return kernel::KernelError::NoCurrentThread;
@@ -38,7 +38,7 @@ kernel::KernelError handle_Create_V1(__KRN_TTY_CREATE_V1 &&args) {
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError handle_SetConfig_V1(__KRN_TTY_SETCONFIG_V1 &&args) {
+kstd::error_code handle_SetConfig_V1(__KRN_TTY_SETCONFIG_V1 &&args) {
   const auto currentThread = KE_SCHED_GetCurrentThread();
   if (currentThread == nullptr) return kernel::KernelError::NoCurrentThread;
   const auto proc = currentThread->owner_process;
@@ -69,7 +69,7 @@ kernel::KernelError handle_SetConfig_V1(__KRN_TTY_SETCONFIG_V1 &&args) {
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError handle_GetConfig_V1(__KRN_TTY_GETCONFIG_V1 &&args) {
+kstd::error_code handle_GetConfig_V1(__KRN_TTY_GETCONFIG_V1 &&args) {
   const auto currentThread = KE_SCHED_GetCurrentThread();
   if (currentThread == nullptr) return kernel::KernelError::NoCurrentThread;
   const auto proc = currentThread->owner_process;

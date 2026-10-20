@@ -8,7 +8,7 @@
 namespace {
 // Parses a decimal unsigned integer. Errors: InvalidFormat (empty/malformed),
 // ArithmeticOverflow (does not fit in 32 bits).
-kstd::expected<uint32_t, kernel::KernelError> ParseUInt32(const kstd::string_view &text) {
+kstd::expected<uint32_t, kstd::error_code> ParseUInt32(const kstd::string_view &text) {
   if (text.empty()) return kstd::unexpected(kernel::KernelError::InvalidFormat);
   uint32_t value = 0;
   for (const char c: text) {
@@ -23,7 +23,7 @@ kstd::expected<uint32_t, kernel::KernelError> ParseUInt32(const kstd::string_vie
 // Reads the named value subkey under `key`, matching the "open a subkey
 // named after the value, then read its default value" pattern the registry
 // uses everywhere else (see kernel/src/legacy_isa_enum.cpp).
-kstd::expected<kstd::string, kernel::KernelError> ReadStringValue(const kernel::KConfigurationKeyPtr &key, const kstd::string_view &valueName) {
+kstd::expected<kstd::string, kstd::error_code> ReadStringValue(const kernel::KConfigurationKeyPtr &key, const kstd::string_view &valueName) {
   const auto valueKey = KE_CM_OpenKey(key, valueName);
   if (!valueKey) return kstd::unexpected(valueKey.error());
   const auto size = KE_CM_GetKeyValueStringSize(*valueKey);
@@ -44,7 +44,7 @@ void ReadUInt32Value(const kernel::KConfigurationKeyPtr &key, const kstd::string
   if (const auto value = ParseUInt32(*text)) {
     out = *value;
   } else {
-    KE_Print("GFX: default monitor value {} is malformed: {}", valueName, value.error());
+    KE_Print("GFX: default monitor value {} is malformed: {}", valueName, value.error().message());
   }
 }
 
@@ -92,10 +92,10 @@ bool ReadDefaultMonitorKey(kernel::KMonitorCapabilities &caps) {
 
       const auto timing = kernel::gfx::parse_timing(*text);
       if (!timing) {
-        KE_Print("GFX: default monitor timing {} ('{}') is malformed ({}), skipped", index, *text, timing.error());
+        KE_Print("GFX: default monitor timing {} ('{}') is malformed ({}), skipped", index, *text, timing.error().message());
         continue;
       }
-      if (caps.Add(*timing) != kernel::KernelError::Success) {
+      if (caps.Add(*timing)) {
         KE_Print("GFX: default monitor timing list is full; timing {} and later ignored", index);
         break;
       }
@@ -107,7 +107,7 @@ bool ReadDefaultMonitorKey(kernel::KMonitorCapabilities &caps) {
 }// namespace
 
 namespace kernel::gfx {
-kstd::expected<KMonitorTiming, KernelError> parse_timing(const kstd::string_view &text) {
+kstd::expected<KMonitorTiming, kstd::error_code> parse_timing(const kstd::string_view &text) {
   const auto xPos = text.find('x');
   if (xPos == kstd::string_view::npos) return kstd::unexpected(KernelError::InvalidFormat);
 

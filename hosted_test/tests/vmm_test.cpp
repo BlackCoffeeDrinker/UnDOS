@@ -5,6 +5,7 @@
 #include <array.hpp>
 
 #include "ob_test_support.hpp"
+#include "memory/Allocator.hpp"
 
 // kernel::vmm::init() (which populates the SLAB caches backing KE_Malloc/
 // KE_Free) is already invoked by EnsureObjectManagerInitialized(), since
@@ -47,6 +48,34 @@ TEST_CASE("KE_Free(nullptr) is a no-op", "[vmm]") {
 
   KE_Free(nullptr);
   SUCCEED("KE_Free(nullptr) did not crash");
+}
+
+TEST_CASE("Kernel VAD reservation does not overlap slabs allocated for its metadata", "[vmm]") {
+  EnsureVmmInitialized();
+  auto &as = KE_VMM_GetKernelAddressSpace();
+  constexpr size_t regionSize = 4 * 4096;
+  kstd::array<void *, 1024> regions{};
+  size_t count = 0;
+  bool grewMetadataSlab = false;
+
+  for (size_t i = 0; i < 1024 && !grewMetadataSlab; ++i) {
+    const auto before = as.current_base;
+    auto region = KE_VMM_AllocateRegion(as, regionSize, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+    REQUIRE(region);
+    auto *vad = as.vads.find(kernel::VirtualAddress::from_ptr(*region));
+    REQUIRE(vad != nullptr);
+    auto *slab = kernel::memory::find_slab(vad);
+    REQUIRE(slab != nullptr);
+    const auto slabStart = kernel::VirtualAddress::from_ptr(slab->memory().data());
+    const auto slabEnd = slabStart + slab->memory().size();
+    REQUIRE((vad->end <= slabStart || vad->start >= slabEnd));
+    grewMetadataSlab = as.current_base.value - before.value > regionSize;
+    regions[count++] = *region;
+  }
+  REQUIRE(grewMetadataSlab);
+  for (size_t i = 0; i < count; ++i) {
+    REQUIRE_FALSE(KE_VMM_FreeRegion(as, regions[i]));
+  }
 }
 
 TEST_CASE("Freed memory can be reused by a subsequent allocation", "[vmm]") {

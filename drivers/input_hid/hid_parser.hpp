@@ -21,7 +21,7 @@ namespace kernel::hid {
 // ReportFormat::kMaxFields -- leaving `out` unusable rather than
 // half-populated. Never allocates. Called once, at attach time, never per
 // report and never from an ISR.
-KernelError ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &out);
+kstd::error_code ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &out);
 
 // Decodes one report against a parsed format and pushes the resulting
 // KInputReport(s) for `device`. `state` is the reporting device's decoder

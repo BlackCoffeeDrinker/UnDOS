@@ -141,7 +141,7 @@ bool ContainsUsage(const uint16_t *list, size_t count, uint16_t usage) noexcept 
 
 namespace kernel::hid {
 
-KernelError ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &out) {
+kstd::error_code ParseReportDescriptor(kstd::span<const uint8_t> descriptor, ReportFormat &out) {
   ReportFormat parsed{};
 
   uint16_t usagePage = 0;

@@ -64,14 +64,14 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
   }
 
   // Called by kernel to probe and enumerate displays
-  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &)> Probe;// optional: detect hardware
+  cfunc<kstd::error_code(const KObjectPtr<KGraphicsAdapter> &)> Probe;// optional: detect hardware
 
   /**
    * The graphics subsystem calls this with increasing display indices until
    * it returns KernelError::OutOfRange (no more heads). Any other error
    * aborts the enumeration of this adapter.
    */
-  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &, const KGraphicsAdapterDisplayEnumInfo &, KGraphicsAdapterDisplayInfo &)> ProbeDisplay;
+  cfunc<kstd::error_code(const KObjectPtr<KGraphicsAdapter> &, const KGraphicsAdapterDisplayEnumInfo &, KGraphicsAdapterDisplayInfo &)> ProbeDisplay;
 
   /**
    * Called once per head the driver reported from ProbeDisplay, after the
@@ -83,11 +83,11 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
    *
    * Returning an error discards the head.
    */
-  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display)> ConfigureDisplay;
+  cfunc<kstd::error_code(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display)> ConfigureDisplay;
 
   // Basic 2D operations. KernelError::Unsupported asks the kernel to use its
   // software fallback; any other error means the request itself failed.
-  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &,
+  cfunc<kstd::error_code(const KObjectPtr<KGraphicsAdapter> &,
              const KObjectPtr<KSurface> &dst,
              int dstX, int dstY,
              const KObjectPtr<KSurface> &src,
@@ -96,13 +96,13 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
              RasterOp rop)>
       BitBlt;
 
-  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &,
+  cfunc<kstd::error_code(const KObjectPtr<KGraphicsAdapter> &,
              const KObjectPtr<KSurface> &dst,
              int x, int y, int w, int h,
              uint32_t colorIndex)>
       FillRect;
 
-  cfunc<KernelError(const KObjectPtr<KGraphicsAdapter> &,
+  cfunc<kstd::error_code(const KObjectPtr<KGraphicsAdapter> &,
              const KObjectPtr<KSurface> &dst,
              int x0, int y0, int x1, int y1,
              uint32_t colorIndex)>
@@ -110,7 +110,7 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
 
   // Optional native-pixel readback for saved-under cursors on non-linear
   // device surfaces. Returns the native pixel value.
-  cfunc<kstd::expected<uint32_t, KernelError>(const KObjectPtr<KGraphicsAdapter> &,
+  cfunc<kstd::expected<uint32_t, kstd::error_code>(const KObjectPtr<KGraphicsAdapter> &,
                                               const KObjectPtr<KSurface> &src, int x, int y)>
       ReadPixel;
 

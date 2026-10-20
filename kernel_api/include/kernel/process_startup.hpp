@@ -24,7 +24,7 @@ constexpr bool whitespace(char ch) {
   return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\v' || ch == '\f';
 }
 
-inline KernelError parse(const char *path, size_t path_size, const char *command, size_t command_size,
+inline kstd::error_code parse(const char *path, size_t path_size, const char *command, size_t command_size,
                          Arguments &out) {
   out.argc = out.bytes = 0;
   if (!path || !path_size || (!command && command_size)) return KernelError::InvalidArgument;
@@ -63,7 +63,7 @@ constexpr size_t stack_size(const Arguments &args) {
           args.bytes + 15) & ~size_t(15);
 }
 
-inline KernelError write_stack(void *storage, size_t capacity, uint32_t user_address, const Arguments &args,
+inline kstd::error_code write_stack(void *storage, size_t capacity, uint32_t user_address, const Arguments &args,
                                uint32_t startup_event = UINT32_MAX) {
   const size_t size = stack_size(args);
   if (!storage) return KernelError::InvalidAddress;

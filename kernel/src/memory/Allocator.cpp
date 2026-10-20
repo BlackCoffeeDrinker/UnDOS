@@ -109,9 +109,9 @@ void free_large(void *ptr) noexcept {
 
   HAL_PMM_FreeFrames(phys, pages);
   const auto region_status = KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), virt.as_ptr());
-  if (region_status != KernelError::Success) {
+  if (region_status) {
     KE_Print("free_large: failed to release virtual region: {}",
-             make_error_code(region_status).message());
+             region_status.message());
   }
 
   g_large_alloc_lock.unlock();

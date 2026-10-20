@@ -31,7 +31,7 @@ struct KMonitorCapabilities {
 
   bool isDefault{false};// Assumed defaults (registry/built-in), not read from EDID
 
-  KernelError Add(const KMonitorTiming &timing) {
+  kstd::error_code Add(const KMonitorTiming &timing) {
     if (count >= MaxTimings) return KernelError::ResourceLimitExceeded;
     timings[count++] = timing;
     return KernelError::Success;

@@ -161,8 +161,8 @@ void EventThread(void *arg) {
     BroadcastRecord record;
     if (!PopRecord(record)) {
       const auto waitStatus = KE_SCHED_WaitForHeader(s_pumpWake, kernel::WAIT_INFINITE);
-      if (waitStatus != kernel::KernelError::Success) {
-        KE_Print("event pump wait failed: {}", kernel::make_error_code(waitStatus).message());
+      if (waitStatus) {
+        KE_Print("event pump wait failed: {}", waitStatus.message());
         KE_SCHED_Yield();
       }
       continue;
@@ -201,7 +201,7 @@ public:
   return s_systemCategory;
 }
 
-KernelError init() {
+kstd::error_code init() {
   s_pumpWake.manualReset = false;
   s_pumpWake.signalled = false;
   auto thread = KE_SCHED_CreateThread(&EventThread, nullptr, 0);
@@ -218,7 +218,7 @@ KernelError init() {
 // fixed-size ring under an IRQ-masking spinlock and signals a dispatcher
 // header. It never allocates, never yields and never walks the subscriber
 // list - the pump thread does the fan-out.
-KernelError broadcast(const Source &target, Code event) {
+kstd::error_code broadcast(const Source &target, Code event) {
   if ((target.type == Source::Type::KObject && !target.kobject) ||
       (target.type == Source::Type::KDevice && !target.kdevice)) {
     return KernelError::InvalidArgument;
@@ -275,7 +275,7 @@ void reset() {
 }// namespace kernel::event
 
 // Public API Implementations
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::event::EventInterestToken, kernel::KernelError> KE_EVENT_RegisterInterest(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::event::EventInterestToken, kstd::error_code> KE_EVENT_RegisterInterest(
     const kernel::event::Source &target,
     kernel::event::RegistrationContext &&context) noexcept {
 
@@ -304,7 +304,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::event::EventInterestToken, kernel::K
   return kernel::event::EventInterestToken{id};
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_EVENT_UnregisterInterest(kernel::event::EventInterestToken &token) noexcept {
+UNDOS_KERNEL_API_DEF kstd::error_code KE_EVENT_UnregisterInterest(kernel::event::EventInterestToken &token) noexcept {
   if (!token) {
     return kernel::KernelError::InvalidArgument;
   }

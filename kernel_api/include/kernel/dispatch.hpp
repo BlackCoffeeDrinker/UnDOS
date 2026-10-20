@@ -19,7 +19,7 @@ class InterruptRecordRing {
   static constexpr size_t kCapacity = 256;
 
   // Single-producer (ISR) safe: only touches m_head, reads m_tail, never blocks or allocates
-  KernelError Push(const HalInterruptRecord &record) noexcept {
+  kstd::error_code Push(const HalInterruptRecord &record) noexcept {
     const size_t head = m_head;
     const size_t nextHead = (head + 1) % kCapacity;
     if (nextHead == m_tail) {
@@ -74,7 +74,7 @@ class InterruptRecordRing {
  * ISR-safe: non-blocking, no allocation, no CPU interrupt manipulation.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_DISPATCH_EnqueueInterrupt,
     const kernel::HalInterruptRecord &record);
 
@@ -85,7 +85,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * Registers an ISR object with the dispatch subsystem for the given IRQ line.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_DISPATCH_RegisterHandler,
     uint32_t irq,
     const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr);
@@ -97,6 +97,6 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * Unregisters any ISR object connected to the given IRQ line.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_DISPATCH_UnregisterHandler,
     uint32_t irq);

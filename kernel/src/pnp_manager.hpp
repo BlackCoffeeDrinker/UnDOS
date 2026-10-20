@@ -4,7 +4,7 @@
 #include <kernel/kobject/KDriverObject.hpp>
 
 namespace kernel::pnp {
-KernelError init();
+kstd::error_code init();
 }
 
-kernel::KernelError KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept;
+kstd::error_code KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriverObject> &driver) noexcept;

@@ -45,7 +45,7 @@ struct BootModuleT {
 };
 
 struct BootSymbolsT {
-  kstd::static_string<48> name;
+  kstd::static_string<256> name;
   VirtualAddress address;
 };
 

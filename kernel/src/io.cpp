@@ -7,7 +7,7 @@
 #include <kernel/vfs.hpp>
 
 namespace {
-kernel::KernelError setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice> &device,
+kstd::error_code setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice> &device,
                         const kernel::KObjectPtr<kernel::KDriverObject> &driver,
                         size_t deviceExtensionSize,
                         const kstd::string_view &deviceName, CreateDeviceFlags flags) {
@@ -42,7 +42,7 @@ kernel::KernelError setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice>
     (*deviceObj)->device = device;
     device->deviceObject = *deviceObj;
 
-    if (const auto status = KE_OB_InsertObject(KE_OB_GetDeviceDirectory(), *deviceObj); status != kernel::KernelError::Success) {
+    if (const auto status = KE_OB_InsertObject(KE_OB_GetDeviceDirectory(), *deviceObj); status) {
       KE_Print("KE_OB_InsertObject failed for device {}", deviceName);
       // Collision ?
       return status;
@@ -53,7 +53,7 @@ kernel::KernelError setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice>
 }
 }// namespace
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kernel::KernelError> KE_IO_CreateDevice(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kstd::error_code> KE_IO_CreateDevice(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     size_t deviceExtensionSize,
     const kstd::string_view &baseDeviceName,
@@ -61,26 +61,26 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kernel:
 
   auto device = KE_CreateKPtrObject<kernel::KDevice>(driver);
   if (!device) return kstd::unexpected(device.error());
-  if (const auto status = setupCommonKDevice(*device, driver, deviceExtensionSize, baseDeviceName, flags); status != kernel::KernelError::Success)
+  if (const auto status = setupCommonKDevice(*device, driver, deviceExtensionSize, baseDeviceName, flags); status)
     return kstd::unexpected(status);
   (*device)->deviceType = deviceType;
   return kstd::move(*device);
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KDevicePtr<kernel::KDeviceBus>, kernel::KernelError> KE_IO_CreateBus(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KDevicePtr<kernel::KDeviceBus>, kstd::error_code> KE_IO_CreateBus(
     kernel::KObjectPtr<kernel::KDriverObject> driver,
     size_t deviceExtensionSize,
     const kstd::string_view &busName, CreateDeviceFlags flags) noexcept {
 
   auto device = KE_CreateKPtrObject<kernel::KDeviceBus>(driver);
   if (!device) return kstd::unexpected(device.error());
-  if (const auto status = setupCommonKDevice(*device, driver, deviceExtensionSize, busName, flags); status != kernel::KernelError::Success)
+  if (const auto status = setupCommonKDevice(*device, driver, deviceExtensionSize, busName, flags); status)
     return kstd::unexpected(status);
   (*device)->deviceType = kernel::device_type::Bus;
   return kstd::move(*device);
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kernel::KernelError> KE_IO_AttachFilterDevice(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kstd::error_code> KE_IO_AttachFilterDevice(
     const kernel::KDevicePtr<kernel::KDevice> &sourceDevice,
     const kernel::KDevicePtr<kernel::KDevice> &targetDevice) noexcept {
   if (!sourceDevice || !targetDevice)
@@ -98,7 +98,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KDevicePtr<kernel::KDevice>, kernel:
   return top;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_IO_AttachChildDevice(const kernel::KDevicePtr<kernel::KDeviceBus> &bus,
+UNDOS_KERNEL_API_DEF kstd::error_code KE_IO_AttachChildDevice(const kernel::KDevicePtr<kernel::KDeviceBus> &bus,
                                                                                  kernel::KDevicePtr<kernel::KDevice> child) noexcept {
 
   if (!bus || !child) return kernel::KernelError::InvalidArgument;
@@ -117,7 +117,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_IO_AttachChildDevice(const kernel::K
   return kernel::KernelError::Success;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_IO_ReadDevice(
+UNDOS_KERNEL_API_DEF kstd::error_code KE_IO_ReadDevice(
     const kernel::KDevicePtr<kernel::KDevice> &device,
     uint64_t offset,
     kstd::span<uint8_t> buffer,
@@ -134,7 +134,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_IO_ReadDevice(
   return device->driverObject->Read(device, offset, buffer, transferred);
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_IO_WriteDevice(
+UNDOS_KERNEL_API_DEF kstd::error_code KE_IO_WriteDevice(
     const kernel::KDevicePtr<kernel::KDevice> &device,
     uint64_t offset,
     kstd::span<const uint8_t> buffer,
@@ -148,7 +148,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_IO_WriteDevice(
   return device->driverObject->Write(device, offset, buffer, transferred);
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_IO_ControlDevice(
+UNDOS_KERNEL_API_DEF kstd::error_code KE_IO_ControlDevice(
     const kernel::KDevicePtr<kernel::KDevice> &device,
     uint32_t code,
     kstd::span<const uint8_t> input,
@@ -162,7 +162,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_IO_ControlDevice(
   return device->driverObject->DeviceControl(device, code, input, output, transferred);
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject>, kernel::KernelError> KE_IO_ConnectInterrupt(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject>, kstd::error_code> KE_IO_ConnectInterrupt(
     const kernel::KDevicePtr<kernel::KDevice> & /*device*/,
     uint32_t irq,
     kernel::cfunc<void(const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *)> routine,
@@ -177,7 +177,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KInterruptService
   isr->service_context = context;
   isr->irql = 0;
 
-  if (const auto status = KE_DISPATCH_RegisterHandler(irq, isr); status != kernel::KernelError::Success) {
+  if (const auto status = KE_DISPATCH_RegisterHandler(irq, isr); status) {
     return kstd::unexpected(status);
   }
 
@@ -204,28 +204,28 @@ KIOObject::~KIOObject() {
   }
 }
 
-KernelError KIOObject::Read(kstd::span<uint8_t> buffer, size_t &transferred) {
+kstd::error_code KIOObject::Read(kstd::span<uint8_t> buffer, size_t &transferred) {
   transferred = 0;
   if (isClosed) return KernelError::DeviceError;
   if (!ops || !ops->Read) return KernelError::Unsupported;
   return ops->Read(*this, buffer, transferred);
 }
 
-KernelError KIOObject::Write(kstd::span<const uint8_t> buffer, size_t &transferred) {
+kstd::error_code KIOObject::Write(kstd::span<const uint8_t> buffer, size_t &transferred) {
   transferred = 0;
   if (isClosed) return KernelError::DeviceError;
   if (!ops || !ops->Write) return KernelError::Unsupported;
   return ops->Write(*this, buffer, transferred);
 }
 
-KernelError KIOObject::Control(uint32_t code, kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred) {
+kstd::error_code KIOObject::Control(uint32_t code, kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred) {
   transferred = 0;
   if (isClosed) return KernelError::DeviceError;
   if (!ops || !ops->Control) return KernelError::Unsupported;
   return ops->Control(*this, code, input, output, transferred);
 }
 
-KernelError KIOObject::Close() {
+kstd::error_code KIOObject::Close() {
   if (isClosed) return KernelError::Success;
   if (!ops || !ops->Close) {
     isClosed = true;
@@ -235,11 +235,11 @@ KernelError KIOObject::Close() {
 }
 
 namespace {
-KernelError TtySinkRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
+kstd::error_code TtySinkRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
   if (!io.vtty) return KernelError::InvalidArgument;
   KE_TTY_PumpDevice(io.vtty);
   if (io.blockingRead) {
-    if (const auto status = io.vtty->sink_read_wait(buffer.data(), buffer.size(), transferred); status != KernelError::Success) {
+    if (const auto status = io.vtty->sink_read_wait(buffer.data(), buffer.size(), transferred); status) {
       transferred = 0;
       return status;
     }
@@ -250,7 +250,7 @@ KernelError TtySinkRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &trans
   return KernelError::Success;
 }
 
-KernelError TtySinkWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
+kstd::error_code TtySinkWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
   if (!io.vtty) return KernelError::InvalidArgument;
   const auto written = io.vtty->sink_write(buffer.data(), buffer.size());
   if (!written) return written.error();
@@ -260,20 +260,20 @@ KernelError TtySinkWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t
   return KernelError::Success;
 }
 
-KernelError TtySinkClose(KIOObject &io) {
+kstd::error_code TtySinkClose(KIOObject &io) {
   io.isClosed = true;
   if (io.vtty && io.ownsTtyEndpoint) io.vtty->close_sink();
   return KernelError::Success;
 }
 
-KernelError TtySourceRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
+kstd::error_code TtySourceRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
   if (!io.vtty) return KernelError::InvalidArgument;
   transferred = io.vtty->source_read(buffer.data(), buffer.size());
   io.offset += transferred;
   return KernelError::Success;
 }
 
-KernelError TtySourceWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
+kstd::error_code TtySourceWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
   if (!io.vtty) return KernelError::InvalidArgument;
   const auto written = io.vtty->source_write(buffer.data(), buffer.size());
   if (!written) return written.error();
@@ -282,34 +282,34 @@ KernelError TtySourceWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size
   return KernelError::Success;
 }
 
-KernelError TtySourceClose(KIOObject &io) {
+kstd::error_code TtySourceClose(KIOObject &io) {
   io.isClosed = true;
   if (io.vtty) io.vtty->close_source();
   return KernelError::Success;
 }
 
-KernelError DeviceRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
+kstd::error_code DeviceRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
   if (!io.device) return KernelError::InvalidArgument;
   if (!(io.mode & KIOObject::OpenMode::Read)) return KernelError::AccessDenied;
   const auto status = KE_IO_ReadDevice(io.device, io.offset, buffer, transferred);
-  if (status == KernelError::Success) io.offset += transferred;
+  if (!status) io.offset += transferred;
   return status;
 }
 
-KernelError DeviceWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
+kstd::error_code DeviceWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
   if (!io.device) return KernelError::InvalidArgument;
   if (!(io.mode & KIOObject::OpenMode::Write)) return KernelError::AccessDenied;
   const auto status = KE_IO_WriteDevice(io.device, io.offset, buffer, transferred);
-  if (status == KernelError::Success) io.offset += transferred;
+  if (!status) io.offset += transferred;
   return status;
 }
 
-KernelError DeviceControl(KIOObject &io, uint32_t code, kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred) {
+kstd::error_code DeviceControl(KIOObject &io, uint32_t code, kstd::span<const uint8_t> input, kstd::span<uint8_t> output, size_t &transferred) {
   if (!io.device) return KernelError::InvalidArgument;
   return KE_IO_ControlDevice(io.device, code, input, output, transferred);
 }
 
-KernelError DeviceClose(KIOObject &io) {
+kstd::error_code DeviceClose(KIOObject &io) {
   io.isClosed = true;
   return KernelError::Success;
 }
@@ -324,7 +324,7 @@ const KIOOps DeviceOps{.Read = DeviceRead, .Write = DeviceWrite, .Control = Devi
 }// namespace kernel
 
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kernel::KernelError> KE_IO_CreateTtySinkStream(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd::error_code> KE_IO_CreateTtySinkStream(
     const kernel::tty::VttyPtr &vtty,
     const kstd::string_view &name) noexcept {
   if (!vtty) return kstd::unexpected(kernel::KernelError::InvalidArgument);
@@ -340,7 +340,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kerne
   return ioObj;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kernel::KernelError> KE_IO_CreateTtySourceStream(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd::error_code> KE_IO_CreateTtySourceStream(
     const kernel::tty::VttyPtr &vtty,
     const kstd::string_view &name) noexcept {
   if (!vtty) return kstd::unexpected(kernel::KernelError::InvalidArgument);
@@ -356,7 +356,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kerne
   return ioObj;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kernel::KernelError> KE_IO_CreateDeviceStream(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd::error_code> KE_IO_CreateDeviceStream(
     const kernel::KDevicePtr<kernel::KDevice> &device,
     kernel::KIOObject::OpenMode mode,
     const kstd::string_view &name) noexcept {
@@ -373,7 +373,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kerne
   return ioObj;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kernel::KernelError> KE_IO_FromObject(
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd::error_code> KE_IO_FromObject(
     const kernel::KObjectPtr<kernel::KObject> &obj) noexcept {
   if (!obj) return kstd::unexpected(kernel::KernelError::InvalidHandle);
 

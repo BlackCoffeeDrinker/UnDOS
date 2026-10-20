@@ -56,37 +56,37 @@ kstd::static_string<128> MakeTempImagePath(const char *name) {
 // vfs_test.cpp: Lookup always "succeeds" (there is no real notion of
 // missing files), and Create/Read/WriteHandle delegate straight to
 // KE_IO_ReadDevice/KE_IO_WriteDevice on the mounted fake disk volume.
-kernel::KernelError TestFs_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kstd::string_view &) {
+kstd::error_code TestFs_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kstd::string_view &) {
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError TestFs_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, kernel::KVFSNode &out) {
+kstd::error_code TestFs_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, kernel::KVFSNode &out) {
   out.type = kernel::VFSNodeType::Directory;
   out.size = 0;
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError TestFs_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kstd::string_view, kernel::KVFSNode &out) {
+kstd::error_code TestFs_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kstd::string_view, kernel::KVFSNode &out) {
   out.type = kernel::VFSNodeType::File;
   out.size = 0;
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kernel::KIOObject::OpenMode) {
+kstd::error_code TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kernel::KIOObject::OpenMode) {
   return kernel::KernelError::Success;
 }
 
-kstd::expected<uint64_t, kernel::KernelError> TestFs_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &buffer) {
+kstd::expected<uint64_t, kstd::error_code> TestFs_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &buffer) {
   size_t transferred = 0;
   const auto status = KE_IO_ReadDevice(mount->volume, offset, buffer, transferred);
-  if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+  if (status) return kstd::unexpected(status);
   return transferred;
 }
 
-kstd::expected<uint64_t, kernel::KernelError> TestFs_WriteHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<const uint8_t> &buffer) {
+kstd::expected<uint64_t, kstd::error_code> TestFs_WriteHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<const uint8_t> &buffer) {
   size_t transferred = 0;
   const auto status = KE_IO_WriteDevice(mount->volume, offset, buffer, transferred);
-  if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+  if (status) return kstd::unexpected(status);
   return transferred;
 }
 
@@ -154,7 +154,7 @@ bool FormatEmptyHiveFile(const kernel::KObjectPtr<kernel::KConfigurationRoot> &h
   auto file = KE_VFS_OpenFile(hive->filePath, kernel::KIOObject::OpenMode::ReadWrite).value_or(nullptr);
   if (!file) return false;
 
-  const bool formatted = kernel::configuration_manager_io::FormatEmptyConfigurationFile(file) == kernel::KernelError::Success;
+  const bool formatted = !kernel::configuration_manager_io::FormatEmptyConfigurationFile(file);
   KE_VFS_CloseFile(kstd::move(file));
   return formatted;
 }

@@ -2,7 +2,8 @@
 #pragma once
 
 #include <atomic.hpp>
-#include <kernel/kerror.hpp>
+#include <system_error.hpp>
+
 #include <kernel/fwd/KPtr.hpp>
 
 namespace kernel {
@@ -10,8 +11,8 @@ struct KConfigurationKey;
 }
 
 // region Ref Count
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_CM_IncrementConfigRootReferenceCount, const kernel::KConfigurationKey *key);
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_CM_DecrementConfigRootReferenceCount, const kernel::KConfigurationKey *key);
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_CM_IncrementConfigRootReferenceCount, const kernel::KConfigurationKey *key);
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_CM_DecrementConfigRootReferenceCount, const kernel::KConfigurationKey *key);
 // endregion
 
 // Forward declaration so KConfigurationKeyPtrTraits::dec_ref() below can call

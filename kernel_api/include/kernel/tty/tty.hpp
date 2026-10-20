@@ -112,17 +112,17 @@ public:
 
   // Source endpoint operations
   // Returns the number of bytes accepted (a short count means the ring was full); InvalidState once either endpoint is closed.
-  kstd::expected<size_t, kernel::KernelError> source_write(const uint8_t *src, size_t count);
+  kstd::expected<size_t, kstd::error_code> source_write(const uint8_t *src, size_t count);
   size_t source_read(uint8_t *dst, size_t count);
   [[nodiscard]] bool source_has_data() const;
   void close_source();
   [[nodiscard]] bool is_source_closed() const;
 
   // Sink endpoint operations
-  kstd::expected<size_t, kernel::KernelError> sink_write(const uint8_t *src, size_t count);
+  kstd::expected<size_t, kstd::error_code> sink_write(const uint8_t *src, size_t count);
   size_t sink_read(uint8_t *dst, size_t count);
   // Blocks until data or EOF. Success with transferred == 0 is EOF; any other status is a wait failure.
-  kernel::KernelError sink_read_wait(uint8_t *dst, size_t count, size_t &transferred);
+  kstd::error_code sink_read_wait(uint8_t *dst, size_t count, size_t &transferred);
   [[nodiscard]] bool sink_has_data() const;
   void close_sink();
   [[nodiscard]] bool is_sink_closed() const;

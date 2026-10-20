@@ -2,6 +2,9 @@
 #pragma once
 
 #include <__config.hpp>
+#include <__type_traits/bool_constant.hpp>
+#include <__type_traits/enable_if.hpp>
+#include <new.hpp>
 #include <string_view.hpp>
 
 namespace kstd {
@@ -9,6 +12,11 @@ namespace kstd {
 class error_category;
 class error_condition;
 class error_code;
+template <class _Tp>
+struct is_error_code_enum : false_type {};
+template <class _Tp>
+inline constexpr bool is_error_code_enum_v = is_error_code_enum<_Tp>::value;
+
 [[nodiscard]] const error_category& generic_category() noexcept;
 [[nodiscard]] const error_category& system_category() noexcept;
 
@@ -63,6 +71,9 @@ public:
     error_code() noexcept : __val_(0), __cat_(&system_category()) {}
     constexpr error_code(int __val, const error_category& __cat) noexcept : __val_(__val), __cat_(&__cat) {}
 
+    template <class _ErrorCodeEnum, enable_if_t<is_error_code_enum_v<_ErrorCodeEnum>, int> = 0>
+    error_code(_ErrorCodeEnum __error) noexcept : error_code(make_error_code(__error)) {}
+
     [[nodiscard]] constexpr int value() const noexcept { return __val_; }
     [[nodiscard]] constexpr const error_category& category() const noexcept { return *__cat_; }
     [[nodiscard]] error_condition default_error_condition() const noexcept {
@@ -93,12 +104,15 @@ public:
 };
 
 inline const error_category& generic_category() noexcept {
-    static __generic_error_category __cat;
+    // Categories live permanently; never register a static destructor.
+    alignas(__generic_error_category) static unsigned char __storage[sizeof(__generic_error_category)];
+    static auto& __cat = *new (__storage) __generic_error_category;
     return __cat;
 }
 
 inline const error_category& system_category() noexcept {
-    static __system_error_category __cat;
+    alignas(__system_error_category) static unsigned char __storage[sizeof(__system_error_category)];
+    static auto& __cat = *new (__storage) __system_error_category;
     return __cat;
 }
 

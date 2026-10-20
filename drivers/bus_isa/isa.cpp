@@ -133,7 +133,7 @@ bool Isolate(uint8_t (&serial)[9]) {
   return serial[8] == checksum && (serial[0] != 0 || serial[1] != 0);
 }
 
-kstd::expected<kernel::VirtualAddress, kernel::KernelError> Isa_AllocateCommonBuffer(kernel::DmaOperation * /*self*/, size_t size, kernel::PhysicalAddress *physicalAddress, kernel::DmaAllocationFlags /*flags*/) {
+kstd::expected<kernel::VirtualAddress, kstd::error_code> Isa_AllocateCommonBuffer(kernel::DmaOperation * /*self*/, size_t size, kernel::PhysicalAddress *physicalAddress, kernel::DmaAllocationFlags /*flags*/) {
   constexpr size_t PAGE_SIZE = 4096;
   const size_t count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
 
@@ -150,7 +150,7 @@ kstd::expected<kernel::VirtualAddress, kernel::KernelError> Isa_AllocateCommonBu
 
   for (size_t i = 0; i < count; ++i) {
     if (const auto status = KE_VMM_MapPhysical(as, v_addr + (i * PAGE_SIZE), phys + (i * PAGE_SIZE), kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
-        status != kernel::KernelError::Success) {
+        status) {
       (void) KE_VMM_FreeRegion(as, v_addr.as_ptr());
       HAL_PMM_FreeFrames(phys, count);
       return kstd::unexpected(status);
@@ -170,7 +170,7 @@ void Isa_FreeCommonBuffer(kernel::DmaOperation * /*self*/, size_t size, kernel::
   HAL_PMM_FreeFrames(physicalAddress, count);
 }
 
-kernel::KernelError Isa_AllocateAdapterChannel(kernel::DmaOperation *self, const kernel::KDevicePtr<kernel::KDevice> &deviceObject, uint32_t /*numberOfMapRegisters*/, kernel::cfunc<kernel::DmaAction(const kernel::KDevicePtr<kernel::KDevice> &deviceObject, kernel::VirtualAddress context, kernel::VirtualAddress mapRegisterBase, kernel::VirtualAddress reserved)> executionRoutine, kernel::VirtualAddress context) {
+kstd::error_code Isa_AllocateAdapterChannel(kernel::DmaOperation *self, const kernel::KDevicePtr<kernel::KDevice> &deviceObject, uint32_t /*numberOfMapRegisters*/, kernel::cfunc<kernel::DmaAction(const kernel::KDevicePtr<kernel::KDevice> &deviceObject, kernel::VirtualAddress context, kernel::VirtualAddress mapRegisterBase, kernel::VirtualAddress reserved)> executionRoutine, kernel::VirtualAddress context) {
   // ISA doesn't have complex map registers. We just call the routine immediately.
   // In a real OS, we might check if the channel is currently in use.
   executionRoutine(deviceObject, context, kernel::VirtualAddress::from_ptr(self), kernel::VirtualAddress(0));
@@ -185,7 +185,7 @@ void Isa_FreeMapRegisters(kernel::DmaOperation * /*self*/, kernel::VirtualAddres
   // NOP
 }
 
-kstd::expected<kernel::PhysicalAddress, kernel::KernelError> Isa_MapTransfer(kernel::DmaOperation * /*self*/, kernel::VirtualAddress /*mapRegisterBase*/, kernel::VirtualAddress virtualAddress, size_t *length, kernel::DmaDirection /*direction*/) {
+kstd::expected<kernel::PhysicalAddress, kstd::error_code> Isa_MapTransfer(kernel::DmaOperation * /*self*/, kernel::VirtualAddress /*mapRegisterBase*/, kernel::VirtualAddress virtualAddress, size_t *length, kernel::DmaDirection /*direction*/) {
   const kernel::PhysicalAddress phys = HAL_VMM_GetPhysicalAddress(virtualAddress);
 
   // Check for 64K boundary crossing for ISA
@@ -199,7 +199,7 @@ kstd::expected<kernel::PhysicalAddress, kernel::KernelError> Isa_MapTransfer(ker
   return phys;
 }
 
-kernel::KernelError Isa_GetScatterGatherList(kernel::DmaOperation *self, const kernel::KDevicePtr<kernel::KDevice> &deviceObject, kernel::VirtualAddress virtualAddress, size_t length, kernel::DmaDirection direction, kernel::cfunc<void(const kernel::KDevicePtr<kernel::KDevice> &deviceObject, kernel::VirtualAddress context, kernel::ScatterGatherList *sgList)> executionRoutine, kernel::VirtualAddress context) {
+kstd::error_code Isa_GetScatterGatherList(kernel::DmaOperation *self, const kernel::KDevicePtr<kernel::KDevice> &deviceObject, kernel::VirtualAddress virtualAddress, size_t length, kernel::DmaDirection direction, kernel::cfunc<void(const kernel::KDevicePtr<kernel::KDevice> &deviceObject, kernel::VirtualAddress context, kernel::ScatterGatherList *sgList)> executionRoutine, kernel::VirtualAddress context) {
   auto *sgList = static_cast<kernel::ScatterGatherList *>(KE_Malloc(sizeof(kernel::ScatterGatherList)));
   if (!sgList) return kernel::KernelError::OutOfMemory;
 
@@ -344,7 +344,7 @@ size_t Isa_ReadCounter(kernel::DmaOperation *self) {
   return real_val;
 }
 
-kstd::expected<kernel::DmaOperation *, kernel::KernelError> Isa_GetDmaAdapter(const kernel::KDevicePtr<kernel::KDevice> & /*device*/, const kernel::DmaDescription &description) {
+kstd::expected<kernel::DmaOperation *, kstd::error_code> Isa_GetDmaAdapter(const kernel::KDevicePtr<kernel::KDevice> & /*device*/, const kernel::DmaDescription &description) {
   if (description.channel >= 8) return kstd::unexpected(kernel::KernelError::InvalidArgument);
 
   auto &adapter = isa_adapters[description.channel];
@@ -476,7 +476,7 @@ kstd::string_view Isa_GetHardwareId(const kernel::KDevicePtr<kernel::KDevice> &c
 // Reports the fixed resources of a detected ATA controller child: its command
 // I/O range (base, 8 ports), its control port (1), and its IRQ (shared, since
 // real hardware may cascade IRQ 14/15). Non-ATA children have no requirements.
-kstd::expected<kernel::IoResourceRequirementsList *, kernel::KernelError> Isa_QueryResourceRequirements(const kernel::KDevicePtr<kernel::KDevice> &childPdo) {
+kstd::expected<kernel::IoResourceRequirementsList *, kstd::error_code> Isa_QueryResourceRequirements(const kernel::KDevicePtr<kernel::KDevice> &childPdo) {
   const auto *ctx = childPdo->deviceExtension.as<IsaCardContext>();
   if (!ctx || ctx->hardwareId != "disk_ata" || ctx->ioBase == 0) return static_cast<kernel::IoResourceRequirementsList *>(nullptr);
 
@@ -488,19 +488,19 @@ kstd::expected<kernel::IoResourceRequirementsList *, kernel::KernelError> Isa_Qu
     return kstd::unexpected(alt.error());
   }
 
-  kernel::KernelError status = KE_RES_AddPort(*alt, ctx->ioBase, 8, kernel::ResourceOption::Fixed, kernel::ResourceShare::DeviceExclusive);
-  if (status == kernel::KernelError::Success)
+  kstd::error_code status = KE_RES_AddPort(*alt, ctx->ioBase, 8, kernel::ResourceOption::Fixed, kernel::ResourceShare::DeviceExclusive);
+  if (!status)
     status = KE_RES_AddPort(*alt, ctx->ctrlBase, 1, kernel::ResourceOption::Fixed, kernel::ResourceShare::DeviceExclusive);
-  if (status == kernel::KernelError::Success)
+  if (!status)
     status = KE_RES_AddInterrupt(*alt, ctx->irq, kernel::ResourceOption::Fixed, kernel::ResourceShare::Shared);
-  if (status != kernel::KernelError::Success) {
+  if (status) {
     KE_RES_FreeRequirementsList(*req);
     return kstd::unexpected(status);
   }
   return *req;
 }
 
-kernel::KernelError IsaBus_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver,
+kstd::error_code IsaBus_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver,
                       const kernel::KDevicePtr<kernel::KDevice> &targetPdo) {
   // Create our unnamed Bus FDO and stack it on top of the target PDO. The
   // target may be the HAL's legacy root PDO or (in the future) a PCI-to-ISA

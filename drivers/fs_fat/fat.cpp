@@ -106,20 +106,20 @@ enum FAT_Attr : uint8_t {
   kAttrLongName = kAttrReadOnly | kAttrHidden | kAttrSystem | kAttrVolumeId,
 };
 
-kernel::KernelError FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kstd::string_view &options) {
+kstd::error_code FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kstd::string_view &options) {
   (void) options;
 
   uint8_t sector[512];
   size_t buffer_actual_transfer = 0;
 
-  if (const auto status = KE_IO_ReadDevice(mountPoint->volume, 0, sector, buffer_actual_transfer); status != kernel::KernelError::Success) {
+  if (const auto status = KE_IO_ReadDevice(mountPoint->volume, 0, sector, buffer_actual_transfer); status.value() != 0) {
     KE_Print("FS_FAT: Failed to read BPB");
     return status;
   }
 
   if (buffer_actual_transfer < sizeof(FAT_BPB_Common)) {
     KE_Print("FS_FAT: Failed to read BPB");
-    return kernel::KernelError::UnexpectedEndOfFile;
+    return kernel::make_error_code(kernel::KernelError::UnexpectedEndOfFile);
   }
 
   const auto *bpb = reinterpret_cast<FAT_BPB_Common *>(sector);
@@ -142,7 +142,7 @@ kernel::KernelError FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMoun
 
   if (bpb->bytesPerSector == 0 || bpb->sectorsPerCluster == 0) {
     KE_Print("FS_FAT: Invalid BPB");
-    return kernel::KernelError::InvalidFormat;
+    return kernel::make_error_code(kernel::KernelError::InvalidFormat);
   }
 
   // Check for ExFAT by reading full EXFAT_BPB and fsName
@@ -151,13 +151,13 @@ kernel::KernelError FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMoun
     size_t exfat_transfer = 0;
     const kstd::span exfatBuf(reinterpret_cast<uint8_t *>(&exfat), sizeof(EXFAT_BPB));
 
-    if (KE_IO_ReadDevice(mountPoint->volume, 0, exfatBuf, exfat_transfer) == kernel::KernelError::Success &&
+    if (!KE_IO_ReadDevice(mountPoint->volume, 0, exfatBuf, exfat_transfer) &&
         exfat_transfer >= exfatBuf.size()) {
       const kstd::string_view fsName(reinterpret_cast<const char *>(exfat.fsName), 8);
       if (fsName == "EXFAT   ") {
         KE_Print("FS_FAT: ExFAT Detected");
         auto vol = kernel::DataBuffer::Create<FAT_Volume>();
-        if (!vol) return kernel::KernelError::OutOfMemory;
+        if (!vol) return kernel::make_error_code(kernel::KernelError::OutOfMemory);
         vol.as<FAT_Volume>()->type = FAT_Type::ExFAT;
         vol.as<FAT_Volume>()->bytesPerSector = 1u << exfat.bytesPerSectorShift;
         vol.as<FAT_Volume>()->sectorsPerCluster = 1u << exfat.sectorsPerClusterShift;
@@ -168,7 +168,7 @@ kernel::KernelError FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMoun
         vol.as<FAT_Volume>()->rootCluster = exfat.rootDirCluster;
         vol.as<FAT_Volume>()->totalClusters = exfat.clusterCount;
         mountPoint->driverExtension = kstd::move(vol);
-        return kernel::KernelError::Success;
+        return {};
       }
     }
   }
@@ -183,7 +183,7 @@ kernel::KernelError FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMoun
   const uint32_t totalClusters = dataSectors / bpb->sectorsPerCluster;
 
   mountPoint->driverExtension = kernel::DataBuffer::Create<FAT_Volume>();
-  if (!mountPoint->driverExtension) return kernel::KernelError::OutOfMemory;
+  if (!mountPoint->driverExtension) return kernel::make_error_code(kernel::KernelError::OutOfMemory);
   const auto vol = mountPoint->driverExtension.as<FAT_Volume>();
 
   vol->bytesPerSector = bpb->bytesPerSector;
@@ -213,7 +213,7 @@ kernel::KernelError FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMoun
     KE_Print("FS_FAT: FAT32 Detected");
   }
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 struct FAT_VFSNode {
@@ -241,7 +241,7 @@ uint32_t FAT_ClusterToSector(const FAT_Volume *vol, uint32_t cluster) {
 
 // Reads the FAT table entry for `cluster` and returns the next cluster in the chain
 // (or an end-of-chain marker, see FAT_IsEndOfChain). Device failures are reported as errors.
-kstd::expected<uint32_t, kernel::KernelError> FAT_GetNextCluster(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const FAT_Volume *vol, uint32_t cluster) {
+kstd::expected<uint32_t, kstd::error_code> FAT_GetNextCluster(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const FAT_Volume *vol, uint32_t cluster) {
   uint32_t byteOffset;
   switch (vol->type) {
     case FAT_Type::FAT12: byteOffset = cluster + (cluster / 2); break;
@@ -254,15 +254,15 @@ kstd::expected<uint32_t, kernel::KernelError> FAT_GetNextCluster(const kernel::K
 
   // Read two consecutive sectors in case a FAT12 entry straddles a sector boundary.
   const auto buf = kernel::DataBuffer::Alloc(static_cast<size_t>(vol->bytesPerSector) * 2);
-  if (!buf) return kstd::unexpected(kernel::KernelError::OutOfMemory);
+  if (!buf) return kstd::unexpected(kernel::make_error_code(kernel::KernelError::OutOfMemory));
   size_t transferred = 0;
   if (const auto status = KE_IO_ReadDevice(mountPoint->volume, static_cast<uint64_t>(fatSector) * vol->bytesPerSector,
                                            kstd::span(buf.as<uint8_t>(), buf.size), transferred);
-      status != kernel::KernelError::Success) {
+      status.value() != 0) {
     return kstd::unexpected(status);
   }
   if (transferred < entryOffset + (vol->type == FAT_Type::FAT12 || vol->type == FAT_Type::FAT16 ? 2u : 4u)) {
-    return kstd::unexpected(kernel::KernelError::UnexpectedEndOfFile);
+    return kstd::unexpected(kernel::make_error_code(kernel::KernelError::UnexpectedEndOfFile));
   }
 
   const uint8_t *bytes = buf.as<uint8_t>();
@@ -291,9 +291,9 @@ kstd::expected<uint32_t, kernel::KernelError> FAT_GetNextCluster(const kernel::K
 // Reads a single sector belonging to a directory (either the FAT12/16 fixed root area, or
 // a regular cluster chain). Returns false once there is nothing left to read and an
 // error if the device or FAT chain could not be read.
-kstd::expected<bool, kernel::KernelError> FAT_ReadDirSector(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const FAT_Volume *vol,
-                       const FAT_VFSNode *dir, uint32_t &cluster, uint32_t &sectorInCluster, uint32_t &fixedSectorIndex,
-                       const kstd::span<uint8_t> &buffer) {
+kstd::expected<bool, kstd::error_code> FAT_ReadDirSector(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const FAT_Volume *vol,
+                                                            const FAT_VFSNode *dir, uint32_t &cluster, uint32_t &sectorInCluster, uint32_t &fixedSectorIndex,
+                                                            const kstd::span<uint8_t> &buffer) {
   uint32_t sector;
 
   if (dir->isFixedRoot) {
@@ -314,14 +314,14 @@ kstd::expected<bool, kernel::KernelError> FAT_ReadDirSector(const kernel::KObjec
 
   size_t transferred = 0;
   if (const auto status = KE_IO_ReadDevice(mountPoint->volume, static_cast<uint64_t>(sector) * vol->bytesPerSector, buffer, transferred);
-      status != kernel::KernelError::Success) {
+      status) {
     return kstd::unexpected(status);
   }
   if (transferred != buffer.size()) return kstd::unexpected(kernel::KernelError::UnexpectedEndOfFile);
   return true;
 }
 
-kernel::KernelError FAT_FillNode(const FAT_DirEntry &entry, kernel::KVFSNode &out) {
+kstd::error_code FAT_FillNode(const FAT_DirEntry &entry, kernel::KVFSNode &out) {
   const uint32_t startCluster = (static_cast<uint32_t>(entry.firstClusterHigh) << 16) | entry.firstClusterLow;
 
   out.type = (entry.attr & kAttrDirectory) ? kernel::VFSNodeType::Directory : kernel::VFSNodeType::File;
@@ -334,7 +334,7 @@ kernel::KernelError FAT_FillNode(const FAT_DirEntry &entry, kernel::KVFSNode &ou
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError FAT_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &vnode, kernel::KIOObject::OpenMode mode) {
+kstd::error_code FAT_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &vnode, kernel::KIOObject::OpenMode mode) {
   (void) mountPoint;
   (void) mode;
 
@@ -344,7 +344,7 @@ kernel::KernelError FAT_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMou
   return kernel::KernelError::Success;
 }
 
-kstd::expected<uint64_t, kernel::KernelError> FAT_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &node, uint64_t offset, const kstd::span<uint8_t> &destination) {
+kstd::expected<uint64_t, kstd::error_code> FAT_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &node, uint64_t offset, const kstd::span<uint8_t> &destination) {
   uint64_t actually_read = 0;
   uint64_t read_size = destination.size();
 
@@ -382,7 +382,7 @@ kstd::expected<uint64_t, kernel::KernelError> FAT_ReadHandle(const kernel::KObje
     const uint32_t sector = FAT_ClusterToSector(vol, cluster);
     if (const auto status = KE_IO_ReadDevice(mountPoint->volume, static_cast<uint64_t>(sector) * vol->bytesPerSector,
                                              kstd::span(clusterBuf.as<uint8_t>(), clusterSize), transferred);
-        status != kernel::KernelError::Success) {
+        status) {
       if (actually_read == 0) return kstd::unexpected(status);
       break;// short read; the error resurfaces on the next call
     }
@@ -414,7 +414,7 @@ kstd::expected<uint64_t, kernel::KernelError> FAT_ReadHandle(const kernel::KObje
   return actually_read;
 }
 
-kernel::KernelError FAT_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint,
+kstd::error_code FAT_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint,
                                const kernel::KVFSNode &parent,
                                kstd::string_view name,
                                kernel::KVFSNode &out) {
@@ -422,7 +422,7 @@ kernel::KernelError FAT_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObje
 
   kstd::static_string<12> shortName;
   shortName.append("           ");// 11 spaces, will be overwritten below
-  if (const auto status = FAT_ToShortName(name, shortName); status != kernel::KernelError::Success) {
+  if (const auto status = FAT_ToShortName(name, shortName); status) {
     return status;
   }
 
@@ -467,7 +467,7 @@ kernel::KernelError FAT_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObje
   return kernel::KernelError::NotFound;
 }
 
-kernel::KernelError FAT_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, kernel::KVFSNode &rootOut) {
+kstd::error_code FAT_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, kernel::KVFSNode &rootOut) {
   const auto *vol = mountPoint->driverExtension.as<FAT_Volume>();
 
   rootOut.type = kernel::VFSNodeType::Directory;

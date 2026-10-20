@@ -4,7 +4,7 @@
 
 namespace kernel::font {
 
-KernelError ResourceBudget::reserve(uint32_t size) noexcept {
+kstd::error_code ResourceBudget::reserve(uint32_t size) noexcept {
   kstd::unique_lock lock(mutex_);
   if (size > MaxRegisteredBytes - bytes_) return KernelError::ResourceLimitExceeded;
   bytes_ += size;
@@ -30,7 +30,7 @@ ResourceTable::Slot *ResourceTable::lookup(uint32_t handle) {
   return slot.used && slot.generation == generation ? &slot : nullptr;
 }
 
-kstd::expected<uint32_t, KernelError> ResourceTable::begin(ResourceBudget &budget, uint32_t size) {
+kstd::expected<uint32_t, kstd::error_code> ResourceTable::begin(ResourceBudget &budget, uint32_t size) {
   if (size < undos::font::PayloadStart || size > undos::font::MaxResourceBytes || (size & 3u))
     return kstd::unexpected(KernelError::InvalidSize);
   kstd::unique_lock lock(mutex_);
@@ -38,7 +38,7 @@ kstd::expected<uint32_t, KernelError> ResourceTable::begin(ResourceBudget &budge
   for (uint32_t index = 0; index < ResourceSlots; ++index) {
     auto &slot = slots_[index];
     if (slot.used || !slot.generation) continue;
-    if (const KernelError reserved = budget.reserve(size); reserved != KernelError::Success)
+    if (const kstd::error_code reserved = budget.reserve(size); reserved)
       return kstd::unexpected(reserved);
     slot.data.resize(size);
     if (slot.data.size() != size || !slot.data.data()) {
@@ -57,7 +57,7 @@ kstd::expected<uint32_t, KernelError> ResourceTable::begin(ResourceBudget &budge
   return kstd::unexpected(KernelError::ResourceLimitExceeded);
 }
 
-KernelError ResourceTable::append(uint32_t handle, uint32_t offset, const uint8_t *data, size_t size) {
+kstd::error_code ResourceTable::append(uint32_t handle, uint32_t offset, const uint8_t *data, size_t size) {
   if (!data || !size || size > 4096) return KernelError::InvalidSize;
   kstd::unique_lock lock(mutex_);
   auto *slot = lookup(handle);
@@ -69,7 +69,7 @@ KernelError ResourceTable::append(uint32_t handle, uint32_t offset, const uint8_
   return KernelError::Success;
 }
 
-kstd::expected<uint32_t, KernelError> ResourceTable::commit(uint32_t handle, uint32_t &validationError) {
+kstd::expected<uint32_t, kstd::error_code> ResourceTable::commit(uint32_t handle, uint32_t &validationError) {
   validationError = static_cast<uint32_t>(undos::font::Error::None);
   kstd::unique_lock lock(mutex_);
   auto *slot = lookup(handle);
@@ -104,7 +104,7 @@ void ResourceTable::release(Slot &slot) {
   slot.generation = slot.generation == 0xffffffu ? 0 : slot.generation + 1;
 }
 
-KernelError ResourceTable::close(uint32_t handle) {
+kstd::error_code ResourceTable::close(uint32_t handle) {
   kstd::unique_lock lock(mutex_);
   auto *slot = lookup(handle);
   if (!slot) return KernelError::InvalidHandle;

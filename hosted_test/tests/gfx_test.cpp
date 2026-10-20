@@ -100,7 +100,7 @@ kstd::string_view CallLog() {
   return {g_fakeAdapterState.callLog, g_fakeAdapterState.callLogLen};
 }
 
-kstd::expected<kernel::KDisplayModeInfo, kernel::KernelError> FakeGetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/, size_t modeIndex) {
+kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> FakeGetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/, size_t modeIndex) {
   if (modeIndex >= g_fakeAdapterState.modeCount) {
     return kstd::unexpected(kernel::KernelError::OutOfRange);
   }
@@ -109,7 +109,7 @@ kstd::expected<kernel::KDisplayModeInfo, kernel::KernelError> FakeGetModeInfo(co
   return info;
 }
 
-kstd::expected<kernel::KDisplaySurfaceBinding, kernel::KernelError> FakeSetMode(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
+kstd::expected<kernel::KDisplaySurfaceBinding, kstd::error_code> FakeSetMode(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
                                                                               size_t modeIndex) {
   RecordCall('S');
   g_fakeAdapterState.setModeCalls++;
@@ -123,7 +123,7 @@ kstd::expected<kernel::KDisplaySurfaceBinding, kernel::KernelError> FakeSetMode(
   return binding;
 }
 
-kernel::KernelError FakeEnable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
+kstd::error_code FakeEnable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
   RecordCall('E');
   return g_fakeAdapterState.enableShouldSucceed ? kernel::KernelError::Success : kernel::KernelError::DeviceError;
 }
@@ -132,7 +132,7 @@ void FakeDisable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
   RecordCall('D');
 }
 
-kernel::KernelError FakeProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+kstd::error_code FakeProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
                                      const kernel::KGraphicsAdapterDisplayEnumInfo &enumInfo,
                                      kernel::KGraphicsAdapterDisplayInfo &outInfo) {
   if (enumInfo.displayIndex >= g_fakeAdapterState.headCount) {
@@ -147,7 +147,7 @@ kernel::KernelError FakeProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsA
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError FakeConfigureDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+kstd::error_code FakeConfigureDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
                                          const kernel::KObjectPtr<kernel::KDisplay> &display) {
   g_fakeAdapterState.configureCalls++;
   g_fakeAdapterState.lastConfiguredHead = display->headIndex;
@@ -167,7 +167,7 @@ kernel::KernelError FakeConfigureDisplay(const kernel::KObjectPtr<kernel::KGraph
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError FakeFillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+kstd::error_code FakeFillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
                   const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
                   int x, int y, int w, int h, uint32_t colorIndex) {
   g_fakeAdapterState.fillRectCalled = true;
@@ -179,7 +179,7 @@ kernel::KernelError FakeFillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapt
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError FakeDrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+kstd::error_code FakeDrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
                   const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
                   int x0, int y0, int /*x1*/, int /*y1*/, uint32_t colorIndex) {
   g_fakeAdapterState.drawLineCalled = true;
@@ -189,7 +189,7 @@ kernel::KernelError FakeDrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapt
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError FakeBitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+kstd::error_code FakeBitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
                 const kernel::KObjectPtr<kernel::KSurface> & /*dst*/,
                 int dstX, int dstY,
                 const kernel::KObjectPtr<kernel::KSurface> & /*src*/,
@@ -705,12 +705,12 @@ TEST_CASE("Mode enumeration preserves driver failures instead of reporting exhau
   EnsureObjectManagerInitialized();
   auto display = kernel::CreateKObject<kernel::KDisplay>("EnumerationErrorDisplay").value();
   display->GetModeInfo = [](const kernel::KObjectPtr<kernel::KDisplay> &, size_t)
-      -> kstd::expected<kernel::KDisplayModeInfo, kernel::KernelError> {
+      -> kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> {
     return kstd::unexpected(kernel::KernelError::DeviceNotReady);
   };
   REQUIRE(kernel::gfx::enumerate_mode(display, 0).error() == kernel::KernelError::DeviceNotReady);
   display->GetModeInfo = [](const kernel::KObjectPtr<kernel::KDisplay> &, size_t)
-      -> kstd::expected<kernel::KDisplayModeInfo, kernel::KernelError> {
+      -> kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> {
     return kstd::unexpected(kernel::KernelError::OutOfRange);
   };
   REQUIRE(kernel::gfx::enumerate_mode(display, 0).error() == kernel::KernelError::NotFound);

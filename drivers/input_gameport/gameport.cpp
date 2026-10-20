@@ -131,7 +131,7 @@ void Gameport_PollThread(void *arg) {
   }
 }
 
-kernel::KernelError Gameport_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
+kstd::error_code Gameport_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
                                         kstd::span<const uint8_t> input, kstd::span<uint8_t> output,
                                         size_t &transferred) {
   (void) input;
@@ -182,7 +182,7 @@ kernel::KernelError Gameport_DeviceControl(const kernel::KDevicePtr<kernel::KDev
   }
 }
 
-kernel::KernelError Gameport_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver,
+kstd::error_code Gameport_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver,
                         const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto fdo = KE_IO_CreateBusWithContext<GameportContext>(driver, {});
   if (!fdo) {
@@ -238,13 +238,13 @@ void Gameport_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   if (kernel::hid::ParseReportDescriptor(
           kstd::span<const uint8_t>(gameport::kJoystickReportDescriptor,
                                     sizeof(gameport::kJoystickReportDescriptor)),
-          ctx->format) != kernel::KernelError::Success) {
+          ctx->format)) {
     KE_Print("gameport: joystick HID descriptor rejected; no device created");
     return;
   }
 
   device->hardwareId = "input_gameport";
-  if (KE_IO_AttachChildDevice(fdo, device) != kernel::KernelError::Success) {
+  if (KE_IO_AttachChildDevice(fdo, device)) {
     KE_Print("gameport: Failed to attach Gamepad device");
     return;
   }

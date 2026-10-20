@@ -6,5 +6,5 @@ constexpr char kObPathSeperatorChar = '/';
 
 namespace kernel::objectmanager {
 bool is_initialized();
-KernelError init();
+kstd::error_code init();
 }

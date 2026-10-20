@@ -39,7 +39,7 @@ struct KMallocDeleter {
 }// namespace kernel::detail
 
 template<typename T, typename... Args>
-kstd::expected<kstd::unique_ptr<T, kernel::detail::KMallocDeleter<T>>, kernel::KernelError>
+kstd::expected<kstd::unique_ptr<T, kernel::detail::KMallocDeleter<T>>, kstd::error_code>
 KE_CreateObject(Args &&...args) {
   if (void *p = KE_Malloc(sizeof(T))) {
     return kstd::unique_ptr<T, kernel::detail::KMallocDeleter<T>>(new (p) T(kstd::forward<Args>(args)...));
@@ -49,7 +49,7 @@ KE_CreateObject(Args &&...args) {
 
 template<typename T, typename... Args>
 auto KE_CreateKPtrObject(Args &&...args)
-    -> kstd::expected<typename kernel::detail::KPtrTypeOf<T>::type, kernel::KernelError> {
+    -> kstd::expected<typename kernel::detail::KPtrTypeOf<T>::type, kstd::error_code> {
   if (void *p = KE_Malloc(sizeof(T))) {
     T *obj = new (p) T(kstd::forward<Args>(args)...);
     return typename kernel::detail::KPtrTypeOf<T>::type(obj);
@@ -67,7 +67,7 @@ using ::KE_CreateObject;
 
 template<typename T, typename... Args>
   requires(kstd::is_base_of_v<KObject, T>)
- kstd::expected<KObjectPtr<T>, KernelError> CreateKObject(const kstd::static_string<64> &name, Args &&...args) {
+ kstd::expected<KObjectPtr<T>, kstd::error_code> CreateKObject(const kstd::static_string<64> &name, Args &&...args) {
   if (void *p = KE_Malloc(sizeof(T))) {
     KObjectPtr<T> res(new (p) T(name, kstd::forward<Args>(args)...));
     return res;
@@ -78,7 +78,7 @@ template<typename T, typename... Args>
 
 template<typename T, typename... Args>
   requires(kstd::is_base_of_v<KObject, T>)
- kstd::expected<KObjectPtr<T>, KernelError> CreateAnonymousKObject(Args &&...args) {
+ kstd::expected<KObjectPtr<T>, kstd::error_code> CreateAnonymousKObject(Args &&...args) {
   if (void *p = KE_Malloc(sizeof(T))) {
     KObjectPtr<T> res(new (p) T(kstd::forward<Args>(args)...));
     return res;

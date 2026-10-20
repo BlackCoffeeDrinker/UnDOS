@@ -9,7 +9,7 @@ namespace kernel::event {
  * broadcast() is usable before this is called - records simply queue up and are
  * delivered once the pump exists.
  */
-KernelError init();
+kstd::error_code init();
 
 /**
  * @brief Queues @p eventId for every subscriber interested in @p target.
@@ -27,15 +27,15 @@ KernelError init();
  * - @p target is captured by value, so the source object is kept alive until
  *   the event has been delivered.
  */
-KernelError broadcast(const Source &target, Code event);
+kstd::error_code broadcast(const Source &target, Code event);
 
 template<typename T>
   requires kstd::is_base_of_v<KObject, T>
-KernelError broadcast(const KObjectPtr<T> &target, Code event) { return broadcast(Source(target), event); }
+kstd::error_code broadcast(const KObjectPtr<T> &target, Code event) { return broadcast(Source(target), event); }
 
 template<typename T>
   requires kstd::is_base_of_v<KDevice, T>
-KernelError broadcast(const KDevicePtr<T> &target, Code event) { return broadcast(Source(target), event); }
+kstd::error_code broadcast(const KDevicePtr<T> &target, Code event) { return broadcast(Source(target), event); }
 
 namespace detail {
 /**

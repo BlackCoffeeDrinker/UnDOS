@@ -74,10 +74,10 @@ public:
   constexpr expected(_Up&& __v) : __storage(__val_tag{}, forward<_Up>(__v)), __has_val(true) {}
 
   template <class _G>
-  constexpr expected(const unexpected<_G>& __e) : __storage(__err_tag{}, __e), __has_val(false) {}
+  constexpr expected(const unexpected<_G>& __e) : __storage(__err_tag{}, __e.error()), __has_val(false) {}
 
   template <class _G>
-  constexpr expected(unexpected<_G>&& __e) : __storage(__err_tag{}, move(__e)), __has_val(false) {}
+  constexpr expected(unexpected<_G>&& __e) : __storage(__err_tag{}, move(__e).error()), __has_val(false) {}
 
   template <class... _Args, enable_if_t<is_constructible_v<_Tp, _Args...>, int> = 0>
   constexpr explicit expected(in_place_t, _Args&&... __args)
@@ -253,12 +253,12 @@ public:
 
   template <class _G>
   constexpr expected(const unexpected<_G>& __e) : __has_val(false) {
-    kstd::construct_at(addressof(__storage.__unexpect), __e);
+    kstd::construct_at(addressof(__storage.__unexpect), __e.error());
   }
 
   template <class _G>
   constexpr expected(unexpected<_G>&& __e) : __has_val(false) {
-    kstd::construct_at(addressof(__storage.__unexpect), move(__e));
+    kstd::construct_at(addressof(__storage.__unexpect), move(__e).error());
   }
 
   template <class... _Args, enable_if_t<is_constructible_v<_Err, _Args...>, int> = 0>

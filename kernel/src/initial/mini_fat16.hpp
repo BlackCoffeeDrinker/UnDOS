@@ -12,6 +12,6 @@ namespace kernel::initial::minifat {
 // into `out`. Returns an error if the boot device is missing, the partition/BPB
 // cannot be parsed, any path component is not found, or a disk read fails.
 // On failure `out` is left cleared. Read-only; no write support.
-KernelError ReadFile(kstd::string_view path, kstd::vector<uint8_t> &out);
+kstd::error_code ReadFile(kstd::string_view path, kstd::vector<uint8_t> &out);
 
 }// namespace kernel::initial::minifat

@@ -13,9 +13,9 @@ void StartAdapter(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
   KE_Print("GFX: Adapter {} started", adapter->name);
 
   adapter->state = kernel::KGraphicsAdapter::State::Probing;
-  if (const kernel::KernelError probed = adapter->Probe ? adapter->Probe(adapter) : kernel::KernelError::Success;
-      probed != kernel::KernelError::Success) {
-    KE_Print("GFX: Adapter {} probe failed: {}", adapter->name, probed);
+  if (const kstd::error_code probed = adapter->Probe ? adapter->Probe(adapter) : kernel::KernelError::Success;
+      probed) {
+    KE_Print("GFX: Adapter {} probe failed: {}", adapter->name, probed.message());
     adapter->state = kernel::KGraphicsAdapter::State::Terminated;
     return;
   }
@@ -36,10 +36,10 @@ void StartAdapter(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
     displayInfo.displayIndex = displayIndex;
 
     kernel::KGraphicsAdapterDisplayInfo outInfo{};
-    if (const kernel::KernelError probed = adapter->ProbeDisplay(adapter, displayInfo, outInfo);
-        probed != kernel::KernelError::Success) {
+    if (const kstd::error_code probed = adapter->ProbeDisplay(adapter, displayInfo, outInfo);
+        probed) {
       if (probed != kernel::KernelError::OutOfRange) {
-        KE_Print("GFX: Adapter {} display head {} probe failed: {}", adapter->name, displayIndex, probed);
+        KE_Print("GFX: Adapter {} display head {} probe failed: {}", adapter->name, displayIndex, probed.message());
       }
       break;// Driver reported no more display heads
     }
@@ -55,9 +55,9 @@ void StartAdapter(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
 
     kernel::Edid edid{};
     if (outInfo.isPnP && kernel::Edid::ValidateHeader(kstd::span(outInfo.edid.data(), outInfo.edidSize))) {
-      if (const kernel::KernelError parsed = edid.Assign(kstd::span(outInfo.edid.data(), outInfo.edidSize));
-          parsed != kernel::KernelError::Success) {
-        KE_Print("GFX: Adapter {} display head {} has an unusable EDID: {}", adapter->name, displayIndex, parsed);
+      if (const kstd::error_code parsed = edid.Assign(kstd::span(outInfo.edid.data(), outInfo.edidSize));
+          parsed) {
+        KE_Print("GFX: Adapter {} display head {} has an unusable EDID: {}", adapter->name, displayIndex, parsed.message());
       }
     }
 
@@ -77,7 +77,7 @@ void StartAdapter(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
     if (KE_OB_FindDirectChild(KE_OB_GetGfxDirectory(), baseName)) {
       const auto suffix = KE_OB_MakeUniqueName(KE_OB_GetGfxDirectory(), baseName);
       if (!suffix) {
-        KE_Print("GFX: cannot assign display name: {}", suffix.error());
+        KE_Print("GFX: cannot assign display name: {}", suffix.error().message());
         adapter->state = kernel::KGraphicsAdapter::State::Terminated;
         return;
       }
@@ -89,7 +89,7 @@ void StartAdapter(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
     // Instantiate and populate KDisplay object
     auto created = kernel::CreateKObject<kernel::KDisplay>(finalName);
     if (!created) {
-      KE_Print("GFX: Failed to create display {} for adapter {}: {}", finalName, adapter->name, created.error());
+      KE_Print("GFX: Failed to create display {} for adapter {}: {}", finalName, adapter->name, created.error().message());
       continue;
     }
     const auto display = kstd::move(*created);
@@ -103,9 +103,9 @@ void StartAdapter(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
     // created. This is the only way a driver influences a KDisplay.
     if (!adapter->ConfigureDisplay) {
       KE_Print("GFX: Adapter {} has no ConfigureDisplay; display {} will be unusable", adapter->name, display->name);
-    } else if (const kernel::KernelError configured = adapter->ConfigureDisplay(adapter, display);
-               configured != kernel::KernelError::Success) {
-      KE_Print("GFX: Adapter {} discarded display head {}: {}", adapter->name, displayIndex, configured);
+    } else if (const kstd::error_code configured = adapter->ConfigureDisplay(adapter, display);
+               configured) {
+      KE_Print("GFX: Adapter {} discarded display head {}: {}", adapter->name, displayIndex, configured.message());
       continue;
     } else if (!display->GetModeInfo || !display->SetMode) {
       KE_Print("GFX: Adapter {} left display {} without GetModeInfo/SetMode", adapter->name, display->name);
@@ -123,9 +123,9 @@ void StartAdapter(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
                display->name, display->monitorCaps.count);
     }
 
-    if (const kernel::KernelError inserted = KE_OB_InsertObject(KE_OB_GetGfxDirectory(), display);
-        inserted != kernel::KernelError::Success) {
-      KE_Print("GFX: Failed to register display {} for adapter {}: {}", display->name, adapter->name, inserted);
+    if (const kstd::error_code inserted = KE_OB_InsertObject(KE_OB_GetGfxDirectory(), display);
+        inserted) {
+      KE_Print("GFX: Failed to register display {} for adapter {}: {}", display->name, adapter->name, inserted.message());
       continue;
     }
 
@@ -183,7 +183,7 @@ bool usable_mode(const KObjectPtr<KDisplay> &display, const KDisplayModeInfo &mo
          display->monitorCaps.Supports(mode);
 }
 
-kstd::expected<KDisplayModeInfo, KernelError> enumerate_mode(const KObjectPtr<KDisplay> &display, uint32_t ordinal) noexcept {
+kstd::expected<KDisplayModeInfo, kstd::error_code> enumerate_mode(const KObjectPtr<KDisplay> &display, uint32_t ordinal) noexcept {
   if (!display) return kstd::unexpected(KernelError::InvalidArgument);
   if (!display->GetModeInfo) return kstd::unexpected(KernelError::Unsupported);
   for (size_t index = 0;; ++index) {
@@ -238,8 +238,8 @@ UNDOS_KERNEL_API_DEF kernel::KGraphicsAdapterResult KE_GFX_RegisterGraphicsAdapt
   ret->device = backingDevice;
   ret->state = kernel::KGraphicsAdapter::State::Uninitialized;
 
-  if (const kernel::KernelError inserted = KE_OB_InsertObject(KE_OB_GetGfxDirectory(), ret);
-      inserted != kernel::KernelError::Success) {
+  if (const kstd::error_code inserted = KE_OB_InsertObject(KE_OB_GetGfxDirectory(), ret);
+      inserted) {
     return kstd::unexpected(inserted);
   }
 
@@ -261,7 +261,7 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDisplay> KE_GFX_GetPrimaryDispl
   return g_primary_display;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SetDisplayMode(
+UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SetDisplayMode(
     const kernel::KObjectPtr<kernel::KDisplay> &display,
     size_t modeIndex) noexcept {
   if (!display) {
@@ -276,7 +276,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SetDisplayMode(
   // Range check: the driver reports OutOfRange once modeIndex runs past its list.
   const auto queried = display->GetModeInfo(display, modeIndex);
   if (!queried) {
-    KE_Print("KE_GFX_SetDisplayMode: Display {} does not have a mode {}: {}.", display->name, modeIndex, queried.error());
+    KE_Print("KE_GFX_SetDisplayMode: Display {} does not have a mode {}: {}.", display->name, modeIndex, queried.error().message());
     return queried.error();
   }
   kernel::KDisplayModeInfo modeInfo = *queried;
@@ -303,9 +303,9 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SetDisplayMode(
       return created.error();
     }
     surface = kstd::move(*created);
-    if (const kernel::KernelError inserted = KE_OB_InsertObject(KE_OB_GetGfxDirectory(), surface);
-        inserted != kernel::KernelError::Success) {
-      KE_Print("KE_GFX_SetDisplayMode: Failed to register surface object: {}.", inserted);
+    if (const kstd::error_code inserted = KE_OB_InsertObject(KE_OB_GetGfxDirectory(), surface);
+        inserted) {
+      KE_Print("KE_GFX_SetDisplayMode: Failed to register surface object: {}.", inserted.message());
       return inserted;
     }
   }
@@ -316,13 +316,13 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SetDisplayMode(
 
   const auto programmed = display->SetMode(display, modeIndex);
   if (!programmed) {
-    KE_Print("KE_GFX_SetDisplayMode: Display {} refused mode {}: {}.", display->name, modeIndex, programmed.error());
+    KE_Print("KE_GFX_SetDisplayMode: Display {} refused mode {}: {}.", display->name, modeIndex, programmed.error().message());
     // Bring the previously programmed mode back up rather than leaving the
     // screen blanked.
-    if (newSurface && KE_OB_RemoveObject(KE_OB_GetGfxDirectory(), surface) != kernel::KernelError::Success) {
+    if (newSurface && KE_OB_RemoveObject(KE_OB_GetGfxDirectory(), surface)) {
       KE_Print("KE_GFX_SetDisplayMode: Failed to remove unused surface.");
     }
-    if (display->isAttachedToDesktop && display->Enable && display->Enable(display) != kernel::KernelError::Success) {
+    if (display->isAttachedToDesktop && display->Enable && display->Enable(display)) {
       display->isAttachedToDesktop = false;
       ++display->modeGeneration;
       KE_Print("KE_GFX_SetDisplayMode: Failed to re-enable previous output.");
@@ -348,10 +348,10 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SetDisplayMode(
 
   display->currentMode = modeInfo;
   ++display->modeGeneration;
-  const kernel::KernelError enabled = display->Enable ? display->Enable(display) : kernel::KernelError::Success;
-  display->isAttachedToDesktop = enabled == kernel::KernelError::Success;
+  const kstd::error_code enabled = display->Enable ? display->Enable(display) : kernel::KernelError::Success;
+  display->isAttachedToDesktop = !enabled;
   if (!display->isAttachedToDesktop) {
-    KE_Print("KE_GFX_SetDisplayMode: Display {} failed to enable output: {}.", display->name, enabled);
+    KE_Print("KE_GFX_SetDisplayMode: Display {} failed to enable output: {}.", display->name, enabled.message());
     return enabled;
   }
 
@@ -361,7 +361,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SetDisplayMode(
 UNDOS_KERNEL_API_DEF kernel::KSurfaceResult KE_GFX_CreateSurfaceForMode(
     const kernel::KObjectPtr<kernel::KDisplay> &display,
     size_t mode) noexcept {
-  if (const kernel::KernelError status = KE_GFX_SetDisplayMode(display, mode); status != kernel::KernelError::Success) {
+  if (const kstd::error_code status = KE_GFX_SetDisplayMode(display, mode); status) {
     return kstd::unexpected(status);
   }
 

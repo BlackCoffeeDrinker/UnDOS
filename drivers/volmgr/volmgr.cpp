@@ -29,7 +29,7 @@ struct VolumeContext {
 // PDOs owned by this driver.
 kernel::KObjectPtr<kernel::KDriverObject> s_driver;
 
-kernel::KernelError VolMgr_Read(const kernel::KDevicePtr<kernel::KDevice> &device,
+kstd::error_code VolMgr_Read(const kernel::KDevicePtr<kernel::KDevice> &device,
                              uint64_t offset,
                              kstd::span<uint8_t> buffer,
                              size_t &transferred) {
@@ -50,7 +50,7 @@ kernel::KernelError VolMgr_Read(const kernel::KDevicePtr<kernel::KDevice> &devic
   return KE_IO_ReadDevice(ctx->disk, *absOffset, buffer, transferred);
 }
 
-kernel::KernelError VolMgr_Write(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<const uint8_t> buffer, size_t &transferred) {
+kstd::error_code VolMgr_Write(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<const uint8_t> buffer, size_t &transferred) {
   transferred = 0;
 
   // Volume PDO check — correct
@@ -70,7 +70,7 @@ kernel::KernelError VolMgr_Write(const kernel::KDevicePtr<kernel::KDevice> &devi
 
 // Only the filter FDO enumerates children; Volume PDOs are leaves.
 
-kernel::KernelError VolMgr_AddDevice(
+kstd::error_code VolMgr_AddDevice(
     const kernel::KObjectPtr<kernel::KDriverObject> &driver,
     const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
   const auto created = KE_IO_CreateBusWithContext<VolMgrFdoContext>(driver);
@@ -101,11 +101,11 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
                                           0,
                                           kstd::span<uint8_t>(sector0),
                                           transferred);
-      error != kernel::KernelError::Success) {
-    KE_Print("VolMgr: Failed to read sector 0: {}", static_cast<uint8_t>(error));
+      error) {
+    KE_Print("VolMgr: Failed to read sector 0: {}", error.message());
     return;
   }
-  const bool haveLba1 = KE_IO_ReadDevice(diskFdo, volmgr::kSectorSize, kstd::span<uint8_t>(lba1), transferred) == kernel::KernelError::Success;
+  const bool haveLba1 = !KE_IO_ReadDevice(diskFdo, volmgr::kSectorSize, kstd::span<uint8_t>(lba1), transferred);
 
   const volmgr::ByteView sector0View(sector0.data(), sector0.size());
   const volmgr::ByteView lba1View = haveLba1 ? volmgr::ByteView(lba1.data(), lba1.size()) : volmgr::ByteView{};
@@ -120,7 +120,7 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
     KE_Print("VolMgr: Detected MBR partition scheme");
     const auto parsed = volmgr::ParseMbr(sector0View, partsView);
     if (!parsed) {
-      KE_Print("VolMgr: Invalid MBR: {}", static_cast<uint32_t>(parsed.error()));
+      KE_Print("VolMgr: Invalid MBR: {}", parsed.error().message());
       return;
     }
     count = *parsed;
@@ -136,10 +136,10 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
       if (bytesNeeded > entriesBuf.size()) bytesNeeded = entriesBuf.size();
 
       if (bytesNeeded > 0 &&
-          KE_IO_ReadDevice(diskFdo, entriesLba * volmgr::kSectorSize, kstd::span<uint8_t>(entriesBuf.data(), static_cast<size_t>(bytesNeeded)), transferred) == kernel::KernelError::Success) {
+          !KE_IO_ReadDevice(diskFdo, entriesLba * volmgr::kSectorSize, kstd::span<uint8_t>(entriesBuf.data(), static_cast<size_t>(bytesNeeded)), transferred)) {
         const auto parsed = volmgr::ParseGptEntries(lba1View, volmgr::ByteView(entriesBuf.data(), static_cast<size_t>(bytesNeeded)), partsView);
         if (!parsed) {
-          KE_Print("VolMgr: Invalid GPT: {}", static_cast<uint32_t>(parsed.error()));
+          KE_Print("VolMgr: Invalid GPT: {}", parsed.error().message());
           return;
         }
         count = *parsed;
@@ -159,7 +159,7 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
         nameBuf,
         kernel::device_type::Volume, CreateDeviceFlags::MultipleAllowed);
     if (!createdVolume) {
-      KE_Print("VolMgr: Failed to create volume PDO: {}", static_cast<uint8_t>(createdVolume.error()));
+      KE_Print("VolMgr: Failed to create volume PDO: {}", createdVolume.error().message());
       continue;
     }
     const auto &volPdo = *createdVolume;
@@ -180,8 +180,8 @@ void VolMgr_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &diskFdo) {
                     parts[i].lengthBytes / volmgr::kSectorSize);
 
     // Report the Volume PDO to PnP so a filesystem driver could bind later.
-    if (const auto reported = KE_PNP_ReportNewDevice(filterFdo, volPdo); reported != kernel::KernelError::Success) {
-      KE_Print("VolMgr: Failed to report volume {}: {}", volPdo->Name(), static_cast<uint8_t>(reported));
+    if (const auto reported = KE_PNP_ReportNewDevice(filterFdo, volPdo); reported) {
+      KE_Print("VolMgr: Failed to report volume {}: {}", volPdo->Name(), reported.message());
     }
   }
 }

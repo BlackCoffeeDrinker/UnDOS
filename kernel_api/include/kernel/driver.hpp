@@ -10,7 +10,7 @@
 #include <string_view.hpp>
 
 namespace kernel {
-using DriverLoadResult = kstd::expected<KObjectPtr<KDriverObject>, KernelError>;
+using DriverLoadResult = kstd::expected<KObjectPtr<KDriverObject>, kstd::error_code>;
 }
 
 /**

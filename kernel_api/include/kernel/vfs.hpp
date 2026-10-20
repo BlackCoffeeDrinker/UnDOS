@@ -6,9 +6,9 @@
 #include <kernel/vfs/vfs_node.hpp>
 
 namespace kernel {
-using KFilesystemResult = kstd::expected<kernel::KObjectPtr<kernel::KFilesystemObject>, KernelError>;
-using KIOObjectResult = kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, KernelError>;
-using KUInt64Result = kstd::expected<uint64_t, KernelError>;
+using KFilesystemResult = kstd::expected<kernel::KObjectPtr<kernel::KFilesystemObject>, kstd::error_code>;
+using KIOObjectResult = kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd::error_code>;
+using KUInt64Result = kstd::expected<uint64_t, kstd::error_code>;
 }// namespace kernel
 
 
@@ -28,7 +28,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_VFS_UnregisterFilesystemDriver,
     kernel::KObjectPtr<kernel::KFilesystemObject> filesystem);
 
@@ -43,7 +43,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @return Success, or the reason the mount failed (AlreadyExists, NotFound, filesystem error...)
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-  kernel::KernelError,
+  kstd::error_code,
   KE_VFS_Mount,
   const kernel::KDevicePtr<kernel::KDevice> &volume,
   const kstd::string_view &filesystem,
@@ -58,7 +58,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @return Success if a mount existed at that exact path and was unmounted, NotFound otherwise
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-  kernel::KernelError,
+  kstd::error_code,
   KE_VFS_Unmount,
   const kstd::string_view &mountPoint);
 
@@ -78,7 +78,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_VFS_CloseFile,
     const kernel::KObjectPtr<kernel::KIOObject> &file);
 

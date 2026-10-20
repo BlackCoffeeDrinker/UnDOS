@@ -13,16 +13,16 @@
 #include <kernel/fwd/KConfigurationKey.hpp>
 
 namespace kernel {
-using KBoolResult = kstd::expected<bool, KernelError>;
-using KConfigurationEnumKeyResult = kstd::expected<KConfigurationKeyEntry, KernelError>;
-using KConfigurationEnumValueResult = kstd::expected<KConfigurationValueEntry, KernelError>;
-using KConfigurationKeyResult = kstd::expected<kernel::KConfigurationKeyPtr, KernelError>;
-using KConfigurationRootResult = kstd::expected<kernel::KObjectPtr<kernel::KConfigurationRoot>, KernelError>;
-using KSInt32Result = kstd::expected<int32_t, KernelError>;
-using KSInt64Result = kstd::expected<int64_t, KernelError>;
-using KSizeResult = kstd::expected<size_t, KernelError>;
-using KUInt32Result = kstd::expected<uint32_t, KernelError>;
-using KUInt64Result = kstd::expected<uint64_t, KernelError>;
+using KBoolResult = kstd::expected<bool, kstd::error_code>;
+using KConfigurationEnumKeyResult = kstd::expected<KConfigurationKeyEntry, kstd::error_code>;
+using KConfigurationEnumValueResult = kstd::expected<KConfigurationValueEntry, kstd::error_code>;
+using KConfigurationKeyResult = kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_code>;
+using KConfigurationRootResult = kstd::expected<kernel::KObjectPtr<kernel::KConfigurationRoot>, kstd::error_code>;
+using KSInt32Result = kstd::expected<int32_t, kstd::error_code>;
+using KSInt64Result = kstd::expected<int64_t, kstd::error_code>;
+using KSizeResult = kstd::expected<size_t, kstd::error_code>;
+using KUInt32Result = kstd::expected<uint32_t, kstd::error_code>;
+using KUInt64Result = kstd::expected<uint64_t, kstd::error_code>;
 }// namespace kernel
 
 
@@ -72,18 +72,18 @@ UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KConfigurationKeyAccess desiredAccess = kernel::KConfigurationKeyAccess::ReadWrite);
 
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_CM_DeleteKey,
     const kernel::KConfigurationKeyPtr &parentKey,
     const kstd::string_view &subKeyName);
 
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_CM_FlushKey,
     const kernel::KConfigurationKeyPtr &keyHandle);
 
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KM_CM_GetKeyInfo,
     const kernel::KConfigurationKeyPtr &keyHandle,
     kernel::KConfigurationKeyInfo &outInfo);
@@ -100,16 +100,16 @@ UNDOS_KERNEL_PUBLIC_V1API(kernel::KSizeResult, KE_CM_GetKeyValueStringSize, cons
 // endregion
 
 // region Configuration Set Value
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_CM_SetKeyValueBool, const kernel::KConfigurationKeyPtr &key, bool outValue);
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_CM_SetKeyValueUInt32, const kernel::KConfigurationKeyPtr &key, uint32_t outValue);
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_CM_SetKeyValueUInt64, const kernel::KConfigurationKeyPtr &key, uint64_t outValue);
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_CM_SetKeyValueSInt32, const kernel::KConfigurationKeyPtr &key, int32_t outValue);
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_CM_SetKeyValueSInt64, const kernel::KConfigurationKeyPtr &key, int64_t outValue);
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_CM_SetKeyValueString, const kernel::KConfigurationKeyPtr &key, const kstd::string_view &outValue);
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_CM_SetKeyValueBool, const kernel::KConfigurationKeyPtr &key, bool outValue);
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_CM_SetKeyValueUInt32, const kernel::KConfigurationKeyPtr &key, uint32_t outValue);
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_CM_SetKeyValueUInt64, const kernel::KConfigurationKeyPtr &key, uint64_t outValue);
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_CM_SetKeyValueSInt32, const kernel::KConfigurationKeyPtr &key, int32_t outValue);
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_CM_SetKeyValueSInt64, const kernel::KConfigurationKeyPtr &key, int64_t outValue);
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_CM_SetKeyValueString, const kernel::KConfigurationKeyPtr &key, const kstd::string_view &outValue);
 // endregion
 
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KernelError,
+    kstd::error_code,
     KE_CM_DeleteValue,
     const kernel::KConfigurationKeyPtr &keyHandle,
     kstd::string_view valueName);

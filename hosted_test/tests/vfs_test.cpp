@@ -43,32 +43,32 @@ struct TestFsDriverState {
 
 TestFsDriverState g_testFsState;
 
-kernel::KernelError TestFs_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kstd::string_view &options) {
+kstd::error_code TestFs_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kstd::string_view &options) {
   g_testFsState.mountVolumeCalled = true;
   g_testFsState.lastMountedVolume = mount->volume;
   g_testFsState.lastMountOptions = options;
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError TestFs_UnmountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount) {
+kstd::error_code TestFs_UnmountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount) {
   g_testFsState.unmountVolumeCalled = true;
   g_testFsState.lastUnmountedMount = mount;
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError TestFs_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, kernel::KVFSNode &out) {
+kstd::error_code TestFs_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, kernel::KVFSNode &out) {
   out.type = kernel::VFSNodeType::Directory;
   out.size = 0;
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError TestFs_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kstd::string_view, kernel::KVFSNode &out) {
+kstd::error_code TestFs_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kstd::string_view, kernel::KVFSNode &out) {
   out.type = kernel::VFSNodeType::File;
   out.size = 0;
   return kernel::KernelError::Success;
 }
 
-kernel::KernelError TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kernel::KIOObject::OpenMode) {
+kstd::error_code TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kernel::KIOObject::OpenMode) {
   return g_testFsState.createHandleSucceeds ? kernel::KernelError::Success : kernel::KernelError::AccessDenied;
 }
 
@@ -76,17 +76,17 @@ void TestFs_CloseHandle(const kernel::KObjectPtr<kernel::KIOObject> &) {
   ++g_testFsState.closeCount;
 }
 
-kstd::expected<uint64_t, kernel::KernelError> TestFs_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &buffer) {
+kstd::expected<uint64_t, kstd::error_code> TestFs_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &buffer) {
   size_t transferred = 0;
   const auto status = KE_IO_ReadDevice(mount->volume, offset, buffer, transferred);
-  if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+  if (status) return kstd::unexpected(status);
   return transferred;
 }
 
-kstd::expected<uint64_t, kernel::KernelError> TestFs_WriteHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<const uint8_t> &buffer) {
+kstd::expected<uint64_t, kstd::error_code> TestFs_WriteHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<const uint8_t> &buffer) {
   size_t transferred = 0;
   const auto status = KE_IO_WriteDevice(mount->volume, offset, buffer, transferred);
-  if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+  if (status) return kstd::unexpected(status);
   return transferred;
 }
 
@@ -144,7 +144,7 @@ struct TestFsFixture {
   }
 
   bool Mount(const kstd::string_view &mountPoint, const kstd::string_view &options) {
-    if (KE_VFS_Mount(volume, fsName, mountPoint, options) == kernel::KernelError::Success) {
+    if (!KE_VFS_Mount(volume, fsName, mountPoint, options)) {
       mountedAt = mountPoint;
       return true;
     }
@@ -350,7 +350,7 @@ TEST_CASE("VFS distinguishes EOF and short writes from errors", "[vfs][io][kerne
 
   fixture.filesystem->ReadHandle = [](const kernel::KObjectPtr<kernel::KVolumeMountObject> &,
                                      const kernel::KVFSNode &, uint64_t,
-                                     const kstd::span<uint8_t> &) -> kstd::expected<uint64_t, kernel::KernelError> {
+                                     const kstd::span<uint8_t> &) -> kstd::expected<uint64_t, kstd::error_code> {
     return 0ull;
   };
   auto eof = KE_VFS_ReadFile(file, buffer);
@@ -360,7 +360,7 @@ TEST_CASE("VFS distinguishes EOF and short writes from errors", "[vfs][io][kerne
 
   fixture.filesystem->ReadHandle = [](const kernel::KObjectPtr<kernel::KVolumeMountObject> &,
                                      const kernel::KVFSNode &, uint64_t,
-                                     const kstd::span<uint8_t> &) -> kstd::expected<uint64_t, kernel::KernelError> {
+                                     const kstd::span<uint8_t> &) -> kstd::expected<uint64_t, kstd::error_code> {
     return kstd::unexpected(kernel::KernelError::DeviceError);
   };
   auto failed = KE_VFS_ReadFile(file, buffer);
@@ -370,7 +370,7 @@ TEST_CASE("VFS distinguishes EOF and short writes from errors", "[vfs][io][kerne
 
   fixture.filesystem->WriteHandle = [](const kernel::KObjectPtr<kernel::KVolumeMountObject> &,
                                       const kernel::KVFSNode &, uint64_t,
-                                      const kstd::span<const uint8_t> &) -> kstd::expected<uint64_t, kernel::KernelError> {
+                                      const kstd::span<const uint8_t> &) -> kstd::expected<uint64_t, kstd::error_code> {
     return 2ull;
   };
   auto shortWrite = KE_VFS_WriteFile(file, buffer);

@@ -1,10 +1,11 @@
 
 #include "strfmt.hpp"
 #include "static_string.hpp"
+#include "limits.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <string>
 
-TEST_CASE("kstd::format with static_string") {
+TEST_CASE("kstd::format with static_string", "[strfmt]") {
     kstd::static_string<64> s;
     
     SECTION("Basic static_string formatting") {
@@ -50,7 +51,7 @@ TEST_CASE("kstd::format with static_string") {
     }
 }
 
-TEST_CASE("kstd::format with nomm_string") {
+TEST_CASE("kstd::format with nomm_string", "[strfmt]") {
     char buffer[64] = {0};
     kstd::nomm_string s(buffer);
     
@@ -65,4 +66,55 @@ TEST_CASE("kstd::format with nomm_string") {
         kstd::format(tiny, "Hello World");
         REQUIRE(tiny == "Hello");
     }
+}
+
+TEST_CASE("kstd::format preserves argument and parser behavior", "[strfmt]") {
+  kstd::static_string<128> s;
+
+  SECTION("Unsigned integer limits and zero") {
+    kstd::format(s, "{} {x} {}", 0u, 0xffffffffffffffffull, 18446744073709551615ull);
+    REQUIRE(s == "0 ffffffffffffffff 18446744073709551615");
+  }
+
+  SECTION("Signed minimum values do not overflow") {
+    kstd::format(s, "{}", kstd::numeric_limits<int>::min());
+    REQUIRE(s == "-2147483648");
+    kstd::format(s, "{}", kstd::numeric_limits<long>::min());
+    if constexpr (sizeof(long) == 8) {
+      REQUIRE(s == "-9223372036854775808");
+    } else {
+      REQUIRE(s == "-2147483648");
+    }
+  }
+
+  SECTION("Negative values retain decimal output with hex options") {
+    kstd::format(s, "{x} {x}", -42, -42L);
+    REQUIRE(s == "-42 -42");
+  }
+
+  SECTION("Strings, characters, booleans, enums and pointers") {
+    enum class Value : unsigned { test = 42 };
+    const void *pointer = nullptr;
+    kstd::format(s, "{} {} {} {} {} {}", kstd::string_view("view"), '!', true, false, Value::test, pointer);
+    REQUIRE(s == "view ! True False 42 0x0");
+  }
+
+  SECTION("Missing and surplus arguments") {
+    kstd::format(s, "{}|{x}|{}", 7u);
+    REQUIRE(s == "7||");
+    kstd::format(s, "plain", 7u, 8u);
+    REQUIRE(s == "plain");
+  }
+
+  SECTION("An unclosed placeholder stops formatting") {
+    kstd::format(s, "prefix {", 7u);
+    REQUIRE(s == "prefix ");
+  }
+
+  SECTION("Callback sinks still accept zero and multiple arguments") {
+    auto sink = [&s](char c) { s.append(c); };
+    kstd::format_dst(sink, "plain");
+    kstd::format_dst(sink, " {} {x}", 7, 42u);
+    REQUIRE(s == "plain 7 2a");
+  }
 }

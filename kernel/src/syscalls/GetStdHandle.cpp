@@ -3,7 +3,7 @@
 
 #include <kernel/kobject/KProcessObject.hpp>
 
-kernel::KernelError handle_GetStdHandle_V1(__KRN_IO_GETSTDHANDLE_V1 &&args) {
+kstd::error_code handle_GetStdHandle_V1(__KRN_IO_GETSTDHANDLE_V1 &&args) {
   args.handle = UINT32_MAX;
 
   const auto thread = KE_SCHED_GetCurrentThread();
@@ -27,7 +27,7 @@ kernel::KernelError handle_GetStdHandle_V1(__KRN_IO_GETSTDHANDLE_V1 &&args) {
 
   kernel::KHandle handle{};
   if (const auto error = thread->owner_process->handles.GetStandardHandle(stream, handle);
-      error != kernel::KernelError::Success) return error;
+      error) return error;
 
   args.handle = static_cast<uint32_t>(handle);
   return kernel::KernelError::Success;

@@ -27,8 +27,9 @@ void init() noexcept {
 void late_init() noexcept {
 }
 
-KernelError create_user_address_space(AddressSpace &out_as) noexcept {
-  if (out_as.translation_root) return KernelError::InvalidState;
+kstd::error_code create_user_address_space(AddressSpace &out_as) noexcept {
+  // A default-constructed AddressSpace carries the Invalid sentinel, not a root.
+  if (out_as.translation_root && out_as.translation_root != PhysicalAddress::Invalid) return KernelError::InvalidState;
   const PhysicalAddress root = HAL_VMM_CreateAddressSpace();
   if (!root) {
     return KernelError::OutOfMemory;
@@ -44,7 +45,7 @@ KernelError create_user_address_space(AddressSpace &out_as) noexcept {
 }
 
 void destroy_user_address_space(AddressSpace &as) noexcept {
-  if (!as.translation_root) {
+  if (!as.translation_root || as.translation_root == PhysicalAddress::Invalid) {
     return;
   }
 
@@ -75,7 +76,7 @@ void destroy_user_address_space(AddressSpace &as) noexcept {
   as.translation_root = PhysicalAddress(0);
 }
 
-kstd::expected<void *, KernelError> allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept {
+kstd::expected<void *, kstd::error_code> allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept {
   if (g_page_size == 0) return kstd::unexpected(KernelError::NotInitialized);
   if (!size) return kstd::unexpected(KernelError::InvalidSize);
   if (size > SIZE_MAX - (g_page_size - 1)) return kstd::unexpected(KernelError::ArithmeticOverflow);
@@ -135,9 +136,9 @@ kstd::expected<void *, KernelError> allocate_memory(AddressSpace &as, size_t siz
       HAL_SMP_ShootdownTlb(v_addr + i * g_page_size);
     }
     const auto cleanupStatus = KE_VMM_FreeRegion(as, virt);
-    if (cleanupStatus != KernelError::Success) {
+    if (cleanupStatus) {
       KE_Print("vmm::allocate_memory: failed to release reserved region: {}",
-               make_error_code(cleanupStatus).message());
+               cleanupStatus.message());
     }
   }
 
@@ -154,7 +155,7 @@ kstd::expected<void *, KernelError> allocate_memory(AddressSpace &as, size_t siz
   return virt;
 }
 
-KernelError map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, ProtectFlags flags) noexcept {
+kstd::error_code map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, ProtectFlags flags) noexcept {
   if (g_page_size == 0) return KernelError::NotInitialized;
   if (!size) return KernelError::InvalidSize;
   if ((address & (g_page_size - 1)) || address < 0x10000 ||
@@ -182,7 +183,7 @@ KernelError map_fixed_memory(AddressSpace &as, uintptr_t address, size_t size, P
   const ProtectFlags map_flags = flags | ProtectFlags::USER;
   const ProtectFlags initialize_flags = map_flags | ProtectFlags::WRITE;
   size_t mapped = 0;
-  KernelError map_error = KernelError::OutOfMemory;
+  kstd::error_code map_error = KernelError::OutOfMemory;
   for (; mapped < aligned; mapped += g_page_size) {
     const VirtualAddress page(address + mapped);
     if (HAL_VMM_GetPhysicalAddress(page)) {
@@ -287,9 +288,9 @@ UNDOS_KERNEL_API_DEF void KE_Free(void *ptr) noexcept {
 namespace {
 // Shared address-bump/limit-check logic used by every VAD-reserving
 // allocator. Bumps `as.current_base` by the page-aligned size and creates a
-// bare VAD spanning the reserved range, or returns nullptr on address-space
+// bare VAD spanning the reserved range, or returns an error on address-space
 // exhaustion. Callers are responsible for setting `vad->backing` (if any).
-kstd::expected<kernel::vmm::VirtualAddressDescriptor *, kernel::KernelError>
+kstd::expected<kernel::vmm::VirtualAddressDescriptor *, kstd::error_code>
 reserve_vad(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
   if (as.current_base == 0) {
     return kstd::unexpected(kernel::KernelError::NotInitialized);
@@ -297,7 +298,6 @@ reserve_vad(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlag
   if (size == 0) return kstd::unexpected(kernel::KernelError::InvalidSize);
   if (size > SIZE_MAX - (g_page_size - 1)) return kstd::unexpected(kernel::KernelError::ArithmeticOverflow);
 
-  const kernel::VirtualAddress addr = as.current_base;
   const size_t aligned_size = (size + g_page_size - 1) & ~(g_page_size - 1);
 
   if (as.current_base > as.limit || aligned_size > as.limit.value - as.current_base.value) {
@@ -305,6 +305,11 @@ reserve_vad(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlag
   }
 
   if (auto vad = KE_CreateObject<kernel::vmm::VirtualAddressDescriptor>()) {
+    // Metadata allocation can grow the slab heap and advance this address space.
+    if (as.current_base > as.limit || aligned_size > as.limit.value - as.current_base.value) {
+      return kstd::unexpected(kernel::KernelError::AddressSpaceExhausted);
+    }
+    const kernel::VirtualAddress addr = as.current_base;
     vad.value()->start = addr;
     vad.value()->end = addr + size;
     vad.value()->flags = flags;
@@ -319,14 +324,14 @@ reserve_vad(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlag
 }
 }// namespace
 
-UNDOS_KERNEL_API_DEF kstd::expected<void *, kernel::KernelError>
+UNDOS_KERNEL_API_DEF kstd::expected<void *, kstd::error_code>
 KE_VMM_AllocateRegion(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
   auto vad = reserve_vad(as, size, flags);
   if (!vad) return kstd::unexpected(vad.error());
   return (*vad)->start.as_ptr();
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::vmm::VirtualAddressDescriptor *, kernel::KernelError>
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::vmm::VirtualAddressDescriptor *, kstd::error_code>
 KE_VMM_MapBackingObject(kernel::vmm::AddressSpace &as, const kernel::KObjectPtr<kernel::KMemoryBackingObject> &backing, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
   if (!backing) return kstd::unexpected(kernel::KernelError::InvalidArgument);
   auto vad = reserve_vad(as, size, flags);
@@ -335,7 +340,7 @@ KE_VMM_MapBackingObject(kernel::vmm::AddressSpace &as, const kernel::KObjectPtr<
   return *vad;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_VMM_FreeRegion(kernel::vmm::AddressSpace &as, void *addr) noexcept {
+UNDOS_KERNEL_API_DEF kstd::error_code KE_VMM_FreeRegion(kernel::vmm::AddressSpace &as, void *addr) noexcept {
   if (auto *vad = as.vads.find(kernel::VirtualAddress::from_ptr(addr))) {
     as.vads.remove(vad);
     // Explicitly run the destructor to release the VAD's KObjectPtr<KMemoryBackingObject>
@@ -350,7 +355,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_VMM_FreeRegion(kernel::vmm::AddressS
 namespace {
 // Creates and registers a fresh anonymous BackingObject sized to `size`
 // under \Memory, giving each segment a uniquely named, inspectable object.
-kstd::expected<kernel::KObjectPtr<kernel::KMemoryBackingObject>, kernel::KernelError>
+kstd::expected<kernel::KObjectPtr<kernel::KMemoryBackingObject>, kstd::error_code>
 create_anonymous_backing(size_t size, const char *prefix) noexcept {
   static uint32_t next_id = 0;
   kstd::static_string<64> name;
@@ -362,12 +367,12 @@ create_anonymous_backing(size_t size, const char *prefix) noexcept {
   backing.value()->kind = kernel::KMemoryBackingObject::Kind::Anonymous;
   backing.value()->size = size;
   const auto status = KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), *backing);
-  if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+  if (status) return kstd::unexpected(status);
   return *backing;
 }
 }// namespace
 
-UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KMemoryBackingObject>, kernel::KernelError>
+UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KMemoryBackingObject>, kstd::error_code>
 KE_VMM_CreateDirectBacking(kernel::VirtualAddress directAddress, size_t size) noexcept {
   static uint32_t next_id = 0;
   kstd::static_string<64> name;
@@ -380,11 +385,11 @@ KE_VMM_CreateDirectBacking(kernel::VirtualAddress directAddress, size_t size) no
   backing.value()->size = size;
   backing.value()->directAddress = directAddress;
   const auto status = KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), *backing);
-  if (status != kernel::KernelError::Success) return kstd::unexpected(status);
+  if (status) return kstd::unexpected(status);
   return *backing;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<void *, kernel::KernelError> KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept {
+UNDOS_KERNEL_API_DEF kstd::expected<void *, kstd::error_code> KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept {
   // Demand-paged: reserve the VAD (backed by a fresh Anonymous
   // BackingObject) without eagerly allocating/mapping any physical frames.
   // The pages are populated lazily by KE_VMM_HandlePagefault on first touch.
@@ -394,16 +399,16 @@ UNDOS_KERNEL_API_DEF kstd::expected<void *, kernel::KernelError> KE_VMM_Allocate
   auto vad = KE_VMM_MapBackingObject(as, *backing, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE | kernel::vmm::ProtectFlags::USER);
   if (!vad) {
     const auto cleanupStatus = KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing);
-    if (cleanupStatus != kernel::KernelError::Success) {
+    if (cleanupStatus) {
       KE_Print("KE_VMM_AllocateUserData: failed to remove backing object: {}",
-               kernel::make_error_code(cleanupStatus).message());
+               cleanupStatus.message());
     }
     return kstd::unexpected(vad.error());
   }
   return (*vad)->start.as_ptr();
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<void *, kernel::KernelError> KE_VMM_AllocateUserProcess(kernel::vmm::AddressSpace &as, size_t size) noexcept {
+UNDOS_KERNEL_API_DEF kstd::expected<void *, kstd::error_code> KE_VMM_AllocateUserProcess(kernel::vmm::AddressSpace &as, size_t size) noexcept {
   // Demand-paged: reserve the VAD (backed by a fresh Anonymous
   // BackingObject) without eagerly allocating/mapping any physical frames.
   // The pages are populated lazily by KE_VMM_HandlePagefault on first touch.
@@ -413,9 +418,9 @@ UNDOS_KERNEL_API_DEF kstd::expected<void *, kernel::KernelError> KE_VMM_Allocate
   auto vad = KE_VMM_MapBackingObject(as, *backing, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE | kernel::vmm::ProtectFlags::USER);
   if (!vad) {
     const auto cleanupStatus = KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing);
-    if (cleanupStatus != kernel::KernelError::Success) {
+    if (cleanupStatus) {
       KE_Print("KE_VMM_AllocateUserProcess: failed to remove backing object: {}",
-               kernel::make_error_code(cleanupStatus).message());
+               cleanupStatus.message());
     }
     return kstd::unexpected(vad.error());
   }
@@ -426,13 +431,13 @@ UNDOS_KERNEL_API_DEF kernel::vmm::AddressSpace &KE_VMM_GetKernelAddressSpace() n
   return g_kernel_address_space;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_VMM_MapPhysical(kernel::vmm::AddressSpace &as, kernel::VirtualAddress virt, kernel::PhysicalAddress phys, kernel::vmm::ProtectFlags flags) noexcept {
+UNDOS_KERNEL_API_DEF kstd::error_code KE_VMM_MapPhysical(kernel::vmm::AddressSpace &as, kernel::VirtualAddress virt, kernel::PhysicalAddress phys, kernel::vmm::ProtectFlags flags) noexcept {
   (void) as;// TODO: Use the address space's translation root if not current
   if (!virt || !phys) return kernel::KernelError::InvalidAddress;
   return HAL_VMM_MapPage(virt, phys, flags) ? kernel::KernelError::Success : kernel::KernelError::DeviceError;
 }
 
-UNDOS_KERNEL_API_DEF kstd::expected<void *, kernel::KernelError> KE_VMM_MapBorrowed(void *addr, size_t size, kernel::vmm::AddressSpace &as) noexcept {
+UNDOS_KERNEL_API_DEF kstd::expected<void *, kstd::error_code> KE_VMM_MapBorrowed(void *addr, size_t size, kernel::vmm::AddressSpace &as) noexcept {
   if (!addr || size == 0) {
     return kstd::unexpected(kernel::KernelError::InvalidArgument);
   }
@@ -514,9 +519,9 @@ UNDOS_KERNEL_API_DEF kstd::expected<void *, kernel::KernelError> KE_VMM_MapBorro
       HAL_SMP_ShootdownTlb(page);
     }
     const auto cleanupStatus = KE_VMM_FreeRegion(kernel_as, kernel_region);
-    if (cleanupStatus != kernel::KernelError::Success) {
+    if (cleanupStatus) {
       KE_Print("KE_VMM_MapBorrowed: failed to release reserved region: {}",
-               kernel::make_error_code(cleanupStatus).message());
+               cleanupStatus.message());
     }
     return kstd::unexpected(kernel::KernelError::DeviceError);
   }
@@ -524,7 +529,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<void *, kernel::KernelError> KE_VMM_MapBorro
   return (kernel_start + offset).as_ptr();
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_VMM_UnmapBorrowed(void *addr, size_t size, kernel::vmm::AddressSpace &as) noexcept {
+UNDOS_KERNEL_API_DEF kstd::error_code KE_VMM_UnmapBorrowed(void *addr, size_t size, kernel::vmm::AddressSpace &as) noexcept {
   (void) as;// The borrow is only ever mapped into the kernel address space.
   if (!addr || size == 0) {
     return kernel::KernelError::InvalidArgument;

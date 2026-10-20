@@ -127,7 +127,7 @@
 constexpr size_t UNDOS_MAX_COPY_SIZE = 4096;
 constexpr size_t UNDOS_MAX_MAPPED_BUFFER_SIZE = 64 * 1024 * 1024;
 
-static kernel::KernelError KE_VMM_CopyToUserspace(kernel::vmm::AddressSpace &as, void *userPtr, const void *kernelPtr, size_t length) {
+static kstd::error_code KE_VMM_CopyToUserspace(kernel::vmm::AddressSpace &as, void *userPtr, const void *kernelPtr, size_t length) {
   if (length == 0) return kernel::KernelError::Success;
   if (userPtr == nullptr) [[unlikely]] return kernel::KernelError::InvalidAddress;
   const auto mapped = KE_VMM_MapBorrowed(userPtr, length, as);
@@ -136,7 +136,7 @@ static kernel::KernelError KE_VMM_CopyToUserspace(kernel::vmm::AddressSpace &as,
   return KE_VMM_UnmapBorrowed(*mapped, length, as);
 }
 
-static kernel::KernelError Dispatch_CreateDC_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CreateDC_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_CREATEDC_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -147,7 +147,7 @@ static kernel::KernelError Dispatch_CreateDC_V1(void *userData, size_t size, uin
   __SYS_GFX_CREATEDC_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEDC_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEDC_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEDC_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEDC_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -166,7 +166,7 @@ static kernel::KernelError Dispatch_CreateDC_V1(void *userData, size_t size, uin
     if (args.driverName.data() == nullptr || args.driverName.size() != headerCopy.driverNameLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.driverName), headerCopy.driverNameLength, address_space)) {
       kstd::memcpy(args.driverName.data(), *mapped, headerCopy.driverNameLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.driverNameLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.driverNameLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
@@ -176,7 +176,7 @@ static kernel::KernelError Dispatch_CreateDC_V1(void *userData, size_t size, uin
     if (args.deviceName.data() == nullptr || args.deviceName.size() != headerCopy.deviceNameLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.deviceName), headerCopy.deviceNameLength, address_space)) {
       kstd::memcpy(args.deviceName.data(), *mapped, headerCopy.deviceNameLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.deviceNameLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.deviceNameLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
@@ -184,13 +184,13 @@ static kernel::KernelError Dispatch_CreateDC_V1(void *userData, size_t size, uin
   args.initFlags = headerCopy.initFlags;
 
   (void)flags;
-  const kernel::KernelError ret = handle_CreateDC_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CreateDC_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_CREATEDC_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_CREATEDC_V1, handle), &args.handle, sizeof(args.handle)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_DeleteDC_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_DeleteDC_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_DELETEDC_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -201,7 +201,7 @@ static kernel::KernelError Dispatch_DeleteDC_V1(void *userData, size_t size, uin
   __SYS_GFX_DELETEDC_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_DELETEDC_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_DELETEDC_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_DELETEDC_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_DELETEDC_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -210,12 +210,12 @@ static kernel::KernelError Dispatch_DeleteDC_V1(void *userData, size_t size, uin
   args.dc = headerCopy.dc;
 
   (void)flags;
-  const kernel::KernelError ret = handle_DeleteDC_V1(kstd::move(args));
+  const kstd::error_code ret = handle_DeleteDC_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_SelectObject_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SelectObject_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_SELECTOBJECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -226,7 +226,7 @@ static kernel::KernelError Dispatch_SelectObject_V1(void *userData, size_t size,
   __SYS_GFX_SELECTOBJECT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SELECTOBJECT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SELECTOBJECT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SELECTOBJECT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SELECTOBJECT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -236,12 +236,12 @@ static kernel::KernelError Dispatch_SelectObject_V1(void *userData, size_t size,
   args.object = headerCopy.object;
 
   (void)flags;
-  const kernel::KernelError ret = handle_SelectObject_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SelectObject_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_CreatePen_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CreatePen_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_CREATEPEN_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -252,7 +252,7 @@ static kernel::KernelError Dispatch_CreatePen_V1(void *userData, size_t size, ui
   __SYS_GFX_CREATEPEN_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEPEN_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEPEN_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEPEN_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEPEN_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -263,12 +263,12 @@ static kernel::KernelError Dispatch_CreatePen_V1(void *userData, size_t size, ui
   args.color = headerCopy.color;
 
   (void)flags;
-  const kernel::KernelError ret = handle_CreatePen_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CreatePen_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_CreateBrush_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CreateBrush_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_CREATEBRUSH_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -279,7 +279,7 @@ static kernel::KernelError Dispatch_CreateBrush_V1(void *userData, size_t size, 
   __SYS_GFX_CREATEBRUSH_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEBRUSH_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEBRUSH_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEBRUSH_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEBRUSH_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -289,12 +289,12 @@ static kernel::KernelError Dispatch_CreateBrush_V1(void *userData, size_t size, 
   args.color = headerCopy.color;
 
   (void)flags;
-  const kernel::KernelError ret = handle_CreateBrush_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CreateBrush_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_CreateFont_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CreateFont_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_CREATEFONT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -305,7 +305,7 @@ static kernel::KernelError Dispatch_CreateFont_V1(void *userData, size_t size, u
   __SYS_GFX_CREATEFONT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEFONT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEFONT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEFONT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEFONT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -323,19 +323,19 @@ static kernel::KernelError Dispatch_CreateFont_V1(void *userData, size_t size, u
     if (args.name.data() == nullptr || args.name.size() != headerCopy.nameLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.name), headerCopy.nameLength, address_space)) {
       kstd::memcpy(args.name.data(), *mapped, headerCopy.nameLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.nameLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.nameLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_CreateFont_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CreateFont_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_CreateBitmap_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CreateBitmap_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_CREATEBITMAP_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -346,7 +346,7 @@ static kernel::KernelError Dispatch_CreateBitmap_V1(void *userData, size_t size,
   __SYS_GFX_CREATEBITMAP_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEBITMAP_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEBITMAP_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEBITMAP_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEBITMAP_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -369,13 +369,13 @@ static kernel::KernelError Dispatch_CreateBitmap_V1(void *userData, size_t size,
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_CreateBitmap_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CreateBitmap_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_CREATEBITMAP_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_CREATEBITMAP_V1, handle), &args.handle, sizeof(args.handle)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_DeleteObject_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_DeleteObject_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_DELETEOBJECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -386,7 +386,7 @@ static kernel::KernelError Dispatch_DeleteObject_V1(void *userData, size_t size,
   __SYS_GFX_DELETEOBJECT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_DELETEOBJECT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_DELETEOBJECT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_DELETEOBJECT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_DELETEOBJECT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -395,12 +395,12 @@ static kernel::KernelError Dispatch_DeleteObject_V1(void *userData, size_t size,
   args.object = headerCopy.object;
 
   (void)flags;
-  const kernel::KernelError ret = handle_DeleteObject_V1(kstd::move(args));
+  const kstd::error_code ret = handle_DeleteObject_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_MoveTo_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_MoveTo_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_MOVETO_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -411,7 +411,7 @@ static kernel::KernelError Dispatch_MoveTo_V1(void *userData, size_t size, uint3
   __SYS_GFX_MOVETO_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_MOVETO_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_MOVETO_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_MOVETO_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_MOVETO_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -422,12 +422,12 @@ static kernel::KernelError Dispatch_MoveTo_V1(void *userData, size_t size, uint3
   args.y = headerCopy.y;
 
   (void)flags;
-  const kernel::KernelError ret = handle_MoveTo_V1(kstd::move(args));
+  const kstd::error_code ret = handle_MoveTo_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_LineTo_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_LineTo_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_LINETO_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -438,7 +438,7 @@ static kernel::KernelError Dispatch_LineTo_V1(void *userData, size_t size, uint3
   __SYS_GFX_LINETO_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_LINETO_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_LINETO_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_LINETO_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_LINETO_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -449,12 +449,12 @@ static kernel::KernelError Dispatch_LineTo_V1(void *userData, size_t size, uint3
   args.y = headerCopy.y;
 
   (void)flags;
-  const kernel::KernelError ret = handle_LineTo_V1(kstd::move(args));
+  const kstd::error_code ret = handle_LineTo_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_Rectangle_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Rectangle_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_RECTANGLE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -465,7 +465,7 @@ static kernel::KernelError Dispatch_Rectangle_V1(void *userData, size_t size, ui
   __SYS_GFX_RECTANGLE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_RECTANGLE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_RECTANGLE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_RECTANGLE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_RECTANGLE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -478,12 +478,12 @@ static kernel::KernelError Dispatch_Rectangle_V1(void *userData, size_t size, ui
   args.bottom = headerCopy.bottom;
 
   (void)flags;
-  const kernel::KernelError ret = handle_Rectangle_V1(kstd::move(args));
+  const kstd::error_code ret = handle_Rectangle_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_Ellipse_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Ellipse_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_ELLIPSE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -494,7 +494,7 @@ static kernel::KernelError Dispatch_Ellipse_V1(void *userData, size_t size, uint
   __SYS_GFX_ELLIPSE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_ELLIPSE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_ELLIPSE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_ELLIPSE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_ELLIPSE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -507,12 +507,12 @@ static kernel::KernelError Dispatch_Ellipse_V1(void *userData, size_t size, uint
   args.bottom = headerCopy.bottom;
 
   (void)flags;
-  const kernel::KernelError ret = handle_Ellipse_V1(kstd::move(args));
+  const kstd::error_code ret = handle_Ellipse_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_TextOut_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_TextOut_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_TEXTOUT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -523,7 +523,7 @@ static kernel::KernelError Dispatch_TextOut_V1(void *userData, size_t size, uint
   __SYS_GFX_TEXTOUT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_TEXTOUT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_TEXTOUT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_TEXTOUT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_TEXTOUT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -541,19 +541,19 @@ static kernel::KernelError Dispatch_TextOut_V1(void *userData, size_t size, uint
     if (args.text.data() == nullptr || args.text.size() != headerCopy.textLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.text), headerCopy.textLength, address_space)) {
       kstd::memcpy(args.text.data(), *mapped, headerCopy.textLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.textLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.textLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_TextOut_V1(kstd::move(args));
+  const kstd::error_code ret = handle_TextOut_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_BitBlt_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_BitBlt_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_BITBLT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -564,7 +564,7 @@ static kernel::KernelError Dispatch_BitBlt_V1(void *userData, size_t size, uint3
   __SYS_GFX_BITBLT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_BITBLT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_BITBLT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_BITBLT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_BITBLT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -581,12 +581,12 @@ static kernel::KernelError Dispatch_BitBlt_V1(void *userData, size_t size, uint3
   args.rop = headerCopy.rop;
 
   (void)flags;
-  const kernel::KernelError ret = handle_BitBlt_V1(kstd::move(args));
+  const kstd::error_code ret = handle_BitBlt_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_StretchBlt_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_StretchBlt_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_STRETCHBLT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -597,7 +597,7 @@ static kernel::KernelError Dispatch_StretchBlt_V1(void *userData, size_t size, u
   __SYS_GFX_STRETCHBLT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_STRETCHBLT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_STRETCHBLT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_STRETCHBLT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_STRETCHBLT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -616,12 +616,12 @@ static kernel::KernelError Dispatch_StretchBlt_V1(void *userData, size_t size, u
   args.rop = headerCopy.rop;
 
   (void)flags;
-  const kernel::KernelError ret = handle_StretchBlt_V1(kstd::move(args));
+  const kstd::error_code ret = handle_StretchBlt_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_AlphaBlend_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_AlphaBlend_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_ALPHABLEND_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -632,7 +632,7 @@ static kernel::KernelError Dispatch_AlphaBlend_V1(void *userData, size_t size, u
   __SYS_GFX_ALPHABLEND_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_ALPHABLEND_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_ALPHABLEND_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_ALPHABLEND_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_ALPHABLEND_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -645,12 +645,12 @@ static kernel::KernelError Dispatch_AlphaBlend_V1(void *userData, size_t size, u
   args.alpha = headerCopy.alpha;
 
   (void)flags;
-  const kernel::KernelError ret = handle_AlphaBlend_V1(kstd::move(args));
+  const kstd::error_code ret = handle_AlphaBlend_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_CreateRegion_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CreateRegion_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_CREATEREGION_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -661,7 +661,7 @@ static kernel::KernelError Dispatch_CreateRegion_V1(void *userData, size_t size,
   __SYS_GFX_CREATEREGION_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CREATEREGION_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CREATEREGION_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEREGION_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CREATEREGION_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -681,12 +681,12 @@ static kernel::KernelError Dispatch_CreateRegion_V1(void *userData, size_t size,
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_CreateRegion_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CreateRegion_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_SelectClipRegion_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SelectClipRegion_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_SELECTCLIPREGION_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -697,7 +697,7 @@ static kernel::KernelError Dispatch_SelectClipRegion_V1(void *userData, size_t s
   __SYS_GFX_SELECTCLIPREGION_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SELECTCLIPREGION_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SELECTCLIPREGION_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SELECTCLIPREGION_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SELECTCLIPREGION_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -707,12 +707,12 @@ static kernel::KernelError Dispatch_SelectClipRegion_V1(void *userData, size_t s
   args.region = headerCopy.region;
 
   (void)flags;
-  const kernel::KernelError ret = handle_SelectClipRegion_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SelectClipRegion_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_CombineRegion_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CombineRegion_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_COMBINEREGION_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -723,7 +723,7 @@ static kernel::KernelError Dispatch_CombineRegion_V1(void *userData, size_t size
   __SYS_GFX_COMBINEREGION_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_COMBINEREGION_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_COMBINEREGION_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_COMBINEREGION_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_COMBINEREGION_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -735,12 +735,12 @@ static kernel::KernelError Dispatch_CombineRegion_V1(void *userData, size_t size
   args.mode = headerCopy.mode;
 
   (void)flags;
-  const kernel::KernelError ret = handle_CombineRegion_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CombineRegion_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_SetViewportOrg_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SetViewportOrg_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_SETVIEWPORTORG_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -751,7 +751,7 @@ static kernel::KernelError Dispatch_SetViewportOrg_V1(void *userData, size_t siz
   __SYS_GFX_SETVIEWPORTORG_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETVIEWPORTORG_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SETVIEWPORTORG_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETVIEWPORTORG_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETVIEWPORTORG_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -762,12 +762,12 @@ static kernel::KernelError Dispatch_SetViewportOrg_V1(void *userData, size_t siz
   args.y = headerCopy.y;
 
   (void)flags;
-  const kernel::KernelError ret = handle_SetViewportOrg_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SetViewportOrg_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_SetWindowOrg_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SetWindowOrg_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_SETWINDOWORG_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -778,7 +778,7 @@ static kernel::KernelError Dispatch_SetWindowOrg_V1(void *userData, size_t size,
   __SYS_GFX_SETWINDOWORG_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETWINDOWORG_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SETWINDOWORG_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETWINDOWORG_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETWINDOWORG_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -789,12 +789,12 @@ static kernel::KernelError Dispatch_SetWindowOrg_V1(void *userData, size_t size,
   args.y = headerCopy.y;
 
   (void)flags;
-  const kernel::KernelError ret = handle_SetWindowOrg_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SetWindowOrg_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_GetTextMetrics_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_GetTextMetrics_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_GETTEXTMETRICS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -805,7 +805,7 @@ static kernel::KernelError Dispatch_GetTextMetrics_V1(void *userData, size_t siz
   __SYS_GFX_GETTEXTMETRICS_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETTEXTMETRICS_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_GETTEXTMETRICS_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETTEXTMETRICS_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETTEXTMETRICS_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -814,13 +814,13 @@ static kernel::KernelError Dispatch_GetTextMetrics_V1(void *userData, size_t siz
   args.dc = headerCopy.dc;
 
   (void)flags;
-  const kernel::KernelError ret = handle_GetTextMetrics_V1(kstd::move(args));
+  const kstd::error_code ret = handle_GetTextMetrics_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETTEXTMETRICS_V1, metrics), &args.metrics, sizeof(args.metrics)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETTEXTMETRICS_V1, metrics), &args.metrics, sizeof(args.metrics)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_GetBitmapBits_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_GetBitmapBits_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_GETBITMAPBITS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -831,7 +831,7 @@ static kernel::KernelError Dispatch_GetBitmapBits_V1(void *userData, size_t size
   __SYS_GFX_GETBITMAPBITS_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETBITMAPBITS_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_GETBITMAPBITS_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETBITMAPBITS_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETBITMAPBITS_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -851,17 +851,17 @@ static kernel::KernelError Dispatch_GetBitmapBits_V1(void *userData, size_t size
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_GetBitmapBits_V1(kstd::move(args));
+  const kstd::error_code ret = handle_GetBitmapBits_V1(kstd::move(args));
 
   // buffer was mapped and filled by the kernel directly; report actual length written.
   {
     const auto len = static_cast<uint32_t>(args.buffer_len);
-    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETBITMAPBITS_V1, bufferLength), &len, sizeof(len)); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETBITMAPBITS_V1, bufferLength), &len, sizeof(len)); error) return error;
   }
   return ret;
 }
 
-static kernel::KernelError Dispatch_SetBitmapBits_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SetBitmapBits_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_SETBITMAPBITS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -872,7 +872,7 @@ static kernel::KernelError Dispatch_SetBitmapBits_V1(void *userData, size_t size
   __SYS_GFX_SETBITMAPBITS_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETBITMAPBITS_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SETBITMAPBITS_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETBITMAPBITS_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETBITMAPBITS_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -893,12 +893,12 @@ static kernel::KernelError Dispatch_SetBitmapBits_V1(void *userData, size_t size
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_SetBitmapBits_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SetBitmapBits_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_GetDeviceCaps_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_GetDeviceCaps_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_GETDEVICECAPS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -909,7 +909,7 @@ static kernel::KernelError Dispatch_GetDeviceCaps_V1(void *userData, size_t size
   __SYS_GFX_GETDEVICECAPS_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETDEVICECAPS_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_GETDEVICECAPS_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETDEVICECAPS_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETDEVICECAPS_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -918,13 +918,13 @@ static kernel::KernelError Dispatch_GetDeviceCaps_V1(void *userData, size_t size
   args.dc = headerCopy.dc;
 
   (void)flags;
-  const kernel::KernelError ret = handle_GetDeviceCaps_V1(kstd::move(args));
+  const kstd::error_code ret = handle_GetDeviceCaps_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETDEVICECAPS_V1, caps), &args.caps, sizeof(args.caps)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETDEVICECAPS_V1, caps), &args.caps, sizeof(args.caps)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_SetDrawColors_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SetDrawColors_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_SETDRAWCOLORS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -935,7 +935,7 @@ static kernel::KernelError Dispatch_SetDrawColors_V1(void *userData, size_t size
   __SYS_GFX_SETDRAWCOLORS_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETDRAWCOLORS_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SETDRAWCOLORS_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETDRAWCOLORS_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETDRAWCOLORS_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -947,12 +947,12 @@ static kernel::KernelError Dispatch_SetDrawColors_V1(void *userData, size_t size
   args.opaque = headerCopy.opaque;
 
   (void)flags;
-  const kernel::KernelError ret = handle_SetDrawColors_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SetDrawColors_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_QueryFontEngine_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_QueryFontEngine_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_QUERYFONTENGINE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -963,7 +963,7 @@ static kernel::KernelError Dispatch_QueryFontEngine_V1(void *userData, size_t si
   __SYS_GFX_QUERYFONTENGINE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_QUERYFONTENGINE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_QUERYFONTENGINE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_QUERYFONTENGINE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_QUERYFONTENGINE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -971,14 +971,14 @@ static kernel::KernelError Dispatch_QueryFontEngine_V1(void *userData, size_t si
   __KRN_GFX_QUERYFONTENGINE_V1 args {};
 
   (void)flags;
-  const kernel::KernelError ret = handle_QueryFontEngine_V1(kstd::move(args));
+  const kstd::error_code ret = handle_QueryFontEngine_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_QUERYFONTENGINE_V1, version), &args.version, sizeof(args.version)); error != kernel::KernelError::Success) return error;
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_QUERYFONTENGINE_V1, capabilities), &args.capabilities, sizeof(args.capabilities)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_QUERYFONTENGINE_V1, version), &args.version, sizeof(args.version)); error) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_QUERYFONTENGINE_V1, capabilities), &args.capabilities, sizeof(args.capabilities)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_BeginFontUpload_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_BeginFontUpload_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -989,7 +989,7 @@ static kernel::KernelError Dispatch_BeginFontUpload_V1(void *userData, size_t si
   __SYS_GFX_BEGINFONTUPLOAD_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_BEGINFONTUPLOAD_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -998,13 +998,13 @@ static kernel::KernelError Dispatch_BeginFontUpload_V1(void *userData, size_t si
   args.totalBytes = headerCopy.totalBytes;
 
   (void)flags;
-  const kernel::KernelError ret = handle_BeginFontUpload_V1(kstd::move(args));
+  const kstd::error_code ret = handle_BeginFontUpload_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_BEGINFONTUPLOAD_V1, upload), &args.upload, sizeof(args.upload)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_BEGINFONTUPLOAD_V1, upload), &args.upload, sizeof(args.upload)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_AppendFontUpload_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_AppendFontUpload_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1015,7 +1015,7 @@ static kernel::KernelError Dispatch_AppendFontUpload_V1(void *userData, size_t s
   __SYS_GFX_APPENDFONTUPLOAD_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_APPENDFONTUPLOAD_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1037,12 +1037,12 @@ static kernel::KernelError Dispatch_AppendFontUpload_V1(void *userData, size_t s
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_AppendFontUpload_V1(kstd::move(args));
+  const kstd::error_code ret = handle_AppendFontUpload_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_CommitFontUpload_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CommitFontUpload_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1053,7 +1053,7 @@ static kernel::KernelError Dispatch_CommitFontUpload_V1(void *userData, size_t s
   __SYS_GFX_COMMITFONTUPLOAD_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_COMMITFONTUPLOAD_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1062,14 +1062,14 @@ static kernel::KernelError Dispatch_CommitFontUpload_V1(void *userData, size_t s
   args.upload = headerCopy.upload;
 
   (void)flags;
-  const kernel::KernelError ret = handle_CommitFontUpload_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CommitFontUpload_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_COMMITFONTUPLOAD_V1, face), &args.face, sizeof(args.face)); error != kernel::KernelError::Success) return error;
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_COMMITFONTUPLOAD_V1, validationError), &args.validationError, sizeof(args.validationError)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_COMMITFONTUPLOAD_V1, face), &args.face, sizeof(args.face)); error) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_COMMITFONTUPLOAD_V1, validationError), &args.validationError, sizeof(args.validationError)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_CloseFontResource_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CloseFontResource_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1080,7 +1080,7 @@ static kernel::KernelError Dispatch_CloseFontResource_V1(void *userData, size_t 
   __SYS_GFX_CLOSEFONTRESOURCE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_CLOSEFONTRESOURCE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1089,12 +1089,12 @@ static kernel::KernelError Dispatch_CloseFontResource_V1(void *userData, size_t 
   args.handle = headerCopy.handle;
 
   (void)flags;
-  const kernel::KernelError ret = handle_CloseFontResource_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CloseFontResource_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_EnumDisplayModes_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_EnumDisplayModes_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1105,7 +1105,7 @@ static kernel::KernelError Dispatch_EnumDisplayModes_V1(void *userData, size_t s
   __SYS_GFX_ENUMDISPLAYMODES_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_ENUMDISPLAYMODES_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1114,14 +1114,14 @@ static kernel::KernelError Dispatch_EnumDisplayModes_V1(void *userData, size_t s
   args.index = headerCopy.index;
 
   (void)flags;
-  const kernel::KernelError ret = handle_EnumDisplayModes_V1(kstd::move(args));
+  const kstd::error_code ret = handle_EnumDisplayModes_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_ENUMDISPLAYMODES_V1, mode), &args.mode, sizeof(args.mode)); error != kernel::KernelError::Success) return error;
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_ENUMDISPLAYMODES_V1, available), &args.available, sizeof(args.available)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_ENUMDISPLAYMODES_V1, mode), &args.mode, sizeof(args.mode)); error) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_ENUMDISPLAYMODES_V1, available), &args.available, sizeof(args.available)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_GetDisplayMode_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_GetDisplayMode_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_GETDISPLAYMODE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1132,7 +1132,7 @@ static kernel::KernelError Dispatch_GetDisplayMode_V1(void *userData, size_t siz
   __SYS_GFX_GETDISPLAYMODE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_GETDISPLAYMODE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_GETDISPLAYMODE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETDISPLAYMODE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_GETDISPLAYMODE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1140,13 +1140,13 @@ static kernel::KernelError Dispatch_GetDisplayMode_V1(void *userData, size_t siz
   __KRN_GFX_GETDISPLAYMODE_V1 args {};
 
   (void)flags;
-  const kernel::KernelError ret = handle_GetDisplayMode_V1(kstd::move(args));
+  const kstd::error_code ret = handle_GetDisplayMode_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETDISPLAYMODE_V1, state), &args.state, sizeof(args.state)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_GFX_GETDISPLAYMODE_V1, state), &args.state, sizeof(args.state)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_SetDisplayMode_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SetDisplayMode_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_SETDISPLAYMODE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1157,7 +1157,7 @@ static kernel::KernelError Dispatch_SetDisplayMode_V1(void *userData, size_t siz
   __SYS_GFX_SETDISPLAYMODE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_GFX_SETDISPLAYMODE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_GFX_SETDISPLAYMODE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETDISPLAYMODE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_GFX_SETDISPLAYMODE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1166,12 +1166,12 @@ static kernel::KernelError Dispatch_SetDisplayMode_V1(void *userData, size_t siz
   args.modeId = headerCopy.modeId;
 
   (void)flags;
-  const kernel::KernelError ret = handle_SetDisplayMode_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SetDisplayMode_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_RegisterClass_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_RegisterClass_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_REGISTERCLASS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1182,7 +1182,7 @@ static kernel::KernelError Dispatch_RegisterClass_V1(void *userData, size_t size
   __SYS_USER_REGISTERCLASS_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_REGISTERCLASS_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_REGISTERCLASS_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_REGISTERCLASS_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_REGISTERCLASS_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1197,7 +1197,7 @@ static kernel::KernelError Dispatch_RegisterClass_V1(void *userData, size_t size
     if (args.name.data() == nullptr || args.name.size() != headerCopy.nameLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.name), headerCopy.nameLength, address_space)) {
       kstd::memcpy(args.name.data(), *mapped, headerCopy.nameLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.nameLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.nameLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
@@ -1206,12 +1206,12 @@ static kernel::KernelError Dispatch_RegisterClass_V1(void *userData, size_t size
   args.background = headerCopy.background;
 
   (void)flags;
-  const kernel::KernelError ret = handle_RegisterClass_V1(kstd::move(args));
+  const kstd::error_code ret = handle_RegisterClass_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_CreateWindow_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CreateWindow_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_CREATEWINDOW_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1222,7 +1222,7 @@ static kernel::KernelError Dispatch_CreateWindow_V1(void *userData, size_t size,
   __SYS_USER_CREATEWINDOW_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_CREATEWINDOW_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_CREATEWINDOW_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_CREATEWINDOW_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_CREATEWINDOW_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1241,7 +1241,7 @@ static kernel::KernelError Dispatch_CreateWindow_V1(void *userData, size_t size,
     if (args.className.data() == nullptr || args.className.size() != headerCopy.classNameLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.className), headerCopy.classNameLength, address_space)) {
       kstd::memcpy(args.className.data(), *mapped, headerCopy.classNameLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.classNameLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.classNameLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
@@ -1251,7 +1251,7 @@ static kernel::KernelError Dispatch_CreateWindow_V1(void *userData, size_t size,
     if (args.title.data() == nullptr || args.title.size() != headerCopy.titleLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.title), headerCopy.titleLength, address_space)) {
       kstd::memcpy(args.title.data(), *mapped, headerCopy.titleLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.titleLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.titleLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
@@ -1265,13 +1265,13 @@ static kernel::KernelError Dispatch_CreateWindow_V1(void *userData, size_t size,
   args.userData = headerCopy.userData;
 
   (void)flags;
-  const kernel::KernelError ret = handle_CreateWindow_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CreateWindow_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_CREATEWINDOW_V1, hwnd), &args.hwnd, sizeof(args.hwnd)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_CREATEWINDOW_V1, hwnd), &args.hwnd, sizeof(args.hwnd)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_DestroyWindow_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_DestroyWindow_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_DESTROYWINDOW_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1282,7 +1282,7 @@ static kernel::KernelError Dispatch_DestroyWindow_V1(void *userData, size_t size
   __SYS_USER_DESTROYWINDOW_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_DESTROYWINDOW_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_DESTROYWINDOW_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_DESTROYWINDOW_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_DESTROYWINDOW_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1291,12 +1291,12 @@ static kernel::KernelError Dispatch_DestroyWindow_V1(void *userData, size_t size
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const kernel::KernelError ret = handle_DestroyWindow_V1(kstd::move(args));
+  const kstd::error_code ret = handle_DestroyWindow_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_ShowWindow_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_ShowWindow_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_SHOWWINDOW_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1307,7 +1307,7 @@ static kernel::KernelError Dispatch_ShowWindow_V1(void *userData, size_t size, u
   __SYS_USER_SHOWWINDOW_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SHOWWINDOW_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_SHOWWINDOW_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SHOWWINDOW_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SHOWWINDOW_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1317,12 +1317,12 @@ static kernel::KernelError Dispatch_ShowWindow_V1(void *userData, size_t size, u
   args.command = headerCopy.command;
 
   (void)flags;
-  const kernel::KernelError ret = handle_ShowWindow_V1(kstd::move(args));
+  const kstd::error_code ret = handle_ShowWindow_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_MoveWindow_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_MoveWindow_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_MOVEWINDOW_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1333,7 +1333,7 @@ static kernel::KernelError Dispatch_MoveWindow_V1(void *userData, size_t size, u
   __SYS_USER_MOVEWINDOW_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_MOVEWINDOW_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_MOVEWINDOW_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_MOVEWINDOW_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_MOVEWINDOW_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1346,12 +1346,12 @@ static kernel::KernelError Dispatch_MoveWindow_V1(void *userData, size_t size, u
   args.height = headerCopy.height;
 
   (void)flags;
-  const kernel::KernelError ret = handle_MoveWindow_V1(kstd::move(args));
+  const kstd::error_code ret = handle_MoveWindow_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_GetWindowRect_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_GetWindowRect_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_GETWINDOWRECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1362,7 +1362,7 @@ static kernel::KernelError Dispatch_GetWindowRect_V1(void *userData, size_t size
   __SYS_USER_GETWINDOWRECT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETWINDOWRECT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_GETWINDOWRECT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETWINDOWRECT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETWINDOWRECT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1371,13 +1371,13 @@ static kernel::KernelError Dispatch_GetWindowRect_V1(void *userData, size_t size
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const kernel::KernelError ret = handle_GetWindowRect_V1(kstd::move(args));
+  const kstd::error_code ret = handle_GetWindowRect_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETWINDOWRECT_V1, rect), &args.rect, sizeof(args.rect)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETWINDOWRECT_V1, rect), &args.rect, sizeof(args.rect)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_InvalidateRect_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_InvalidateRect_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_INVALIDATERECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1388,7 +1388,7 @@ static kernel::KernelError Dispatch_InvalidateRect_V1(void *userData, size_t siz
   __SYS_USER_INVALIDATERECT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_INVALIDATERECT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_INVALIDATERECT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_INVALIDATERECT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_INVALIDATERECT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1399,12 +1399,12 @@ static kernel::KernelError Dispatch_InvalidateRect_V1(void *userData, size_t siz
   args.whole = headerCopy.whole;
 
   (void)flags;
-  const kernel::KernelError ret = handle_InvalidateRect_V1(kstd::move(args));
+  const kstd::error_code ret = handle_InvalidateRect_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_BeginPaint_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_BeginPaint_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_BEGINPAINT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1415,7 +1415,7 @@ static kernel::KernelError Dispatch_BeginPaint_V1(void *userData, size_t size, u
   __SYS_USER_BEGINPAINT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_BEGINPAINT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_BEGINPAINT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_BEGINPAINT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_BEGINPAINT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1424,14 +1424,14 @@ static kernel::KernelError Dispatch_BeginPaint_V1(void *userData, size_t size, u
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const kernel::KernelError ret = handle_BeginPaint_V1(kstd::move(args));
+  const kstd::error_code ret = handle_BeginPaint_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_BEGINPAINT_V1, dc), &args.dc, sizeof(args.dc)); error != kernel::KernelError::Success) return error;
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_BEGINPAINT_V1, paint), &args.paint, sizeof(args.paint)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_BEGINPAINT_V1, dc), &args.dc, sizeof(args.dc)); error) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_BEGINPAINT_V1, paint), &args.paint, sizeof(args.paint)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_EndPaint_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_EndPaint_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_ENDPAINT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1442,7 +1442,7 @@ static kernel::KernelError Dispatch_EndPaint_V1(void *userData, size_t size, uin
   __SYS_USER_ENDPAINT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_ENDPAINT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_ENDPAINT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_ENDPAINT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_ENDPAINT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1452,12 +1452,12 @@ static kernel::KernelError Dispatch_EndPaint_V1(void *userData, size_t size, uin
   args.dc = headerCopy.dc;
 
   (void)flags;
-  const kernel::KernelError ret = handle_EndPaint_V1(kstd::move(args));
+  const kstd::error_code ret = handle_EndPaint_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_GetMessage_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_GetMessage_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_GETMESSAGE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1468,7 +1468,7 @@ static kernel::KernelError Dispatch_GetMessage_V1(void *userData, size_t size, u
   __SYS_USER_GETMESSAGE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETMESSAGE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_GETMESSAGE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETMESSAGE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETMESSAGE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1476,13 +1476,13 @@ static kernel::KernelError Dispatch_GetMessage_V1(void *userData, size_t size, u
   __KRN_USER_GETMESSAGE_V1 args {};
 
   (void)flags;
-  const kernel::KernelError ret = handle_GetMessage_V1(kstd::move(args));
+  const kstd::error_code ret = handle_GetMessage_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETMESSAGE_V1, msg), &args.msg, sizeof(args.msg)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETMESSAGE_V1, msg), &args.msg, sizeof(args.msg)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_PeekMessage_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_PeekMessage_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_PEEKMESSAGE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1493,7 +1493,7 @@ static kernel::KernelError Dispatch_PeekMessage_V1(void *userData, size_t size, 
   __SYS_USER_PEEKMESSAGE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_PEEKMESSAGE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_PEEKMESSAGE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_PEEKMESSAGE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_PEEKMESSAGE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1502,13 +1502,13 @@ static kernel::KernelError Dispatch_PeekMessage_V1(void *userData, size_t size, 
   args.remove = headerCopy.remove;
 
   (void)flags;
-  const kernel::KernelError ret = handle_PeekMessage_V1(kstd::move(args));
+  const kstd::error_code ret = handle_PeekMessage_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_PEEKMESSAGE_V1, msg), &args.msg, sizeof(args.msg)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_PEEKMESSAGE_V1, msg), &args.msg, sizeof(args.msg)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_PostMessage_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_PostMessage_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_POSTMESSAGE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1519,7 +1519,7 @@ static kernel::KernelError Dispatch_PostMessage_V1(void *userData, size_t size, 
   __SYS_USER_POSTMESSAGE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_POSTMESSAGE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_POSTMESSAGE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_POSTMESSAGE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_POSTMESSAGE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1531,12 +1531,12 @@ static kernel::KernelError Dispatch_PostMessage_V1(void *userData, size_t size, 
   args.lParam = headerCopy.lParam;
 
   (void)flags;
-  const kernel::KernelError ret = handle_PostMessage_V1(kstd::move(args));
+  const kstd::error_code ret = handle_PostMessage_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_GetWindowLongPtr_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_GetWindowLongPtr_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_GETWINDOWLONGPTR_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1547,7 +1547,7 @@ static kernel::KernelError Dispatch_GetWindowLongPtr_V1(void *userData, size_t s
   __SYS_USER_GETWINDOWLONGPTR_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETWINDOWLONGPTR_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_GETWINDOWLONGPTR_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETWINDOWLONGPTR_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETWINDOWLONGPTR_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1557,13 +1557,13 @@ static kernel::KernelError Dispatch_GetWindowLongPtr_V1(void *userData, size_t s
   args.index = headerCopy.index;
 
   (void)flags;
-  const kernel::KernelError ret = handle_GetWindowLongPtr_V1(kstd::move(args));
+  const kstd::error_code ret = handle_GetWindowLongPtr_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETWINDOWLONGPTR_V1, value), &args.value, sizeof(args.value)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETWINDOWLONGPTR_V1, value), &args.value, sizeof(args.value)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_SetWindowLongPtr_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SetWindowLongPtr_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_SETWINDOWLONGPTR_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1574,7 +1574,7 @@ static kernel::KernelError Dispatch_SetWindowLongPtr_V1(void *userData, size_t s
   __SYS_USER_SETWINDOWLONGPTR_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETWINDOWLONGPTR_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_SETWINDOWLONGPTR_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETWINDOWLONGPTR_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETWINDOWLONGPTR_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1585,13 +1585,13 @@ static kernel::KernelError Dispatch_SetWindowLongPtr_V1(void *userData, size_t s
   args.value = headerCopy.value;
 
   (void)flags;
-  const kernel::KernelError ret = handle_SetWindowLongPtr_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SetWindowLongPtr_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_SETWINDOWLONGPTR_V1, previous), &args.previous, sizeof(args.previous)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_SETWINDOWLONGPTR_V1, previous), &args.previous, sizeof(args.previous)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_SetCapture_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SetCapture_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_SETCAPTURE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1602,7 +1602,7 @@ static kernel::KernelError Dispatch_SetCapture_V1(void *userData, size_t size, u
   __SYS_USER_SETCAPTURE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETCAPTURE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_SETCAPTURE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETCAPTURE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETCAPTURE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1611,12 +1611,12 @@ static kernel::KernelError Dispatch_SetCapture_V1(void *userData, size_t size, u
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const kernel::KernelError ret = handle_SetCapture_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SetCapture_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_ReleaseCapture_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_ReleaseCapture_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_RELEASECAPTURE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1627,7 +1627,7 @@ static kernel::KernelError Dispatch_ReleaseCapture_V1(void *userData, size_t siz
   __SYS_USER_RELEASECAPTURE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_RELEASECAPTURE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_RELEASECAPTURE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_RELEASECAPTURE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_RELEASECAPTURE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1636,12 +1636,12 @@ static kernel::KernelError Dispatch_ReleaseCapture_V1(void *userData, size_t siz
   args.unused = headerCopy.unused;
 
   (void)flags;
-  const kernel::KernelError ret = handle_ReleaseCapture_V1(kstd::move(args));
+  const kstd::error_code ret = handle_ReleaseCapture_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_GetClientRect_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_GetClientRect_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_GETCLIENTRECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1652,7 +1652,7 @@ static kernel::KernelError Dispatch_GetClientRect_V1(void *userData, size_t size
   __SYS_USER_GETCLIENTRECT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_GETCLIENTRECT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_GETCLIENTRECT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETCLIENTRECT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_GETCLIENTRECT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1661,13 +1661,13 @@ static kernel::KernelError Dispatch_GetClientRect_V1(void *userData, size_t size
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const kernel::KernelError ret = handle_GetClientRect_V1(kstd::move(args));
+  const kstd::error_code ret = handle_GetClientRect_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETCLIENTRECT_V1, rect), &args.rect, sizeof(args.rect)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_USER_GETCLIENTRECT_V1, rect), &args.rect, sizeof(args.rect)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_SetFocus_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SetFocus_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_SETFOCUS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1678,7 +1678,7 @@ static kernel::KernelError Dispatch_SetFocus_V1(void *userData, size_t size, uin
   __SYS_USER_SETFOCUS_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETFOCUS_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_SETFOCUS_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETFOCUS_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETFOCUS_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1687,12 +1687,12 @@ static kernel::KernelError Dispatch_SetFocus_V1(void *userData, size_t size, uin
   args.hwnd = headerCopy.hwnd;
 
   (void)flags;
-  const kernel::KernelError ret = handle_SetFocus_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SetFocus_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_SetWindowText_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SetWindowText_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_USER_SETWINDOWTEXT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1703,7 +1703,7 @@ static kernel::KernelError Dispatch_SetWindowText_V1(void *userData, size_t size
   __SYS_USER_SETWINDOWTEXT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_USER_SETWINDOWTEXT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_USER_SETWINDOWTEXT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETWINDOWTEXT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_USER_SETWINDOWTEXT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1719,19 +1719,19 @@ static kernel::KernelError Dispatch_SetWindowText_V1(void *userData, size_t size
     if (args.text.data() == nullptr || args.text.size() != headerCopy.textLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.text), headerCopy.textLength, address_space)) {
       kstd::memcpy(args.text.data(), *mapped, headerCopy.textLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.textLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.textLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_SetWindowText_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SetWindowText_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_QueryFpu_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_QueryFpu_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_ABI_QUERYFPU_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1742,7 +1742,7 @@ static kernel::KernelError Dispatch_QueryFpu_V1(void *userData, size_t size, uin
   __SYS_ABI_QUERYFPU_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_ABI_QUERYFPU_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_ABI_QUERYFPU_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_ABI_QUERYFPU_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_ABI_QUERYFPU_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1750,13 +1750,13 @@ static kernel::KernelError Dispatch_QueryFpu_V1(void *userData, size_t size, uin
   __KRN_ABI_QUERYFPU_V1 args {};
 
   (void)flags;
-  const kernel::KernelError ret = handle_QueryFpu_V1(kstd::move(args));
+  const kstd::error_code ret = handle_QueryFpu_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_ABI_QUERYFPU_V1, capability), &args.capability, sizeof(args.capability)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_ABI_QUERYFPU_V1, capability), &args.capability, sizeof(args.capability)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_Print_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Print_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_DEBUG_PRINT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1767,7 +1767,7 @@ static kernel::KernelError Dispatch_Print_V1(void *userData, size_t size, uint32
   __SYS_DEBUG_PRINT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_DEBUG_PRINT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_DEBUG_PRINT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_DEBUG_PRINT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_DEBUG_PRINT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1782,19 +1782,19 @@ static kernel::KernelError Dispatch_Print_V1(void *userData, size_t size, uint32
     if (args.message.data() == nullptr || args.message.size() != headerCopy.messageLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.message), headerCopy.messageLength, address_space)) {
       kstd::memcpy(args.message.data(), *mapped, headerCopy.messageLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.messageLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.messageLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_Print_V1(kstd::move(args));
+  const kstd::error_code ret = handle_Print_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_CreateProcess_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CreateProcess_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_PROC_CREATEPROCESS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1805,7 +1805,7 @@ static kernel::KernelError Dispatch_CreateProcess_V1(void *userData, size_t size
   __SYS_PROC_CREATEPROCESS_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_CREATEPROCESS_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_CREATEPROCESS_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_CREATEPROCESS_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_CREATEPROCESS_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1824,7 +1824,7 @@ static kernel::KernelError Dispatch_CreateProcess_V1(void *userData, size_t size
     if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
       kstd::memcpy(args.path.data(), *mapped, headerCopy.pathLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.pathLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.pathLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
@@ -1834,7 +1834,7 @@ static kernel::KernelError Dispatch_CreateProcess_V1(void *userData, size_t size
     if (args.argument.data() == nullptr || args.argument.size() != headerCopy.argumentLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.argument), headerCopy.argumentLength, address_space)) {
       kstd::memcpy(args.argument.data(), *mapped, headerCopy.argumentLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.argumentLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.argumentLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
@@ -1842,13 +1842,13 @@ static kernel::KernelError Dispatch_CreateProcess_V1(void *userData, size_t size
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const kernel::KernelError ret = handle_CreateProcess_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CreateProcess_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEPROCESS_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEPROCESS_V1, handle), &args.handle, sizeof(args.handle)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_CreateProcess_V2(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CreateProcess_V2(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_PROC_CREATEPROCESS_V2)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1859,7 +1859,7 @@ static kernel::KernelError Dispatch_CreateProcess_V2(void *userData, size_t size
   __SYS_PROC_CREATEPROCESS_V2 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_CREATEPROCESS_V2), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_CREATEPROCESS_V2));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_CREATEPROCESS_V2), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_CREATEPROCESS_V2), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1878,7 +1878,7 @@ static kernel::KernelError Dispatch_CreateProcess_V2(void *userData, size_t size
     if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
       kstd::memcpy(args.path.data(), *mapped, headerCopy.pathLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.pathLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.pathLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
@@ -1888,7 +1888,7 @@ static kernel::KernelError Dispatch_CreateProcess_V2(void *userData, size_t size
     if (args.argument.data() == nullptr || args.argument.size() != headerCopy.argumentLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.argument), headerCopy.argumentLength, address_space)) {
       kstd::memcpy(args.argument.data(), *mapped, headerCopy.argumentLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.argumentLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.argumentLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
@@ -1899,13 +1899,13 @@ static kernel::KernelError Dispatch_CreateProcess_V2(void *userData, size_t size
   args.stderrHandle = headerCopy.stderrHandle;
 
   (void)flags;
-  const kernel::KernelError ret = handle_CreateProcess_V2(kstd::move(args));
+  const kstd::error_code ret = handle_CreateProcess_V2(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEPROCESS_V2, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEPROCESS_V2, handle), &args.handle, sizeof(args.handle)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_GetInfo_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_GetInfo_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_PROC_GETINFO_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1916,7 +1916,7 @@ static kernel::KernelError Dispatch_GetInfo_V1(void *userData, size_t size, uint
   __SYS_PROC_GETINFO_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_GETINFO_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_GETINFO_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_GETINFO_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_GETINFO_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1936,18 +1936,18 @@ static kernel::KernelError Dispatch_GetInfo_V1(void *userData, size_t size, uint
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_GetInfo_V1(kstd::move(args));
+  const kstd::error_code ret = handle_GetInfo_V1(kstd::move(args));
 
   // content was written directly into the mapped user buffer; report the actual/required length.
   {
     const auto len = static_cast<uint32_t>(args.commandLine_len);
-    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_GETINFO_V1, commandLineLength), &len, sizeof(len)); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_GETINFO_V1, commandLineLength), &len, sizeof(len)); error) return error;
   }
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_GETINFO_V1, exitCode), &args.exitCode, sizeof(args.exitCode)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_GETINFO_V1, exitCode), &args.exitCode, sizeof(args.exitCode)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_Exit_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Exit_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_PROC_EXIT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1958,7 +1958,7 @@ static kernel::KernelError Dispatch_Exit_V1(void *userData, size_t size, uint32_
   __SYS_PROC_EXIT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_EXIT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_EXIT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_EXIT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_EXIT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1967,12 +1967,12 @@ static kernel::KernelError Dispatch_Exit_V1(void *userData, size_t size, uint32_
   args.exitCode = headerCopy.exitCode;
 
   (void)flags;
-  const kernel::KernelError ret = handle_Exit_V1(kstd::move(args));
+  const kstd::error_code ret = handle_Exit_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_WaitForObject_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_WaitForObject_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_PROC_WAITFOROBJECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -1983,7 +1983,7 @@ static kernel::KernelError Dispatch_WaitForObject_V1(void *userData, size_t size
   __SYS_PROC_WAITFOROBJECT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_WAITFOROBJECT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_WAITFOROBJECT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_WAITFOROBJECT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_WAITFOROBJECT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -1993,12 +1993,12 @@ static kernel::KernelError Dispatch_WaitForObject_V1(void *userData, size_t size
   args.timeoutMs = headerCopy.timeoutMs;
 
   (void)flags;
-  const kernel::KernelError ret = handle_WaitForObject_V1(kstd::move(args));
+  const kstd::error_code ret = handle_WaitForObject_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_WaitProcess_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_WaitProcess_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_PROC_WAITPROCESS_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2009,7 +2009,7 @@ static kernel::KernelError Dispatch_WaitProcess_V1(void *userData, size_t size, 
   __SYS_PROC_WAITPROCESS_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_WAITPROCESS_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_WAITPROCESS_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_WAITPROCESS_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_WAITPROCESS_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2019,13 +2019,13 @@ static kernel::KernelError Dispatch_WaitProcess_V1(void *userData, size_t size, 
   args.timeoutMs = headerCopy.timeoutMs;
 
   (void)flags;
-  const kernel::KernelError ret = handle_WaitProcess_V1(kstd::move(args));
+  const kstd::error_code ret = handle_WaitProcess_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_WAITPROCESS_V1, exitCode), &args.exitCode, sizeof(args.exitCode)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_WAITPROCESS_V1, exitCode), &args.exitCode, sizeof(args.exitCode)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_CreateEvent_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_CreateEvent_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_PROC_CREATEEVENT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2036,7 +2036,7 @@ static kernel::KernelError Dispatch_CreateEvent_V1(void *userData, size_t size, 
   __SYS_PROC_CREATEEVENT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_CREATEEVENT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_CREATEEVENT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_CREATEEVENT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_CREATEEVENT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2045,13 +2045,13 @@ static kernel::KernelError Dispatch_CreateEvent_V1(void *userData, size_t size, 
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const kernel::KernelError ret = handle_CreateEvent_V1(kstd::move(args));
+  const kstd::error_code ret = handle_CreateEvent_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEEVENT_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_PROC_CREATEEVENT_V1, handle), &args.handle, sizeof(args.handle)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_SetEvent_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SetEvent_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_PROC_SETEVENT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2062,7 +2062,7 @@ static kernel::KernelError Dispatch_SetEvent_V1(void *userData, size_t size, uin
   __SYS_PROC_SETEVENT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_PROC_SETEVENT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_PROC_SETEVENT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_SETEVENT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_PROC_SETEVENT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2071,12 +2071,12 @@ static kernel::KernelError Dispatch_SetEvent_V1(void *userData, size_t size, uin
   args.handle = headerCopy.handle;
 
   (void)flags;
-  const kernel::KernelError ret = handle_SetEvent_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SetEvent_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_AllocatePages_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_AllocatePages_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_MEM_ALLOCATEPAGES_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2087,7 +2087,7 @@ static kernel::KernelError Dispatch_AllocatePages_V1(void *userData, size_t size
   __SYS_MEM_ALLOCATEPAGES_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_ALLOCATEPAGES_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_MEM_ALLOCATEPAGES_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_ALLOCATEPAGES_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_ALLOCATEPAGES_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2097,13 +2097,13 @@ static kernel::KernelError Dispatch_AllocatePages_V1(void *userData, size_t size
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const kernel::KernelError ret = handle_AllocatePages_V1(kstd::move(args));
+  const kstd::error_code ret = handle_AllocatePages_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_MEM_ALLOCATEPAGES_V1, address), &args.address, sizeof(args.address)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_MEM_ALLOCATEPAGES_V1, address), &args.address, sizeof(args.address)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_FreePages_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_FreePages_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_MEM_FREEPAGES_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2114,7 +2114,7 @@ static kernel::KernelError Dispatch_FreePages_V1(void *userData, size_t size, ui
   __SYS_MEM_FREEPAGES_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_FREEPAGES_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_MEM_FREEPAGES_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_FREEPAGES_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_FREEPAGES_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2124,12 +2124,12 @@ static kernel::KernelError Dispatch_FreePages_V1(void *userData, size_t size, ui
   args.size = headerCopy.size;
 
   (void)flags;
-  const kernel::KernelError ret = handle_FreePages_V1(kstd::move(args));
+  const kstd::error_code ret = handle_FreePages_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_Protect_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Protect_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_MEM_PROTECT_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2140,7 +2140,7 @@ static kernel::KernelError Dispatch_Protect_V1(void *userData, size_t size, uint
   __SYS_MEM_PROTECT_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_PROTECT_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_MEM_PROTECT_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_PROTECT_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_PROTECT_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2151,12 +2151,12 @@ static kernel::KernelError Dispatch_Protect_V1(void *userData, size_t size, uint
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const kernel::KernelError ret = handle_Protect_V1(kstd::move(args));
+  const kstd::error_code ret = handle_Protect_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_MapFixedPages_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_MapFixedPages_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_MEM_MAPFIXEDPAGES_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2167,7 +2167,7 @@ static kernel::KernelError Dispatch_MapFixedPages_V1(void *userData, size_t size
   __SYS_MEM_MAPFIXEDPAGES_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_MEM_MAPFIXEDPAGES_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_MEM_MAPFIXEDPAGES_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_MAPFIXEDPAGES_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_MEM_MAPFIXEDPAGES_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2178,12 +2178,12 @@ static kernel::KernelError Dispatch_MapFixedPages_V1(void *userData, size_t size
   args.flags = headerCopy.flags;
 
   (void)flags;
-  const kernel::KernelError ret = handle_MapFixedPages_V1(kstd::move(args));
+  const kstd::error_code ret = handle_MapFixedPages_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_Open_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Open_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_IO_OPEN_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2194,7 +2194,7 @@ static kernel::KernelError Dispatch_Open_V1(void *userData, size_t size, uint32_
   __SYS_IO_OPEN_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_OPEN_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_OPEN_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_OPEN_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_OPEN_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2209,7 +2209,7 @@ static kernel::KernelError Dispatch_Open_V1(void *userData, size_t size, uint32_
     if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return kernel::KernelError::OutOfMemory;
     if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
       kstd::memcpy(args.path.data(), *mapped, headerCopy.pathLength);
-      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.pathLength, address_space); error != kernel::KernelError::Success) return error;
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.pathLength, address_space); error) return error;
     } else {
       return mapped.error();
     }
@@ -2217,13 +2217,13 @@ static kernel::KernelError Dispatch_Open_V1(void *userData, size_t size, uint32_
   args.mode = headerCopy.mode;
 
   (void)flags;
-  const kernel::KernelError ret = handle_Open_V1(kstd::move(args));
+  const kstd::error_code ret = handle_Open_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_OPEN_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_OPEN_V1, handle), &args.handle, sizeof(args.handle)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_Close_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Close_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_IO_CLOSE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2234,7 +2234,7 @@ static kernel::KernelError Dispatch_Close_V1(void *userData, size_t size, uint32
   __SYS_IO_CLOSE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_CLOSE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_CLOSE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_CLOSE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_CLOSE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2243,12 +2243,12 @@ static kernel::KernelError Dispatch_Close_V1(void *userData, size_t size, uint32
   args.handle = headerCopy.handle;
 
   (void)flags;
-  const kernel::KernelError ret = handle_Close_V1(kstd::move(args));
+  const kstd::error_code ret = handle_Close_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_Read_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Read_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_IO_READ_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2259,7 +2259,7 @@ static kernel::KernelError Dispatch_Read_V1(void *userData, size_t size, uint32_
   __SYS_IO_READ_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_READ_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_READ_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_READ_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_READ_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2279,17 +2279,17 @@ static kernel::KernelError Dispatch_Read_V1(void *userData, size_t size, uint32_
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_Read_V1(kstd::move(args));
+  const kstd::error_code ret = handle_Read_V1(kstd::move(args));
 
   // buffer was mapped and filled by the kernel directly; report actual length written.
   {
     const auto len = static_cast<uint32_t>(args.data_len);
-    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_READ_V1, dataLength), &len, sizeof(len)); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_READ_V1, dataLength), &len, sizeof(len)); error) return error;
   }
   return ret;
 }
 
-static kernel::KernelError Dispatch_Write_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Write_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_IO_WRITE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2300,7 +2300,7 @@ static kernel::KernelError Dispatch_Write_V1(void *userData, size_t size, uint32
   __SYS_IO_WRITE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_WRITE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_WRITE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_WRITE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_WRITE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2321,12 +2321,12 @@ static kernel::KernelError Dispatch_Write_V1(void *userData, size_t size, uint32
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_Write_V1(kstd::move(args));
+  const kstd::error_code ret = handle_Write_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_Write_V2(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Write_V2(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_IO_WRITE_V2)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2337,7 +2337,7 @@ static kernel::KernelError Dispatch_Write_V2(void *userData, size_t size, uint32
   __SYS_IO_WRITE_V2 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_WRITE_V2), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_WRITE_V2));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_WRITE_V2), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_WRITE_V2), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2358,13 +2358,13 @@ static kernel::KernelError Dispatch_Write_V2(void *userData, size_t size, uint32
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_Write_V2(kstd::move(args));
+  const kstd::error_code ret = handle_Write_V2(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_WRITE_V2, transferred), &args.transferred, sizeof(args.transferred)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_WRITE_V2, transferred), &args.transferred, sizeof(args.transferred)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_Control_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Control_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_IO_CONTROL_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2375,7 +2375,7 @@ static kernel::KernelError Dispatch_Control_V1(void *userData, size_t size, uint
   __SYS_IO_CONTROL_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_CONTROL_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_CONTROL_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_CONTROL_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_CONTROL_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2408,17 +2408,17 @@ static kernel::KernelError Dispatch_Control_V1(void *userData, size_t size, uint
   }
 
   (void)flags;
-  const kernel::KernelError ret = handle_Control_V1(kstd::move(args));
+  const kstd::error_code ret = handle_Control_V1(kstd::move(args));
 
   // buffer was mapped and filled by the kernel directly; report actual length written.
   {
     const auto len = static_cast<uint32_t>(args.output_len);
-    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_CONTROL_V1, outputLength), &len, sizeof(len)); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_CONTROL_V1, outputLength), &len, sizeof(len)); error) return error;
   }
   return ret;
 }
 
-static kernel::KernelError Dispatch_GetStdHandle_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_GetStdHandle_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_IO_GETSTDHANDLE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2429,7 +2429,7 @@ static kernel::KernelError Dispatch_GetStdHandle_V1(void *userData, size_t size,
   __SYS_IO_GETSTDHANDLE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_GETSTDHANDLE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_GETSTDHANDLE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_GETSTDHANDLE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_GETSTDHANDLE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2438,13 +2438,13 @@ static kernel::KernelError Dispatch_GetStdHandle_V1(void *userData, size_t size,
   args.selector = headerCopy.selector;
 
   (void)flags;
-  const kernel::KernelError ret = handle_GetStdHandle_V1(kstd::move(args));
+  const kstd::error_code ret = handle_GetStdHandle_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_GETSTDHANDLE_V1, handle), &args.handle, sizeof(args.handle)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_GETSTDHANDLE_V1, handle), &args.handle, sizeof(args.handle)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_Create_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_Create_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_TTY_CREATE_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2455,7 +2455,7 @@ static kernel::KernelError Dispatch_Create_V1(void *userData, size_t size, uint3
   __SYS_TTY_CREATE_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_CREATE_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_TTY_CREATE_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_TTY_CREATE_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_TTY_CREATE_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2463,14 +2463,14 @@ static kernel::KernelError Dispatch_Create_V1(void *userData, size_t size, uint3
   __KRN_TTY_CREATE_V1 args {};
 
   (void)flags;
-  const kernel::KernelError ret = handle_Create_V1(kstd::move(args));
+  const kstd::error_code ret = handle_Create_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_CREATE_V1, sourceHandle), &args.sourceHandle, sizeof(args.sourceHandle)); error != kernel::KernelError::Success) return error;
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_CREATE_V1, sinkHandle), &args.sinkHandle, sizeof(args.sinkHandle)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_CREATE_V1, sourceHandle), &args.sourceHandle, sizeof(args.sourceHandle)); error) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_CREATE_V1, sinkHandle), &args.sinkHandle, sizeof(args.sinkHandle)); error) return error;
   return ret;
 }
 
-static kernel::KernelError Dispatch_SetConfig_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_SetConfig_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_TTY_SETCONFIG_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2481,7 +2481,7 @@ static kernel::KernelError Dispatch_SetConfig_V1(void *userData, size_t size, ui
   __SYS_TTY_SETCONFIG_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_SETCONFIG_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_TTY_SETCONFIG_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_TTY_SETCONFIG_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_TTY_SETCONFIG_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2493,12 +2493,12 @@ static kernel::KernelError Dispatch_SetConfig_V1(void *userData, size_t size, ui
   args.cols = headerCopy.cols;
 
   (void)flags;
-  const kernel::KernelError ret = handle_SetConfig_V1(kstd::move(args));
+  const kstd::error_code ret = handle_SetConfig_V1(kstd::move(args));
 
   return ret;
 }
 
-static kernel::KernelError Dispatch_GetConfig_V1(void *userData, size_t size, uint32_t flags) {
+static kstd::error_code Dispatch_GetConfig_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_TTY_GETCONFIG_V1)) return kernel::KernelError::InvalidSize;
 
   const auto currentThread = KE_SCHED_GetCurrentThread();
@@ -2509,7 +2509,7 @@ static kernel::KernelError Dispatch_GetConfig_V1(void *userData, size_t size, ui
   __SYS_TTY_GETCONFIG_V1 headerCopy {};
   if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_TTY_GETCONFIG_V1), address_space)) {
     kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_TTY_GETCONFIG_V1));
-    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_TTY_GETCONFIG_V1), address_space); error != kernel::KernelError::Success) return error;
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_TTY_GETCONFIG_V1), address_space); error) return error;
   } else {
     return mapped.error();
   }
@@ -2518,11 +2518,11 @@ static kernel::KernelError Dispatch_GetConfig_V1(void *userData, size_t size, ui
   args.handle = headerCopy.handle;
 
   (void)flags;
-  const kernel::KernelError ret = handle_GetConfig_V1(kstd::move(args));
+  const kstd::error_code ret = handle_GetConfig_V1(kstd::move(args));
 
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, flags), &args.flags, sizeof(args.flags)); error != kernel::KernelError::Success) return error;
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, rows), &args.rows, sizeof(args.rows)); error != kernel::KernelError::Success) return error;
-  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, cols), &args.cols, sizeof(args.cols)); error != kernel::KernelError::Success) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, flags), &args.flags, sizeof(args.flags)); error) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, rows), &args.rows, sizeof(args.rows)); error) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_TTY_GETCONFIG_V1, cols), &args.cols, sizeof(args.cols)); error) return error;
   return ret;
 }
 

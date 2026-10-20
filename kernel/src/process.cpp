@@ -32,17 +32,17 @@
     thread->owner_process = nullptr;
 
     const auto processRemoval = KE_OB_RemoveObject(KE_OB_GetProcessDirectory(), KObjectPtr<KObject>(process.get()));
-    if (processRemoval != KernelError::Success) {
+    if (processRemoval) {
       KE_Print("process::terminate_current: failed to remove process object: {}",
-               make_error_code(processRemoval).message());
+               processRemoval.message());
     }
   }
 
   if (thread) {
     const auto threadRemoval = KE_OB_RemoveObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(thread.get()));
-    if (threadRemoval != KernelError::Success) {
+    if (threadRemoval) {
       KE_Print("process::terminate_current: failed to remove thread object: {}",
-               make_error_code(threadRemoval).message());
+               threadRemoval.message());
     }
   }
 

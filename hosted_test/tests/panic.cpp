@@ -3,10 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-namespace kstd {
-void panic(const char* msg) {
+extern "C" [[noreturn]] void KE_RUNTIME_Panic(const char* msg) {
     fprintf(stderr, "PANIC: %s\n", msg);
     abort();
 }
-}
-

@@ -50,9 +50,9 @@ void fill(const KObjectPtr<KDisplay> &display, const URect &r, uint32_t color) n
   if (static_cast<uint64_t>(w) * static_cast<uint64_t>(h) <= 256 &&
       surface->backing && surface->backing->directAddress && surface->pitch > 0 &&
       static_cast<uint64_t>(surface->pitch) >= static_cast<uint64_t>(surface->width) * pixel_bytes(*surface) &&
-      KE_GFX_SoftwareFillRect(surface, r.left, r.top, w, h, packed) == KernelError::Success) return;
+      !KE_GFX_SoftwareFillRect(surface, r.left, r.top, w, h, packed)) return;
   if (adapter && adapter->FillRect &&
-      adapter->FillRect(display->adapter, display->surface, r.left, r.top, w, h, packed) == KernelError::Success) return;
+      !adapter->FillRect(display->adapter, display->surface, r.left, r.top, w, h, packed)) return;
   // Last resort; scene painting has no caller to report a failed fill to.
   (void) KE_GFX_SoftwareFillRect(display->surface, r.left, r.top, w, h, packed);
 }
@@ -250,7 +250,7 @@ void visible_region_locked(const KWindowObject &window, URegion &out) noexcept {
   }
 }
 
-kstd::expected<PaintBegin, KernelError> begin_paint_locked(KProcessObject &proc, KWindowObject &window) noexcept {
+kstd::expected<PaintBegin, kstd::error_code> begin_paint_locked(KProcessObject &proc, KWindowObject &window) noexcept {
   const auto display = primary_display();
   if (!display) return kstd::unexpected(KernelError::DeviceNotReady);
   if (window.paintDC) {
@@ -300,7 +300,7 @@ kstd::expected<PaintBegin, KernelError> begin_paint_locked(KProcessObject &proc,
   return PaintBegin{.dc = handle, .paint = paint};
 }
 
-KernelError end_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t hdc) noexcept {
+kstd::error_code end_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t hdc) noexcept {
   if (window.process != &proc) return KernelError::AccessDenied;
   if (!hdc || window.paintDC != hdc) return KernelError::InvalidHandle;
   auto *slot = proc.dcTable.Resolve(hdc);
@@ -315,7 +315,7 @@ KernelError end_paint_locked(KProcessObject &proc, KWindowObject &window, uint32
     damage = damage.Union({.left = r.left, .top = r.top, .right = r.right, .bottom = r.bottom});
   }
   slot->lock.unlock();
-  if (const KernelError closed = proc.dcTable.Close(hdc); closed != KernelError::Success) return closed;
+  if (const kstd::error_code closed = proc.dcTable.Close(hdc); closed) return closed;
   present_locked(damage.Intersect(screen_rect()));
   window.paintDC = 0;
   window.painting = {};

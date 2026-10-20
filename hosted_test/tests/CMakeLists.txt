@@ -13,6 +13,8 @@ add_executable(KernelTests
         map_test.cpp
         expected_test.cpp
         kernel_error_test.cpp
+        symbol_table_test.cpp
+        ../../kernel/src/module/symbol_table.cpp
         unique_ptr_test.cpp
         unique_lock_test.cpp
         static_identifier_test.cpp
@@ -140,6 +142,11 @@ target_link_libraries(KernelTests PRIVATE ${CMAKE_DL_LIBS})
 add_dependencies(KernelTests fake_fs_fat_driver fake_volmgr_driver)
 
 catch_discover_tests(KernelTests)
+
+add_executable(KernelPrintTests konsole_test.cpp)
+target_link_libraries(KernelPrintTests PRIVATE libkcpp KernelHeaders undos_warnings Catch2::Catch2WithMain)
+catch_discover_tests(KernelPrintTests)
+
 add_test(NAME process_startup_trampoline
         COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/process_startup_trampoline_test.py
         --build-dir ${CMAKE_BINARY_DIR})

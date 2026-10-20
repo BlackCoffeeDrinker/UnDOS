@@ -159,7 +159,7 @@ UNDOS_HAL_API_DEF void HAL_PLATFORM_AfterObjectManager() noexcept {
     // No PCI bus: spawn a legacy ISA root PDO so the ISA bus driver can bind.
     KE_Print("HAL: No PCI bus; reporting legacy ISA root device");
     if (const auto device = KE_PNP_ReportRootDevice("bus_isa"); !device) {
-      KE_Print("HAL: failed to report legacy ISA root: {}", kernel::make_error_code(device.error()).message());
+      KE_Print("HAL: failed to report legacy ISA root: {}", device.error().message());
       HAL_PLATFORM_Panic("Failed to report legacy ISA root", __FILE__, __LINE__);
     }
   }

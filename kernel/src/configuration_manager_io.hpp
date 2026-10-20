@@ -143,8 +143,8 @@ static_assert(sizeof(ConfigurationNameBlock) == 4096, "ConfigurationNameBlock mu
 // DATA REGION starts right after this.
 constexpr uint64_t BLOCK_PAIR_BYTES = sizeof(ConfigurationIndexBlock) + sizeof(ConfigurationNameBlock);
 
-kernel::KernelError ReadRawAt(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t offset, kstd::span<uint8_t> outValue);
-kernel::KernelError WriteRawAt(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t offset, kstd::span<const uint8_t> data);
+kstd::error_code ReadRawAt(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t offset, kstd::span<uint8_t> outValue);
+kstd::error_code WriteRawAt(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t offset, kstd::span<const uint8_t> data);
 
 // The NAME BLOCK immediately follows its paired INDEX BLOCK on disk (see the
 // on-disk layout diagram at the top of this file).
@@ -165,9 +165,9 @@ void ReadNameEntry(const kernel::KObjectPtr<kernel::KIOObject> &file, uint32_t i
 // scoped to entries sharing the same `indexBlockOffset`.
 uint64_t ComputeDataRegionEnd(const kernel::KConfigurationRoot &root, uint32_t indexBlockOffset);
 
-kernel::KernelError PersistIndexEntry(const kernel::KObjectPtr<kernel::KIOObject> &file, const kernel::KConfigurationRoot::Root &root);
+kstd::error_code PersistIndexEntry(const kernel::KObjectPtr<kernel::KIOObject> &file, const kernel::KConfigurationRoot::Root &root);
 
-kernel::KernelError PersistNameEntry(const kernel::KObjectPtr<kernel::KIOObject> &file, uint32_t indexBlockOffset, uint16_t nameEntryIndex, uint64_t keyHash, const kstd::string_view &name);
+kstd::error_code PersistNameEntry(const kernel::KObjectPtr<kernel::KIOObject> &file, uint32_t indexBlockOffset, uint16_t nameEntryIndex, uint64_t keyHash, const kstd::string_view &name);
 
 // Finds the first unused (keyHash == 0) slot in the NAME BLOCK paired with
 // `indexBlockOffset`, persists `name` into it, and returns its slot index.
@@ -176,14 +176,14 @@ kernel::KernelError PersistNameEntry(const kernel::KObjectPtr<kernel::KIOObject>
 // names even though its INDEX BLOCK has room for 170 entries, so it is
 // possible (if unlikely in practice) for this to simply run out of room. In
 // that case the caller's entry is left unnamed rather than failing outright.
-kernel::KernelError FindOrAllocateNameSlot(const kernel::KObjectPtr<kernel::KIOObject> &file, uint32_t indexBlockOffset, uint64_t keyHash, const kstd::string_view &name, uint16_t &outNameEntryIndex);
+kstd::error_code FindOrAllocateNameSlot(const kernel::KObjectPtr<kernel::KIOObject> &file, uint32_t indexBlockOffset, uint64_t keyHash, const kstd::string_view &name, uint16_t &outNameEntryIndex);
 
 // Finds the value entry for `keyHash`/`parentHash`, validates its stored
 // type/size against what the caller expects, and reads its raw payload
 // bytes. Both keyHash and parentHash are needed to identify the entry:
 // keyHash alone can collide across different parents (see
 // KConfigurationKey::parentHash).
-kernel::KernelError ReadKeyValue(const kernel::KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, kernel::ConfigurationValueType expectedType, kstd::span<uint8_t> outValue);
+kstd::error_code ReadKeyValue(const kernel::KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, kernel::ConfigurationValueType expectedType, kstd::span<uint8_t> outValue);
 
 // Finds the first unused (keyHash == 0) INDEX BLOCK slot across the hive's
 // chained block pairs, extending the chain with a brand-new (empty)
@@ -192,7 +192,7 @@ kernel::KernelError ReadKeyValue(const kernel::KConfigurationRoot &root, uint64_
 // in order (deletion of entries - and therefore reuse of interior holes -
 // isn't implemented yet), so the first free slot in a block is simply the
 // one right after however many entries already live there.
-kernel::KernelError FindOrAllocateFreeSlot(kernel::KConfigurationRoot &root, uint32_t &outIndexBlockOffset, uint32_t &outIndexEntryOffset);
+kstd::error_code FindOrAllocateFreeSlot(kernel::KConfigurationRoot &root, uint32_t &outIndexBlockOffset, uint32_t &outIndexEntryOffset);
 
 // Finds the existing value entry for `keyHash`/`parentHash`, writes (or
 // relocates, if the payload size changed) its stored bytes, and persists
@@ -201,20 +201,20 @@ kernel::KernelError FindOrAllocateFreeSlot(kernel::KConfigurationRoot &root, uin
 // index. Both keyHash and parentHash are needed to identify the entry:
 // keyHash alone can collide across different parents (see
 // KConfigurationKey::parentHash).
-kernel::KernelError WriteKeyValue(kernel::KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, kernel::ConfigurationValueType type, kstd::span<const uint8_t> data);
+kstd::error_code WriteKeyValue(kernel::KConfigurationRoot &root, uint64_t keyHash, uint64_t parentHash, kernel::ConfigurationValueType type, kstd::span<const uint8_t> data);
 
 // Writes a fresh HEADER plus a single, fully-empty INDEX BLOCK/NAME BLOCK
 // pair to `file`, producing a minimal-but-valid, empty configuration hive
 // (no entries). configuration_manager.cpp's EnsureRootIsOpened() never
 // creates or formats a file itself - the file must already exist and be
 // valid - so this is how tooling (or tests) build one ahead of time.
-kernel::KernelError FormatEmptyConfigurationFile(const kernel::KObjectPtr<kernel::KIOObject> &file);
+kstd::error_code FormatEmptyConfigurationFile(const kernel::KObjectPtr<kernel::KIOObject> &file);
 
 // Reads back `file`'s HEADER and walks its chained INDEX BLOCKs, populating
 // `outRoots`/`outNumRoots` with every entry found (mirroring the on-disk
 // layout diagram at the top of this file). Returns an error (InvalidFormat for a bad header), leaving
 // `outRoots`/`outNumRoots` untouched, if the header is missing/invalid or a
 // block in the chain can't be read.
-kernel::KernelError LoadConfigurationIndex(const kernel::KObjectPtr<kernel::KIOObject> &file, kstd::list<kernel::KConfigurationRoot::Root> &outRoots, size_t &outNumRoots);
+kstd::error_code LoadConfigurationIndex(const kernel::KObjectPtr<kernel::KIOObject> &file, kstd::list<kernel::KConfigurationRoot::Root> &outRoots, size_t &outNumRoots);
 
 }// namespace kernel::configuration_manager_io

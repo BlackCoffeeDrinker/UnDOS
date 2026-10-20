@@ -1,10 +1,10 @@
 #pragma once
+#include <kernel/__core.hpp>
 
 #include <stdint.h>
 #include <system_error.hpp>
 
 namespace kernel {
-
 enum class KernelError : uint32_t {
   Success = 0,
   Unknown,
@@ -65,6 +65,23 @@ enum class KernelError : uint32_t {
   ProcessStartupFailed,
 };
 
-kstd::error_category &kernel_error_category();
-kstd::error_code make_error_code(KernelError e);
 }// namespace kernel
+
+extern "C" {
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_category *, KE_ERROR_GetCategory);
+}
+
+namespace kernel {
+inline kstd::error_category &kernel_error_category() noexcept {
+  return *KE_ERROR_GetCategory();
+}
+
+inline kstd::error_code make_error_code(KernelError error) noexcept {
+  return kstd::error_code(static_cast<int>(error), kernel_error_category());
+}
+}// namespace kernel
+
+namespace kstd {
+template <>
+struct is_error_code_enum<kernel::KernelError> : true_type {};
+}// namespace kstd

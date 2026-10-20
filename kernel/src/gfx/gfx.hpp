@@ -35,10 +35,10 @@ bool usable_mode(const KObjectPtr<KDisplay> &display, const KDisplayModeInfo &mo
 // InvalidArgument (null display), Unsupported (no GetModeInfo hook),
 // OutOfRange (fewer usable modes).
 // NotFound marks the end of supported-mode enumeration.
-kstd::expected<KDisplayModeInfo, KernelError> enumerate_mode(const KObjectPtr<KDisplay> &display, uint32_t ordinal) noexcept;
+kstd::expected<KDisplayModeInfo, kstd::error_code> enumerate_mode(const KObjectPtr<KDisplay> &display, uint32_t ordinal) noexcept;
 
 // Parses a "<width>x<height>@<refresh>" timing string; the "@<refresh>"
 // suffix is optional and yields a refreshRate of 0 ("any"). Errors:
 // InvalidFormat (malformed text), ArithmeticOverflow (number too large).
-kstd::expected<KMonitorTiming, KernelError> parse_timing(const kstd::string_view &text);
+kstd::expected<KMonitorTiming, kstd::error_code> parse_timing(const kstd::string_view &text);
 }// namespace kernel::gfx

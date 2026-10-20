@@ -140,7 +140,7 @@ struct RegistrationContext {
 }// namespace kernel::event
 
 namespace kernel {
-using EventInterestResult = kstd::expected<event::EventInterestToken, KernelError>;
+using EventInterestResult = kstd::expected<event::EventInterestToken, kstd::error_code>;
 }// namespace kernel
 
 /**
@@ -172,7 +172,7 @@ UNDOS_KERNEL_PUBLIC_V1API(kernel::EventInterestResult,
  * letting the token go out of scope): waiting there would deadlock, so the
  * subscriber is instead torn down as soon as the callback returns.
  */
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError,
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code,
                           KE_EVENT_UnregisterInterest,
                           kernel::event::EventInterestToken &);
 

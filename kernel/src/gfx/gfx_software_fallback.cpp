@@ -75,7 +75,7 @@ void WritePixel(const kernel::KObjectPtr<kernel::KSurface> &surface, int x, int 
 
 }// namespace
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SoftwareFillRect(
+UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareFillRect(
     const kernel::KObjectPtr<kernel::KSurface> &dst,
     int x, int y, int w, int h,
     uint32_t colorIndex) noexcept {
@@ -113,7 +113,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SoftwareFillRect(
   return kernel::KernelError::Success;
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SoftwareDrawLine(
+UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareDrawLine(
     const kernel::KObjectPtr<kernel::KSurface> &dst,
     int x0, int y0, int x1, int y1,
     uint32_t colorIndex) noexcept {
@@ -125,7 +125,7 @@ UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SoftwareDrawLine(
       [&](int32_t x, int32_t y) { WritePixel(dst, x, y, colorIndex); });
 }
 
-UNDOS_KERNEL_API_DEF kernel::KernelError KE_GFX_SoftwareBitBlt(
+UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareBitBlt(
     const kernel::KObjectPtr<kernel::KSurface> &dst,
     int dstX, int dstY,
     const kernel::KObjectPtr<kernel::KSurface> &src,

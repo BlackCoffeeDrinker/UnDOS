@@ -90,7 +90,7 @@ struct DeviceContextTable {
   // is full. Returns {slot pointer, HDC}; fails with OutOfMemory when a chunk
   // cannot be allocated or ResourceLimitExceeded when the 16-bit index space
   // is exhausted.
-  kstd::expected<kstd::pair<KDeviceContextSlot *, HDC>, KernelError> Allocate() noexcept;
+  kstd::expected<kstd::pair<KDeviceContextSlot *, HDC>, kstd::error_code> Allocate() noexcept;
 
   // Resolves a HDC to its slot. Bit-splits `index = hdc & 0xFFFF` /
   // `generation = (hdc >> 16) & 0xFFFF`; rejects an out-of-range index, an
@@ -100,7 +100,7 @@ struct DeviceContextTable {
   // Bumps the slot's generation (invalidating any outstanding HDC into it)
   // and returns its index to the free list. Fails with InvalidHandle if `hdc`
   // didn't resolve to a live slot.
-  KernelError Close(HDC hdc) noexcept;
+  kstd::error_code Close(HDC hdc) noexcept;
 };
 
 }// namespace kernel

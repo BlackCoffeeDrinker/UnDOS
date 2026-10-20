@@ -216,8 +216,8 @@ struct KInputReport {
   constexpr KInputReport(const GamepadState &g) noexcept : kind(InputReportKind::Gamepad), gamepad(g) {}
 };
 
-using GamepadStateResult = kstd::expected<GamepadState, KernelError>;
-using InputEventResult = kstd::expected<AnyInputEvent, KernelError>;
+using GamepadStateResult = kstd::expected<GamepadState, kstd::error_code>;
+using InputEventResult = kstd::expected<AnyInputEvent, kstd::error_code>;
 
 }// namespace kernel::input
 
@@ -230,7 +230,7 @@ using InputEventResult = kstd::expected<AnyInputEvent, KernelError>;
  * pushes a report. The ring is usable even when publishing \Device\Input
  * fails; that failure is returned.
  */
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_INPUT_Initialize);
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_INPUT_Initialize);
 
 /**
  * @ingroup INPUT
@@ -257,7 +257,7 @@ UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_INPUT_Initialize);
  * Errors: InvalidArgument (null device or unknown report kind),
  * ResourceLimitExceeded (device/gamepad table full; the report is dropped).
  */
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KernelError, KE_INPUT_PushEvent,
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_INPUT_PushEvent,
                           const kernel::KDevicePtr<kernel::KDevice> &device,
                           const kernel::input::KInputReport &report);
 

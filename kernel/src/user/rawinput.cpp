@@ -69,7 +69,7 @@ void drag_locked() noexcept {
     } else rect = rect.Intersect(bounds);
   }
   if (!rect.Empty() && rect.left >= -32768 && rect.top >= -32768 &&
-      rect.right <= 32767 && rect.bottom <= 32767 && move_window_locked(*window, rect) == KernelError::Success)
+      rect.right <= 32767 && rect.bottom <= 32767 && !move_window_locked(*window, rect))
     window->restoredRect = rect;
 }
 
@@ -211,7 +211,7 @@ void raw_input_thread(void *) {
 
 void init_raw_input() noexcept {
   if (const auto worker = KE_SCHED_CreateThread(raw_input_thread, nullptr, 2); !worker)
-    KE_Print("USER: cannot create raw input worker: {}", worker.error());
+    KE_Print("USER: cannot create raw input worker: {}", worker.error().message());
 }
 
 void display_input_changed_locked(bool firstActivation) noexcept {

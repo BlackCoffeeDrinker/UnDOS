@@ -20,9 +20,9 @@ public:
   MemoryBackingStore(const MemoryBackingStore &) = delete;
   MemoryBackingStore &operator=(const MemoryBackingStore &) = delete;
 
-  [[nodiscard]] kstd::expected<size_t, kernel::KernelError> Size() const override { return size_; }
+  [[nodiscard]] kstd::expected<size_t, kstd::error_code> Size() const override { return size_; }
 
-  kernel::KernelError Resize(size_t newSize) override {
+  kstd::error_code Resize(size_t newSize) override {
     if (newSize == 0) {
       KE_Free(data_);
       data_ = nullptr;
@@ -42,13 +42,13 @@ public:
     return kernel::KernelError::Success;
   }
 
-  kernel::KernelError ReadAt(uint64_t offset, kstd::span<uint8_t> buffer) override {
+  kstd::error_code ReadAt(uint64_t offset, kstd::span<uint8_t> buffer) override {
     if (offset > size_ || buffer.size() > size_ - offset) return kernel::KernelError::OutOfRange;
     for (size_t i = 0; i < buffer.size(); i++) buffer[i] = data_[offset + i];
     return kernel::KernelError::Success;
   }
 
-  kernel::KernelError WriteAt(uint64_t offset, kstd::span<const uint8_t> buffer) override {
+  kstd::error_code WriteAt(uint64_t offset, kstd::span<const uint8_t> buffer) override {
     if (offset > size_ || buffer.size() > size_ - offset) return kernel::KernelError::OutOfRange;
     for (size_t i = 0; i < buffer.size(); i++) data_[offset + i] = buffer[i];
     return kernel::KernelError::Success;

@@ -16,21 +16,20 @@ kstd::chrono::milliseconds to_timeout(uint32_t ms) {
   return ms == WaitTimeout_Infinite ? kernel::WAIT_INFINITE : kstd::chrono::milliseconds(ms);
 }
 
-kernel::KernelError wait_handle(const kernel::KObjectPtr<kernel::KObject> &object, uint32_t timeoutMs) {
+kstd::error_code wait_handle(const kernel::KObjectPtr<kernel::KObject> &object, uint32_t timeoutMs) {
   return KE_SCHED_WaitForObject(object, to_timeout(timeoutMs));
 }
 } // namespace
 
 namespace {
 template<typename Arguments>
-kernel::KernelError create(Arguments &args, const kernel::ProcessStreams *streams) {
+kstd::error_code create(Arguments &args, const kernel::ProcessStreams *streams) {
   args.handle = UINT32_MAX;
   const auto proc = current_process();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   if (args.flags != 0) return kernel::KernelError::InvalidArgument;
   // Reserve a handle before the loader can start a child.
-  const auto reserved = proc->handles.Allocate(
-      nullptr,
+  const auto reserved = proc->handles.Reserve(
       kernel::ProcessHandleTable::HandleAccess::Read,
       kernel::ProcessHandleTable::HandleFlags::None);
   if (!reserved) return reserved.error();
@@ -44,7 +43,7 @@ kernel::KernelError create(Arguments &args, const kernel::ProcessStreams *stream
       ? KE_USER_CreateProcessWithStreams(kstd::string_view(args.path), kstd::string_view(args.argument), *streams)
       : KE_USER_CreateProcess(kstd::string_view(args.path), kstd::string_view(args.argument));
   if (!created) {
-    proc->handles.Close(h);
+      proc->handles.Close(h);
     return created.error();
   }
   const auto &child = *created;
@@ -53,9 +52,9 @@ kernel::KernelError create(Arguments &args, const kernel::ProcessStreams *stream
   // could leave a running, untracked child, so readiness/failure must complete.
   const auto status = KE_SCHED_WaitForObject(
       kernel::KObjectPtr<kernel::KObject>(child->startupEvent.get()), kernel::WAIT_INFINITE);
-  if (status != kernel::KernelError::Success || !child->startupReady) {
+  if (status || !child->startupReady) {
     proc->handles.Close(h);
-    return status != kernel::KernelError::Success ? status : kernel::KernelError::ProcessStartupFailed;
+    return status ? status : kernel::KernelError::ProcessStartupFailed;
   }
   entry->object = kernel::KObjectPtr<kernel::KObject>(child.get());
   args.handle = static_cast<uint32_t>(h);
@@ -63,11 +62,11 @@ kernel::KernelError create(Arguments &args, const kernel::ProcessStreams *stream
 }
 }
 
-kernel::KernelError handle_CreateProcess_V1(__KRN_PROC_CREATEPROCESS_V1 &&args) {
+kstd::error_code handle_CreateProcess_V1(__KRN_PROC_CREATEPROCESS_V1 &&args) {
   return create(args, nullptr);
 }
 
-kernel::KernelError handle_CreateProcess_V2(__KRN_PROC_CREATEPROCESS_V2 &&args) {
+kstd::error_code handle_CreateProcess_V2(__KRN_PROC_CREATEPROCESS_V2 &&args) {
   args.handle = UINT32_MAX;
   const auto proc = current_process();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
@@ -98,7 +97,7 @@ kernel::KernelError handle_CreateProcess_V2(__KRN_PROC_CREATEPROCESS_V2 &&args) 
 }
 
 /** Blocks until a waitable handle (event or process) is signalled. */
-kernel::KernelError handle_WaitForObject_V1(__KRN_PROC_WAITFOROBJECT_V1 &&args) {
+kstd::error_code handle_WaitForObject_V1(__KRN_PROC_WAITFOROBJECT_V1 &&args) {
   const auto proc = current_process();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   const auto entry = proc->handles.Lookup(static_cast<kernel::KHandle>(args.handle));
@@ -107,7 +106,7 @@ kernel::KernelError handle_WaitForObject_V1(__KRN_PROC_WAITFOROBJECT_V1 &&args) 
 }
 
 /** Blocks until a process exits and returns its exit code. */
-kernel::KernelError handle_WaitProcess_V1(__KRN_PROC_WAITPROCESS_V1 &&args) {
+kstd::error_code handle_WaitProcess_V1(__KRN_PROC_WAITPROCESS_V1 &&args) {
   const auto proc = current_process();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   const auto entry = proc->handles.Lookup(static_cast<kernel::KHandle>(args.handle));
@@ -116,14 +115,14 @@ kernel::KernelError handle_WaitProcess_V1(__KRN_PROC_WAITPROCESS_V1 &&args) {
   if (!child) return kernel::KernelError::WrongObjectType;
 
   const auto ret = wait_handle(entry->object, args.timeoutMs);
-  if (ret == kernel::KernelError::Success) {
+  if (!ret) {
     args.exitCode = static_cast<uint32_t>(child->exit_code);
   }
   return ret;
 }
 
 /** Creates an event object. */
-kernel::KernelError handle_CreateEvent_V1(__KRN_PROC_CREATEEVENT_V1 &&args) {
+kstd::error_code handle_CreateEvent_V1(__KRN_PROC_CREATEEVENT_V1 &&args) {
   const auto proc = current_process();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   const auto created = KE_EVENT_Create((args.flags & EventFlags_ManualReset) != 0,
@@ -140,7 +139,7 @@ kernel::KernelError handle_CreateEvent_V1(__KRN_PROC_CREATEEVENT_V1 &&args) {
 }
 
 /** Signals an event. */
-kernel::KernelError handle_SetEvent_V1(__KRN_PROC_SETEVENT_V1 &&args) {
+kstd::error_code handle_SetEvent_V1(__KRN_PROC_SETEVENT_V1 &&args) {
   const auto proc = current_process();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   const auto entry = proc->handles.Lookup(static_cast<kernel::KHandle>(args.handle));
@@ -152,18 +151,18 @@ kernel::KernelError handle_SetEvent_V1(__KRN_PROC_SETEVENT_V1 &&args) {
   return kernel::KernelError::Success;
 }
 /** Retrieves information about a running or exited process. */
-kernel::KernelError handle_GetInfo_V1(__KRN_PROC_GETINFO_V1 &&args) {
+kstd::error_code handle_GetInfo_V1(__KRN_PROC_GETINFO_V1 &&args) {
   (void) args;
   return kernel::KernelError::NotImplemented;
 }
 /** Terminates the current process with the given return code. */
-kernel::KernelError handle_Exit_V1(__KRN_PROC_EXIT_V1 &&args) {
+kstd::error_code handle_Exit_V1(__KRN_PROC_EXIT_V1 &&args) {
   if (const auto proc = current_process(); proc && proc->startupEvent && !proc->startupReady)
     KE_EVENT_Signal(proc->startupEvent->header, true);
   kernel::process::terminate_current(static_cast<int32_t>(args.exitCode));
 }
 /** Allocates `size` bytes of pages with the given protection. */
-kernel::KernelError handle_AllocatePages_V1(__KRN_MEM_ALLOCATEPAGES_V1 &&args) {
+kstd::error_code handle_AllocatePages_V1(__KRN_MEM_ALLOCATEPAGES_V1 &&args) {
   args.address = 0;
   const auto proc = current_process();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
@@ -177,7 +176,7 @@ kernel::KernelError handle_AllocatePages_V1(__KRN_MEM_ALLOCATEPAGES_V1 &&args) {
   args.address = reinterpret_cast<uintptr_t>(*memory);
   return kernel::KernelError::Success;
 }
-kernel::KernelError handle_MapFixedPages_V1(__KRN_MEM_MAPFIXEDPAGES_V1 &&args) {
+kstd::error_code handle_MapFixedPages_V1(__KRN_MEM_MAPFIXEDPAGES_V1 &&args) {
   const auto thread = KE_SCHED_GetCurrentThread();
   if (!thread) return kernel::KernelError::NoCurrentThread;
   if (!thread->owner_process) return kernel::KernelError::NoCurrentProcess;
@@ -189,7 +188,7 @@ kernel::KernelError handle_MapFixedPages_V1(__KRN_MEM_MAPFIXEDPAGES_V1 &&args) {
   return kernel::vmm::map_fixed_memory(thread->owner_process->address_space, args.address, args.size, flags);
 }
 /** Frees a previously allocated page range. */
-kernel::KernelError handle_FreePages_V1(__KRN_MEM_FREEPAGES_V1 &&args) {
+kstd::error_code handle_FreePages_V1(__KRN_MEM_FREEPAGES_V1 &&args) {
   const auto proc = current_process();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   if (!args.size || args.size > UINT32_MAX - 4095 || (args.address & 4095))
@@ -214,7 +213,7 @@ kernel::KernelError handle_FreePages_V1(__KRN_MEM_FREEPAGES_V1 &&args) {
   return KE_VMM_FreeRegion(as, address.as_ptr());
 }
 /** Changes the protection of an existing page range (e.g. mark executable). */
-kernel::KernelError handle_Protect_V1(__KRN_MEM_PROTECT_V1 &&args) {
+kstd::error_code handle_Protect_V1(__KRN_MEM_PROTECT_V1 &&args) {
   (void) args;
   // No partial VAD splitting/protection updates in this milestone.
   return kernel::KernelError::NotImplemented;
