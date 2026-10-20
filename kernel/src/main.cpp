@@ -186,10 +186,10 @@ void DumpDevice(const kernel::KDevicePtr<kernel::KDevice> &dev, int depth, bool 
 UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT &boot_info) noexcept {
   g_page_size = boot_info.page_size;
 
+  HAL_PLATFORM_Init(boot_info, KE_VMM_GetKernelAddressSpace());
   KE_Print("UnDOS Kernel INIT with page size {}", g_page_size);
   KE_Print("Command line: {}", boot_info.command_line);
 
-  HAL_PLATFORM_Init(boot_info, KE_VMM_GetKernelAddressSpace());
   kernel::vmm::init();
   kernel::objectmanager::init();
   kernel::vmm::late_init();
@@ -198,6 +198,8 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   const kernel::CommandLineParser parser(boot_info.command_line);
   RegisterBootMappedRegions(boot_info);
   kernel::driver::init(boot_info);
+  MemoryReclaim_BootStructures();
+  
   HAL_VMM_FinalizeInit();
   kernel::sched::init_bsp();
   kernel::dispatch::init();
@@ -223,7 +225,6 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   // asynchronously on the PnP worker thread; wait for the queue to fully
   // drain so the root-fs lookup below still sees a fully-started tree.
   KE_PNP_WaitForQuiescence();
-  MemoryReclaim_BootStructures();
 
   // Bring every CPU the HAL reports online. On a uniprocessor HAL this is a
   // no-op and online_count() stays 1.

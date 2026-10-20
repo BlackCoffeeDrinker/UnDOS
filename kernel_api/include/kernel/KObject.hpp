@@ -1,6 +1,5 @@
 #pragma once
 
-
 #include <kernel/gfx/KDeviceContextTable.hpp>
 #include <kernel/kobject/KConfigurationRoot.hpp>
 #include <kernel/kobject/KDeviceObject.hpp>
