@@ -47,13 +47,16 @@ uint64_t area(const URect &r) noexcept {
 
 // Returns true when the pixels still have to be presented, i.e. they were
 // written to the surface but not necessarily to the visible image.
+// Inside a scene draw every fill stays in a packed shadow, so the frame
+// appears atomically at the final present. A visible hardware fill would
+// show caption bars before their deferred glyphs and bevels.
 bool fill(const KObjectPtr<KDisplay> &display, const URect &r, uint32_t color) noexcept {
   const auto &adapter = display->adapter;
   const int w = r.right - r.left;
   const int h = r.bottom - r.top;
   const uint32_t packed = gfx::Palette16ScreenColor(color, display->surface->bpp);
   const auto &surface = display->surface;
-  if (area(r) <= 256 &&
+  if ((area(r) <= 256 || g_drawDepth) &&
       surface->backing && surface->backing->directAddress && surface->pitch > 0 &&
       static_cast<uint64_t>(surface->pitch) >= static_cast<uint64_t>(surface->width) * pixel_bytes(*surface) &&
       !KE_GFX_SoftwareFillRect(surface, r.left, r.top, w, h, packed)) return true;
@@ -292,7 +295,7 @@ void expose_locked(const URect &screenRect) noexcept {
     }
     if (!effectively_visible_locked(*w)) continue;
     invalidate_locked(*w, screen_to_client_locked(*w, screenRect));
-    if (!w->rect.Intersect(screenRect).Empty()) draw_nonclient_locked(*w);
+    if (!w->rect.Intersect(screenRect).Empty()) draw_nonclient_locked(*w, screenRect);
     desktop.Subtract(clipped_rect_locked(*w));
   }
   if (desktop.Empty()) return;

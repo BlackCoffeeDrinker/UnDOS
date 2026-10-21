@@ -138,6 +138,8 @@ URect client_to_screen_locked(const KWindowObject &window, const URect &clientRe
 URect screen_to_client_locked(const KWindowObject &window, const URect &screenRect) noexcept;
 HitTest hit_test_locked(const KWindowObject &window, int32_t x, int32_t y) noexcept;
 void draw_nonclient_locked(KWindowObject &window) noexcept;
+// Redraws only the part of the frame inside `limit` (screen coordinates).
+void draw_nonclient_locked(KWindowObject &window, const URect &limit) noexcept;
 
 // rawinput.cpp
 void init_raw_input() noexcept;

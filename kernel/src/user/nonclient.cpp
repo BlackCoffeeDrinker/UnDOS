@@ -72,11 +72,16 @@ HitTest hit_test_locked(const KWindowObject &window, int32_t x, int32_t y) noexc
 }
 
 void draw_nonclient_locked(KWindowObject &window) noexcept {
+  draw_nonclient_locked(window, window.rect);
+}
+
+void draw_nonclient_locked(KWindowObject &window, const URect &limit) noexcept {
   if (!effectively_visible_locked(window)) return;
   SceneDrawGuard drawing;
 
   URegion clip;
   visible_region_locked(window, clip);
+  clip.Intersect(limit);
   if (clip.Empty()) return;
 
   auto draw_rect = [&](int32_t l, int32_t t, int32_t w, int32_t h, uint32_t color) {
