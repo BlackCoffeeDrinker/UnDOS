@@ -127,7 +127,7 @@ kstd::error_code to_short_name(kstd::string_view name, char out[11]) {
     }
     out[8 + i] = c;
   }
-  return KernelError::Success;
+  return {};
 }
 
 bool names_equal(const char entry[11], const char want[11]) {
@@ -204,7 +204,7 @@ kstd::error_code open_volume(Volume &vol) {
       (static_cast<uint32_t>(vol.rootEntryCount) * 32u + (vol.bytesPerSector - 1u)) /
       vol.bytesPerSector;
   vol.dataStartSector = vol.rootDirSector + vol.rootDirSectors;
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code read_fat_entry(const Volume &vol, uint16_t cluster, uint16_t &next_out) {
@@ -219,7 +219,7 @@ kstd::error_code read_fat_entry(const Volume &vol, uint16_t cluster, uint16_t &n
     return error;
   }
   next_out = read_le16(sector_buf + entry_off);
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code cluster_to_lba(const Volume &vol, uint16_t cluster, uint32_t &rel_lba_out) {
@@ -228,7 +228,7 @@ kstd::error_code cluster_to_lba(const Volume &vol, uint16_t cluster, uint32_t &r
   }
   rel_lba_out = vol.dataStartSector +
                 static_cast<uint32_t>(cluster - 2) * vol.sectorsPerCluster;
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code read_cluster(const Volume &vol, uint16_t cluster, kstd::span<uint8_t> buffer) {
@@ -275,7 +275,7 @@ kstd::error_code find_in_dir_bytes(kstd::span<const uint8_t> dir_bytes,
     }
 
     entry_out = e;
-    return KernelError::Success;
+    return {};
   }
   return KernelError::NotFound;
 }
@@ -306,7 +306,7 @@ kstd::error_code load_cluster_chain_dir(const Volume &vol, uint16_t start_cluste
       return error;
     }
     if (next >= kFatEofMin) {
-      return KernelError::Success;
+      return {};
     }
     cluster = next;
   }
@@ -316,7 +316,7 @@ kstd::error_code load_cluster_chain_dir(const Volume &vol, uint16_t start_cluste
 kstd::error_code read_file_clusters(const Volume &vol, uint16_t start_cluster, uint32_t file_size,
                         kstd::vector<uint8_t> &out) {
   out.clear();
-  if (file_size == 0) return KernelError::Success;
+  if (file_size == 0) return {};
   if (start_cluster == 0) return KernelError::InvalidData;
 
   out.reserve(file_size);

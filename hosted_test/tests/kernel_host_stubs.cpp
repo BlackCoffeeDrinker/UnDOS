@@ -137,9 +137,11 @@ UNDOS_HAL_API_DEF void HAL_INTR_DisconnectInterrupt(uint32_t irq) noexcept {
 
 #include "dispatch_test_hooks.hpp"
 
+#include "dispatch.hpp"
+
 namespace {
 kernel::InterruptRecordRing g_testRing;
-kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> g_testHandlers[16]{};
+kernel::dispatch::InterruptHandlerRegistry g_testHandlers;
 }// namespace
 
 namespace test_dispatch {
@@ -149,26 +151,28 @@ kernel::InterruptRecordRing &GetRing() noexcept {
 }
 
 kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> GetHandler(uint32_t irq) noexcept {
-  if (irq < 16) {
-    return g_testHandlers[irq];
-  }
-  return nullptr;
+  kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject>
+      handlers[kernel::dispatch::InterruptHandlerRegistry::kMaxHandlersPerInterrupt]{};
+  size_t count = 0;
+  g_testHandlers.CopyHandlers(irq, handlers, count);
+  return count > 0 ? handlers[0] : nullptr;
 }
 
 void Reset() noexcept {
   g_testRing.Reset();
-  for (auto &h: g_testHandlers) {
-    h = nullptr;
-  }
+  g_testHandlers.Reset();
 }
 
 void Pump() noexcept {
   kernel::HalInterruptRecord record{};
   while (g_testRing.Pop(record)) {
-    if (record.irq < 16 && g_testHandlers[record.irq]) {
-      auto &isr = g_testHandlers[record.irq];
-      if (isr->service_routine) {
-        isr->service_routine(isr, isr->service_context);
+    kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject>
+        handlers[kernel::dispatch::InterruptHandlerRegistry::kMaxHandlersPerInterrupt]{};
+    size_t count = 0;
+    g_testHandlers.CopyHandlers(record.irq, handlers, count);
+    for (size_t i = 0; i < count; ++i) {
+      if (handlers[i] && handlers[i]->service_routine) {
+        handlers[i]->service_routine(handlers[i], handlers[i]->service_context);
       }
     }
   }
@@ -183,19 +187,11 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_EnqueueInterrupt(const kernel:
 UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_RegisterHandler(
     uint32_t irq,
     const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
-  if (irq >= 16 || !isr) {
-    return kernel::KernelError::InvalidArgument;
-  }
-  g_testHandlers[irq] = isr;
-  return kernel::KernelError::Success;
+  return g_testHandlers.Register(irq, isr);
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_UnregisterHandler(uint32_t irq) noexcept {
-  if (irq < 16) {
-    g_testHandlers[irq] = nullptr;
-    return kernel::KernelError::Success;
-  }
-  return kernel::KernelError::InvalidArgument;
+  return g_testHandlers.Unregister(irq);
 }
 #include <stdexcept>
 void HAL_PLATFORM_Panic(const kstd::string_view &message, const char *file, int line) noexcept {

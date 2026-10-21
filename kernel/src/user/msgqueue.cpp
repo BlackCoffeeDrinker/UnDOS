@@ -60,7 +60,7 @@ kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t messag
                         .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
   if (const kstd::error_code pushed = queue.ring.Push(m); pushed) return pushed;
   wake_locked(queue);
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code post_message(uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept {

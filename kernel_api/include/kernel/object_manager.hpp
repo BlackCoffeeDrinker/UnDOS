@@ -23,6 +23,7 @@ constexpr kstd::static_string kOBFileSystemPath = "FileSystem";
 constexpr kstd::static_string kOBVFSPath = "VFS";
 constexpr kstd::static_string kOBFilePath = "File";
 constexpr kstd::static_string kOBSubsystemsPath = "Subsystems";
+constexpr kstd::static_string kOBModulesPath = "Modules";
 constexpr kstd::static_string kOBHivePath = "Hive";
 constexpr kstd::static_string kOBSystemPath = "System";
 constexpr kstd::static_string kOBGfxPath = "Gfx";
@@ -163,6 +164,14 @@ UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_Ge
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetSubsystemDirectory);
+
+/**
+ * @ingroup OB
+ * @brief Method KE_OB_GetModuleDirectory
+ *
+ * The loaded kernel modules (Kernel, HAL and every loadable subsystem image).
+ */
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KDirectoryObject>, KE_OB_GetModuleDirectory);
 
 /**
  * @ingroup OB

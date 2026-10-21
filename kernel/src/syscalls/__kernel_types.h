@@ -434,6 +434,12 @@ struct __KRN_ABI_QUERYFPU_V1 {
     enum FpuCapability capability;
 };
 
+/** Reports the version of the network subsystem; UNSUPPORTED when it is not loaded. */
+struct __KRN_NET_QUERYNETWORKVERSION_V1 {
+    /** Interface version implemented by the network subsystem. */
+    uint32_t version;
+};
+
 struct __KRN_DEBUG_PRINT_V1 {
     kstd::string message {};
 };

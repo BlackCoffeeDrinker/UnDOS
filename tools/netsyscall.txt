@@ -1,0 +1,10 @@
+// The NET syscall group (500-599) is implemented by the loadable `network`
+// subsystem rather than the kernel image. Dispatch goes through a generated
+// slot table that is bound when the provider module registers; until then
+// callers receive UNSUPPORTED.
+
+/** Reports the version of the network subsystem; UNSUPPORTED when it is not loaded. */
+syscall V1 NET QueryNetworkVersion [500] provider network {
+    /** Interface version implemented by the network subsystem. */
+    version: OUT c<uint32_t>;
+};

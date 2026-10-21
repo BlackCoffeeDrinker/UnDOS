@@ -105,6 +105,8 @@ TEST_CASE("Dispatch handler registration lifecycle and dispatch pump", "[dispatc
 
   DriverContext kbdCtx{};
   DriverContext mouseCtx{};
+  DriverContext extendedCtx{};
+  constexpr uint32_t extendedInterruptId = 0x12345678;
 
   auto kbdRoutine = [](const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> & /*isr*/, void *ctx) {
     auto *c = static_cast<DriverContext *>(ctx);
@@ -161,6 +163,25 @@ TEST_CASE("Dispatch handler registration lifecycle and dispatch pump", "[dispatc
   CHECK(mouseCtx.callCount == 2);
 
   KE_IO_DisconnectInterrupt(12);
+
+  auto extendedRoutine = [](const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *ctx) {
+    auto *c = static_cast<DriverContext *>(ctx);
+    c->callCount++;
+    c->lastIrq = extendedInterruptId;
+  };
+  auto extendedIsr = KE_IO_ConnectInterrupt(
+      nullptr,
+      extendedInterruptId,
+      kernel::cfunc<void(const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &, void *)>(extendedRoutine),
+      &extendedCtx);
+  REQUIRE(extendedIsr != nullptr);
+  CHECK(KE_DISPATCH_EnqueueInterrupt({.vector = 0x80, .irq = extendedInterruptId, .timestamp = 70, .flags = 0}) ==
+        kernel::KernelError::Success);
+  test_dispatch::Pump();
+  CHECK(extendedCtx.callCount == 1);
+  CHECK(extendedCtx.lastIrq == extendedInterruptId);
+  KE_IO_DisconnectInterrupt(extendedInterruptId);
+
   test_dispatch::Reset();
 }
 
@@ -168,13 +189,14 @@ TEST_CASE("Dispatch invalid registration parameters", "[dispatch]") {
   EnsureObjectManagerInitialized();
   test_dispatch::Reset();
 
-  // IRQ >= 16 out of bounds
+  // Interrupt identifiers have no kernel-defined range; a null handler remains invalid.
   CHECK(KE_DISPATCH_RegisterHandler(16, nullptr) == kernel::KernelError::InvalidArgument);
-  CHECK(KE_DISPATCH_RegisterHandler(32, nullptr) == kernel::KernelError::InvalidArgument);
+  CHECK(KE_DISPATCH_RegisterHandler(0xFFFFFFFF, nullptr) == kernel::KernelError::InvalidArgument);
 
   // Connect with null routine
   auto nullIsr = KE_IO_ConnectInterrupt(nullptr, 1, nullptr, nullptr);
-  CHECK(nullIsr == nullptr);
+  CHECK_FALSE(nullIsr);
+  CHECK(nullIsr.error() == kernel::KernelError::InvalidArgument);
 
   test_dispatch::Reset();
 }

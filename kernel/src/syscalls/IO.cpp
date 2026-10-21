@@ -40,7 +40,7 @@ kstd::error_code handle_Open_V1(__KRN_IO_OPEN_V1 &&args) {
     const auto result = proc->handles.Allocate(object, access, flags);
     if (!result) return result.error();
     args.handle = static_cast<uint32_t>(*result);
-    return kernel::KernelError::Success;
+    return {};
   };
 
   if ((args.mode & FileOpenMode_Read) != 0) {
@@ -132,7 +132,7 @@ kstd::error_code handle_Read_V1(__KRN_IO_READ_V1 &&args) {
   if (transferred > args.data.size()) return kernel::KernelError::IoError;
 
   args.data_len = static_cast<decltype(args.data_len)>(transferred);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 /** Writes data from `data` to an open handle. */
@@ -146,7 +146,7 @@ kstd::error_code handle_Write_V1(__KRN_IO_WRITE_V1 &&args) {
   if (transferred > args.data.size()) return kernel::KernelError::IoError;
 
   args.data_len = static_cast<decltype(args.data_len)>(transferred);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 /** Versioned byte-counting write, preserving the V1 ABI. */
@@ -159,7 +159,7 @@ kstd::error_code handle_Write_V2(__KRN_IO_WRITE_V2 &&args) {
   if (status) return status;
   if (transferred > args.data.size()) return kernel::KernelError::IoError;
   args.transferred = static_cast<uint32_t>(transferred);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 /** Sends a control code to the device behind an open handle. */
@@ -177,5 +177,5 @@ kstd::error_code handle_Control_V1(__KRN_IO_CONTROL_V1 &&args) {
   if (transferred > args.output.size()) return kernel::KernelError::IoError;
 
   args.output_len = static_cast<decltype(args.output_len)>(transferred);
-  return kernel::KernelError::Success;
+  return {};
 }

@@ -68,6 +68,15 @@ constexpr uint32_t SHT_SYMTAB = 2;
 constexpr uint32_t SHT_STRTAB = 3;
 constexpr uint32_t SHT_REL = 9;
 constexpr uint32_t SHF_ALLOC = 0x2;
+constexpr uint32_t SHN_LORESERVE = 0xff00;
+constexpr unsigned char STB_GLOBAL = 1;
+constexpr unsigned char STT_OBJECT = 1;
+constexpr unsigned char STT_FUNC = 2;
+constexpr unsigned char STV_DEFAULT = 0;
+
+constexpr unsigned char ELF32_ST_BIND(unsigned char info) { return info >> 4; }
+constexpr unsigned char ELF32_ST_TYPE(unsigned char info) { return info & 0xf; }
+constexpr unsigned char ELF32_ST_VISIBILITY(unsigned char other) { return other & 0x3; }
 
 constexpr uint32_t R_386_32 = 1;
 constexpr uint32_t R_386_PC32 = 2;

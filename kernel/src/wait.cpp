@@ -50,7 +50,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForHeader(KDispatcherHeader &
   const uintptr_t irq_state = wait::lock().lock_irqsave();
   if (header.TryAcquire()) {
     wait::lock().unlock_irqrestore(irq_state);
-    return KernelError::Success;
+    return {};
   }
   if (timeout.count() == 0) {
     wait::lock().unlock_irqrestore(irq_state);

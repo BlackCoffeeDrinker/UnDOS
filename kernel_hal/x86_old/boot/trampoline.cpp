@@ -13,7 +13,7 @@ extern "C" [[noreturn]] void entry_trampoline(uint32_t entry, uint32_t boot_info
 namespace {
 constexpr uintptr_t PAGE_ALIGN_UP(uintptr_t addr) { return (addr + 4095) & ~static_cast<uintptr_t>(4095); }
 
-constexpr size_t MAX_GLOBAL_SYMBOLS = 2048;
+constexpr size_t MAX_GLOBAL_SYMBOLS = kernel::kMaxBootSymbols;
 constexpr size_t DEFAULT_STACK_SIZE = 16384;
 
 // Fixed memory mapping zones for compilation deployment
@@ -28,6 +28,7 @@ struct runtime_symbol_t {
 
 kstd::array<runtime_symbol_t, MAX_GLOBAL_SYMBOLS> g_symbol_table;
 size_t g_symbol_count = 0;
+size_t g_kernel_symbol_count = 0;// symbols collected from the kernel image (the rest are the HAL's)
 
 uintptr_t g_hal_virtual_base = 0;
 uintptr_t g_hal_virtual_end = 0;
@@ -135,10 +136,6 @@ uintptr_t get_elf_load_vaddr(uint32_t module_start) {
 }
 
 void register_global_symbol(const char *name, uint32_t value) {
-  if (kstd::string_view(name).size() > decltype(kernel::BootSymbolsT::name)::capacity()) {
-    write_fmt("Stage 1.5: Symbol name exceeds boot handoff capacity: {}\n\r", name);
-    panic("Stage 1.5: Symbol name too long");
-  }
   for (size_t i = 0; i < g_symbol_count; ++i) {
     if (kstrcmp(g_symbol_table[i].name, name)) {
       write_fmt("Stage 1.5: Duplicate symbol '{}', retaining first definition\n\r", name);
@@ -444,6 +441,7 @@ void calculate_layout(multiboot_module_t *kernel_module, multiboot_module_t *hal
 void load_and_link(const multiboot_module_t *kernel_module, const multiboot_module_t *hal_module, const module_got_t &kernel_got, const module_got_t &hal_got) {
   // PASS 2: Read all public exports across binaries into our table space
   collect_symbols_from_module(kernel_module->mod_start, KERNEL_VIRTUAL_BASE);
+  g_kernel_symbol_count = g_symbol_count;
   collect_symbols_from_module(hal_module->mod_start, g_hal_virtual_base);
   write_fmt("Stage 1.5: Object Registry aggregated {} global symbols.\n\r", g_symbol_count);
 
@@ -620,12 +618,20 @@ kernel::BootInfoT *fill_boot_info(const multiboot_info_t *mbi, uintptr_t kernel_
   */
   
   // Copy symbols into the boot info
+  size_t names_used = 0;
   for (size_t i = 0; i < g_symbol_count; i++) {
-    if (i < boot_info_ptr->boot_symbols.size()) {
-      boot_info_ptr->boot_symbols[i].name = g_symbol_table[i].name;
-      boot_info_ptr->boot_symbols[i].address = g_symbol_table[i].value;
+    const size_t length = kstd::string_view(g_symbol_table[i].name).size() + 1;
+    if (length > boot_info_ptr->boot_symbol_names.size() - names_used) {
+      panic("Stage 1.5: Boot symbol name pool full");
     }
+    for (size_t c = 0; c < length; ++c) boot_info_ptr->boot_symbol_names[names_used + c] = g_symbol_table[i].name[c];
+    boot_info_ptr->boot_symbols[i].name_offset = static_cast<uint32_t>(names_used);
+    boot_info_ptr->boot_symbols[i].address = g_symbol_table[i].value;
+    names_used += length;
   }
+  boot_info_ptr->boot_symbol_count = static_cast<uint32_t>(g_symbol_count);
+  boot_info_ptr->boot_kernel_symbol_count = static_cast<uint32_t>(g_kernel_symbol_count);
+  boot_info_ptr->boot_symbol_names_used = static_cast<uint32_t>(names_used);
 
   write_fmt("Stage 1.5: boot_info structure populated at 0x{x}.\n\r", reinterpret_cast<uintptr_t>(boot_info_ptr));
   return boot_info_ptr;

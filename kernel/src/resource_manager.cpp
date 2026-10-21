@@ -57,7 +57,7 @@ kstd::error_code AddDescriptor(IoResourceList *alt, ResourceType type, uint32_t 
   d->length = length;
   d->alignment = 1;
   alt->descriptors.push_back(d);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 }// namespace
@@ -141,7 +141,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_RES_AssignResources(const kernel::KDevi
   // No requirements -> success with an empty grant.
   if (!requirements || requirements->alternatives.empty()) {
     s_assignments.push_back(assignment);
-    return kernel::KernelError::Success;
+    return {};
   }
 
   // Flatten every existing grant into a temporary reserved set (copies, so the
@@ -186,7 +186,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_RES_AssignResources(const kernel::KDevi
   }
 
   s_assignments.push_back(assignment);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF const CmResourceList *KE_RES_GetAssignedResources(const kernel::KDevicePtr<kernel::KDevice> &device) noexcept {

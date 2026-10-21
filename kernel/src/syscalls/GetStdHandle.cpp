@@ -30,5 +30,5 @@ kstd::error_code handle_GetStdHandle_V1(__KRN_IO_GETSTDHANDLE_V1 &&args) {
       error) return error;
 
   args.handle = static_cast<uint32_t>(handle);
-  return kernel::KernelError::Success;
+  return {};
 }

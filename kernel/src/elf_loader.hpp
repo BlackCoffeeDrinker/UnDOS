@@ -44,6 +44,9 @@ struct LoadPolicy {
   // to capture_section, avoiding reading every section (including large
   // debug sections) from disk.
   kstd::string_view capture_section_name;
+  // Invoked after relocation (relocatable path only) for every defined,
+  // GLOBAL, default-visibility FUNC/OBJECT symbol, with its relocated address.
+  cfunc<void(void *, kstd::string_view, VirtualAddress)> capture_export;
 };
 
 struct LoadResult {

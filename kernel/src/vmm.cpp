@@ -41,7 +41,7 @@ kstd::error_code create_user_address_space(AddressSpace &out_as) noexcept {
   out_as.current_base = 0x10000000;
   out_as.limit = 0xC0000000;
 
-  return KernelError::Success;
+  return {};
 }
 
 void destroy_user_address_space(AddressSpace &as) noexcept {
@@ -228,7 +228,7 @@ kstd::error_code map_fixed_memory(AddressSpace &as, uintptr_t address, size_t si
   vad.value()->end = VirtualAddress(address + aligned);
   vad.value()->flags = map_flags;
   as.vads.insert(*vad->release());
-  return KernelError::Success;
+  return {};
 }
 }// namespace kernel::vmm
 
@@ -347,7 +347,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_VMM_FreeRegion(kernel::vmm::AddressSpac
     // reference before returning the raw storage to the allocator.
     vad->~VirtualAddressDescriptor();
     KE_Free(vad);
-    return kernel::KernelError::Success;
+    return {};
   }
   return kernel::KernelError::NotFound;
 }

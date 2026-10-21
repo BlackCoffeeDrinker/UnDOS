@@ -38,6 +38,7 @@ SyscallReturnCode KErrorToSysReturnCode(const kstd::error_code &error) {
     case KernelError::InvalidResource:
     case KernelError::NotDirectory:
     case KernelError::InvalidExecutable:
+    case KernelError::StandardStreamUnavailable:
       return SyscallReturnCode_INVALID_ARGUMENT;
 
     case KernelError::Unsupported:
@@ -59,7 +60,6 @@ SyscallReturnCode KErrorToSysReturnCode(const kstd::error_code &error) {
     case KernelError::NoCurrentThread:
     case KernelError::NoCurrentProcess:
     case KernelError::DeviceNotReady:
-    case KernelError::StandardStreamUnavailable:
     case KernelError::WouldBlock:
     case KernelError::IoError:
     case KernelError::DeviceError:

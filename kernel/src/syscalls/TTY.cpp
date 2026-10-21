@@ -35,7 +35,7 @@ kstd::error_code handle_Create_V1(__KRN_TTY_CREATE_V1 &&args) {
   }
   args.sourceHandle = static_cast<uint32_t>(*sourceHandle);
   args.sinkHandle = static_cast<uint32_t>(*sinkHandle);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_SetConfig_V1(__KRN_TTY_SETCONFIG_V1 &&args) {
@@ -66,7 +66,7 @@ kstd::error_code handle_SetConfig_V1(__KRN_TTY_SETCONFIG_V1 &&args) {
   cfg.size.ws_row = args.rows;
   cfg.size.ws_col = args.cols;
   vtty->set_config(cfg);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_GetConfig_V1(__KRN_TTY_GETCONFIG_V1 &&args) {
@@ -96,5 +96,5 @@ kstd::error_code handle_GetConfig_V1(__KRN_TTY_GETCONFIG_V1 &&args) {
   args.flags = static_cast<enum TtyModeFlags>(cfg.flags);
   args.rows = cfg.size.ws_row;
   args.cols = cfg.size.ws_col;
-  return kernel::KernelError::Success;
+  return {};
 }

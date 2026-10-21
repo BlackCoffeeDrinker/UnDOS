@@ -8,12 +8,14 @@
 #include "gfx/gfx.hpp"
 #include "initial/boot_device_vfs.hpp"
 #include "input/input_manager.hpp"
+#include "module/module_registry.hpp"
 #include "object_manager.hpp"
 #include "pnp_manager.hpp"
 #include "resource_manager.hpp"
 #include "scheduler/CpuContext.hpp"
 #include "scheduler/Scheduler.hpp"
 #include "smp.hpp"
+#include "subsystem_loader.hpp"
 #include "user/user.hpp"
 #include "vfs.hpp"
 #include "vmm.hpp"
@@ -194,12 +196,12 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   kernel::objectmanager::init();
   kernel::vmm::late_init();
 
-  // The parser copies the command line; it needs the heap, and the original is reclaimed below.
   const kernel::CommandLineParser parser(boot_info.command_line);
   RegisterBootMappedRegions(boot_info);
-  kernel::driver::init(boot_info);
+  kernel::module::RegisterBootModules(boot_info);
   MemoryReclaim_BootStructures();
-  
+
+  kernel::driver::init();
   HAL_VMM_FinalizeInit();
   kernel::sched::init_bsp();
   kernel::dispatch::init();
@@ -266,6 +268,8 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   // Now that LocalMachine is rebound onto the writable root mount, load
   // drivers that don't need to be present to mount the root fs (e.g. the
   // VGA driver): declared with Start=Automatic instead of Start=Boot.
+  // Subsystems load first so drivers can import their exports.
+  kernel::subsystem::LoadAutomaticStartSubsystems();
   kernel::driver::LoadAutomaticStartDrivers();
 
   // Register the native ELF loader subsystem, a long-lived singleton used to

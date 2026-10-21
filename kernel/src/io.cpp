@@ -49,7 +49,7 @@ kstd::error_code setupCommonKDevice(const kernel::KDevicePtr<kernel::KDevice> &d
     }
   }
 
-  return kernel::KernelError::Success;
+  return {};
 }
 }// namespace
 
@@ -114,7 +114,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_IO_AttachChildDevice(const kernel::KDev
   child->parentBus = bus;
   KE_Print("KE_IO_AttachChildDevice: Bus = {} Child = {}", bus->Name(), child->Name());
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_IO_ReadDevice(
@@ -126,7 +126,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_IO_ReadDevice(
   transferred = 0;
 
   if (!device || !buffer.data()) return kernel::KernelError::InvalidArgument;
-  if (buffer.empty()) return kernel::KernelError::Success;
+  if (buffer.empty()) return {};
 
   if (!device->driverObject || !device->driverObject->Read) {
     return kernel::KernelError::Unsupported;
@@ -141,7 +141,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_IO_WriteDevice(
     size_t &transferred) noexcept {
   transferred = 0;
   if (!device || !buffer.data()) return kernel::KernelError::InvalidArgument;
-  if (buffer.empty()) return kernel::KernelError::Success;
+  if (buffer.empty()) return {};
   if (!device->driverObject || !device->driverObject->Write) {
     return kernel::KernelError::Unsupported;
   }
@@ -226,10 +226,10 @@ kstd::error_code KIOObject::Control(uint32_t code, kstd::span<const uint8_t> inp
 }
 
 kstd::error_code KIOObject::Close() {
-  if (isClosed) return KernelError::Success;
+  if (isClosed) return {};
   if (!ops || !ops->Close) {
     isClosed = true;
-    return KernelError::Success;
+    return {};
   }
   return ops->Close(*this);
 }
@@ -247,7 +247,7 @@ kstd::error_code TtySinkRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &
     transferred = io.vtty->sink_read(buffer.data(), buffer.size());
   }
   io.offset += transferred;
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code TtySinkWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
@@ -257,20 +257,20 @@ kstd::error_code TtySinkWrite(KIOObject &io, kstd::span<const uint8_t> buffer, s
   transferred = *written;
   KE_TTY_PumpDevice(io.vtty);
   io.offset += transferred;
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code TtySinkClose(KIOObject &io) {
   io.isClosed = true;
   if (io.vtty && io.ownsTtyEndpoint) io.vtty->close_sink();
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code TtySourceRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
   if (!io.vtty) return KernelError::InvalidArgument;
   transferred = io.vtty->source_read(buffer.data(), buffer.size());
   io.offset += transferred;
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code TtySourceWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
@@ -279,13 +279,13 @@ kstd::error_code TtySourceWrite(KIOObject &io, kstd::span<const uint8_t> buffer,
   if (!written) return written.error();
   transferred = *written;
   io.offset += transferred;
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code TtySourceClose(KIOObject &io) {
   io.isClosed = true;
   if (io.vtty) io.vtty->close_source();
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code DeviceRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &transferred) {
@@ -311,7 +311,7 @@ kstd::error_code DeviceControl(KIOObject &io, uint32_t code, kstd::span<const ui
 
 kstd::error_code DeviceClose(KIOObject &io) {
   io.isClosed = true;
-  return KernelError::Success;
+  return {};
 }
 }// namespace
 

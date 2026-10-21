@@ -16,7 +16,7 @@ constexpr uint32_t AP_START_SPIN_LIMIT = 100'000'000u;
 kstd::error_code wait_until_online(const cpu::CpuContext &ctx) noexcept {
   for (uint32_t spins = 0; spins < AP_START_SPIN_LIMIT; ++spins) {
     HAL_ATOMIC_ThreadFence(PlatformMemoryOrder::Acquire);
-    if (ctx.online) return KernelError::Success;
+    if (ctx.online) return {};
   }
   return KernelError::Timeout;
 }

@@ -52,7 +52,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_TTY_AttachDevice(const kernel::tty::Vtt
   for (auto &s_attachedPair: s_attachedPairs) {
     if (s_attachedPair.vtty.get() == vtty.get()) {
       s_attachedPair.device = device;
-      return kernel::KernelError::Success;
+      return {};
     }
   }
 
@@ -61,7 +61,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_TTY_AttachDevice(const kernel::tty::Vtt
     if (s_attachedPair.vtty == nullptr) {
       s_attachedPair.vtty = vtty;
       s_attachedPair.device = device;
-      return kernel::KernelError::Success;
+      return {};
     }
   }
 

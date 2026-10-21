@@ -22,6 +22,8 @@ add_executable(kernel
         src/scheduler/Scheduler.cpp
         src/driver_loader.cpp
         src/driver_loader.hpp
+        src/subsystem_loader.cpp
+        src/subsystem_loader.hpp
         src/legacy_isa_enum.cpp
         src/legacy_isa_enum.hpp
         src/elf_loader.hpp
@@ -49,10 +51,8 @@ add_executable(kernel
         src/memory/Cache.hpp
         src/memory/Cache.cpp
         src/stdkrn.hpp
-        src/module/symbol_entry.cpp
-        src/module/symbol_entry.hpp
-        src/module/symbol_table.cpp
-        src/module/symbol_table.hpp
+        src/module/module_registry.cpp
+        src/module/module_registry.hpp
         src/guard/guard.cpp
         src/atexit.cpp
         src/io.cpp

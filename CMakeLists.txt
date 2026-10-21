@@ -46,6 +46,7 @@ include(cmake/StandardProjectSettings.cmake)
 include(cmake/CompilerWarnings.cmake)
 include(cmake/AddDriver.cmake)
 include(cmake/AddHal.cmake)
+include(cmake/AddSubsystem.cmake)
 
 #######################################################################################################################
 ## Make options
@@ -104,7 +105,7 @@ find_program(PYTHON3_EXECUTABLE NAMES python3 REQUIRED)
 add_custom_target(undos-syscalls-gen
         COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/create-syscalls.py tools/syscalls.txt kernel_userland_shared/include/undos/syscalls userland/ kernel/src/syscalls
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        DEPENDS tools/syscalls.txt tools/gfxsyscall.txt tools/usersyscall.txt tools/abisyscall.txt
+        DEPENDS tools/syscalls.txt tools/gfxsyscall.txt tools/usersyscall.txt tools/abisyscall.txt tools/netsyscall.txt
         COMMENT "Generating syscalls from tools/syscalls.txt (includes tools/gfxsyscall.txt)"
 )
 
@@ -133,6 +134,7 @@ if (NOT TESTING_ONLY)
     add_subdirectory(kernel_hal)
     add_subdirectory(kernel)
     add_subdirectory(drivers)
+    add_subdirectory(subsystems)
 
     add_subdirectory(userland)
     add_subdirectory(sdk)
@@ -153,11 +155,27 @@ if (NOT TESTING_ONLY)
             BYPRODUCTS ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/grub ${CMAKE_SOURCE_DIR}/bin/isofiles/boot/undos-boot
     )
 
+    # Loadable subsystems registered through add_subsystem(): staged under
+    # System/Subsys and authored into the LocalMachine registry.
+    get_property(UNDOS_SUBSYSTEM_TARGETS GLOBAL PROPERTY UNDOS_SUBSYSTEMS)
+    set(SUBSYSTEM_STAGE_COMMANDS)
+    set(SUBSYSTEM_REGISTRY_SPECS)
+    foreach (subsystem ${UNDOS_SUBSYSTEM_TARGETS})
+        get_property(subsystem_file GLOBAL PROPERTY UNDOS_SUBSYSTEM_${subsystem}_FILE)
+        get_property(subsystem_start GLOBAL PROPERTY UNDOS_SUBSYSTEM_${subsystem}_START)
+        list(APPEND SUBSYSTEM_STAGE_COMMANDS
+                COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${subsystem}>
+                ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Subsys/${subsystem_file})
+        list(APPEND SUBSYSTEM_REGISTRY_SPECS "${subsystem}:${subsystem_start}:/System/Subsys/${subsystem_file}")
+    endforeach ()
+
     add_custom_target(make-initial-disk
             COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/bin
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Config
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers
             COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Fonts
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Subsys
+            ${SUBSYSTEM_STAGE_COMMANDS}
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:native_elf_loader> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/ELoader.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:bus_isa> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/bus_isa.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:disk_ata> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/disk_ata.elf
@@ -187,10 +205,10 @@ if (NOT TESTING_ONLY)
             COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/userland/apps/init/initlib.so ${CMAKE_SOURCE_DIR}/bin/filesystem/System/initlib.so
             COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/configuration_editor/config.py
                     ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Config/MACHI
-                    author-localmachine
+                    author-localmachine ${SUBSYSTEM_REGISTRY_SPECS}
             COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py ${PROJECT_SOURCE_DIR}/bin/fat32.img ${PROJECT_SOURCE_DIR}/bin/filesystem
 
-            DEPENDS native_elf_loader bus_isa disk_ata volmgr fs_fat gfx_vga gfx_cirrus input_i8042 input_gameport serial_uart term progman demo fontloader init init_shared abi_test abi_test_shared abi_test_dependent abi_test_missing_note
+            DEPENDS ${UNDOS_SUBSYSTEM_TARGETS} native_elf_loader bus_isa disk_ata volmgr fs_fat gfx_vga gfx_cirrus input_i8042 input_gameport serial_uart term progman demo fontloader init init_shared abi_test abi_test_shared abi_test_dependent abi_test_missing_note
             $<TARGET_FILE:native_elf_loader>
             $<TARGET_FILE:bus_isa> $<TARGET_FILE:disk_ata> $<TARGET_FILE:volmgr> $<TARGET_FILE:fs_fat> $<TARGET_FILE:gfx_vga> $<TARGET_FILE:gfx_cirrus> $<TARGET_FILE:input_i8042> $<TARGET_FILE:input_gameport>
             $<TARGET_FILE:serial_uart>

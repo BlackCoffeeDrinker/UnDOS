@@ -241,7 +241,7 @@ kstd::error_code set_focus_locked(uint32_t hwnd) noexcept {
 
   const uint32_t oldHwnd = g_focusHwnd;
 
-  if (oldHwnd == hwnd) return KernelError::Success;
+  if (oldHwnd == hwnd) return {};
   g_focusHwnd = hwnd;
 
   // Focus notifications are best effort: a full queue must not veto the
@@ -259,7 +259,7 @@ kstd::error_code set_focus_locked(uint32_t hwnd) noexcept {
     draw_nonclient_locked(*w);
   }
 
-  return KernelError::Success;
+  return {};
 }
 
 void set_active_window_locked(uint32_t hwnd) noexcept {
@@ -362,7 +362,7 @@ kstd::error_code register_class_locked(KProcessObject &proc, const kstd::string_
   c.background = background;
   c.process = &proc;
 
-  return KernelError::Success;
+  return {};
 }
 
 kstd::expected<uint32_t, kstd::error_code> insert_window_locked(const KObjectPtr<KWindowObject> &window) noexcept {
@@ -406,7 +406,7 @@ void destroy_window_locked(KWindowObject &window) noexcept {
 
 kstd::error_code move_window_locked(KWindowObject &window, const URect &rect) noexcept {
   const URect old = window.rect;
-  if (old == rect) return KernelError::Success;
+  if (old == rect) return {};
   if (rect.Empty()) return KernelError::InvalidSize;
   if (rect.left < kMinWindowCoordinate || rect.top < kMinWindowCoordinate ||
       rect.right > kMaxWindowCoordinate || rect.bottom > kMaxWindowCoordinate ||
@@ -464,7 +464,7 @@ kstd::error_code move_window_locked(KWindowObject &window, const URect &rect) no
       }
     }
   }
-  return KernelError::Success;
+  return {};
 }
 
 void show_window_locked(KWindowObject &window, bool show) noexcept {
@@ -484,13 +484,13 @@ kstd::error_code show_command_locked(KWindowObject &window, uint32_t command) no
   if (command > kShowCommandRestore) return KernelError::InvalidArgument;
   if (command == kShowCommandHide || command == kShowCommandShow) {
     show_window_locked(window, command == kShowCommandShow);
-    return KernelError::Success;
+    return {};
   }
   const auto next = command == kShowCommandRestore ? KWindowObject::State::Restored : command == kShowCommandMinimize ? KWindowObject::State::Minimized
                                                                                                                       : KWindowObject::State::Maximized;
   if (window.state == next) {
     show_window_locked(window, true);
-    return KernelError::Success;
+    return {};
   }
   URect bounds = screen_rect();
   if (const auto *p = lookup_locked(window.parent)) bounds = client_to_screen_locked(*p, client_rect_locked(*p));
@@ -546,7 +546,7 @@ kstd::error_code show_command_locked(KWindowObject &window, uint32_t command) no
   } else {
     choose_active();
   }
-  return KernelError::Success;
+  return {};
 }
 
 void cycle_window_locked(bool children, bool reverse) noexcept {
@@ -713,7 +713,7 @@ kstd::error_code destroy_window(KProcessObject &caller, uint32_t hwnd) noexcept 
   const auto w = owned_window_locked(caller, hwnd);
   if (!w) return w.error();
   destroy_window_locked(**w);
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code show_window(KProcessObject &caller, uint32_t hwnd, uint32_t command) noexcept {
@@ -734,7 +734,7 @@ kstd::error_code move_window(KProcessObject &caller, uint32_t hwnd, int32_t x, i
   if (!rect) return rect.error();
   if (const kstd::error_code moved = move_window_locked(window, *rect); moved) return moved;
   if (window.state == KWindowObject::State::Restored) window.restoredRect = *rect;
-  return KernelError::Success;
+  return {};
 }
 
 kstd::expected<URect, kstd::error_code> get_window_rect(uint32_t hwnd) noexcept {
@@ -758,7 +758,7 @@ kstd::error_code invalidate_rect(KProcessObject &caller, uint32_t hwnd, const UR
   const auto w = owned_window_locked(caller, hwnd);
   if (!w) return w.error();
   invalidate_locked(**w, clientRect ? *clientRect : client_rect_locked(**w));
-  return KernelError::Success;
+  return {};
 }
 
 kstd::expected<PaintBegin, kstd::error_code> begin_paint(KProcessObject &caller, uint32_t hwnd) noexcept {
@@ -853,13 +853,13 @@ kstd::error_code set_capture(KProcessObject &caller, uint32_t hwnd) noexcept {
   if (!w) return w.error();
   if (!effectively_visible_locked(**w) || (*w)->state == KWindowObject::State::Minimized) return KernelError::InvalidState;
   set_capture_locked(hwnd);
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code release_capture(KProcessObject &caller) noexcept {
   Guard guard;
   if (const auto *w = lookup_locked(g_capture); w && w->process == &caller) set_capture_locked(0);
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code set_focus(KProcessObject &caller, uint32_t hwnd) noexcept {
@@ -879,7 +879,7 @@ kstd::error_code set_window_text(KProcessObject &caller, uint32_t hwnd, const ks
   if (!w) return w.error();
   (*w)->title = text;
   draw_nonclient_locked(**w);
-  return KernelError::Success;
+  return {};
 }
 
 }// namespace kernel::user

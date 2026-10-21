@@ -320,7 +320,7 @@ kstd::error_code end_paint_locked(KProcessObject &proc, KWindowObject &window, u
   window.paintDC = 0;
   window.painting = {};
   window.paintClip.Clear();
-  return KernelError::Success;
+  return {};
 }
 
 }// namespace kernel::user

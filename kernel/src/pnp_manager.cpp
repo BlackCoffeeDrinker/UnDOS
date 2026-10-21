@@ -145,7 +145,7 @@ kstd::error_code KE_PNP_RegisterDriver(const kernel::KObjectPtr<kernel::KDriverO
     if (registered == driver) return kernel::KernelError::AlreadyExists;
   }
   s_registeredDrivers.push_back(driver);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_PNP_RegisterDeviceInterest(
@@ -159,7 +159,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_PNP_RegisterDeviceInterest(
 
   kstd::unique_lock guard(s_registryLock);
   s_deviceInterests.emplace_back(type, driver);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 static void TriggerDeviceStateChanged(const kernel::KDevicePtr<kernel::KDevice> &fdo) {
@@ -254,7 +254,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_PNP_ReportNewDevice(
   // Sticky signal: safe even if the worker has not reached its wait yet, and
   // safe before init() created the thread at all.
   KE_EVENT_Signal(s_workAvailable, false);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF void KE_PNP_WaitForQuiescence() noexcept {
@@ -391,5 +391,5 @@ kstd::error_code KE_PNP_EnumerateBus(const kernel::KDevicePtr<kernel::KDeviceBus
       }
     }
   }
-  return kernel::KernelError::Success;
+  return {};
 }

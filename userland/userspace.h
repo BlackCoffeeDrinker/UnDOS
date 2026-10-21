@@ -1010,6 +1010,22 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_QueryFpuV1(enum FpuCapability* capability)
     return ret;
 }
 
+/** Reports the version of the network subsystem; UNSUPPORTED when it is not loaded. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_QueryNetworkVersionV1(uint32_t* version)
+{
+    uint32_t ret = 0;
+    struct __SYS_NET_QUERYNETWORKVERSION_V1 __wire;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(500), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *version = __wire.version;
+    return ret;
+}
+
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_PrintV1(const char* message)
 {
     uint32_t ret = 0;

@@ -93,7 +93,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareFillRect(
   if (bottom > dst->height) bottom = dst->height;
   const int64_t left = x < 0 ? 0 : x;
   const int64_t top = y < 0 ? 0 : y;
-  if (right <= left || bottom <= top) return kernel::KernelError::Success;
+  if (right <= left || bottom <= top) return {};
   const size_t bytes = BytesPerPixel(dst->pixelFormat);
   const uint8_t pattern[4] = {
       static_cast<uint8_t>(colorIndex), static_cast<uint8_t>(colorIndex >> 8),
@@ -110,7 +110,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareFillRect(
       pixel += bytes;
     }
   }
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareDrawLine(
@@ -138,7 +138,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareBitBlt(
   }
 
   if (width == 0 || height == 0) {
-    return kernel::KernelError::Success;
+    return {};
   }
 
   // 1. Resolve raw surface memory base pointers once
@@ -150,7 +150,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareBitBlt(
   }
 
   kernel::gfx::BlitRect copy{dstX, dstY, srcX, srcY, width, height};
-  if (!kernel::gfx::ClipBlit(copy, dst->width, dst->height, src->width, src->height)) return kernel::KernelError::Success;
+  if (!kernel::gfx::ClipBlit(copy, dst->width, dst->height, src->width, src->height)) return {};
   dstX = static_cast<int>(copy.dstX);
   dstY = static_cast<int>(copy.dstY);
   srcX = static_cast<int>(copy.srcX);
@@ -189,7 +189,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareBitBlt(
         bytesPerRow == static_cast<size_t>(srcPitch)) {
       // Single bulk transfer for the entire region
       kstd::memmove(dstRow, srcRow, bytesPerRow * height);
-      return kernel::KernelError::Success;
+      return {};
     }
 
     // Bottom-up logical traversal protects vertically overlapping rows.
@@ -201,7 +201,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareBitBlt(
         dstRow -= dstPitch;
         srcRow -= srcPitch;
       }
-      return kernel::KernelError::Success;
+      return {};
     }
 
     // Row-by-row memory copy, including horizontal overlap.
@@ -210,7 +210,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareBitBlt(
       dstRow += dstPitch;
       srcRow += srcPitch;
     }
-    return kernel::KernelError::Success;
+    return {};
   }
 
   // --------------------------------------------------------------------------
@@ -289,5 +289,5 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SoftwareBitBlt(
     srcRow += srcPitch;
   }
 
-  return kernel::KernelError::Success;
+  return {};
 }

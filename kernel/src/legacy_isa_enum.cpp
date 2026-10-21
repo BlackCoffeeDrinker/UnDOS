@@ -58,7 +58,7 @@ kstd::error_code ParseUInt32(const kstd::string_view &text, uint32_t &out) {
   }
 
   out = value;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 // Parses a "start-end" range (each side per ParseUInt32) as found in the
@@ -88,7 +88,7 @@ kstd::error_code ReadStringValue(const kernel::KConfigurationKeyPtr &deviceKey, 
   if (out.size() != *size) return kernel::KernelError::OutOfMemory;
   const auto copied = KE_CM_GetKeyValueString(*valueKey, kstd::span(out.data(), out.size()));
   if (!copied) return copied.error();
-  return kernel::KernelError::Success;
+  return {};
 }
 
 // Best-effort generic ISA presence probe: reads back the device's first
@@ -217,7 +217,7 @@ kstd::error_code LoadLegacyReservation(
     }
   } else if (error != kernel::KernelError::NotFound) return error;
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 // True when the entry opts out of the normal enumeration pass by declaring

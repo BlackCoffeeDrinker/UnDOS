@@ -58,7 +58,7 @@ kstd::error_code create(Arguments &args, const kernel::ProcessStreams *streams) 
   }
   entry->object = kernel::KObjectPtr<kernel::KObject>(child.get());
   args.handle = static_cast<uint32_t>(h);
-  return kernel::KernelError::Success;
+  return {};
 }
 }
 
@@ -135,7 +135,7 @@ kstd::error_code handle_CreateEvent_V1(__KRN_PROC_CREATEEVENT_V1 &&args) {
       kernel::ProcessHandleTable::HandleFlags::None);
   if (!allocated) return allocated.error();
   args.handle = static_cast<uint32_t>(*allocated);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 /** Signals an event. */
@@ -148,7 +148,7 @@ kstd::error_code handle_SetEvent_V1(__KRN_PROC_SETEVENT_V1 &&args) {
   if (!event) return kernel::KernelError::WrongObjectType;
   if (event == proc->startupEvent) proc->startupReady = true;
   KE_EVENT_Signal(event->header, false);
-  return kernel::KernelError::Success;
+  return {};
 }
 /** Retrieves information about a running or exited process. */
 kstd::error_code handle_GetInfo_V1(__KRN_PROC_GETINFO_V1 &&args) {
@@ -174,7 +174,7 @@ kstd::error_code handle_AllocatePages_V1(__KRN_MEM_ALLOCATEPAGES_V1 &&args) {
                                              static_cast<kernel::vmm::ProtectFlags>(flags));
   if (!memory) return memory.error();
   args.address = reinterpret_cast<uintptr_t>(*memory);
-  return kernel::KernelError::Success;
+  return {};
 }
 kstd::error_code handle_MapFixedPages_V1(__KRN_MEM_MAPFIXEDPAGES_V1 &&args) {
   const auto thread = KE_SCHED_GetCurrentThread();

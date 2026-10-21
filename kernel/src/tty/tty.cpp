@@ -170,18 +170,18 @@ bool KVtty::sink_has_data() const {
 
 kstd::error_code KVtty::sink_read_wait(uint8_t *dst, size_t count, size_t &transferred) {
   transferred = 0;
-  if (!count) return kernel::KernelError::Success;
+  if (!count) return {};
   for (;;) {
     {
       kstd::unique_lock lock(m_lock);
       if (!m_sinkInRing.empty()) {
         transferred = m_sinkInRing.read(dst, count);
-        return kernel::KernelError::Success;
+        return {};
       }
       // EOF: success with zero bytes transferred
       if (m_eofSignaled || m_sourceClosed || m_sinkClosed) {
         m_eofSignaled = false;
-        return kernel::KernelError::Success;
+        return {};
       }
       // Reset under the TTY lock; a writer after unlock leaves a sticky signal.
       const uintptr_t state = HAL_CPU_SaveAndDisableInterrupts();

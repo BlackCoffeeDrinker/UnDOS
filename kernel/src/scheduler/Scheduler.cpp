@@ -435,7 +435,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_Unblock(const KObjectPtr<KThreadO
   const uintptr_t state = HAL_CPU_SaveAndDisableInterrupts();
   sched::ready_locked(thread.get());
   HAL_CPU_RestoreInterrupts(state);
-  return KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF [[noreturn]] void KE_SCHED_Terminate() noexcept {

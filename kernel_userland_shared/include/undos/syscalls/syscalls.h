@@ -93,6 +93,7 @@
 #include "__syscall_SetFocus_V1.h"
 #include "__syscall_SetWindowText_V1.h"
 #include "__syscall_QueryFpu_V1.h"
+#include "__syscall_QueryNetworkVersion_V1.h"
 #include "__syscall_Print_V1.h"
 #include "__syscall_CreateProcess_V1.h"
 #include "__syscall_CreateProcess_V2.h"

@@ -15,6 +15,7 @@ kernel::KObjectPtr<kernel::KDirectoryObject> g_process{};
 kernel::KObjectPtr<kernel::KDirectoryObject> g_vfs{};
 kernel::KObjectPtr<kernel::KDirectoryObject> g_file{};
 kernel::KObjectPtr<kernel::KDirectoryObject> g_subsystem{};
+kernel::KObjectPtr<kernel::KDirectoryObject> g_modules{};
 kernel::KObjectPtr<kernel::KDirectoryObject> g_configroots{};
 kernel::KObjectPtr<kernel::KDirectoryObject> g_gfx{};
 
@@ -96,13 +97,14 @@ void init() {
   auto vfs = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBVFSPath));
   auto file = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBFilePath));
   auto subsystem = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBSubsystemsPath));
+  auto modules = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBModulesPath));
   auto configroots = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBHivePath));
   auto gfx = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBGfxPath));
   auto system = EnsureNoError(kernel::CreateKObject<KDirectoryObject>(kOBSystemPath));
 
   const KObjectPtr<KObject> children[] = {
       device, driver, memory, filesystem, thread, process, vfs,
-      file, subsystem, configroots, gfx, system};
+      file, subsystem, modules, configroots, gfx, system};
 
   for (const auto &child: children) {
     if (const auto status = KE_OB_InsertObject(root, child)) {
@@ -121,6 +123,7 @@ void init() {
   g_vfs = kstd::move(vfs);
   g_file = kstd::move(file);
   g_subsystem = kstd::move(subsystem);
+  g_modules = kstd::move(modules);
   g_configroots = kstd::move(configroots);
   g_gfx = kstd::move(gfx);
 }
@@ -148,7 +151,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_OB_InsertObject(const kernel::KObjectPt
   KE_OB_Retain(child.get());
   parent->child_list.push_back(child.get());
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<uint32_t, kstd::error_code>
@@ -189,7 +192,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_OB_RemoveObject(const kernel::KObjectPt
   // Undo the retain KE_OB_InsertObject performed on insertion.
   KE_OB_Release(child.get());
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KObject> KE_OB_LookupObject(const kstd::string_view &path) noexcept {
@@ -260,5 +263,6 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetVFSDi
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetFilesystemDirectory() noexcept { return g_filesystem; }
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetFileDirectory() noexcept { return g_file; }
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetSubsystemDirectory() noexcept { return g_subsystem; }
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetModuleDirectory() noexcept { return g_modules; }
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetConfigDirectory() noexcept { return g_configroots; }
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KDirectoryObject> KE_OB_GetGfxDirectory() noexcept { return g_gfx; }

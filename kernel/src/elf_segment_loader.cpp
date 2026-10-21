@@ -39,5 +39,5 @@ kstd::error_code kernel::elf::MapAndCopySegment(uintptr_t virt_start, const uint
   if (file_size > 0) {
     __builtin_memcpy(reinterpret_cast<void *>(virt_start), data, file_size);
   }
-  return kernel::KernelError::Success;
+  return {};
 }

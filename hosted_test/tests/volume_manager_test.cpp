@@ -131,8 +131,8 @@ TEST_CASE("GPT detection and parsing", "[volmgr][gpt]") {
 }
 
 TEST_CASE("Volume offset translation and range checking", "[volmgr][offset]") {
-  const uint64_t base = 2048ull * 512;
-  const uint64_t length = 4096ull * 512;
+  constexpr uint64_t base = 2048ull * 512;
+  constexpr uint64_t length = 4096ull * 512;
 
   SECTION("In-range access adds the base offset") {
     uint64_t abs = 0;
@@ -153,7 +153,6 @@ TEST_CASE("Volume offset translation and range checking", "[volmgr][offset]") {
   }
 
   SECTION("Length overrunning the partition fails") {
-    uint64_t abs = 0;
     REQUIRE(ComputeAbsoluteOffset(base, length, length - 100, 200).error() == kernel::KernelError::OutOfRange);
   }
 }

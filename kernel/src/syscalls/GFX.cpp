@@ -191,7 +191,7 @@ void Present(kernel::KDeviceContextSlot &slot, const DirtyRect &dirty) {
 kstd::error_code handle_QueryFontEngine_V1(__KRN_GFX_QUERYFONTENGINE_V1 &&args) {
   args.version = undos::font::Version;
   args.capabilities = 1;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_BeginFontUpload_V1(__KRN_GFX_BEGINFONTUPLOAD_V1 &&args) {
@@ -201,7 +201,7 @@ kstd::error_code handle_BeginFontUpload_V1(__KRN_GFX_BEGINFONTUPLOAD_V1 &&args) 
   const auto upload = process->fontResources.begin(fontResourceBudget, args.totalBytes);
   if (!upload) return upload.error();
   args.upload = *upload;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_AppendFontUpload_V1(__KRN_GFX_APPENDFONTUPLOAD_V1 &&args) {
@@ -223,7 +223,7 @@ kstd::error_code handle_CommitFontUpload_V1(__KRN_GFX_COMMITFONTUPLOAD_V1 &&args
     return face.error();
   }
   args.face = *face;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_CloseFontResource_V1(__KRN_GFX_CLOSEFONTRESOURCE_V1 &&args) {
@@ -261,7 +261,7 @@ kstd::error_code handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
   slot->lock.unlock();
 
   args.handle = hdc;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 namespace {
@@ -280,7 +280,7 @@ kstd::error_code handle_EnumDisplayModes_V1(__KRN_GFX_ENUMDISPLAYMODES_V1 &&args
   if (!mode) return mode.error() == kernel::KernelError::NotFound ? kernel::KernelError::Success : mode.error();
   args.mode = PublicMode(*mode);
   args.available = 1;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_GetDisplayMode_V1(__KRN_GFX_GETDISPLAYMODE_V1 &&args) {
@@ -291,7 +291,7 @@ kstd::error_code handle_GetDisplayMode_V1(__KRN_GFX_GETDISPLAYMODE_V1 &&args) {
   args.state.active = display->isAttachedToDesktop ? 1 : 0;
   args.state.generation = display->modeGeneration;
   args.state.mode = PublicMode(display->currentMode);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_SetDisplayMode_V1(__KRN_GFX_SETDISPLAYMODE_V1 &&args) {
@@ -302,7 +302,7 @@ kstd::error_code handle_SetDisplayMode_V1(__KRN_GFX_SETDISPLAYMODE_V1 &&args) {
   if (!mode) return mode.error();
   if (!kernel::gfx::usable_mode(display, *mode)) return kernel::KernelError::InvalidArgument;
   if (display->isAttachedToDesktop && display->currentMode.modeIndex == args.modeId)
-    return kernel::KernelError::Success;
+    return {};
   kernel::user::SceneDrawGuard drawing;
   const auto generation = display->modeGeneration;
   const auto result = KE_GFX_SetDisplayMode(display, args.modeId);
@@ -343,7 +343,7 @@ kstd::error_code handle_SelectObject_V1(__KRN_GFX_SELECTOBJECT_V1 &&args) {
   slot->target = bitmap;
   slot->lock.unlock();
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_CreatePen_V1(__KRN_GFX_CREATEPEN_V1 &&args) {
@@ -416,7 +416,7 @@ kstd::error_code handle_CreateBitmap_V1(__KRN_GFX_CREATEBITMAP_V1 &&args) {
 
   if (!allocated) return allocated.error();
   args.handle = static_cast<uint32_t>(*allocated);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_DeleteObject_V1(__KRN_GFX_DELETEOBJECT_V1 &&args) {
@@ -443,7 +443,7 @@ kstd::error_code handle_MoveTo_V1(__KRN_GFX_MOVETO_V1 &&args) {
   slot->currentY = args.y;
   slot->lock.unlock();
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_LineTo_V1(__KRN_GFX_LINETO_V1 &&args) {
@@ -589,7 +589,7 @@ kstd::error_code handle_BitBlt_V1(__KRN_GFX_BITBLT_V1 &&args) {
                              srcSlot->target->width, srcSlot->target->height)) {
     if (!sameSlot) srcSlot->lock.unlock();
     dstSlot->lock.unlock();
-    return kernel::KernelError::Success;
+    return {};
   }
   const int32_t dx = static_cast<int32_t>(copy.dstX);
   const int32_t dy = static_cast<int32_t>(copy.dstY);
@@ -687,7 +687,7 @@ kstd::error_code handle_GetTextMetrics_V1(__KRN_GFX_GETTEXTMETRICS_V1 &&args) {
   args.metrics.firstChar = kernel::gfx::kFontFirstChar;
   args.metrics.lastChar = kernel::gfx::kFontLastChar;
   args.metrics.defaultChar = kernel::gfx::kFontDefaultChar;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_SetDrawColors_V1(__KRN_GFX_SETDRAWCOLORS_V1 &&args) {
@@ -702,7 +702,7 @@ kstd::error_code handle_SetDrawColors_V1(__KRN_GFX_SETDRAWCOLORS_V1 &&args) {
   slot->backgroundColor = args.background;
   slot->opaqueText = args.opaque != 0;
   slot->lock.unlock();
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_GetBitmapBits_V1(__KRN_GFX_GETBITMAPBITS_V1 &&args) {
@@ -722,7 +722,7 @@ kstd::error_code handle_GetBitmapBits_V1(__KRN_GFX_GETBITMAPBITS_V1 &&args) {
   kstd::memcpy(args.buffer.get(), bitmap->backing->directAddress.as_ptr<uint8_t>(), copySize);
   args.buffer_len = copySize;
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_SetBitmapBits_V1(__KRN_GFX_SETBITMAPBITS_V1 &&args) {
@@ -741,7 +741,7 @@ kstd::error_code handle_SetBitmapBits_V1(__KRN_GFX_SETBITMAPBITS_V1 &&args) {
 
   kstd::memcpy(bitmap->backing->directAddress.as_ptr<uint8_t>(), args.buffer.get(), copySize);
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_GetDeviceCaps_V1(__KRN_GFX_GETDEVICECAPS_V1 &&args) {
@@ -766,5 +766,5 @@ kstd::error_code handle_GetDeviceCaps_V1(__KRN_GFX_GETDEVICECAPS_V1 &&args) {
 
   slot->lock.unlock();
 
-  return kernel::KernelError::Success;
+  return {};
 }

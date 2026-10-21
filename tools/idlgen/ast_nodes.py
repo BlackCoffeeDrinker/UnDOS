@@ -120,13 +120,14 @@ class Field:
 
 class Syscall:
     def __init__(self, version: str, category: str, name: str, number: int,
-                 fields: List[Field], doc: str = ""):
+                 fields: List[Field], doc: str = "", provider: str = ""):
         self.version = version  # "V1"
         self.category = category  # "PROC"
         self.name = name  # "CreateProcess"
         self.number = number  # 200
         self.fields = fields  # List[Field]
         self.doc = doc  # optional documentation text (from a /** ... */ comment)
+        self.provider = provider  # loadable module implementing it; "" = built into the kernel
 
     def __repr__(self):
         return f"Syscall({self.version!r}, {self.category!r}, {self.name!r}, {self.number}, {self.fields!r})"

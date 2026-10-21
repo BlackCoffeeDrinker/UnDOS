@@ -90,7 +90,7 @@ kstd::error_code FindOrAllocateNameSlot(const KObjectPtr<KIOObject> &file, uint3
         return status;
       }
       outNameEntryIndex = slot;
-      return KernelError::Success;
+      return {};
     }
   }
   return KernelError::ResourceLimitExceeded;
@@ -121,7 +121,7 @@ kstd::error_code FindOrAllocateFreeSlot(KConfigurationRoot &root, uint32_t &outI
     if (occupied < ENTRIES_PER_INDEX_BLOCK) {
       outIndexBlockOffset = static_cast<uint32_t>(indexBlockOffset);
       outIndexEntryOffset = static_cast<uint32_t>(indexBlockOffset + offsetof(ConfigurationIndexBlock, entries) + occupied * sizeof(ConfigurationIndexEntry));
-      return KernelError::Success;
+      return {};
     }
 
     uint32_t nextBlockOffset = 0;
@@ -140,8 +140,8 @@ kstd::error_code FindOrAllocateFreeSlot(KConfigurationRoot &root, uint32_t &outI
     // append a brand-new (empty) INDEX BLOCK/NAME BLOCK pair right after
     // this pair's data region, and link the two INDEX BLOCKs together.
     const uint64_t newIndexBlockOffset = ComputeDataRegionEnd(root, static_cast<uint32_t>(indexBlockOffset));
-    const ConfigurationIndexBlock freshIndexBlock{};
-    const ConfigurationNameBlock freshNameBlock{};
+    constexpr ConfigurationIndexBlock freshIndexBlock{};
+    constexpr ConfigurationNameBlock freshNameBlock{};
     if (const auto status = WriteRawAt(root.file, newIndexBlockOffset,
                                        kstd::span(reinterpret_cast<const uint8_t *>(&freshIndexBlock), sizeof(ConfigurationIndexBlock)));
         status) {
@@ -197,7 +197,7 @@ kstd::error_code FormatEmptyConfigurationFile(const KObjectPtr<KIOObject> &file)
   constexpr uint32_t nameBlockOffset = indexBlockOffset + sizeof(ConfigurationIndexBlock);
   constexpr auto dataRegionOffset = static_cast<uint32_t>(indexBlockOffset + BLOCK_PAIR_BYTES);
 
-  const ConfigurationFileHeader header{
+  constexpr ConfigurationFileHeader header{
       .indexEntryCount = 0,
       .nameEntryCount = 0,
       .offsetToFirstIndexBlock = indexBlockOffset,
@@ -208,14 +208,14 @@ kstd::error_code FormatEmptyConfigurationFile(const KObjectPtr<KIOObject> &file)
     return status;
   }
 
-  const ConfigurationIndexBlock emptyIndexBlock{};
+  constexpr ConfigurationIndexBlock emptyIndexBlock{};
   if (const auto status = WriteRawAt(file, indexBlockOffset,
                                      kstd::span(reinterpret_cast<const uint8_t *>(&emptyIndexBlock), sizeof(emptyIndexBlock)));
       status) {
     return status;
   }
 
-  const ConfigurationNameBlock emptyNameBlock{};
+  constexpr ConfigurationNameBlock emptyNameBlock{};
   return WriteRawAt(file, nameBlockOffset,
                     kstd::span(reinterpret_cast<const uint8_t *>(&emptyNameBlock), sizeof(emptyNameBlock)));
 }
@@ -288,7 +288,7 @@ kstd::error_code LoadConfigurationIndex(const KObjectPtr<KIOObject> &file, kstd:
 
   outRoots = kstd::move(loaded);
   outNumRoots = populatedCount;
-  return KernelError::Success;
+  return {};
 }
 
 }// namespace kernel::configuration_manager_io

@@ -87,8 +87,22 @@ def generate_kernel_handle_definition(module: IDLModule, out_h_dir: str, out_h_s
         template.write_include_local("__kernel_types.h")
         template.write_newline()
 
+        providers = [sc for sc in module.syscalls if sc.provider]
+        if providers:
+            f.write("#include <kernel/kobject/KModuleObject.hpp>\n\n")
+            f.write("namespace kernel::syscall {\n")
+            f.write("// Binds every syscall provided by `module` (its exported handle_<Name>_<Version>\n")
+            f.write("// functions) into the dispatch slot table. All-or-nothing; fails with NotFound when a\n")
+            f.write("// declared handler is not exported and AlreadyExists when a slot is already bound.\n")
+            f.write("kstd::error_code BindProvider(const KObjectPtr<KModuleObject> &module);\n")
+            f.write("}// namespace kernel::syscall\n\n")
+
         for sc in module.syscalls:
             template.write_doc(sc.doc)
+            if sc.provider:
+                f.write(f"// Provided by module '{sc.provider}': it must export (UNDOS_MODULE_EXPORT)\n")
+                f.write(f"//   kstd::error_code handle_{sc.name}_{sc.version}({kernel_struct_name(sc)} &&args);\n\n")
+                continue
             template.write_method_def(name = f"handle_{sc.name}_{sc.version}", return_type = "kstd::error_code", args = [
                 {'name': "args", 'type': f"{kernel_struct_name(sc)} &&"}
             ])
@@ -153,6 +167,33 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
         f.write("  kstd::memcpy(*mapped, kernelPtr, length);\n")
         f.write("  return KE_VMM_UnmapBorrowed(*mapped, length, as);\n")
         f.write("}\n\n")
+
+        providers = [sc for sc in module.syscalls if sc.provider]
+        if providers:
+            f.write("// One slot per module-provided syscall, indexed at generation time so dispatch is a\n")
+            f.write("// single load and null check. An empty slot means the provider is not loaded.\n")
+            f.write("namespace {\n")
+            f.write("struct ProviderSlot {\n  kstd::string_view provider;\n  kstd::string_view symbol;\n  kernel::VirtualAddress handler;\n};\n\n")
+            f.write("ProviderSlot g_providerSlots[] = {\n")
+            for sc in providers:
+                f.write(f'    {{"{sc.provider}", "handle_{sc.name}_{sc.version}", kernel::VirtualAddress{{0}}}},\n')
+            f.write("};\n}// namespace\n\n")
+            f.write("namespace kernel::syscall {\n")
+            f.write("kstd::error_code BindProvider(const KObjectPtr<KModuleObject> &module) {\n")
+            f.write("  const kstd::string_view moduleName(module->name);\n")
+            f.write("  for (const auto &slot: g_providerSlots) {\n")
+            f.write("    if (slot.provider != moduleName) continue;\n")
+            f.write("    if (slot.handler.value != 0) return KernelError::AlreadyExists;\n")
+            f.write("    if (!module->exports.Find(slot.symbol)) return KernelError::NotFound;\n")
+            f.write("  }\n")
+            f.write("  for (auto &slot: g_providerSlots) {\n")
+            f.write("    if (slot.provider != moduleName) continue;\n")
+            f.write("    slot.handler = *module->exports.Find(slot.symbol);\n")
+            f.write("  }\n")
+            f.write("  return KernelError::Success;\n")
+            f.write("}\n}// namespace kernel::syscall\n\n")
+
+        slot_index = {sc.number: i for i, sc in enumerate(providers)}
 
         for sc in module.syscalls:
             wire_name = wire_struct_name(sc)
@@ -248,7 +289,12 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
                 f.write("  }\n")
 
             f.write("\n  (void)flags;\n")
-            f.write(f"  const kstd::error_code ret = handle_{sc.name}_{sc.version}(kstd::move(args));\n\n")
+            if sc.provider:
+                f.write(f"  const auto handler = g_providerSlots[{slot_index[sc.number]}].handler;\n")
+                f.write("  if (handler.value == 0) return kernel::KernelError::Unsupported;\n")
+                f.write(f"  const kstd::error_code ret = handler.as_ptr<kstd::error_code({krn_name} &&)>()(kstd::move(args));\n\n")
+            else:
+                f.write(f"  const kstd::error_code ret = handle_{sc.name}_{sc.version}(kstd::move(args));\n\n")
 
             # Step 6: copy every OUT (non-buffer) field back to the original
             # user struct, one field at a time; buffer<T>/OUT-string content

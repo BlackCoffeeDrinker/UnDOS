@@ -242,7 +242,7 @@ kstd::error_code broadcast(const Source &target, Code event) {
   }
 
   KE_EVENT_Signal(s_pumpWake, false);
-  return KernelError::Success;
+  return {};
 }
 
 namespace detail {
@@ -329,7 +329,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_EVENT_UnregisterInterest(kernel::event:
       // ~EventInterestToken). Waiting for activeCalls to reach zero would wait
       // on ourselves, so leave the node marked dead and let Dispatch's
       // ReleaseSubscriberLocked reap it when the callback returns.
-      return kernel::KernelError::Success;
+      return {};
     }
 
     // Otherwise block until the in-flight callback finishes, so that once this
@@ -350,7 +350,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_EVENT_UnregisterInterest(kernel::event:
   for (auto it = s_subscribers.begin(); it != s_subscribers.end(); ++it) {
     if (it->id == idToUnregister) {
       s_subscribers.erase(it);
-      return kernel::KernelError::Success;
+      return {};
     }
   }
   return kernel::KernelError::NotFound;

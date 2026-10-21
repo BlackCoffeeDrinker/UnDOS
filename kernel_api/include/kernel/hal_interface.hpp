@@ -117,9 +117,9 @@ UNDOS_HAL_PUBLIC_V1API(void, HAL_IO_Delay);
  * @brief Method HAL_INTR_ConnectInterrupt
  *
  * Connects an already-constructed KInterruptServiceRoutineObject to the
- * given hardware IRQ line (0-15) and unmasks it on the PIC (and, for IRQ
- * 8-15, also unmasks the master's cascade line, IRQ2). Fails (returns
- * false) if the line is already connected.
+ * given platform-specific interrupt source. The HAL defines the valid
+ * identifier range and controller behavior; the identifier is also used
+ * in queued interrupt records to select kernel handlers.
  */
 UNDOS_HAL_PUBLIC_V1API(
     bool,
@@ -131,8 +131,8 @@ UNDOS_HAL_PUBLIC_V1API(
  * @ingroup INTERRUPT
  * @brief Method HAL_INTR_DisconnectInterrupt
  *
- * Detaches whatever KInterruptServiceRoutineObject is connected to `irq`
- * and re-masks the line.
+ * Detaches whatever KInterruptServiceRoutineObject is connected to the
+ * given platform-specific interrupt source.
  */
 UNDOS_HAL_PUBLIC_V1API(void, HAL_INTR_DisconnectInterrupt, uint32_t irq);
 

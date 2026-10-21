@@ -4,6 +4,7 @@
 include "gfxsyscall.txt";
 include "usersyscall.txt";
 include "abisyscall.txt";
+include "netsyscall.txt";
 
 /** Opaque 32-bit process-local object handle, not a pointer or a stream index.
  * Zero is a valid handle. Passing a handle to another process requires an

@@ -4,12 +4,16 @@
 #include <Kernel.hpp>
 #include <kernel/kerror.hpp>
 #include <kernel/adt/avl_tree.hpp>
+#include <expected.hpp>
 #include <static_string.hpp>
 #include <string_view.hpp>
 
 namespace kernel::driver {
-void init(const kernel::BootInfoT &boot_info);
+void init();
+
 void LoadBootDrivers();
+
+// Resolves a symbol against the kernel/HAL boot symbol table only.
 
 // Loads every driver declared under LocalMachine's "/Drivers" key whose
 // "Start" value is "Automatic": drivers that aren't needed to mount the root

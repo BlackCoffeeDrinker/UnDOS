@@ -37,6 +37,14 @@ and predicates are not failures. Domain validation belongs in the subsystem;
 the dispatcher owns user-memory and wire-format validation. The public syscall
 enum and wire layouts remain unchanged.
 
+## Module-provided syscalls
+
+A syscall may be implemented by a loadable subsystem instead of the kernel image by adding
+`provider <module>` after the number: `syscall V1 NET Name [500] provider network { ... };`.
+The generator emits a slot table instead of a `handle_*` declaration; the module exports
+`UNDOS_MODULE_EXPORT kstd::error_code handle_Name_V1(__KRN_..._V1 &&args)`, and the kernel binds it
+when the module loads. Calls made while the provider is not loaded return `UNSUPPORTED`.
+
 ## Top-level declarations
 
 The IDL file is a sequence of `enum`, `flags`, `struct`, `using`, and `syscall` declarations, in any

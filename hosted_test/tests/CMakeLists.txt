@@ -13,8 +13,7 @@ add_executable(KernelTests
         map_test.cpp
         expected_test.cpp
         kernel_error_test.cpp
-        symbol_table_test.cpp
-        ../../kernel/src/module/symbol_table.cpp
+        export_table_test.cpp
         unique_ptr_test.cpp
         unique_lock_test.cpp
         static_identifier_test.cpp

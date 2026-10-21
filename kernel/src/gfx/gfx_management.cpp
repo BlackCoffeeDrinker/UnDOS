@@ -355,7 +355,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_SetDisplayMode(
     return enabled;
   }
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF kernel::KSurfaceResult KE_GFX_CreateSurfaceForMode(

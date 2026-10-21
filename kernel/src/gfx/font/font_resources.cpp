@@ -8,7 +8,7 @@ kstd::error_code ResourceBudget::reserve(uint32_t size) noexcept {
   kstd::unique_lock lock(mutex_);
   if (size > MaxRegisteredBytes - bytes_) return KernelError::ResourceLimitExceeded;
   bytes_ += size;
-  return KernelError::Success;
+  return {};
 }
 
 void ResourceBudget::release(uint32_t size) noexcept {
@@ -66,7 +66,7 @@ kstd::error_code ResourceTable::append(uint32_t handle, uint32_t offset, const u
   if (offset != slot->written || size > slot->data.size() - slot->written) return KernelError::InvalidOffset;
   for (size_t i = 0; i < size; ++i) slot->data[offset + i] = data[i];
   slot->written += static_cast<uint32_t>(size);
-  return KernelError::Success;
+  return {};
 }
 
 kstd::expected<uint32_t, kstd::error_code> ResourceTable::commit(uint32_t handle, uint32_t &validationError) {
@@ -109,7 +109,7 @@ kstd::error_code ResourceTable::close(uint32_t handle) {
   auto *slot = lookup(handle);
   if (!slot) return KernelError::InvalidHandle;
   release(*slot);
-  return KernelError::Success;
+  return {};
 }
 
 void ResourceTable::clear() {

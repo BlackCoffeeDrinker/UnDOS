@@ -100,7 +100,7 @@ kstd::error_code DeviceContextTable::Close(HDC hdc) noexcept {
   free_indices.push_back(index);
   table_lock.unlock();
 
-  return KernelError::Success;
+  return {};
 }
 
 }// namespace kernel

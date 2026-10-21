@@ -140,7 +140,7 @@ kstd::error_code InputRead(kernel::KIOObject &, kstd::span<uint8_t> buffer, size
       __builtin_memcpy(buffer.data() + transferred, &event, sizeof(event));
       transferred += sizeof(event);
     }
-    if (transferred) return kernel::KernelError::Success;
+    if (transferred) return {};
     if (ResetIfEmpty()) {
       if (const kstd::error_code waited = KE_SCHED_WaitForHeader(g_eventHeader, kernel::WAIT_INFINITE);
           waited) {
@@ -150,7 +150,7 @@ kstd::error_code InputRead(kernel::KIOObject &, kstd::span<uint8_t> buffer, size
   }
 }
 
-kstd::error_code InputClose(kernel::KIOObject &) { return kernel::KernelError::Success; }
+kstd::error_code InputClose(kernel::KIOObject &) { return {}; }
 
 const kernel::KIOOps InputOps{.Read = InputRead, .Write = {}, .Control = {}, .Close = InputClose};
 

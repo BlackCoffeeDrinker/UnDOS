@@ -101,12 +101,18 @@ class Parser:
         number = int(number_tok.value)
         self.match("RBRACKET")
 
+        provider = ""
+        tok = self.current()
+        if tok is not None and tok.kind == "IDENT" and tok.value == "provider":
+            self.match("IDENT")
+            provider = self.match("IDENT").value
+
         self.match("LBRACE")
         fields = self.parse_field_list()
         self.match("RBRACE")
         self.match("SEMICOLON")
 
-        return Syscall(version, category, name, number, fields, doc)
+        return Syscall(version, category, name, number, fields, doc, provider)
 
     def parse_module(self) -> IDLModule:
         module = IDLModule()

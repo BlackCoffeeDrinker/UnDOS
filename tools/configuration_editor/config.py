@@ -22,8 +22,10 @@ def create_database(filename: str) -> None:
     cfg.save(force=True)
 
 
-def author_localmachine_hive(filename: str) -> None:
-    """Write the boot LocalMachine hive with the boot-start and automatic-start drivers."""
+def author_localmachine_hive(filename: str, subsystems: list[str] | None = None) -> None:
+    """Write the boot LocalMachine hive with the boot-start and automatic-start drivers.
+
+    `subsystems` holds "name:Start:ImagePath" specs for loadable subsystems."""
     cfg = Config(filename)
     cfg.entries = {}
 
@@ -73,6 +75,16 @@ def author_localmachine_hive(filename: str) -> None:
         cfg.ensure_key(f"/Drivers/{name}")
         cfg.set(f"/Drivers/{name}/Start", "LastResort", Config.VALUE_STRING)
         cfg.set(f"/Drivers/{name}/ImagePath", image, Config.VALUE_STRING)
+
+    # Loadable kernel subsystems (see DYNAMIC_SUBSYSTEM.md): name is the module
+    # name reported by the image's descriptor, which dependency lookups use.
+    if subsystems:
+        cfg.ensure_key("/Subsystems")
+        for spec in subsystems:
+            name, start, image = spec.split(":", 2)
+            cfg.ensure_key(f"/Subsystems/{name}")
+            cfg.set(f"/Subsystems/{name}/Start", start, Config.VALUE_STRING)
+            cfg.set(f"/Subsystems/{name}/ImagePath", image, Config.VALUE_STRING)
 
     # LegacyISAReservations: "the registry is the enumeration" for fixed,
     # always-present ISA hardware that no real bus discovers on its own. The
@@ -157,7 +169,7 @@ if __name__ == "__main__":
     command = sys.argv[2]
 
     if command == "author-localmachine":
-        author_localmachine_hive(filename)
+        author_localmachine_hive(filename, sys.argv[3:])
         sys.exit(0)
 
     if command == "create" and len(sys.argv) == 3:

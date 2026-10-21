@@ -120,9 +120,10 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @brief Method KE_IO_ConnectInterrupt
  *
  * Builds a KInterruptServiceRoutineObject wrapping `routine`/`context`,
- * connects it to `irq` via HAL_INTR_ConnectInterrupt (which also unmasks
- * the line), and returns it. The caller (typically the driver's AddDevice
- * or StartDevice) MUST keep the returned KObjectPtr alive for as long as
+ * connects it to the HAL-specific interrupt source `irq`, and returns it.
+ * The HAL defines valid identifiers and controller behavior. The caller
+ * (typically the driver's AddDevice or StartDevice) MUST keep the returned
+ * KObjectPtr alive for as long as
  * the interrupt should stay connected -- e.g. by storing it in the
  * driver's device extension -- since dropping it frees a live ISR object.
  * Fails with OutOfMemory on allocation failure, or the registration error
@@ -139,7 +140,7 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @ingroup IO
  * @brief Method KE_IO_DisconnectInterrupt
  *
- * Disconnects `irq` (re-masking the line via HAL_INTR_DisconnectInterrupt).
+ * Disconnects `irq` through HAL_INTR_DisconnectInterrupt.
  * Does not free the KObjectPtr itself -- that happens when the caller's
  * last reference to it is dropped.
  */

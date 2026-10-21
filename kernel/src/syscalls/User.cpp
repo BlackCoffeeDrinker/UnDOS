@@ -44,7 +44,7 @@ kstd::error_code handle_CreateWindow_V1(__KRN_USER_CREATEWINDOW_V1 &&args) {
       .userData = args.userData});
   if (!window) return window.error();
   args.hwnd = *window;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_DestroyWindow_V1(__KRN_USER_DESTROYWINDOW_V1 &&args) {
@@ -70,7 +70,7 @@ kstd::error_code handle_GetWindowRect_V1(__KRN_USER_GETWINDOWRECT_V1 &&args) {
   const auto rect = get_window_rect(args.hwnd);
   if (!rect) return rect.error();
   args.rect = to_rect(*rect);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_InvalidateRect_V1(__KRN_USER_INVALIDATERECT_V1 &&args) {
@@ -90,7 +90,7 @@ kstd::error_code handle_BeginPaint_V1(__KRN_USER_BEGINPAINT_V1 &&args) {
   args.dc = paint->dc;
   args.paint.rcPaint = to_rect(paint->paint);
   args.paint.erased = 1;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_EndPaint_V1(__KRN_USER_ENDPAINT_V1 &&args) {
@@ -104,7 +104,7 @@ kstd::error_code handle_GetMessage_V1(__KRN_USER_GETMESSAGE_V1 &&args) {
   const auto message = get_message(true, true);
   if (!message) return message.error();
   to_msg(*message, args.msg);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_PeekMessage_V1(__KRN_USER_PEEKMESSAGE_V1 &&args) {
@@ -115,7 +115,7 @@ kstd::error_code handle_PeekMessage_V1(__KRN_USER_PEEKMESSAGE_V1 &&args) {
     return message.error() == kernel::KernelError::WouldBlock ? kernel::KernelError::Timeout : message.error();
   }
   to_msg(*message, args.msg);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_PostMessage_V1(__KRN_USER_POSTMESSAGE_V1 &&args) {
@@ -127,7 +127,7 @@ kstd::error_code handle_GetWindowLongPtr_V1(__KRN_USER_GETWINDOWLONGPTR_V1 &&arg
   const auto value = get_window_long(args.hwnd, args.index);
   if (!value) return value.error();
   args.value = *value;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_SetWindowLongPtr_V1(__KRN_USER_SETWINDOWLONGPTR_V1 &&args) {
@@ -137,7 +137,7 @@ kstd::error_code handle_SetWindowLongPtr_V1(__KRN_USER_SETWINDOWLONGPTR_V1 &&arg
   const auto previous = set_window_long(**process, args.hwnd, args.index, args.value);
   if (!previous) return previous.error();
   args.previous = *previous;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_SetCapture_V1(__KRN_USER_SETCAPTURE_V1 &&args) {
@@ -151,7 +151,7 @@ kstd::error_code handle_GetClientRect_V1(__KRN_USER_GETCLIENTRECT_V1 &&args) {
   const auto rect = get_client_rect(args.hwnd);
   if (!rect) return rect.error();
   args.rect = to_rect(*rect);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code handle_SetFocus_V1(__KRN_USER_SETFOCUS_V1 &&args) {

@@ -53,6 +53,8 @@ extern "C" int main(int argc, char **argv) {
   FpuCapability capability{};
   if (UD_SYS_QueryFpuV1(&capability) != SyscallReturnCode_OKAY ||
       capability != FpuCapability_Unavailable) fail();
+  uint32_t networkVersion = 0;
+  if (UD_SYS_QueryNetworkVersionV1(&networkVersion) != SyscallReturnCode_OKAY || networkVersion != 1) fail();
   HANDLE handle = 0;
   if (UD_SYS_GetStdHandleV1(static_cast<StdHandleSelector>(99), &handle) !=
       SyscallReturnCode_INVALID_ARGUMENT) fail();

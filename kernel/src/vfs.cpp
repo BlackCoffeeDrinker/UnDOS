@@ -101,7 +101,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_Mount(const kernel::KDevicePtr<kern
       KE_Print("KE_VFS_Mount: Failed to publish mount point '{}'", mountPoint);
       return status;
     }
-    return kernel::KernelError::Success;
+    return {};
   }
 
   KE_Print("KE_VFS_Mount: Filesystem driver with name '{}' not found", filesystem);
@@ -128,7 +128,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_Unmount(const kstd::string_view &mo
   mount->isMounted = false;
   if (const auto status = KE_OB_RemoveObject(vfsRoot, mount); status) return status;
   KE_Print("KE_VFS_Unmount: Unmounted '{}'", mountPoint);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KFilesystemObject>, kstd::error_code> KE_VFS_RegisterFilesystemDriver(
@@ -310,7 +310,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd:
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_CloseFile(const kernel::KObjectPtr<kernel::KIOObject> &file) noexcept {
   if (!file) [[unlikely]] { return kernel::KernelError::InvalidHandle; }
-  if (file->isClosed) [[unlikely]] { return kernel::KernelError::Success; }
+  if (file->isClosed) [[unlikely]] { return {}; }
   if (file->ops != &kernel::io::FileOps) return kernel::KernelError::WrongObjectType;
   file->isClosed = true;
   if (file->fileHandleCreated && file->mountPoint && file->FileSystem() && file->FileSystem()->CloseHandle) {
@@ -321,7 +321,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_CloseFile(const kernel::KObjectPtr<
 
   // Remove file from the OB
   if (file->parent) return KE_OB_RemoveObject(KE_OB_GetFileDirectory(), file);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kstd::error_code> KE_VFS_ReadFile(const kernel::KObjectPtr<kernel::KIOObject> &file, const kstd::span<uint8_t> &readInto) noexcept {
@@ -377,7 +377,7 @@ kstd::error_code FileRead(KIOObject &io, kstd::span<uint8_t> buffer, size_t &tra
   const auto read = KE_VFS_ReadFile(&io, buffer);
   if (!read) return read.error();
   transferred = static_cast<size_t>(*read);
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code FileWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size_t &transferred) {
@@ -386,7 +386,7 @@ kstd::error_code FileWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size
   const auto written = KE_VFS_WriteFile(&io, buffer);
   if (!written) return written.error();
   transferred = static_cast<size_t>(*written);
-  return KernelError::Success;
+  return {};
 }
 
 kstd::error_code FileClose(KIOObject &io) {

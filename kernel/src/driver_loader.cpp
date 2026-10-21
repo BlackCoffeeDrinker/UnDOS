@@ -4,9 +4,10 @@
 #include "elf_loader.hpp"
 #include "elf_segment_loader.hpp"
 #include "legacy_isa_enum.hpp"
-#include "module/symbol_table.hpp"
+#include "module/module_registry.hpp"
 #include "pnp_manager.hpp"
 #include "stdkrn.hpp"
+#include "subsystem_loader.hpp"
 #include "vmm.hpp"
 
 #include <Kernel.hpp>
@@ -17,8 +18,6 @@
 #include <system_error.hpp>
 
 namespace {
-kernel::driver::SymbolTable g_SymbolTable;
-
 enum class ElfError {
   Success = 0,
   InvalidHeader,
@@ -27,10 +26,9 @@ enum class ElfError {
   AllocationFailure
 };
 
-// Plain function pointer wrapping g_SymbolTable::Resolve, since cfunc only
-// wraps C-style function pointers (no captures).
+// Plain function, since cfunc only wraps C-style function pointers (no captures).
 kstd::expected<uintptr_t, kstd::error_code> ResolveSymbol(kstd::string_view name) {
-  return g_SymbolTable.Resolve(name);
+  return kernel::module::Resolve(name);
 }
 
 // Copies a matched ".driver_name" section's bytes into the static_string
@@ -140,14 +138,7 @@ void LoadDriversWithStart(const kstd::string_view &startFilter, const kstd::stri
 }// namespace
 
 namespace kernel::driver {
-void init(const BootInfoT &boot_info) {
-  for (const auto &sym: boot_info.boot_symbols) {
-    if (sym.name.empty()) continue;
-    if (const auto status = g_SymbolTable.Register(sym.name, static_cast<uintptr_t>(sym.address))) {
-      KE_Print("Failed to initialize driver loader: {}", status.message());
-      HAL_PLATFORM_Panic("Failed to initialize driver loader", __FILE__, __LINE__);
-    }
-  }
+void init() {
 }
 
 void LoadBootDrivers() {

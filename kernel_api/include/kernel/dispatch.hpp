@@ -9,6 +9,7 @@ namespace kernel {
 
 struct HalInterruptRecord {
   uint32_t vector{0};
+  // Opaque HAL interrupt identifier used to match this event to registered handlers.
   uint32_t irq{0};
   uint64_t timestamp{0};
   uint32_t flags{0};
@@ -82,21 +83,24 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @ingroup DISPATCH
  * @brief Method KE_DISPATCH_RegisterHandler
  *
- * Registers an ISR object with the dispatch subsystem for the given IRQ line.
+ * Registers an ISR object with the dispatch subsystem for the given
+ * platform-specific interrupt identifier. The kernel does not impose a
+ * controller-specific range on this identifier.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
     kstd::error_code,
     KE_DISPATCH_RegisterHandler,
-    uint32_t irq,
+    uint32_t interruptId,
     const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr);
 
 /**
  * @ingroup DISPATCH
  * @brief Method KE_DISPATCH_UnregisterHandler
  *
- * Unregisters any ISR object connected to the given IRQ line.
+ * Unregisters any ISR object connected to the given platform-specific
+ * interrupt identifier.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
     kstd::error_code,
     KE_DISPATCH_UnregisterHandler,
-    uint32_t irq);
+    uint32_t interruptId);

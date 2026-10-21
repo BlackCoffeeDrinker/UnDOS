@@ -146,6 +146,7 @@ TEST_CASE("Kernel error mapping preserves syscall status categories", "[kernel-e
   REQUIRE(KErrorToSysReturnCode(KernelError::Unsupported) == SyscallReturnCode_UNSUPPORTED);
   REQUIRE(KErrorToSysReturnCode(KernelError::NotImplemented) == SyscallReturnCode_UNSUPPORTED);
   REQUIRE(KErrorToSysReturnCode(KernelError::Timeout) == SyscallReturnCode_TIMEOUT);
+  REQUIRE(KErrorToSysReturnCode(KernelError::StandardStreamUnavailable) == SyscallReturnCode_INVALID_ARGUMENT);
   REQUIRE(KErrorToSysReturnCode(KernelError::QueueFull) == SyscallReturnCode_UNKNOWN);
   REQUIRE(KErrorToSysReturnCode(KernelError::WouldBlock) == SyscallReturnCode_UNKNOWN);
   REQUIRE(KErrorToSysReturnCode(static_cast<KernelError>(UINT32_MAX)) == SyscallReturnCode_UNKNOWN);

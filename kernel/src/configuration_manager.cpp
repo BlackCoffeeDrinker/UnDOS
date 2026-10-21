@@ -16,10 +16,6 @@
 using namespace kernel::configuration_manager_io;
 
 namespace {
-// Object manager insertion reports success either as bool or kstd::error_code.
-}// namespace
-
-namespace {
 constexpr kstd::string_view kConfigurationLocalMachine = "/System/Config/MACHI";
 
 struct ConfigurationKeyTag {
@@ -33,9 +29,7 @@ using ConfigurationKey = kernel::StaticIdentifier<ConfigurationKeyTag>;
 // file, or it is a volatile (file-less) hive, which is always considered
 // "open" (its `roots` list simply lives in memory for as long as the root
 // object itself does).
-bool IsRootReady(const kernel::KConfigurationRoot &root) {
-  return root.file != nullptr;
-}
+bool IsRootReady(const kernel::KConfigurationRoot &root) { return root.file != nullptr; }
 
 // Opens `configRoot`'s backing file (unless another key sharing the same
 // root already has) and loads its on-disk index into memory via
@@ -53,7 +47,7 @@ kstd::error_code EnsureRootIsOpened(const kernel::KObjectPtr<kernel::KConfigurat
   kstd::unique_lock lock(configRoot->mtx);
   if (configRoot->file) {
     // Already opened and indexed by another key sharing the same root
-    return kernel::KernelError::Success;
+    return {};
   }
 
   auto opened = KE_VFS_OpenFile(configRoot->filePath, kernel::KIOObject::OpenMode::ReadWrite);
@@ -73,7 +67,7 @@ kstd::error_code EnsureRootIsOpened(const kernel::KObjectPtr<kernel::KConfigurat
     return status;
   }
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 // Drops one reference on `root`, closing the backing file and releasing the
@@ -132,14 +126,14 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_CM_IncrementConfigRootReferenceCount(co
 
   // Increment references on the underlying root object
   key->configRoot->configptr_references++;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_CM_DecrementConfigRootReferenceCount(const kernel::KConfigurationKey *key) noexcept {
   if (!key || !key->configRoot) return kernel::KernelError::InvalidHandle;
 
   ReleaseConfigRootReference(key->configRoot);
-  return kernel::KernelError::Success;
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_code> KE_CM_OpenRoot(const kstd::string_view &rootName) noexcept {
@@ -166,8 +160,8 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_code> KE_CM_OpenKey(const kernel::KConfigurationKeyPtr &parentKey,
-                                                                                                    const kstd::string_view &subKeyName,
-                                                                                                    kernel::KConfigurationKeyAccess desiredAccess) noexcept {
+                                                                                                  const kstd::string_view &subKeyName,
+                                                                                                  kernel::KConfigurationKeyAccess desiredAccess) noexcept {
   // if parentKey is null then subKeyName must be a fully qualified name, starting with the root name
   kernel::KObjectPtr<kernel::KConfigurationRoot> root = nullptr;
   ConfigurationKey realKeyHash;
@@ -201,10 +195,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
 
   for (const auto &child: root->roots) {
     if (child.keyHash == realKeyHash && child.parentHash == expectedParentHash) {
-      auto created = KE_CreateKPtrObject<kernel::KConfigurationKey>();
-      if (!created) {
-        found = kstd::unexpected(created.error());
-      } else {
+      if (auto created = KE_CreateKPtrObject<kernel::KConfigurationKey>(); created) {
         // Same ordering requirement as KE_CM_OpenRoot: assign configRoot
         // first so the reference-count bump below can find it.
         auto obj = kstd::move(*created);
@@ -214,6 +205,8 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
         obj->access = desiredAccess;
         KE_CM_IncrementConfigRootReferenceCount(obj.get());
         found = kstd::move(obj);
+      } else {
+        found = kstd::unexpected(created.error());
       }
       break;
     }
@@ -224,8 +217,8 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_code> KE_CM_CreateKey(const kernel::KConfigurationKeyPtr &parentKey,
-                                                                                                      const kstd::string_view &subKeyName,
-                                                                                                      kernel::KConfigurationKeyAccess desiredAccess) noexcept {
+                                                                                                    const kstd::string_view &subKeyName,
+                                                                                                    kernel::KConfigurationKeyAccess desiredAccess) noexcept {
   // Same parent/root resolution as KE_CM_OpenKey(): if parentKey is null,
   // subKeyName must be fully qualified (starting with the root/hive name).
   kernel::KObjectPtr<kernel::KConfigurationRoot> root = nullptr;
@@ -281,10 +274,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
     } else if (existsAlready) {
       // Key already exists and the caller didn't require exclusivity:
       // behave like KE_CM_OpenKey() and just hand back a handle to it.
-      auto created = KE_CreateKPtrObject<kernel::KConfigurationKey>();
-      if (!created) {
-        result = kstd::unexpected(created.error());
-      } else {
+      if (auto created = KE_CreateKPtrObject<kernel::KConfigurationKey>(); created) {
         auto obj = kstd::move(*created);
         obj->configRoot = root;
         obj->keyHash = realKeyHash;
@@ -292,13 +282,13 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
         obj->access = desiredAccess;
         KE_CM_IncrementConfigRootReferenceCount(obj.get());
         result = kstd::move(obj);
+      } else {
+        result = kstd::unexpected(created.error());
       }
     } else {
       uint32_t indexBlockOffset = 0;
       uint32_t indexEntryOffset = 0;
-      if (const auto slotStatus = FindOrAllocateFreeSlot(*root, indexBlockOffset, indexEntryOffset); slotStatus) {
-        result = kstd::unexpected(slotStatus);
-      } else {
+      if (const auto slotStatus = FindOrAllocateFreeSlot(*root, indexBlockOffset, indexEntryOffset); !slotStatus) {
         // Persist a name entry alongside the index entry so KE_CM_EnumKey()/
         // KE_CM_EnumValue() can later report this key's short name. A
         // paired NAME BLOCK has fewer slots than its INDEX BLOCK (56 vs
@@ -323,16 +313,11 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
             .indexBlockOffset = indexBlockOffset,
             .nameEntryIndex = nameEntryIndex};
 
-        if (const auto persistStatus = PersistIndexEntry(root->file, newEntry); persistStatus) {
-          result = kstd::unexpected(persistStatus);
-        } else {
+        if (const auto persistStatus = PersistIndexEntry(root->file, newEntry); !persistStatus) {
           root->roots.emplace_back(newEntry);
           root->numRoots++;
 
-          auto created = KE_CreateKPtrObject<kernel::KConfigurationKey>();
-          if (!created) {
-            result = kstd::unexpected(created.error());
-          } else {
+          if (auto created = KE_CreateKPtrObject<kernel::KConfigurationKey>(); created) {
             auto obj = kstd::move(*created);
             obj->configRoot = root;
             obj->keyHash = newEntry.keyHash;
@@ -340,8 +325,14 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
             obj->access = desiredAccess;
             KE_CM_IncrementConfigRootReferenceCount(obj.get());
             result = kstd::move(obj);
+          } else {
+            result = kstd::unexpected(created.error());
           }
+        } else {
+          result = kstd::unexpected(persistStatus);
         }
+      } else {
+        result = kstd::unexpected(slotStatus);
       }
     }
   }
@@ -351,7 +342,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_CM_DeleteKey(const kernel::KConfigurationKeyPtr &parentKey,
-                                          const kstd::string_view &subKeyName) noexcept {
+                                                      const kstd::string_view &subKeyName) noexcept {
   // Same parent/root resolution as KE_CM_OpenKey()/KE_CM_CreateKey(): if
   // parentKey is null, subKeyName must be fully qualified (starting with
   // the root/hive name).
@@ -429,7 +420,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_CM_FlushKey(const kernel::KConfiguratio
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KM_CM_GetKeyInfo(const kernel::KConfigurationKeyPtr &keyHandle,
-                                                          kernel::KConfigurationKeyInfo &outInfo) noexcept {
+                                                       kernel::KConfigurationKeyInfo &outInfo) noexcept {
   if (!keyHandle || !keyHandle->configRoot) return kernel::KernelError::InvalidHandle;
 
   const auto &root = keyHandle->configRoot;
@@ -443,7 +434,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KM_CM_GetKeyInfo(const kernel::KConfigurat
     outInfo.name.clear();
     outInfo.isFolder = true;
     outInfo.typeIfNotFolder = kernel::ConfigurationValueType::Invalid;
-    return kernel::KernelError::Success;
+    return {};
   }
 
   for (const auto &entry: root->roots) {
@@ -454,7 +445,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KM_CM_GetKeyInfo(const kernel::KConfigurat
       outInfo.name = entry.name;
       outInfo.isFolder = entry.valueType == kernel::ConfigurationValueType::Invalid;
       outInfo.typeIfNotFolder = entry.valueType;
-      return kernel::KernelError::Success;
+      return {};
     }
   }
   return kernel::KernelError::NotFound;
@@ -703,7 +694,7 @@ kstd::error_code RebindHiveFile(const kstd::string_view &hiveName, const kstd::s
 
   if (!hadOpenFile) {
     // Path updated; lazy open+parse on next use.
-    return KernelError::Success;
+    return {};
   }
 
   // Same underlying bytes as before, just reached through a different VFS
@@ -713,12 +704,12 @@ kstd::error_code RebindHiveFile(const kstd::string_view &hiveName, const kstd::s
                                       KIOObject::OpenMode::Create);
   if (!reopened) {
     KE_Print("RebindHiveFile: failed to reopen hive '{}' at '{}'",
-                    hiveName, newFilePath);
+             hiveName, newFilePath);
     return reopened.error();
   }
   configRoot->file = kstd::move(*reopened);
 
-  return KernelError::Success;
+  return {};
 }
 
 void PromoteBootHive() {

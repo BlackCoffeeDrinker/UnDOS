@@ -44,8 +44,13 @@ struct BootModuleT {
   kstd::static_string<64> name;
 };
 
+// Boot handoff symbols are packed: BootSymbolsT::name_offset indexes the
+// NUL-terminated names stored back to back in BootInfoT::boot_symbol_names.
+constexpr size_t kMaxBootSymbols = 1024;
+constexpr size_t kBootSymbolNamePoolSize = 48 * 1024;
+
 struct BootSymbolsT {
-  kstd::static_string<256> name;
+  uint32_t name_offset;
   VirtualAddress address;
 };
 
@@ -56,8 +61,16 @@ struct BootInfoT {
   kstd::array<MemoryRegionT, 32> memory_regions;
   kstd::array<MappedMemoryT, 10> mapped_memory;
 
-  // TODO: This needs to be relocated elsewhere; maybe even the kernel should read it's own ELF
-  kstd::array<BootSymbolsT, 2048> boot_symbols;
+  // Exported symbols of the kernel image, then of the HAL image. Both sit in
+  // boot_symbols, the first boot_kernel_symbol_count entries being the kernel's.
+  // Reclaimed with the rest of BootInfo once the module registry has copied them.
+  uint32_t boot_symbol_count;
+  uint32_t boot_kernel_symbol_count;
+  uint32_t boot_symbol_names_used;
+  kstd::array<BootSymbolsT, kMaxBootSymbols> boot_symbols;
+  kstd::array<char, kBootSymbolNamePoolSize> boot_symbol_names;
+
+  [[nodiscard]] const char *SymbolName(size_t index) const { return boot_symbol_names.data() + boot_symbols[index].name_offset; }
 
   kstd::static_string<1024> command_line;
 };

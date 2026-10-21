@@ -10,6 +10,15 @@
 #include "stdkrn.hpp"
 #include "__kernel_types.h"
 
+#include <kernel/kobject/KModuleObject.hpp>
+
+namespace kernel::syscall {
+// Binds every syscall provided by `module` (its exported handle_<Name>_<Version>
+// functions) into the dispatch slot table. All-or-nothing; fails with NotFound when a
+// declared handler is not exported and AlreadyExists when a slot is already bound.
+kstd::error_code BindProvider(const KObjectPtr<KModuleObject> &module);
+}// namespace kernel::syscall
+
 kstd::error_code handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 && args);
 kstd::error_code handle_DeleteDC_V1(__KRN_GFX_DELETEDC_V1 && args);
 kstd::error_code handle_SelectObject_V1(__KRN_GFX_SELECTOBJECT_V1 && args);
@@ -127,6 +136,10 @@ kstd::error_code handle_SetWindowText_V1(__KRN_USER_SETWINDOWTEXT_V1 && args);
  * FPU state; Emulated is only valid when an instruction emulator is active.
  */
 kstd::error_code handle_QueryFpu_V1(__KRN_ABI_QUERYFPU_V1 && args);
+/** Reports the version of the network subsystem; UNSUPPORTED when it is not loaded. */
+// Provided by module 'network': it must export (UNDOS_MODULE_EXPORT)
+//   kstd::error_code handle_QueryNetworkVersion_V1(__KRN_NET_QUERYNETWORKVERSION_V1 &&args);
+
 kstd::error_code handle_Print_V1(__KRN_DEBUG_PRINT_V1 && args);
 /**
  * Creates a new process from the executable at `path`. Waits only for loader

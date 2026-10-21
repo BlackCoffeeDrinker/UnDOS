@@ -100,6 +100,7 @@
 #include <undos/syscalls/__syscall_SetFocus_V1.h>
 #include <undos/syscalls/__syscall_SetWindowText_V1.h>
 #include <undos/syscalls/__syscall_QueryFpu_V1.h>
+#include <undos/syscalls/__syscall_QueryNetworkVersion_V1.h>
 #include <undos/syscalls/__syscall_Print_V1.h>
 #include <undos/syscalls/__syscall_CreateProcess_V1.h>
 #include <undos/syscalls/__syscall_CreateProcess_V2.h>
@@ -135,6 +136,36 @@ static kstd::error_code KE_VMM_CopyToUserspace(kernel::vmm::AddressSpace &as, vo
   kstd::memcpy(*mapped, kernelPtr, length);
   return KE_VMM_UnmapBorrowed(*mapped, length, as);
 }
+
+// One slot per module-provided syscall, indexed at generation time so dispatch is a
+// single load and null check. An empty slot means the provider is not loaded.
+namespace {
+struct ProviderSlot {
+  kstd::string_view provider;
+  kstd::string_view symbol;
+  kernel::VirtualAddress handler;
+};
+
+ProviderSlot g_providerSlots[] = {
+    {"network", "handle_QueryNetworkVersion_V1", kernel::VirtualAddress{0}},
+};
+}// namespace
+
+namespace kernel::syscall {
+kstd::error_code BindProvider(const KObjectPtr<KModuleObject> &module) {
+  const kstd::string_view moduleName(module->name);
+  for (const auto &slot: g_providerSlots) {
+    if (slot.provider != moduleName) continue;
+    if (slot.handler.value != 0) return KernelError::AlreadyExists;
+    if (!module->exports.Find(slot.symbol)) return KernelError::NotFound;
+  }
+  for (auto &slot: g_providerSlots) {
+    if (slot.provider != moduleName) continue;
+    slot.handler = *module->exports.Find(slot.symbol);
+  }
+  return KernelError::Success;
+}
+}// namespace kernel::syscall
 
 static kstd::error_code Dispatch_CreateDC_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_GFX_CREATEDC_V1)) return kernel::KernelError::InvalidSize;
@@ -1756,6 +1787,33 @@ static kstd::error_code Dispatch_QueryFpu_V1(void *userData, size_t size, uint32
   return ret;
 }
 
+static kstd::error_code Dispatch_QueryNetworkVersion_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_NET_QUERYNETWORKVERSION_V1)) return kernel::KernelError::InvalidSize;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_NET_QUERYNETWORKVERSION_V1 headerCopy {};
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_NET_QUERYNETWORKVERSION_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_NET_QUERYNETWORKVERSION_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_NET_QUERYNETWORKVERSION_V1), address_space); error) return error;
+  } else {
+    return mapped.error();
+  }
+
+  __KRN_NET_QUERYNETWORKVERSION_V1 args {};
+
+  (void)flags;
+  const auto handler = g_providerSlots[0].handler;
+  if (handler.value == 0) return kernel::KernelError::Unsupported;
+  const kstd::error_code ret = handler.as_ptr<kstd::error_code(__KRN_NET_QUERYNETWORKVERSION_V1 &&)>()(kstd::move(args));
+
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_NET_QUERYNETWORKVERSION_V1, version), &args.version, sizeof(args.version)); error) return error;
+  return ret;
+}
+
 static kstd::error_code Dispatch_Print_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_DEBUG_PRINT_V1)) return kernel::KernelError::InvalidSize;
 
@@ -2583,6 +2641,7 @@ UNDOS_KERNEL_API_DEF uint32_t KE_SYSCALL_Dispatch(uint32_t number, uint32_t size
     case 417: return kernel::KErrorToSysReturnCode(Dispatch_SetFocus_V1(data, size, flags));
     case 418: return kernel::KErrorToSysReturnCode(Dispatch_SetWindowText_V1(data, size, flags));
     case 207: return kernel::KErrorToSysReturnCode(Dispatch_QueryFpu_V1(data, size, flags));
+    case 500: return kernel::KErrorToSysReturnCode(Dispatch_QueryNetworkVersion_V1(data, size, flags));
     case 100: return kernel::KErrorToSysReturnCode(Dispatch_Print_V1(data, size, flags));
     case 200: return kernel::KErrorToSysReturnCode(Dispatch_CreateProcess_V1(data, size, flags));
     case 208: return kernel::KErrorToSysReturnCode(Dispatch_CreateProcess_V2(data, size, flags));

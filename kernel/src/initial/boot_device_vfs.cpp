@@ -22,13 +22,13 @@ kstd::error_code BootDeviceVFS_MountVolume(const kernel::KObjectPtr<kernel::KVol
   // No per-volume state: minifat::ReadFile opens the BIOS boot disk on each
   // call and is fully self-contained.
   (void) options;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code BootDeviceVFS_UnmountVolume(const kernel::KObjectPtr<kernel::KVolumeMountObject> &) {
   // No per-volume state to tear down: minifat::ReadFile is fully
   // self-contained per call, so unmounting is always trivially successful.
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code BootDeviceVFS_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, kernel::KVFSNode &rootOut) {
@@ -39,7 +39,7 @@ kstd::error_code BootDeviceVFS_GetRootNode(const kernel::KObjectPtr<kernel::KVol
   if (!rootOut.fsPrivate.as<FS_NodeExtension>()) return kernel::KernelError::OutOfMemory;
   rootOut.size = 0;
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code BootDeviceVFS_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint,
@@ -71,7 +71,7 @@ kstd::error_code BootDeviceVFS_Lookup(const kernel::KObjectPtr<kernel::KVolumeMo
 
   out.type = kernel::VFSNodeType::Directory;
   out.size = 0;
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::error_code BootDeviceVFS_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &vnode, kernel::KIOObject::OpenMode mode) {
@@ -101,7 +101,7 @@ kstd::error_code BootDeviceVFS_CreateHandle(const kernel::KObjectPtr<kernel::KVo
     ctx->loaded = true;
   }
 
-  return kernel::KernelError::Success;
+  return {};
 }
 
 kstd::expected<uint64_t, kstd::error_code> BootDeviceVFS_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &vnode, uint64_t offset, const kstd::span<uint8_t> &buffer) {
