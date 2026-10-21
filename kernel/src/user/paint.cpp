@@ -41,26 +41,88 @@ KObjectPtr<KDisplay> primary_display() noexcept {
   return display;
 }
 
-void fill(const KObjectPtr<KDisplay> &display, const URect &r, uint32_t color) noexcept {
+uint64_t area(const URect &r) noexcept {
+  return r.Empty() ? 0 : static_cast<uint64_t>(r.right - r.left) * static_cast<uint64_t>(r.bottom - r.top);
+}
+
+// Returns true when the pixels still have to be presented, i.e. they were
+// written to the surface but not necessarily to the visible image.
+bool fill(const KObjectPtr<KDisplay> &display, const URect &r, uint32_t color) noexcept {
   const auto &adapter = display->adapter;
   const int w = r.right - r.left;
   const int h = r.bottom - r.top;
   const uint32_t packed = gfx::Palette16ScreenColor(color, display->surface->bpp);
   const auto &surface = display->surface;
-  if (static_cast<uint64_t>(w) * static_cast<uint64_t>(h) <= 256 &&
+  if (area(r) <= 256 &&
       surface->backing && surface->backing->directAddress && surface->pitch > 0 &&
       static_cast<uint64_t>(surface->pitch) >= static_cast<uint64_t>(surface->width) * pixel_bytes(*surface) &&
-      !KE_GFX_SoftwareFillRect(surface, r.left, r.top, w, h, packed)) return;
+      !KE_GFX_SoftwareFillRect(surface, r.left, r.top, w, h, packed)) return true;
   if (adapter && adapter->FillRect &&
-      !adapter->FillRect(display->adapter, display->surface, r.left, r.top, w, h, packed)) return;
+      !adapter->FillRect(display->adapter, display->surface, r.left, r.top, w, h, packed))
+    return !Any(adapter->caps & KGfxCaps::VisibleFill);
   // Last resort; scene painting has no caller to report a failed fill to.
   (void) KE_GFX_SoftwareFillRect(display->surface, r.left, r.top, w, h, packed);
+  return true;
 }
 
 void present(const KObjectPtr<KDisplay> &display, const URect *rects, uint32_t count) noexcept {
   const auto &adapter = display->adapter;
   if (!adapter || !adapter->Present) return;
   adapter->Present(display->adapter, display->surface, reinterpret_cast<const KClipRect *>(rects), count);
+}
+
+// Damage produced while a scene draw is open. It is presented once when the
+// outermost scene draw ends instead of once per frame line or glyph span.
+// Rectangles may overlap; a rectangle that adds little area to an existing
+// entry is merged into it, and overflow collapses the list to its bounds.
+URegion g_frameDamage;
+
+void add_frame_damage(const URect &r) noexcept {
+  if (r.Empty()) return;
+  for (uint32_t i = 0; i < g_frameDamage.count; ++i) {
+    auto &d = g_frameDamage.rects[i];
+    const URect merged = d.Union(r);
+    const uint64_t covered = area(d) + area(r);
+    if (area(merged) <= covered + covered / 4) {
+      d = merged;
+      return;
+    }
+  }
+  if (g_frameDamage.count < URegion::kMaxRects) {
+    g_frameDamage.rects[g_frameDamage.count++] = r;
+    return;
+  }
+  g_frameDamage.Set(g_frameDamage.Bounds().Union(r));
+}
+
+void present_region(const KObjectPtr<KDisplay> &display, const URegion &region) noexcept {
+  if (region_merges_to_bounds(region)) {
+    const URect bounds = region.Bounds();
+    present(display, &bounds, 1);
+    return;
+  }
+  present(display, region.rects, region.count);
+}
+
+// Presents now, or defers to the end of the open scene draw.
+void damage_locked(const KObjectPtr<KDisplay> &display, const URect &r) noexcept {
+  if (r.Empty()) return;
+  if (g_drawDepth) {
+    add_frame_damage(r);
+    return;
+  }
+  present(display, &r, 1);
+}
+
+void flush_frame_damage_locked() noexcept {
+  if (g_frameDamage.Empty()) return;
+  URegion pending = g_frameDamage;
+  g_frameDamage.Clear();
+  const auto display = primary_display();
+  if (!display) return;
+  // A mode change inside the scene can shrink the screen under the damage.
+  pending.Intersect(screen_rect());
+  if (!pending.Empty()) present_region(display, pending);
 }
 }// namespace
 
@@ -162,6 +224,7 @@ void begin_scene_draw_locked() noexcept {
 
 void end_scene_draw_locked() noexcept {
   if (g_drawDepth) --g_drawDepth;
+  if (!g_drawDepth) flush_frame_damage_locked();
   cursor_show_locked();
 }
 
@@ -169,13 +232,11 @@ void present_locked(const URegion &region) noexcept {
   if (region.Empty()) return;
   const auto display = primary_display();
   if (!display) return;
-  if (region_merges_to_bounds(region)) {
-    const URect bounds = region.Bounds();
-    present(display, &bounds, 1);
-    cursor_show_locked();
+  if (g_drawDepth) {
+    for (uint32_t i = 0; i < region.count; ++i) add_frame_damage(region.rects[i]);
     return;
   }
-  present(display, region.rects, region.count);
+  present_region(display, region);
   cursor_show_locked();
 }
 
@@ -183,7 +244,7 @@ void present_locked(const URect &r) noexcept {
   if (r.Empty()) return;
   const auto display = primary_display();
   if (!display) return;
-  present(display, &r, 1);
+  damage_locked(display, r);
   cursor_show_locked();
 }
 
@@ -193,8 +254,7 @@ void fill_screen_locked(const URect &r, uint32_t color) noexcept {
   const URect c = r.Intersect(screen_rect());
   if (c.Empty()) return;
   cursor_hide_locked();
-  fill(display, c, color);
-  present(display, &c, 1);
+  if (fill(display, c, color)) damage_locked(display, c);
   cursor_show_locked();
 }
 
@@ -239,8 +299,9 @@ void expose_locked(const URect &screenRect) noexcept {
   const auto display = primary_display();
   if (!display) return;
   cursor_hide_locked();
-  for (uint32_t i = 0; i < desktop.count; ++i) fill(display, desktop.rects[i], kDesktopColor);
-  present_locked(desktop);
+  for (uint32_t i = 0; i < desktop.count; ++i) {
+    if (fill(display, desktop.rects[i], kDesktopColor)) add_frame_damage(desktop.rects[i]);
+  }
 }
 
 void visible_region_locked(const KWindowObject &window, URegion &out) noexcept {
@@ -281,7 +342,11 @@ kstd::expected<PaintBegin, kstd::error_code> begin_paint_locked(KProcessObject &
 
   // Erase the background (the WM_ERASEBKGND default) before the app draws.
   cursor_hide_locked();
-  for (uint32_t i = 0; i < window.paintClip.count; ++i) fill(display, window.paintClip.rects[i], window.background);
+  window.paintErase = {};
+  for (uint32_t i = 0; i < window.paintClip.count; ++i) {
+    const URect &r = window.paintClip.rects[i];
+    if (fill(display, r, window.background)) window.paintErase = window.paintErase.Union(r);
+  }
   cursor_show_locked();
 
   slot->lock.lock();
@@ -308,7 +373,7 @@ kstd::error_code end_paint_locked(KProcessObject &proc, KWindowObject &window, u
   // The live clip can shrink after rasterization (hide, occlusion, or a scene
   // change). It is not a record of pixels already written into the shadow.
   // Preserve GFX's actual damage before Close resets the slot.
-  URect damage = window.paintClip.Bounds();
+  URect damage = window.paintErase;
   slot->lock.lock();
   if (slot->presentationDirty) {
     const auto &r = slot->presentationBounds;
@@ -319,6 +384,7 @@ kstd::error_code end_paint_locked(KProcessObject &proc, KWindowObject &window, u
   present_locked(damage.Intersect(screen_rect()));
   window.paintDC = 0;
   window.painting = {};
+  window.paintErase = {};
   window.paintClip.Clear();
   return {};
 }

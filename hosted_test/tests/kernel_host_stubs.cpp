@@ -10,6 +10,10 @@ UNDOS_KERNEL_API_DEF kernel::input::InputEventResult KE_INPUT_WaitEvent(kstd::ch
   return kstd::unexpected(kernel::KernelError::Timeout);
 }
 
+UNDOS_KERNEL_API_DEF bool KE_INPUT_DequeueEvent(kernel::input::AnyInputEvent &) noexcept {
+  return false;
+}
+
 kernel::KDevicePtr<kernel::KDevice> g_lastReportedPdo;
 
 UNDOS_KERNEL_API_DEF void KE_PrintBuffer(const char *str, size_t n) noexcept {

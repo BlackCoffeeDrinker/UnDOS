@@ -147,17 +147,21 @@ kstd::error_code Fill(kernel::KDeviceContextSlot &slot, int64_t l, int64_t t, in
   const auto native = NativeColor(*slot.target, color);
   ForEachClip(slot, l, t, r, b, [&](int32_t cl, int32_t ct, int32_t cr, int32_t cb) {
     kstd::error_code drawn = kernel::KernelError::Unsupported;
+    bool visible = false;
     const auto adapter = slot.display ? slot.display->adapter : nullptr;
     const bool screen = slot.display && slot.target == slot.display->surface;
     const bool packed = IsPacked(*slot.target);
     const bool tiny = static_cast<int64_t>(cr - cl) * (cb - ct) <= 256;
     if (packed && (tiny || slot.noAccel))
       drawn = KE_GFX_SoftwareFillRect(slot.target, cl, ct, cr - cl, cb - ct, native);
-    if (drawn && screen && adapter && adapter->FillRect && (!slot.noAccel || !packed))
+    if (drawn && screen && adapter && adapter->FillRect && (!slot.noAccel || !packed)) {
       drawn = adapter->FillRect(adapter, slot.target, cl, ct, cr - cl, cb - ct, native);
+      // The adapter already wrote the visible image; presenting would re-upload it.
+      visible = !drawn && kernel::Any(adapter->caps & kernel::KGfxCaps::VisibleFill);
+    }
     if (drawn && packed)
       drawn = KE_GFX_SoftwareFillRect(slot.target, cl, ct, cr - cl, cb - ct, native);
-    if (!drawn) dirty.Add(cl, ct, cr, cb);
+    if (!drawn && !visible) dirty.Add(cl, ct, cr, cb);
     if (!result) result = drawn;
   });
   return result;

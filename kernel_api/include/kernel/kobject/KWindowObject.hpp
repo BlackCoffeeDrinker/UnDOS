@@ -60,6 +60,7 @@ struct KWindowObject : KObjectT<KWindowObject, 1, TYPE_WINDOW> {
   user::URegion paintClip;// screen coordinates, referenced by the BeginPaint DC
   HDC paintDC{0};
   user::URect painting{};// validated client damage, restored if painting is interrupted
+  user::URect paintErase{};// screen bounds of BeginPaint erase pixels still awaiting Present
   uint32_t moveParam{0}, sizeParam{0};
   uint8_t pendingGeometry{0};// coalesced Move/Size survive a full message ring
   bool pendingDisplayChange{false};

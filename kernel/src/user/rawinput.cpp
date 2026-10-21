@@ -14,6 +14,7 @@ struct InputState {
   uint32_t lastClickHwnd{0}, lastClickTime{0};
   int32_t lastClickX{0}, lastClickY{0};
   HitTest lastClickHit{HitTest::Nowhere};
+  bool dragPending{false};// a drag move awaits the end of the queued burst
 } g_input;
 
 uint32_t packed_point(const KWindowObject &window) noexcept {
@@ -33,6 +34,7 @@ bool resize_hit(HitTest hit) noexcept {
 }
 
 void drag_locked() noexcept {
+  g_input.dragPending = false;
   auto *window = lookup_locked(g_input.dragHwnd);
   if (!window || !effectively_visible_locked(*window) || window->state != KWindowObject::State::Restored) {
     g_input.dragHwnd = 0;
@@ -81,7 +83,13 @@ void mouse_locked(const input::MouseInputEvent &event) noexcept {
   g_input.mouseX = static_cast<int32_t>(x < screen.left ? screen.left : x >= screen.right ? screen.right - 1 : x);
   g_input.mouseY = static_cast<int32_t>(y < screen.top ? screen.top : y >= screen.bottom ? screen.bottom - 1 : y);
   cursor_hide_locked();
-  if (g_input.dragHwnd) drag_locked();
+  // Each drag step redraws the moved window and what it uncovered, so plain
+  // moves are applied once per queued burst. Button changes apply at once,
+  // so a release ends the drag at its final position.
+  if (g_input.dragHwnd) {
+    if (event.buttonFlags) drag_locked();
+    else g_input.dragPending = true;
+  }
 
   auto *captured = lookup_locked(capture_locked());
   auto *target = mouse_target_locked(g_input.mouseX, g_input.mouseY);
@@ -198,10 +206,29 @@ void raw_input_thread(void *) {
     g_input.mouseY = (screen.top + screen.bottom) / 2;
     cursor_move_locked(g_input.mouseX, g_input.mouseY);
   }
+  // Bounds the coalesced burst, so a steady event stream still moves the window.
+  constexpr uint32_t kMaxCoalescedMoves = 16;
+  uint32_t coalesced = 0;
   for (;;) {
-    const auto next = KE_INPUT_WaitEvent(kstd::chrono::milliseconds(1000));
-    if (!next) continue;
-    const input::AnyInputEvent &event = *next;
+    input::AnyInputEvent event{};
+    if (g_input.dragPending) {
+      if (coalesced >= kMaxCoalescedMoves || !KE_INPUT_DequeueEvent(event)) {
+        Guard guard;
+        if (g_input.dragPending && g_input.dragHwnd) {
+          cursor_hide_locked();
+          drag_locked();
+          cursor_show_locked();
+        }
+        g_input.dragPending = false;
+        coalesced = 0;
+        continue;
+      }
+      ++coalesced;
+    } else {
+      const auto next = KE_INPUT_WaitEvent(kstd::chrono::milliseconds(1000));
+      if (!next) continue;
+      event = *next;
+    }
     Guard guard;
     if (event.base.is<input::MouseInputEvent>()) mouse_locked(event.mouse);
     else if (event.base.is<input::KeyboardInputEvent>()) keyboard_locked(event.keyboard);
@@ -216,6 +243,7 @@ void init_raw_input() noexcept {
 
 void display_input_changed_locked(bool firstActivation) noexcept {
   g_input.dragHwnd = 0;
+  g_input.dragPending = false;
   g_input.lastClickHwnd = 0;
   set_capture_locked(0);
   const auto screen = screen_rect();

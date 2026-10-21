@@ -25,6 +25,9 @@ enum class KGfxCaps : uint32_t {
   HwBlt = 1u << 1,
   DirectScanout = 1u << 2,
   Hw3D = 1u << 3,
+  // A successful FillRect on the primary surface already updated the visible
+  // image (and any shadow copy), so callers need not Present those pixels.
+  VisibleFill = 1u << 4,
 };
 
 constexpr KGfxCaps operator|(KGfxCaps a, KGfxCaps b) noexcept {

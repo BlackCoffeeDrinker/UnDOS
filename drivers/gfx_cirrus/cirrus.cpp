@@ -190,15 +190,36 @@ void Cirrus_ProgramMode(CirrusContext *const ctx_cirrus) {
 // endregion
 
 // region Bank window and the region flush
-// Points the 64 KiB window at the 16 KiB-aligned bank containing
-// `vramOffset` and returns the offset of that byte inside the window.
+// Returns the offset of `vramOffset` inside the 64 KiB window, moving the
+// window only when that byte is outside the currently mapped view. A bank
+// switch is expensive (emulators remap guest memory on every GR09 write),
+// so the window is reused for as long as it covers the access.
 uint32_t Cirrus_SetBank(CirrusContext *const ctx_cirrus, uint32_t vramOffset) {
-  const uint32_t bank = vramOffset / cirrus_regs::kBankGranularity;
-  if (bank != ctx_cirrus->activeBank) {
-    WriteGraphics(cirrus_regs::kGrOffset0, static_cast<uint8_t>(bank));
-    ctx_cirrus->activeBank = bank;
+  const uint32_t base = ctx_cirrus->activeBank * cirrus_regs::kBankGranularity;
+  if (vramOffset >= base && vramOffset - base < cirrus_regs::kWindowSize) {
+    return vramOffset - base;
   }
+  const uint32_t bank = vramOffset / cirrus_regs::kBankGranularity;
+  WriteGraphics(cirrus_regs::kGrOffset0, static_cast<uint8_t>(bank));
+  ctx_cirrus->activeBank = bank;
   return vramOffset - bank * cirrus_regs::kBankGranularity;
+}
+
+// Aligned dword stores into the window; the source may be unaligned.
+void Cirrus_CopyToWindow(volatile uint8_t *dst, const uint8_t *src, size_t length) {
+  using UnalignedWord = uint32_t __attribute__((may_alias, aligned(1)));
+  while (length && (reinterpret_cast<uintptr_t>(dst) & 3u)) {
+    *dst++ = *src++;
+    --length;
+  }
+  auto *dstWords = reinterpret_cast<volatile uint32_t *>(dst);
+  for (; length >= 4; length -= 4, src += 4) {
+    *dstWords++ = *reinterpret_cast<const UnalignedWord *>(src);
+  }
+  dst = reinterpret_cast<volatile uint8_t *>(dstWords);
+  while (length--) {
+    *dst++ = *src++;
+  }
 }
 
 // Copies `length` bytes into VRAM through the bank window, switching banks
@@ -209,9 +230,7 @@ void Cirrus_WriteVram(CirrusContext *const ctx_cirrus, uint32_t vramOffset, cons
     const uint32_t windowOffset = Cirrus_SetBank(ctx_cirrus, vramOffset);
     size_t chunk = cirrus_regs::kWindowSize - windowOffset;
     if (chunk > length) chunk = length;
-    for (size_t i = 0; i < chunk; ++i) {
-      window[windowOffset + i] = src[i];
-    }
+    Cirrus_CopyToWindow(window + windowOffset, src, chunk);
     vramOffset += static_cast<uint32_t>(chunk);
     src += chunk;
     length -= chunk;
@@ -252,57 +271,10 @@ void Cirrus_ProgramBlitGeometry(uint32_t widthBytes, uint32_t height, uint32_t d
   WriteGraphics(cirrus_regs::kGrBltDstAddrHigh, static_cast<uint8_t>((dstAddress >> 16) & 0x3F));
 }
 
-// Pushes one rectangle of the shadow buffer into VRAM with the blitter's
-// system-memory-source mode: the engine consumes the source pixels written
-// into the 0xA0000 window, so the CPU never bank-switches per row.
-kstd::error_code Cirrus_FlushRectAccelerated(CirrusContext *const ctx_cirrus, int32_t x, int32_t y, uint32_t width, uint32_t height) {
-  if (!Cirrus_WaitForBlitter()) return kernel::KernelError::Timeout;
-
-  const uint32_t bytesPerPixel = BytesPerPixel(ctx_cirrus->depth->bpp);
-  const uint32_t widthBytes = width * bytesPerPixel;
-  // The engine rounds the source row up to a multiple of four bytes and
-  // consumes exactly that many per row, so the padding has to be fed too:
-  // underfeeding it leaves the transfer armed and it then eats every later
-  // write to the window.
-  const uint32_t srcPitch = (widthBytes + cirrus_regs::kMemSysSrcRowAlignment - 1) &
-                            ~(cirrus_regs::kMemSysSrcRowAlignment - 1);
-  const uint32_t dstAddress = static_cast<uint32_t>(y) * ctx_cirrus->pitch + static_cast<uint32_t>(x) * bytesPerPixel;
-
-  Cirrus_ProgramBlitGeometry(widthBytes, height, ctx_cirrus->pitch, srcPitch, dstAddress);
-  WriteGraphics(cirrus_regs::kGrBltRop, cirrus_regs::kBltRopSrcCopy);
-  WriteGraphics(cirrus_regs::kGrBltModeExtension, 0x00);
-  WriteGraphics(cirrus_regs::kGrBltMode,
-                static_cast<uint8_t>(cirrus_regs::kBltModeMemSysSrc | ctx_cirrus->depth->bltPixelWidth));
-  WriteGraphics(cirrus_regs::kGrBltStatus, cirrus_regs::kBltStatusStart);
-
-  const auto *shadow = ctx_cirrus->shadow.as_ptr<const uint8_t>();
-  auto *window = ctx_cirrus->window.as_ptr<volatile uint8_t>();
-  size_t written = 0;
-  for (uint32_t row = 0; row < height; ++row) {
-    const uint8_t *src = shadow + (static_cast<size_t>(y) + row) * ctx_cirrus->pitch +
-                         static_cast<size_t>(x) * bytesPerPixel;
-    for (uint32_t i = 0; i < srcPitch; ++i) {
-      window[written % cirrus_regs::kWindowSize] = i < widthBytes ? src[i] : 0;
-      ++written;
-    }
-  }
-
-  return Cirrus_WaitForBlitter() ? kernel::KernelError::Success : kernel::KernelError::Timeout;
-}
-
-// Plain bank-switched row copy, used when the blitter does not settle.
-void Cirrus_FlushRectCpu(CirrusContext *const ctx_cirrus, int32_t x, int32_t y, uint32_t width, uint32_t height) {
-  const uint32_t bytesPerPixel = BytesPerPixel(ctx_cirrus->depth->bpp);
-  const uint32_t widthBytes = width * bytesPerPixel;
-  const auto *shadow = ctx_cirrus->shadow.as_ptr<const uint8_t>();
-
-  for (uint32_t row = 0; row < height; ++row) {
-    const size_t offset = (static_cast<size_t>(y) + row) * ctx_cirrus->pitch +
-                          static_cast<size_t>(x) * bytesPerPixel;
-    Cirrus_WriteVram(ctx_cirrus, static_cast<uint32_t>(offset), shadow + offset, widthBytes);
-  }
-}
-
+// Copies one rectangle of the shadow buffer into VRAM with the CPU. The
+// blitter's system-memory-source mode is not used: it has to be fed one
+// byte per I/O-visible window write and was several times slower than
+// these dword stores. Rows spanning the whole pitch are one contiguous run.
 void Cirrus_FlushRect(CirrusContext *const ctx_cirrus, int32_t left, int32_t top, int32_t right, int32_t bottom) {
   if (left < 0) left = 0;
   if (top < 0) top = 0;
@@ -310,13 +282,19 @@ void Cirrus_FlushRect(CirrusContext *const ctx_cirrus, int32_t left, int32_t top
   if (bottom > static_cast<int32_t>(ctx_cirrus->timing->height)) bottom = static_cast<int32_t>(ctx_cirrus->timing->height);
   if (right <= left || bottom <= top) return;
 
-  const auto width = static_cast<uint32_t>(right - left);
+  const uint32_t bytesPerPixel = BytesPerPixel(ctx_cirrus->depth->bpp);
+  const uint32_t widthBytes = static_cast<uint32_t>(right - left) * bytesPerPixel;
   const auto height = static_cast<uint32_t>(bottom - top);
-  if (Cirrus_FlushRectAccelerated(ctx_cirrus, left, top, width, height)) {
-    // Reset the engine before falling back, so a stuck operation does not
-    // consume the CPU-written bytes instead of VRAM.
-    Cirrus_ResetBlitter();
-    Cirrus_FlushRectCpu(ctx_cirrus, left, top, width, height);
+  const auto *shadow = ctx_cirrus->shadow.as_ptr<const uint8_t>();
+  const size_t first = static_cast<size_t>(top) * ctx_cirrus->pitch + static_cast<size_t>(left) * bytesPerPixel;
+
+  if (widthBytes == ctx_cirrus->pitch) {
+    Cirrus_WriteVram(ctx_cirrus, static_cast<uint32_t>(first), shadow + first, static_cast<size_t>(widthBytes) * height);
+    return;
+  }
+  for (uint32_t row = 0; row < height; ++row) {
+    const size_t offset = first + static_cast<size_t>(row) * ctx_cirrus->pitch;
+    Cirrus_WriteVram(ctx_cirrus, static_cast<uint32_t>(offset), shadow + offset, widthBytes);
   }
 }
 
@@ -877,7 +855,7 @@ void Cirrus_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   ctx_cirrus->adapter->DrawLine = Cirrus_DrawLine;
   ctx_cirrus->adapter->BitBlt = Cirrus_BitBlt;
   ctx_cirrus->adapter->Present = Cirrus_Present;
-  ctx_cirrus->adapter->caps = kernel::KGfxCaps::HwFill | kernel::KGfxCaps::HwBlt;
+  ctx_cirrus->adapter->caps = kernel::KGfxCaps::HwFill | kernel::KGfxCaps::HwBlt | kernel::KGfxCaps::VisibleFill;
 }
 }// namespace
 
