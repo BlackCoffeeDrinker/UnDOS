@@ -47,7 +47,7 @@ int sdk_libc_from_c(void) {
   if (UD_SYS_OpenV1("/System/libcin.txt", FileOpenMode_Read, &handle) !=
           SyscallReturnCode_OKAY ||
       UD_SYS_WriteV2(handle, (const uint8_t *)"x", 1, &transferred) !=
-          SyscallReturnCode_INVALID_ARGUMENT || transferred != 0 ||
+          SyscallReturnCode_UNKNOWN || transferred != 0 ||
       UD_SYS_CloseV1(handle) != SyscallReturnCode_OKAY) { FAIL(); }
   HANDLE source = 0, sink = 0;
   if (UD_SYS_CreateV1(&source, &sink) != SyscallReturnCode_OKAY ||

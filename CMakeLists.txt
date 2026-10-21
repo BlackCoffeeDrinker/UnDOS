@@ -138,6 +138,7 @@ if (NOT TESTING_ONLY)
 
     add_subdirectory(userland)
     add_subdirectory(sdk)
+    include(cmake/SDKApplications.cmake)
 
     #######################################################################################################################
     ## Tools that generate the initial image 
@@ -189,32 +190,29 @@ if (NOT TESTING_ONLY)
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:input_i8042> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/i8042.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:input_gameport> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/gameport.elf
             COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:serial_uart> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Drivers/serial.elf
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:term> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/term.elf
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:progman> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/progman.elf
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:demo> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/demo.elf
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:fontloader> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/fontload.elf
+            COMMAND ${CMAKE_COMMAND} -E copy "${UNDOS_term_DIR}/term.elf" ${CMAKE_SOURCE_DIR}/bin/filesystem/System/term.elf
+            COMMAND ${CMAKE_COMMAND} -E copy "${UNDOS_progman_DIR}/progman.elf" ${CMAKE_SOURCE_DIR}/bin/filesystem/System/progman.elf
+            COMMAND ${CMAKE_COMMAND} -E copy "${UNDOS_demo_DIR}/demo.elf" ${CMAKE_SOURCE_DIR}/bin/filesystem/System/demo.elf
+            COMMAND ${CMAKE_COMMAND} -E copy "${UNDOS_fontloader_DIR}/fontload.elf" ${CMAKE_SOURCE_DIR}/bin/filesystem/System/fontload.elf
             COMMAND ${PYTHON3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/create-font-fixture.py
                     ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Fonts/FTEST.TTF
             COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/userland/apps/progman/PROGMAN.INI ${CMAKE_SOURCE_DIR}/bin/filesystem/System/PROGMAN.INI
             COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/userland/apps/init/DISPLAY.CFG ${CMAKE_SOURCE_DIR}/bin/filesystem/System/DISPLAY.CFG
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:init> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/init.elf
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:abi_test> ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abitest.elf
-            COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/userland/apps/abitest/abitest.so ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abitest.so
-            COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/userland/apps/abitest/abinext.so ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abinext.so
-            COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/userland/apps/abitest/abimiss.elf ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abimiss.elf
-            COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/userland/apps/init/initlib.so ${CMAKE_SOURCE_DIR}/bin/filesystem/System/initlib.so
+            COMMAND ${CMAKE_COMMAND} -E copy "${UNDOS_init_DIR}/init.elf" ${CMAKE_SOURCE_DIR}/bin/filesystem/System/init.elf
+            COMMAND ${CMAKE_COMMAND} -E copy "${UNDOS_abi_test_DIR}/abitest.elf" ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abitest.elf
+            COMMAND ${CMAKE_COMMAND} -E copy "${UNDOS_abi_test_DIR}/abitest.so" ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abitest.so
+            COMMAND ${CMAKE_COMMAND} -E copy "${UNDOS_abi_test_DIR}/abinext.so" ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abinext.so
+            COMMAND ${CMAKE_COMMAND} -E copy "${UNDOS_abi_test_DIR}/abimiss.elf" ${CMAKE_SOURCE_DIR}/bin/filesystem/System/abimiss.elf
+            COMMAND ${CMAKE_COMMAND} -E copy "${UNDOS_init_DIR}/initlib.so" ${CMAKE_SOURCE_DIR}/bin/filesystem/System/initlib.so
             COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/configuration_editor/config.py
                     ${CMAKE_SOURCE_DIR}/bin/filesystem/System/Config/MACHI
                     author-localmachine ${SUBSYSTEM_REGISTRY_SPECS}
             COMMAND python3 ${PROJECT_SOURCE_DIR}/tools/make-initial-disk.py ${PROJECT_SOURCE_DIR}/bin/fat32.img ${PROJECT_SOURCE_DIR}/bin/filesystem
 
-            DEPENDS ${UNDOS_SUBSYSTEM_TARGETS} native_elf_loader bus_isa disk_ata volmgr fs_fat gfx_vga gfx_cirrus input_i8042 input_gameport serial_uart term progman demo fontloader init init_shared abi_test abi_test_shared abi_test_dependent abi_test_missing_note
+            DEPENDS ${UNDOS_SUBSYSTEM_TARGETS} native_elf_loader bus_isa disk_ata volmgr fs_fat gfx_vga gfx_cirrus input_i8042 input_gameport serial_uart term progman demo fontloader init abi_test
             $<TARGET_FILE:native_elf_loader>
             $<TARGET_FILE:bus_isa> $<TARGET_FILE:disk_ata> $<TARGET_FILE:volmgr> $<TARGET_FILE:fs_fat> $<TARGET_FILE:gfx_vga> $<TARGET_FILE:gfx_cirrus> $<TARGET_FILE:input_i8042> $<TARGET_FILE:input_gameport>
             $<TARGET_FILE:serial_uart>
-            $<TARGET_FILE:term> $<TARGET_FILE:init> ${CMAKE_BINARY_DIR}/userland/apps/init/initlib.so
-            $<TARGET_FILE:progman> $<TARGET_FILE:demo>
-            $<TARGET_FILE:fontloader>
             ${CMAKE_SOURCE_DIR}/userland/apps/progman/PROGMAN.INI
             ${CMAKE_SOURCE_DIR}/userland/apps/init/DISPLAY.CFG
             ${PROJECT_SOURCE_DIR}/tools/configuration_editor/config.py

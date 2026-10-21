@@ -578,6 +578,7 @@ The installed package provides:
 | `UnDOS::Shared` | PIC shared-library defaults, ABI note and DSO cleanup object; no application entry point |
 | `UnDOS::CRT` | Low-level runtime archive; normally use Application or GUI |
 | `UnDOS::FontResource` | Shared UFT1 font-resource validation helpers; link alongside Application/GUI |
+| `UnDOS::KStd` | Opt-in header-only `kstd` utilities; not a hosted C++ standard library |
 
 For a shared library, use `add_library(message SHARED message.cpp)` and link it
 to `UnDOS::Shared`; link the executable to `message` and `UnDOS::Application`.
@@ -590,6 +591,57 @@ needed to produce real `ET_DYN` objects.
 The image includes complete C, C++/shared-library, GUI, and runtime-probe
 examples under `/opt/undos-sdk/share/undos/examples`. Copy an example into a
 mounted application directory or configure it directly inside the container.
+
+#### In-repository programs as SDK applications
+
+The application projects below are standalone SDK consumers.
+Their CMake projects do not supply a linker script,
+startup objects, or freestanding flags, and do not link source-tree libraries.
+Application sources still use public `undoscrt` and syscall interfaces;
+this migration changes their build boundary, not their behavior.
+
+| Root target | Standalone source directory | SDK dependencies | Output |
+|---|---|---|---|
+| `progman` | `userland/apps/progman` | `UnDOS::GUI` | `progman.elf` |
+| `term` | `userland/apps/term` | `UnDOS::GUI` | `term.elf` |
+| `demo` | `userland/apps/demo` | `UnDOS::GUI` | `demo.elf` |
+| `init` | `userland/apps/init` | `UnDOS::Application`, `UnDOS::Shared` | `init.elf`, `initlib.so` |
+| `abi_test` | `userland/apps/abitest` | `UnDOS::Application`, `UnDOS::Shared` | `abitest.elf`, `abitest.so`, `abinext.so`, `abimiss.elf` |
+| `fontloader` | `userland/fontloader` | `UnDOS::Application`, `UnDOS::FontResource`, `UnDOS::KStd` | `fontload.elf` |
+
+Each root target first stages the SDK, then configures and builds the application
+separately in `<build>/sdk-apps/<target>/<configuration>/`.
+`BootIso` depends on these targets and installs their outputs under `/System`.
+The OS image build still stages configuration files and font fixtures.
+The ABI project retains its deliberately unmarked `abimiss.elf` rejection
+fixture and dependent-library lifecycle checks.
+
+The font decoder remains app-local. It uses the SDK's opt-in `kstd` headers,
+installed under `sysroot/usr/include/kstd`; these headers are not added to
+ordinary application include paths. They do not provide hosted C++ support,
+exceptions, or an allocation runtime. Fontloader retains its allocator adapters.
+ELoader remains an in-tree bootstrap image because it starts applications
+before the application CRT runs. Kernel, HAL, drivers and loadable subsystems
+also retain their separate kernel contracts.
+
+To build Program Manager without the OS project, copy its directory outside the
+repository and run these commands from the copied directory:
+
+```sh
+docker run --rm --mount "type=bind,source=${PWD},target=/work" undos-sdk:dev cmake -S . -B build-undos -DCMAKE_BUILD_TYPE=Debug
+docker run --rm --mount "type=bind,source=${PWD},target=/work" undos-sdk:dev cmake --build build-undos
+```
+
+The result is `build-undos/progman.elf`. Deploy it with `PROGMAN.INI` to
+`/System`; building it alone does not create an OS image.
+The installed SDK checker accepts repeated
+`--application-source /path/to/application` arguments to copy and build these
+projects outside the source tree with the SDK relocated to a path containing
+spaces. `--progman-source` remains a compatible shorthand. With `--output`,
+the checker exports the application binaries and runtime probes.
+After staging the binaries and rebuilding `BootIso`, use the bounded
+`launch`, `abi`, `font`, `terminal-stdio`, and `terminal-close` scenarios in
+`tools/progman-smoke.py`. Run image consumers sequentially.
 
 #### Stage or install the SDK without building an image
 

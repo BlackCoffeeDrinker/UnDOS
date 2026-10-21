@@ -1,12 +1,7 @@
-cmake_minimum_required(VERSION 3.16)
-project(term CXX ASM)
+cmake_minimum_required(VERSION 3.27)
+project(Terminal LANGUAGES CXX)
+find_package(UnDOS CONFIG REQUIRED)
 
 add_executable(term main.cpp)
-
-target_include_directories(term PRIVATE ${CMAKE_SOURCE_DIR}/userland)
-target_link_libraries(term PRIVATE undosgui)
-
-set_target_properties(term PROPERTIES POSITION_INDEPENDENT_CODE OFF)
-
-target_compile_options(term PRIVATE -ffreestanding -nostdlib -fno-exceptions -fno-rtti -fno-pic -fno-pie -m32)
-target_link_options(term PRIVATE -nostdlib -no-pie -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/linker.ld)
+target_compile_features(term PRIVATE cxx_std_20)
+target_link_libraries(term PRIVATE UnDOS::GUI)

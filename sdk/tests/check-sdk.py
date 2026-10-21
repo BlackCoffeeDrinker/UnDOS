@@ -14,7 +14,7 @@ def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
 
 
-def inspect(path, expected_type):
+def inspect(path, expected_type, expected_notes=1):
     data = path.read_bytes()
     if data[:7] != b"\x7fELF\x01\x01\x01":
         raise RuntimeError(f"{path}: not little-endian ELF32")
@@ -47,8 +47,8 @@ def inspect(path, expected_type):
                 if note_type != 1 or descriptor != struct.pack("<2I", 1, 0):
                     raise RuntimeError(f"{path}: incompatible ABI note")
                 matches += 1
-    if matches != 1:
-        raise RuntimeError(f"{path}: expected exactly one ABI note")
+    if matches != expected_notes:
+        raise RuntimeError(f"{path}: expected {expected_notes} ABI notes")
     print(f"ABI verified: {path.name}")
 
 
@@ -143,6 +143,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--output", type=Path, help="Copy the runtime probe ELF files here")
+    parser.add_argument("--progman-source", type=Path,
+                        help="Also build a copy of the standalone Program Manager source with the relocated SDK")
+    parser.add_argument("--application-source", type=Path, action="append", default=[],
+                        help="Build a copied standalone SDK application directory; may be repeated")
     args = parser.parse_args()
     sdk = args.sdk.resolve()
     with tempfile.TemporaryDirectory(prefix="undos-sdk-") as directory:
@@ -178,6 +182,24 @@ def main():
                 for symbol in ("__cxa_atexit", "__cxa_finalize"):
                     if symbol not in symbols:
                         raise RuntimeError(f"Missing exported runtime symbol {symbol}")
+        applications = args.application_source + ([args.progman_source] if args.progman_source else [])
+        for index, application in enumerate(applications):
+            source = root / f"application {index} source"
+            shutil.copytree(application, source)
+            build = root / f"application {index} build"
+            run("cmake", "-S", str(source), "-B", str(build),
+                "-DCMAKE_BUILD_TYPE=Debug", env=environment)
+            run("cmake", "--build", str(build), "--parallel", "2", env=environment)
+            binaries = sorted(build.glob("*.elf")) + sorted(build.glob("*.so"))
+            if not binaries:
+                raise RuntimeError(f"{application}: no SDK application binaries produced")
+            for binary in binaries:
+                inspect(binary, 3 if binary.suffix == ".so" else 2,
+                        expected_notes=0 if binary.name == "abimiss.elf" else 1)
+            if args.output:
+                args.output.mkdir(parents=True, exist_ok=True)
+                for binary in binaries:
+                    shutil.copy2(binary, args.output / binary.name)
         check_drivers(relocated, root, args.output)
     print("Installed SDK relocation, C/C++ examples, shared library and ABI checks passed")
 

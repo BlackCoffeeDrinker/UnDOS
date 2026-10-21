@@ -51,5 +51,10 @@ if (NOT TARGET UnDOS::Common)
     set_target_properties(UnDOS::FontResource PROPERTIES
         IMPORTED_LOCATION "${_undos_font}"
         INTERFACE_LINK_LIBRARIES "UnDOS::Common;gcc")
+
+    add_library(UnDOS::KStd INTERFACE IMPORTED)
+    set_target_properties(UnDOS::KStd PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${UnDOS_SYSROOT}/usr/include/kstd"
+        INTERFACE_LINK_LIBRARIES "UnDOS::Common")
 endif ()
 check_required_components(UnDOS)

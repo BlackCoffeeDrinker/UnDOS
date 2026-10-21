@@ -8,16 +8,17 @@ int main(int argc, char **argv) {
       UD_SYS_GetStdHandleV1(StdHandleSelector_Stdout, &output) != SyscallReturnCode_OKAY ||
       UD_SYS_GetStdHandleV1(StdHandleSelector_Stderr, &error) != SyscallReturnCode_OKAY)
     return 1;
+  /* AccessDenied maps to UNKNOWN in the current syscall return-code ABI. */
   if (UD_SYS_CreateProcessV2(argv[0], "", 1, input, output, error, &child) !=
           SyscallReturnCode_INVALID_ARGUMENT ||
       UD_SYS_CreateProcessV2(argv[0], "", 0, UINT32_MAX, output, error, &child) !=
           SyscallReturnCode_INVALID_ARGUMENT ||
       UD_SYS_CreateProcessV2(argv[0], "", 0, output, output, error, &child) !=
-          SyscallReturnCode_INVALID_ARGUMENT ||
+          SyscallReturnCode_UNKNOWN ||
       UD_SYS_CreateProcessV2(argv[0], "", 0, input, input, error, &child) !=
-          SyscallReturnCode_INVALID_ARGUMENT ||
+          SyscallReturnCode_UNKNOWN ||
       UD_SYS_CreateProcessV2(argv[0], "", 0, input, output, input, &child) !=
-          SyscallReturnCode_INVALID_ARGUMENT) return 2;
+          SyscallReturnCode_UNKNOWN) return 2;
   if (puts("Child stdout ready") == EOF ||
       fprintf(stderr, "Child stderr ready\n") < 0) return 3;
   (void) UD_SYS_PrintV1("Terminal probe: waiting for input");

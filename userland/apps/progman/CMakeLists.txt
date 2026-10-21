@@ -1,5 +1,8 @@
+cmake_minimum_required(VERSION 3.27)
+project(ProgramManager LANGUAGES CXX)
+
+find_package(UnDOS CONFIG REQUIRED)
+
 add_executable(progman main.cpp)
-target_link_libraries(progman PRIVATE undosgui)
-set_target_properties(progman PROPERTIES POSITION_INDEPENDENT_CODE OFF)
-target_compile_options(progman PRIVATE -ffreestanding -nostdlib -fno-exceptions -fno-rtti -fno-pic -fno-pie -m32)
-target_link_options(progman PRIVATE -nostdlib -no-pie -Wl,-T,${CMAKE_SOURCE_DIR}/userland/apps/term/linker.ld)
+target_compile_features(progman PRIVATE cxx_std_20)
+target_link_libraries(progman PRIVATE UnDOS::GUI)

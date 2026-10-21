@@ -8,6 +8,7 @@ COPY cmake/ cmake/
 COPY sdk/ sdk/
 COPY tools/ tools/
 COPY kernel_userland_shared/ kernel_userland_shared/
+COPY libkcpp/include/ libkcpp/include/
 COPY userland/ userland/
 RUN mkdir -p kernel/src/syscalls \
     && cmake -S . -B /sdk-build \

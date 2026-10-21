@@ -44,6 +44,8 @@ install(DIRECTORY ../userland/crt/include/undoscrt ../userland/gui/include/undos
     DESTINATION ${UNDOS_SDK_INCLUDE} COMPONENT SDK
     FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp" PATTERN "lifecycle.hpp" EXCLUDE)
 install(FILES ../userland/userspace.h DESTINATION ${UNDOS_SDK_INCLUDE} COMPONENT SDK)
+install(DIRECTORY ../libkcpp/include/ DESTINATION ${UNDOS_SDK_INCLUDE}/kstd
+    COMPONENT SDK FILES_MATCHING PATTERN "*.hpp")
 install(DIRECTORY ../userland/crt/libc/include/ DESTINATION ${UNDOS_SDK_INCLUDE}
     COMPONENT SDK FILES_MATCHING PATTERN "*.h")
 install(FILES ../userland/apps/term/linker.ld DESTINATION ${UNDOS_SDK_LIB}
