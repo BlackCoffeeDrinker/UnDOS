@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build independent UnDOS projects without a root CMake project."""
+"""Build independent UnDOS projects without using the root IDE launcher."""
 import argparse
 import json
 from pathlib import Path

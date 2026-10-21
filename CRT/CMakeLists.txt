@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.27)
-if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+if (NOT TARGET KernelUserlandShared)
     set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
     project(UnDOSCRT VERSION 0.0.1 LANGUAGES C CXX ASM)
     include(../BuildSupport/Project.cmake)
