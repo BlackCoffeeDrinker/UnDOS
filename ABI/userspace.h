@@ -1381,6 +1381,153 @@ UNDOS_SYSCALL_DEF uint32_t UD_SYS_WriteV2(HANDLE handle, const uint8_t* data, ui
     return ret;
 }
 
+/**
+ * Enumerates one directory entry by zero-based index, excluding . and ...
+ * Requires a readable directory handle. found=0 means end of directory.
+ * name uses query-length-then-fill, including its terminating NUL.
+ * Indices are not snapshots: restart enumeration after a mutation.
+ * On insufficient capacity returns INVALID_SIZE without truncation.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_ReadDirectoryV1(HANDLE handle, uint32_t index, char* name, uint32_t* nameLength, struct FileInformation* information, uint32_t* found)
+{
+    uint32_t ret = 0;
+    struct __SYS_IO_READDIRECTORY_V1 __wire;
+    __wire.handle = handle;
+    __wire.index = index;
+    __wire.name = name;
+    __wire.nameLength = nameLength ? *nameLength : 0;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(227), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    if (nameLength) *nameLength = __wire.nameLength;
+    *information = __wire.information;
+    *found = __wire.found;
+    return ret;
+}
+
+/** Returns information for an open VFS file/directory handle with read access. */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_GetFileInformationV1(HANDLE handle, struct FileInformation* information)
+{
+    uint32_t ret = 0;
+    struct __SYS_IO_GETFILEINFORMATION_V1 __wire;
+    __wire.handle = handle;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(229), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    *information = __wire.information;
+    return ret;
+}
+
+/**
+ * Copies one file to a nonexisting destination on the same mount.
+ * Both paths must be absolute, at most 255 bytes, with FAT short names.
+ * Open source entries and open directories block the operation.
+ * Directory copies and cross-volume copies are unsupported.
+ * Device failures can leave partial changes; no crash consistency is promised.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CopyFileV1(const char* source, const char* destination)
+{
+    uint32_t ret = 0;
+    struct __SYS_IO_COPYFILE_V1 __wire;
+    __wire.source = source;
+    __wire.sourceLength = 0;
+    if (source) while (source[__wire.sourceLength]) __wire.sourceLength++;
+    __wire.destination = destination;
+    __wire.destinationLength = 0;
+    if (destination) while (destination[__wire.destinationLength]) __wire.destinationLength++;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(230), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/**
+ * Moves a file, or renames a directory within the same parent.
+ * Both paths must be absolute, at most 255 bytes, with FAT short names.
+ * The destination must not exist and must be on the same mount.
+ * Open source entries and open directories block the operation.
+ * Cross-parent directory moves and cross-volume moves are unsupported.
+ * Device failures can leave partial changes; no crash consistency is promised.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_MoveFileV1(const char* source, const char* destination)
+{
+    uint32_t ret = 0;
+    struct __SYS_IO_MOVEFILE_V1 __wire;
+    __wire.source = source;
+    __wire.sourceLength = 0;
+    if (source) while (source[__wire.sourceLength]) __wire.sourceLength++;
+    __wire.destination = destination;
+    __wire.destinationLength = 0;
+    if (destination) while (destination[__wire.destinationLength]) __wire.destinationLength++;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(231), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/**
+ * Deletes a file or empty directory at an absolute path of at most 255 bytes.
+ * Requires FAT short names. Roots, . and .. are rejected.
+ * Open source entries, open directories and read-only entries block deletion.
+ * Recursive deletion is unsupported. Device failures can leave partial changes;
+ * no crash consistency is promised.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_DeleteFileV1(const char* path)
+{
+    uint32_t ret = 0;
+    struct __SYS_IO_DELETEFILE_V1 __wire;
+    __wire.path = path;
+    __wire.pathLength = 0;
+    if (path) while (path[__wire.pathLength]) __wire.pathLength++;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(232), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
+/**
+ * Creates a directory at a nonexisting absolute path of at most 255 bytes.
+ * Requires FAT short names and an existing parent directory.
+ * Open directory handles on the volume block creation.
+ * Device failures can leave partial changes; no crash consistency is promised.
+ */
+UNDOS_SYSCALL_DEF uint32_t UD_SYS_CreateDirectoryV1(const char* path)
+{
+    uint32_t ret = 0;
+    struct __SYS_IO_CREATEDIRECTORY_V1 __wire;
+    __wire.path = path;
+    __wire.pathLength = 0;
+    if (path) while (path[__wire.pathLength]) __wire.pathLength++;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(233), "b"(sizeof __wire), "c"(&__wire), "d"(0)
+        : "memory");
+
+    return ret;
+}
+
 /** Sends a control code to the device behind an open handle. */
 UNDOS_SYSCALL_DEF uint32_t UD_SYS_ControlV1(HANDLE handle, uint32_t code, const uint8_t* input, uint32_t inputLength, uint8_t* output, uint32_t* outputLength)
 {

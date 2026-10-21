@@ -9,6 +9,7 @@ namespace kernel {
 using KFilesystemResult = kstd::expected<kernel::KObjectPtr<kernel::KFilesystemObject>, kstd::error_code>;
 using KIOObjectResult = kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd::error_code>;
 using KUInt64Result = kstd::expected<uint64_t, kstd::error_code>;
+using KBoolResult = kstd::expected<bool, kstd::error_code>;
 }// namespace kernel
 
 
@@ -118,3 +119,17 @@ UNDOS_KERNEL_PUBLIC_V1API(
   kernel::KUInt64Result,
   KE_VFS_TellFile,
   const kernel::KObjectPtr<kernel::KIOObject>& file);
+
+/** Reads one entry, excluding dot entries. False is end of directory. */
+UNDOS_KERNEL_PUBLIC_V1API(
+  kernel::KBoolResult,
+  KE_VFS_ReadDirectory,
+  const kernel::KObjectPtr<kernel::KIOObject> &file, uint32_t index, kernel::KVFSDirectoryEntry &entry);
+
+/** Mutates short-name entries without replacing existing destinations.
+ * Open directories and source entries block mutations. See the file-management
+ * contracts in Docs/ApplicationABI.md. */
+UNDOS_KERNEL_PUBLIC_V1API(
+  kstd::error_code,
+  KE_VFS_OperateFile,
+  kernel::VFSFileOperation operation, const kstd::string_view &source, const kstd::string_view &destination);

@@ -39,6 +39,7 @@
 #include <undos/syscalls/__struct_TextMetrics.h>
 #include <undos/syscalls/__struct_Msg.h>
 #include <undos/syscalls/__struct_PaintInfo.h>
+#include <undos/syscalls/__struct_FileInformation.h>
 #include <undos/syscalls/__struct_IoctlDisplayMode.h>
 #include <undos/syscalls/__struct_IoctlMouseConfig.h>
 #include <undos/syscalls/__struct_IoctlGamepadState.h>
@@ -622,6 +623,74 @@ struct __KRN_IO_WRITE_V2 {
      * undefined if dispatcher validation rejects the call before the handler.
      */
     uint32_t transferred;
+};
+
+/**
+ * Enumerates one directory entry by zero-based index, excluding . and ...
+ * Requires a readable directory handle. found=0 means end of directory.
+ * name uses query-length-then-fill, including its terminating NUL.
+ * Indices are not snapshots: restart enumeration after a mutation.
+ * On insufficient capacity returns INVALID_SIZE without truncation.
+ */
+struct __KRN_IO_READDIRECTORY_V1 {
+    HANDLE handle;
+    uint32_t index;
+    kernel::borrowed_ptr<char> name = nullptr;
+    size_t name_len = 0;
+    struct FileInformation information;
+    uint32_t found;
+};
+
+/** Returns information for an open VFS file/directory handle with read access. */
+struct __KRN_IO_GETFILEINFORMATION_V1 {
+    HANDLE handle;
+    struct FileInformation information;
+};
+
+/**
+ * Copies one file to a nonexisting destination on the same mount.
+ * Both paths must be absolute, at most 255 bytes, with FAT short names.
+ * Open source entries and open directories block the operation.
+ * Directory copies and cross-volume copies are unsupported.
+ * Device failures can leave partial changes; no crash consistency is promised.
+ */
+struct __KRN_IO_COPYFILE_V1 {
+    kstd::string source {};
+    kstd::string destination {};
+};
+
+/**
+ * Moves a file, or renames a directory within the same parent.
+ * Both paths must be absolute, at most 255 bytes, with FAT short names.
+ * The destination must not exist and must be on the same mount.
+ * Open source entries and open directories block the operation.
+ * Cross-parent directory moves and cross-volume moves are unsupported.
+ * Device failures can leave partial changes; no crash consistency is promised.
+ */
+struct __KRN_IO_MOVEFILE_V1 {
+    kstd::string source {};
+    kstd::string destination {};
+};
+
+/**
+ * Deletes a file or empty directory at an absolute path of at most 255 bytes.
+ * Requires FAT short names. Roots, . and .. are rejected.
+ * Open source entries, open directories and read-only entries block deletion.
+ * Recursive deletion is unsupported. Device failures can leave partial changes;
+ * no crash consistency is promised.
+ */
+struct __KRN_IO_DELETEFILE_V1 {
+    kstd::string path {};
+};
+
+/**
+ * Creates a directory at a nonexisting absolute path of at most 255 bytes.
+ * Requires FAT short names and an existing parent directory.
+ * Open directory handles on the volume block creation.
+ * Device failures can leave partial changes; no crash consistency is promised.
+ */
+struct __KRN_IO_CREATEDIRECTORY_V1 {
+    kstd::string path {};
 };
 
 /** Sends a control code to the device behind an open handle. */

@@ -4,6 +4,7 @@
 #include <kernel/object_manager.hpp>
 #include <kernel/tty/tty_device.hpp>
 #include <expected.hpp>
+#include <kernel/vfs.hpp>
 
 namespace {
 kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd::error_code>
@@ -119,6 +120,57 @@ kstd::error_code handle_Close_V1(__KRN_IO_CLOSE_V1 &&args) {
 
   const auto h = static_cast<kernel::KHandle>(args.handle);
   return proc->handles.Close(h);
+}
+
+kstd::error_code handle_ReadDirectory_V1(__KRN_IO_READDIRECTORY_V1 &&args) {
+  args.found = 0;
+  args.information = {};
+  const size_t capacity = args.name_len;
+  args.name_len = 0;
+  const auto file = resolve_io(args.handle, kernel::ProcessHandleTable::HandleAccess::Read);
+  if (!file) return file.error();
+  kernel::KVFSDirectoryEntry entry{};
+  const auto result = KE_VFS_ReadDirectory(*file, args.index, entry);
+  if (!result) return result.error();
+  if (!*result) return {};
+  size_t length = 0;
+  while (length < sizeof(entry.name) && entry.name[length]) ++length;
+  if (length == sizeof(entry.name)) return kernel::KernelError::InvalidData;
+  const size_t required = length + 1;
+  args.name_len = required;
+  args.found = 1;
+  args.information = {.size = entry.size, .attributes = entry.attributes};
+  if (!args.name || capacity == 0) return {};
+  if (capacity < required) return kernel::KernelError::BufferTooSmall;
+  for (size_t i = 0; i < required; ++i) args.name.get()[i] = entry.name[i];
+  return {};
+}
+
+kstd::error_code handle_GetFileInformation_V1(__KRN_IO_GETFILEINFORMATION_V1 &&args) {
+  args.information = {};
+  const auto resolved = resolve_io(args.handle, kernel::ProcessHandleTable::HandleAccess::Read);
+  if (!resolved) return resolved.error();
+  const auto &file = *resolved;
+  if (file->ops != &kernel::io::FileOps) return kernel::KernelError::WrongObjectType;
+  if (file->isClosed || !file->vfsNode) return kernel::KernelError::InvalidState;
+  args.information = {.size = file->vfsNode->size, .attributes = file->vfsNode->attributes};
+  return {};
+}
+
+kstd::error_code handle_CopyFile_V1(__KRN_IO_COPYFILE_V1 &&args) {
+  return KE_VFS_OperateFile(kernel::VFSFileOperation::Copy, args.source, args.destination);
+}
+
+kstd::error_code handle_MoveFile_V1(__KRN_IO_MOVEFILE_V1 &&args) {
+  return KE_VFS_OperateFile(kernel::VFSFileOperation::Move, args.source, args.destination);
+}
+
+kstd::error_code handle_DeleteFile_V1(__KRN_IO_DELETEFILE_V1 &&args) {
+  return KE_VFS_OperateFile(kernel::VFSFileOperation::Delete, args.path, {});
+}
+
+kstd::error_code handle_CreateDirectory_V1(__KRN_IO_CREATEDIRECTORY_V1 &&args) {
+  return KE_VFS_OperateFile(kernel::VFSFileOperation::CreateDirectory, args.path, {});
 }
 
 /** Reads data from an open handle into `data`. */

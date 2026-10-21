@@ -123,6 +123,7 @@ this migration changes their build boundary, not their behavior.
 | `progman` | `Apps/Progman` | `UnDOS::GUI` | `progman.elf` |
 | `term` | `Apps/Terminal` | `UnDOS::GUI` | `term.elf` |
 | `demo` | `Apps/Demo` | `UnDOS::GUI` | `demo.elf` |
+| `winfile` | `Apps/FileManager` | `UnDOS::GUI` | `winfile.elf` |
 | `init` | `Apps/Init` | `UnDOS::Application`, `UnDOS::Shared` | `init.elf`, `initlib.so` |
 | `abi_test` | `Tests/ABI` | `UnDOS::Application`, `UnDOS::Shared` | `abitest.elf`, `abitest.so`, `abinext.so`, `abimiss.elf` |
 | `fontloader` | `Apps/Fontloader` | `UnDOS::Application`, `UnDOS::FontResource`, `UnDOS::KStd` | `fontload.elf` |

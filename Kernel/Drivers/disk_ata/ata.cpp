@@ -4,6 +4,8 @@
 #include <kernel/dma.hpp>
 #include <kernel/resource.hpp>
 #include <span.hpp>
+#include <kernel/mutex.hpp>
+#include <mutex.hpp>
 
 namespace {
 
@@ -24,18 +26,20 @@ inline uint16_t AtaPort(uint16_t ioBase, uint8_t reg) {
   return static_cast<uint16_t>(ioBase + reg);
 }
 
-static kstd::error_code AtaWait(uint16_t io) {
+static kstd::error_code AtaWait(uint16_t io, bool data = true, bool checkError = true) {
   // 400ns delay: read status port 4 times
   for (int i = 0; i < 4; i++) {
     HAL_IO_In8(AtaPort(io, kRegStatusCommand));
   }
 
-  while (true) {
+  for (uint32_t poll = 0; poll < 1000000; ++poll) {
     const uint8_t status = HAL_IO_In8(AtaPort(io, kRegStatusCommand));
-
-    if (status & 0x01) return kernel::KernelError::DeviceError;                      // ERR
-    if (!(status & 0x80) && (status & 0x08)) return kernel::KernelError::Success;// !BSY && DRQ
+    if (!status || status == 0xff) return kernel::KernelError::DeviceNotReady;
+    if (status & 0x80) continue;
+    if (checkError && (status & 0x21)) return kernel::KernelError::DeviceError;
+    if (!data || (status & 0x08)) return {};
   }
+  return kernel::KernelError::Timeout;
 }
 
 
@@ -47,11 +51,13 @@ struct BusContext {
   uint16_t ioBase;  // command-block base, resolved from the grant (0 = unstarted)
   uint16_t ctrlBase;// control-block base, resolved from the grant
   uint32_t irq;     // assigned interrupt line
+  kernel::Mutex ioMutex;
 };
 
 struct AtaContext {
   kernel::KDevicePtr<kernel::KDevice> pdo;
   bool isAtapi;
+  bool isMaster;
 
   uint32_t sectorCount;// LBA28 addressable sectors, from IDENTIFY (0 = unknown)
   uint32_t sectorSize; // bytes per sector (512)
@@ -187,6 +193,7 @@ kstd::error_code Ata_ProbeDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo,
   dctx->model = model;
   dctx->serial = serial;
   dctx->isAtapi = isAtapi;
+  dctx->isMaster = isMaster;
   disk->hardwareId = "disk";
   // LBA28 total addressable sectors live in words 60-61 of IDENTIFY data.
   dctx->sectorCount = isAtapi
@@ -199,63 +206,74 @@ kstd::error_code Ata_ProbeDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo,
 }
 
 
-kstd::error_code Ata_Read(const kernel::KDevicePtr<kernel::KDevice> &device, uint64_t offset, kstd::span<uint8_t> buffer, size_t &transferred) {
-  transferred = 0;
-  if (device->deviceType != kernel::device_type::Disk) return kernel::KernelError::Unsupported;
-
-  const auto *dctx = device->deviceExtension.as<AtaContext>();
-  if (!dctx || dctx->isAtapi) return kernel::KernelError::Unsupported;
-  const auto fdo = dctx->pdo->attachedDevice.As<kernel::KDeviceBus>();
-  if (!fdo) return kernel::KernelError::DeviceError;
-  const auto *bctx = fdo->deviceExtension.as<BusContext>();
-  if (!bctx || !bctx->ioBase) return kernel::KernelError::DeviceError;
-
-  const uint16_t io = bctx->ioBase;
-
-  const size_t sector_count = (buffer.size() + kAtaSectorSize - 1) / kAtaSectorSize;
-
-  for (size_t s = 0; s < sector_count; ++s) {
-    const auto lba = static_cast<uint32_t>(offset / kAtaSectorSize) + static_cast<uint32_t>(s);
-
-    // LBA28 PIO
-    HAL_IO_Out8(AtaPort(io, kRegDrive), 0xE0 | ((lba >> 24) & 0x0F));
-    HAL_IO_Out8(AtaPort(io, kRegFeatures), 0);
-    HAL_IO_Out8(AtaPort(io, kRegSectorCount), 1);
-    HAL_IO_Out8(AtaPort(io, kRegLbaLow), lba & 0xFF);
-    HAL_IO_Out8(AtaPort(io, kRegLbaMid), (lba >> 8) & 0xFF);
-    HAL_IO_Out8(AtaPort(io, kRegLbaHigh), (lba >> 16) & 0xFF);
-    HAL_IO_Out8(AtaPort(io, kRegStatusCommand), 0x20);// READ SECTORS
-
-    // Wait
-    if (AtaWait(io)) {
-      return transferred > 0 ? kernel::KernelError::Success : kernel::KernelError::DeviceError;
+kstd::error_code Ata_Sector(uint16_t io, const AtaContext &disk, uint32_t lba,
+    uint8_t (&sector)[kAtaSectorSize], bool write) {
+  HAL_IO_Out8(AtaPort(io, kRegDrive), (disk.isMaster ? 0xe0 : 0xf0) | ((lba >> 24) & 15));
+  // Let drive selection settle before issuing a command.
+  for (int i = 0; i < 4; ++i) (void) HAL_IO_In8(AtaPort(io, kRegStatusCommand));
+  if (const auto status = AtaWait(io, false, false); status) return status;
+  HAL_IO_Out8(AtaPort(io, kRegFeatures), 0);
+  HAL_IO_Out8(AtaPort(io, kRegSectorCount), 1);
+  HAL_IO_Out8(AtaPort(io, kRegLbaLow), lba & 255);
+  HAL_IO_Out8(AtaPort(io, kRegLbaMid), (lba >> 8) & 255);
+  HAL_IO_Out8(AtaPort(io, kRegLbaHigh), (lba >> 16) & 255);
+  HAL_IO_Out8(AtaPort(io, kRegStatusCommand), write ? 0x30 : 0x20);
+  if (const auto status = AtaWait(io); status) return status;
+  for (uint32_t i = 0; i < kAtaSectorSize; i += 2) {
+    if (write) HAL_IO_Out16(AtaPort(io, kRegData), sector[i] | (static_cast<uint16_t>(sector[i + 1]) << 8));
+    else {
+      const uint16_t word = HAL_IO_In16(AtaPort(io, kRegData));
+      sector[i] = static_cast<uint8_t>(word);
+      sector[i + 1] = static_cast<uint8_t>(word >> 8);
     }
-
-    // Read 512 bytes (256 words) for this sector into the buffer at the
-    // correct offset.
-    const size_t sector_base = s * kAtaSectorSize;
-    for (uint32_t i = 0; i < 256; i++) {
-      const uint16_t data = HAL_IO_In16(AtaPort(io, kRegData));
-      const size_t byte0 = sector_base + i * 2;
-      const size_t byte1 = byte0 + 1;
-
-      if (byte0 < buffer.size()) {
-        buffer[byte0] = static_cast<uint8_t>(data & 0xFF);
-      }
-
-      if (byte1 < buffer.size()) {
-        buffer[byte1] = static_cast<uint8_t>(data >> 8);
-      }
-    }
-
-    transferred += kstd::min(static_cast<size_t>(kAtaSectorSize), buffer.size() - sector_base);
   }
-
-  return kernel::KernelError::Success;
+  return AtaWait(io, false);
 }
 
-kstd::error_code Ata_Write([[maybe_unused]] const kernel::KDevicePtr<kernel::KDevice> &device, [[maybe_unused]] uint64_t offset, [[maybe_unused]] kstd::span<const uint8_t> buffer, [[maybe_unused]] size_t &transferred) {
-  return kernel::KernelError::Unsupported;
+kstd::error_code Ata_Transfer(const kernel::KDevicePtr<kernel::KDevice> &device,
+    uint64_t offset, uint8_t *readBuffer, const uint8_t *writeBuffer, size_t size, size_t &transferred) {
+  transferred = 0;
+  if (!device || device->deviceType != kernel::device_type::Disk) return kernel::KernelError::Unsupported;
+  const auto *disk = device->deviceExtension.as<AtaContext>();
+  if (!disk || disk->isAtapi || !disk->pdo) return kernel::KernelError::Unsupported;
+  const uint64_t capacity = static_cast<uint64_t>(kstd::min<uint32_t>(disk->sectorCount, 0x10000000u)) * kAtaSectorSize;
+  if (offset > capacity || size > capacity - offset) return kernel::KernelError::OutOfRange;
+  if (!size) return {};
+  const auto bus = disk->pdo->attachedDevice.As<kernel::KDeviceBus>();
+  if (!bus) return kernel::KernelError::DeviceError;
+  auto *ctx = bus->deviceExtension.as<BusContext>();
+  if (!ctx || !ctx->ioBase) return kernel::KernelError::DeviceNotReady;
+  kstd::unique_lock lock(ctx->ioMutex);
+  while (transferred < size) {
+    const uint64_t position = offset + transferred;
+    const uint32_t lba = static_cast<uint32_t>(position / kAtaSectorSize);
+    const size_t begin = static_cast<size_t>(position % kAtaSectorSize);
+    const size_t count = kstd::min(size - transferred, kAtaSectorSize - begin);
+    uint8_t sector[kAtaSectorSize]{};
+    if (readBuffer || begin || count != kAtaSectorSize) {
+      if (const auto status = Ata_Sector(ctx->ioBase, *disk, lba, sector, false); status) return status;
+    }
+    if (writeBuffer) {
+      for (size_t i = 0; i < count; ++i) sector[begin + i] = writeBuffer[transferred + i];
+      if (const auto status = Ata_Sector(ctx->ioBase, *disk, lba, sector, true); status) return status;
+      HAL_IO_Out8(AtaPort(ctx->ioBase, kRegStatusCommand), 0xe7); // FLUSH CACHE
+      if (const auto status = AtaWait(ctx->ioBase, false); status) return status;
+    } else {
+      for (size_t i = 0; i < count; ++i) readBuffer[transferred + i] = sector[begin + i];
+    }
+    transferred += count;
+  }
+  return {};
+}
+
+kstd::error_code Ata_Read(const kernel::KDevicePtr<kernel::KDevice> &device,
+    uint64_t offset, kstd::span<uint8_t> buffer, size_t &transferred) {
+  return Ata_Transfer(device, offset, buffer.data(), nullptr, buffer.size(), transferred);
+}
+
+kstd::error_code Ata_Write(const kernel::KDevicePtr<kernel::KDevice> &device,
+    uint64_t offset, kstd::span<const uint8_t> buffer, size_t &transferred) {
+  return Ata_Transfer(device, offset, nullptr, buffer.data(), buffer.size(), transferred);
 }
 
 void Ata_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {

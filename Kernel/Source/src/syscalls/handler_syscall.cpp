@@ -41,6 +41,7 @@
 #include <undos/syscalls/__struct_TextMetrics.h>
 #include <undos/syscalls/__struct_Msg.h>
 #include <undos/syscalls/__struct_PaintInfo.h>
+#include <undos/syscalls/__struct_FileInformation.h>
 #include <undos/syscalls/__struct_IoctlDisplayMode.h>
 #include <undos/syscalls/__struct_IoctlMouseConfig.h>
 #include <undos/syscalls/__struct_IoctlGamepadState.h>
@@ -119,6 +120,12 @@
 #include <undos/syscalls/__syscall_Read_V1.h>
 #include <undos/syscalls/__syscall_Write_V1.h>
 #include <undos/syscalls/__syscall_Write_V2.h>
+#include <undos/syscalls/__syscall_ReadDirectory_V1.h>
+#include <undos/syscalls/__syscall_GetFileInformation_V1.h>
+#include <undos/syscalls/__syscall_CopyFile_V1.h>
+#include <undos/syscalls/__syscall_MoveFile_V1.h>
+#include <undos/syscalls/__syscall_DeleteFile_V1.h>
+#include <undos/syscalls/__syscall_CreateDirectory_V1.h>
 #include <undos/syscalls/__syscall_Control_V1.h>
 #include <undos/syscalls/__syscall_GetStdHandle_V1.h>
 #include <undos/syscalls/__syscall_Create_V1.h>
@@ -2422,6 +2429,256 @@ static kstd::error_code Dispatch_Write_V2(void *userData, size_t size, uint32_t 
   return ret;
 }
 
+static kstd::error_code Dispatch_ReadDirectory_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_READDIRECTORY_V1)) return kernel::KernelError::InvalidSize;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_IO_READDIRECTORY_V1 headerCopy {};
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_READDIRECTORY_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_READDIRECTORY_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_READDIRECTORY_V1), address_space); error) return error;
+  } else {
+    return mapped.error();
+  }
+
+  if (headerCopy.name != nullptr) {
+    if (headerCopy.nameLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+    if (headerCopy.nameLength == 0) return kernel::KernelError::InvalidArgument;
+  }
+
+  __KRN_IO_READDIRECTORY_V1 args {};
+  args.handle = headerCopy.handle;
+  args.index = headerCopy.index;
+  if (headerCopy.name != nullptr) {
+    const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.name), headerCopy.nameLength, address_space);
+    if (!mapped) return mapped.error();
+    args.name = kernel::borrowed_ptr<char>(static_cast<char *>(*mapped), headerCopy.nameLength, address_space);
+    args.name_len = headerCopy.nameLength;
+  }
+
+  (void)flags;
+  const kstd::error_code ret = handle_ReadDirectory_V1(kstd::move(args));
+
+  // content was written directly into the mapped user buffer; report the actual/required length.
+  {
+    const auto len = static_cast<uint32_t>(args.name_len);
+    if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_READDIRECTORY_V1, nameLength), &len, sizeof(len)); error) return error;
+  }
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_READDIRECTORY_V1, information), &args.information, sizeof(args.information)); error) return error;
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_READDIRECTORY_V1, found), &args.found, sizeof(args.found)); error) return error;
+  return ret;
+}
+
+static kstd::error_code Dispatch_GetFileInformation_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_GETFILEINFORMATION_V1)) return kernel::KernelError::InvalidSize;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_IO_GETFILEINFORMATION_V1 headerCopy {};
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_GETFILEINFORMATION_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_GETFILEINFORMATION_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_GETFILEINFORMATION_V1), address_space); error) return error;
+  } else {
+    return mapped.error();
+  }
+
+  __KRN_IO_GETFILEINFORMATION_V1 args {};
+  args.handle = headerCopy.handle;
+
+  (void)flags;
+  const kstd::error_code ret = handle_GetFileInformation_V1(kstd::move(args));
+
+  if (const auto error = KE_VMM_CopyToUserspace(address_space, static_cast<char *>(userData) + offsetof(__SYS_IO_GETFILEINFORMATION_V1, information), &args.information, sizeof(args.information)); error) return error;
+  return ret;
+}
+
+static kstd::error_code Dispatch_CopyFile_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_COPYFILE_V1)) return kernel::KernelError::InvalidSize;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_IO_COPYFILE_V1 headerCopy {};
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_COPYFILE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_COPYFILE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_COPYFILE_V1), address_space); error) return error;
+  } else {
+    return mapped.error();
+  }
+
+  if (headerCopy.source != nullptr) {
+    if (headerCopy.sourceLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+  }
+
+  if (headerCopy.destination != nullptr) {
+    if (headerCopy.destinationLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+  }
+
+  __KRN_IO_COPYFILE_V1 args {};
+  if (headerCopy.source != nullptr && headerCopy.sourceLength > 0) {
+    args.source.resize(headerCopy.sourceLength);
+    if (args.source.data() == nullptr || args.source.size() != headerCopy.sourceLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.source), headerCopy.sourceLength, address_space)) {
+      kstd::memcpy(args.source.data(), *mapped, headerCopy.sourceLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.sourceLength, address_space); error) return error;
+    } else {
+      return mapped.error();
+    }
+  }
+  if (headerCopy.destination != nullptr && headerCopy.destinationLength > 0) {
+    args.destination.resize(headerCopy.destinationLength);
+    if (args.destination.data() == nullptr || args.destination.size() != headerCopy.destinationLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.destination), headerCopy.destinationLength, address_space)) {
+      kstd::memcpy(args.destination.data(), *mapped, headerCopy.destinationLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.destinationLength, address_space); error) return error;
+    } else {
+      return mapped.error();
+    }
+  }
+
+  (void)flags;
+  const kstd::error_code ret = handle_CopyFile_V1(kstd::move(args));
+
+  return ret;
+}
+
+static kstd::error_code Dispatch_MoveFile_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_MOVEFILE_V1)) return kernel::KernelError::InvalidSize;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_IO_MOVEFILE_V1 headerCopy {};
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_MOVEFILE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_MOVEFILE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_MOVEFILE_V1), address_space); error) return error;
+  } else {
+    return mapped.error();
+  }
+
+  if (headerCopy.source != nullptr) {
+    if (headerCopy.sourceLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+  }
+
+  if (headerCopy.destination != nullptr) {
+    if (headerCopy.destinationLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+  }
+
+  __KRN_IO_MOVEFILE_V1 args {};
+  if (headerCopy.source != nullptr && headerCopy.sourceLength > 0) {
+    args.source.resize(headerCopy.sourceLength);
+    if (args.source.data() == nullptr || args.source.size() != headerCopy.sourceLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.source), headerCopy.sourceLength, address_space)) {
+      kstd::memcpy(args.source.data(), *mapped, headerCopy.sourceLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.sourceLength, address_space); error) return error;
+    } else {
+      return mapped.error();
+    }
+  }
+  if (headerCopy.destination != nullptr && headerCopy.destinationLength > 0) {
+    args.destination.resize(headerCopy.destinationLength);
+    if (args.destination.data() == nullptr || args.destination.size() != headerCopy.destinationLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.destination), headerCopy.destinationLength, address_space)) {
+      kstd::memcpy(args.destination.data(), *mapped, headerCopy.destinationLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.destinationLength, address_space); error) return error;
+    } else {
+      return mapped.error();
+    }
+  }
+
+  (void)flags;
+  const kstd::error_code ret = handle_MoveFile_V1(kstd::move(args));
+
+  return ret;
+}
+
+static kstd::error_code Dispatch_DeleteFile_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_DELETEFILE_V1)) return kernel::KernelError::InvalidSize;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_IO_DELETEFILE_V1 headerCopy {};
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_DELETEFILE_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_DELETEFILE_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_DELETEFILE_V1), address_space); error) return error;
+  } else {
+    return mapped.error();
+  }
+
+  if (headerCopy.path != nullptr) {
+    if (headerCopy.pathLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+  }
+
+  __KRN_IO_DELETEFILE_V1 args {};
+  if (headerCopy.path != nullptr && headerCopy.pathLength > 0) {
+    args.path.resize(headerCopy.pathLength);
+    if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
+      kstd::memcpy(args.path.data(), *mapped, headerCopy.pathLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.pathLength, address_space); error) return error;
+    } else {
+      return mapped.error();
+    }
+  }
+
+  (void)flags;
+  const kstd::error_code ret = handle_DeleteFile_V1(kstd::move(args));
+
+  return ret;
+}
+
+static kstd::error_code Dispatch_CreateDirectory_V1(void *userData, size_t size, uint32_t flags) {
+  if (size < sizeof(__SYS_IO_CREATEDIRECTORY_V1)) return kernel::KernelError::InvalidSize;
+
+  const auto currentThread = KE_SCHED_GetCurrentThread();
+  if (!currentThread) return kernel::KernelError::NoCurrentThread;
+  if (!currentThread->owner_process) return kernel::KernelError::NoCurrentProcess;
+  auto &address_space = currentThread->owner_process->address_space;
+
+  __SYS_IO_CREATEDIRECTORY_V1 headerCopy {};
+  if (const auto mapped = KE_VMM_MapBorrowed(userData, sizeof(__SYS_IO_CREATEDIRECTORY_V1), address_space)) {
+    kstd::memcpy(&headerCopy, *mapped, sizeof(__SYS_IO_CREATEDIRECTORY_V1));
+    if (const auto error = KE_VMM_UnmapBorrowed(*mapped, sizeof(__SYS_IO_CREATEDIRECTORY_V1), address_space); error) return error;
+  } else {
+    return mapped.error();
+  }
+
+  if (headerCopy.path != nullptr) {
+    if (headerCopy.pathLength > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;
+  }
+
+  __KRN_IO_CREATEDIRECTORY_V1 args {};
+  if (headerCopy.path != nullptr && headerCopy.pathLength > 0) {
+    args.path.resize(headerCopy.pathLength);
+    if (args.path.data() == nullptr || args.path.size() != headerCopy.pathLength) return kernel::KernelError::OutOfMemory;
+    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<char *>(headerCopy.path), headerCopy.pathLength, address_space)) {
+      kstd::memcpy(args.path.data(), *mapped, headerCopy.pathLength);
+      if (const auto error = KE_VMM_UnmapBorrowed(*mapped, headerCopy.pathLength, address_space); error) return error;
+    } else {
+      return mapped.error();
+    }
+  }
+
+  (void)flags;
+  const kstd::error_code ret = handle_CreateDirectory_V1(kstd::move(args));
+
+  return ret;
+}
+
 static kstd::error_code Dispatch_Control_V1(void *userData, size_t size, uint32_t flags) {
   if (size < sizeof(__SYS_IO_CONTROL_V1)) return kernel::KernelError::InvalidSize;
 
@@ -2660,6 +2917,12 @@ UNDOS_KERNEL_API_DEF uint32_t KE_SYSCALL_Dispatch(uint32_t number, uint32_t size
     case 222: return kernel::KErrorToSysReturnCode(Dispatch_Read_V1(data, size, flags));
     case 223: return kernel::KErrorToSysReturnCode(Dispatch_Write_V1(data, size, flags));
     case 226: return kernel::KErrorToSysReturnCode(Dispatch_Write_V2(data, size, flags));
+    case 227: return kernel::KErrorToSysReturnCode(Dispatch_ReadDirectory_V1(data, size, flags));
+    case 229: return kernel::KErrorToSysReturnCode(Dispatch_GetFileInformation_V1(data, size, flags));
+    case 230: return kernel::KErrorToSysReturnCode(Dispatch_CopyFile_V1(data, size, flags));
+    case 231: return kernel::KErrorToSysReturnCode(Dispatch_MoveFile_V1(data, size, flags));
+    case 232: return kernel::KErrorToSysReturnCode(Dispatch_DeleteFile_V1(data, size, flags));
+    case 233: return kernel::KErrorToSysReturnCode(Dispatch_CreateDirectory_V1(data, size, flags));
     case 224: return kernel::KErrorToSysReturnCode(Dispatch_Control_V1(data, size, flags));
     case 225: return kernel::KErrorToSysReturnCode(Dispatch_GetStdHandle_V1(data, size, flags));
     case 250: return kernel::KErrorToSysReturnCode(Dispatch_Create_V1(data, size, flags));

@@ -57,6 +57,9 @@ struct KIOObject : KObjectT<KIOObject, 1, TYPE_IO> {
   kstd::unique_ptr<KVFSNode> vfsNode;
   uint32_t flags{0};
   bool fileHandleCreated{false};
+  bool vfsOpenCounted{false};
+  KIOObject *vfsNext{nullptr};
+  KIOObject *vfsPrevious{nullptr};
 
   const KObjectPtr<KFilesystemObject> &FileSystem() const noexcept { return mountPoint->fileSystem; }
 

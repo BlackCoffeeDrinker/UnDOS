@@ -123,6 +123,24 @@ and unquoted fragments concatenate. `""` is an empty argument. Backslashes
 are literal: there is no escaping or shell expansion. Unmatched quotes,
 embedded NULs, and overflow reject rather than truncate.
 
+### File management extensions
+
+`ReadDirectoryV1` (227) enumerates short-name directory entries through a readable
+VFS directory handle. Its output name uses query-length-then-fill, including the
+terminating NUL. `GetFileInformationV1` (229) returns the byte size and FAT
+attribute bits for an open file or directory.
+
+`CopyFileV1` (230), `MoveFileV1` (231), `DeleteFileV1` (232) and
+`CreateDirectoryV1` (233) provide separate file-management operations.
+Destinations are never overwritten.
+Deletion supports only empty directories; directory renames work only within
+the same parent. Paths are absolute and at most 255 bytes. Cross-volume and
+recursive operations are unsupported. Open source entries and open directory
+handles block mutations.
+The exact field and failure contracts are in `ABI/IDL/syscalls.txt`; application
+behavior and filesystem limits are described in
+[File Manager](../Apps/FileManager/README.md).
+
 ### Runtime initialization, exit, and standard streams
 
 The CRT validates startup size/version/reserved fields, caches standard

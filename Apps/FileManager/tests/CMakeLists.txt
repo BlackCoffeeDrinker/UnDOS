@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.27)
+project(FileManagerModelTests LANGUAGES CXX)
+enable_testing()
+add_executable(filemanager-model model_test.cpp)
+target_compile_features(filemanager-model PRIVATE cxx_std_20)
+target_compile_options(filemanager-model PRIVATE -Wall -Wextra -Werror)
+add_test(NAME filemanager-model COMMAND filemanager-model)

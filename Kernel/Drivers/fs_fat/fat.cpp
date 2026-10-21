@@ -75,6 +75,10 @@ struct FAT_Volume {
   uint32_t rootCluster;   // FAT32/ExFAT
   uint32_t dataStartSector;
   uint32_t totalClusters;
+  bool writable{true};
+  uint32_t fsInfoSector{0};
+  uint32_t backupFsInfoSector{0};
+  mutable bool fsInfoInvalidated{false};
   // maybe: pointers to on‑disk FSInfo, etc.
 };
 
@@ -178,9 +182,19 @@ kstd::error_code FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountOb
 
   const uint32_t totalSectors = bpb->totalSectors16 ? bpb->totalSectors16 : bpb->totalSectors32;
   const uint32_t fatSize = bpb->fatSize16 ? bpb->fatSize16 : fat32->fatSize32;
+  if (bpb->bytesPerSector < 512 || bpb->bytesPerSector > 4096 ||
+      (bpb->bytesPerSector & (bpb->bytesPerSector - 1)) ||
+      bpb->sectorsPerCluster > 128 || (bpb->sectorsPerCluster & (bpb->sectorsPerCluster - 1)) ||
+      !bpb->reservedSectors || !bpb->numFATs || !fatSize ||
+      static_cast<uint64_t>(bpb->reservedSectors) + static_cast<uint64_t>(bpb->numFATs) * fatSize >= totalSectors)
+    return kernel::KernelError::InvalidFormat;
   const uint32_t rootDirSectors = (static_cast<uint32_t>(bpb->rootEntryCount) * 32u + (static_cast<uint32_t>(bpb->bytesPerSector) - 1u)) / static_cast<uint32_t>(bpb->bytesPerSector);
-  const uint32_t dataSectors = totalSectors - bpb->reservedSectors - (bpb->numFATs * fatSize) - rootDirSectors;
+  const uint64_t metadataSectors = static_cast<uint64_t>(bpb->reservedSectors) +
+      static_cast<uint64_t>(bpb->numFATs) * fatSize + rootDirSectors;
+  if (metadataSectors >= totalSectors) return kernel::KernelError::InvalidFormat;
+  const uint32_t dataSectors = totalSectors - static_cast<uint32_t>(metadataSectors);
   const uint32_t totalClusters = dataSectors / bpb->sectorsPerCluster;
+  if (totalClusters >= 0x0ffffff0u) return kernel::KernelError::InvalidFormat;
 
   mountPoint->driverExtension = kernel::DataBuffer::Create<FAT_Volume>();
   if (!mountPoint->driverExtension) return kernel::make_error_code(kernel::KernelError::OutOfMemory);
@@ -209,9 +223,21 @@ kstd::error_code FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountOb
   } else {
     vol->type = FAT_Type::FAT32;
     vol->rootCluster = fat32->rootCluster;
+    vol->writable = !(fat32->extFlags & 0x80) && fat32->fsVersion == 0;
+    if (fat32->fsInfo > 0 && fat32->fsInfo < bpb->reservedSectors) {
+      vol->fsInfoSector = fat32->fsInfo;
+      const uint32_t backup = static_cast<uint32_t>(fat32->backupBootSector) + fat32->fsInfo;
+      if (fat32->backupBootSector && backup < bpb->reservedSectors) vol->backupFsInfoSector = backup;
+    }
     vol->dataStartSector = bpb->reservedSectors + bpb->numFATs * fatSize;
     KE_Print("FS_FAT: FAT32 Detected");
   }
+  const uint64_t requiredFatBytes = vol->type == FAT_Type::FAT12 ?
+      (static_cast<uint64_t>(totalClusters + 2) * 3 + 1) / 2 :
+      static_cast<uint64_t>(totalClusters + 2) * (vol->type == FAT_Type::FAT16 ? 2 : 4);
+  if (requiredFatBytes > static_cast<uint64_t>(fatSize) * vol->bytesPerSector ||
+      (vol->type == FAT_Type::FAT32 && (vol->rootCluster < 2 || vol->rootCluster >= totalClusters + 2)))
+    return kernel::KernelError::InvalidFormat;
 
   return {};
 }
@@ -326,6 +352,7 @@ kstd::error_code FAT_FillNode(const FAT_DirEntry &entry, kernel::KVFSNode &out) 
 
   out.type = (entry.attr & kAttrDirectory) ? kernel::VFSNodeType::Directory : kernel::VFSNodeType::File;
   out.size = (entry.attr & kAttrDirectory) ? 0 : entry.fileSize;
+  out.attributes = entry.attr;
   out.fsPrivate = kernel::DataBuffer::Create<FAT_VFSNode>();
   if (!out.fsPrivate) return kernel::KernelError::OutOfMemory;
   auto *node = out.fsPrivate.as<FAT_VFSNode>();
@@ -336,10 +363,12 @@ kstd::error_code FAT_FillNode(const FAT_DirEntry &entry, kernel::KVFSNode &out) 
 
 kstd::error_code FAT_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &vnode, kernel::KIOObject::OpenMode mode) {
   (void) mountPoint;
-  (void) mode;
-
-  // FAT can only open Files
-  if (vnode.type != kernel::VFSNodeType::File) return kernel::KernelError::InvalidState;
+  if ((mode & kernel::KIOObject::OpenMode::Create) && (mode & kernel::KIOObject::OpenMode::Exclusive))
+    return kernel::KernelError::AlreadyExists;
+  if (mode & (kernel::KIOObject::OpenMode::Truncate | kernel::KIOObject::OpenMode::Append))
+    return kernel::KernelError::Unsupported;
+  if (vnode.type != kernel::VFSNodeType::File && vnode.type != kernel::VFSNodeType::Directory)
+    return kernel::KernelError::InvalidState;
 
   return kernel::KernelError::Success;
 }
@@ -472,6 +501,7 @@ kstd::error_code FAT_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountOb
 
   rootOut.type = kernel::VFSNodeType::Directory;
   rootOut.size = 0;
+  rootOut.attributes = kAttrDirectory;
   rootOut.fsPrivate = kernel::DataBuffer::Create<FAT_VFSNode>();
   if (!rootOut.fsPrivate) return kernel::KernelError::OutOfMemory;
 
@@ -487,6 +517,8 @@ kstd::error_code FAT_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMountOb
   return kernel::KernelError::Success;
 }
 
+#include "fat_operations.hpp"
+
 }// namespace
 
 UNDOS_DRIVER_ENTRY {
@@ -500,6 +532,8 @@ UNDOS_DRIVER_ENTRY {
     (*fs)->GetRootNode = FAT_GetRootNode;
     (*fs)->CreateHandle = FAT_CreateHandle;
     (*fs)->ReadHandle = FAT_ReadHandle;
+    (*fs)->ReadDirectory = FAT_ReadDirectory;
+    (*fs)->OperateFile = FAT_OperateFile;
   } else {
     KE_Print("FS_FAT: Failed to register filesystem driver");
   }

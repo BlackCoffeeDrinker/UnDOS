@@ -12,6 +12,8 @@
 namespace kernel {
 struct KVolumeMountObject;
 struct KVFSNode;
+struct KVFSDirectoryEntry;
+enum class VFSFileOperation : uint32_t;
 
 struct KFilesystemObject : KObjectT<KFilesystemObject, 1, TYPE_FILE_SYSTEM> {
   using KObjectT::KObjectT;
@@ -29,6 +31,12 @@ struct KFilesystemObject : KObjectT<KFilesystemObject, 1, TYPE_FILE_SYSTEM> {
                     kstd::string_view name,
                     KVFSNode &out)>
       Lookup;
+
+  cfunc<kstd::expected<bool, kstd::error_code>(const KObjectPtr<KVolumeMountObject> &,
+      const KVFSNode &, uint32_t index, KVFSDirectoryEntry &)> ReadDirectory;
+  cfunc<kstd::error_code(const KObjectPtr<KVolumeMountObject> &, VFSFileOperation,
+      const KVFSNode &parent, kstd::string_view name,
+      const KVFSNode *destinationParent, kstd::string_view destinationName)> OperateFile;
 
   // Create a handle for a vnode
   cfunc<kstd::error_code(const KObjectPtr<KVolumeMountObject> &, const KVFSNode &, KIOObject::OpenMode)> CreateHandle;

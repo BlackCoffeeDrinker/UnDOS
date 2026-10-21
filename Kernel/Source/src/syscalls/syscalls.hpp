@@ -196,6 +196,48 @@ kstd::error_code handle_Read_V1(__KRN_IO_READ_V1 && args);
 kstd::error_code handle_Write_V1(__KRN_IO_WRITE_V1 && args);
 /** Writes bytes and reports short writes. V1 remains available unchanged. */
 kstd::error_code handle_Write_V2(__KRN_IO_WRITE_V2 && args);
+/**
+ * Enumerates one directory entry by zero-based index, excluding . and ...
+ * Requires a readable directory handle. found=0 means end of directory.
+ * name uses query-length-then-fill, including its terminating NUL.
+ * Indices are not snapshots: restart enumeration after a mutation.
+ * On insufficient capacity returns INVALID_SIZE without truncation.
+ */
+kstd::error_code handle_ReadDirectory_V1(__KRN_IO_READDIRECTORY_V1 && args);
+/** Returns information for an open VFS file/directory handle with read access. */
+kstd::error_code handle_GetFileInformation_V1(__KRN_IO_GETFILEINFORMATION_V1 && args);
+/**
+ * Copies one file to a nonexisting destination on the same mount.
+ * Both paths must be absolute, at most 255 bytes, with FAT short names.
+ * Open source entries and open directories block the operation.
+ * Directory copies and cross-volume copies are unsupported.
+ * Device failures can leave partial changes; no crash consistency is promised.
+ */
+kstd::error_code handle_CopyFile_V1(__KRN_IO_COPYFILE_V1 && args);
+/**
+ * Moves a file, or renames a directory within the same parent.
+ * Both paths must be absolute, at most 255 bytes, with FAT short names.
+ * The destination must not exist and must be on the same mount.
+ * Open source entries and open directories block the operation.
+ * Cross-parent directory moves and cross-volume moves are unsupported.
+ * Device failures can leave partial changes; no crash consistency is promised.
+ */
+kstd::error_code handle_MoveFile_V1(__KRN_IO_MOVEFILE_V1 && args);
+/**
+ * Deletes a file or empty directory at an absolute path of at most 255 bytes.
+ * Requires FAT short names. Roots, . and .. are rejected.
+ * Open source entries, open directories and read-only entries block deletion.
+ * Recursive deletion is unsupported. Device failures can leave partial changes;
+ * no crash consistency is promised.
+ */
+kstd::error_code handle_DeleteFile_V1(__KRN_IO_DELETEFILE_V1 && args);
+/**
+ * Creates a directory at a nonexisting absolute path of at most 255 bytes.
+ * Requires FAT short names and an existing parent directory.
+ * Open directory handles on the volume block creation.
+ * Device failures can leave partial changes; no crash consistency is promised.
+ */
+kstd::error_code handle_CreateDirectory_V1(__KRN_IO_CREATEDIRECTORY_V1 && args);
 /** Sends a control code to the device behind an open handle. */
 kstd::error_code handle_Control_V1(__KRN_IO_CONTROL_V1 && args);
 /**

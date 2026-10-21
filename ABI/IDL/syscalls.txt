@@ -237,6 +237,71 @@ syscall V2 IO Write [226] {
     transferred: OUT c<uint32_t>;
 };
 
+/** File or directory information. Attributes use the FAT attribute bits:
+ * read-only=1, hidden=2, system=4, directory=16, archive=32.
+ * Timestamps and long filenames are not supplied by this interface. */
+struct FileInformation {
+    size: c<uint64_t>;
+    attributes: c<uint32_t>;
+};
+
+/** Enumerates one directory entry by zero-based index, excluding . and ...
+ * Requires a readable directory handle. found=0 means end of directory.
+ * name uses query-length-then-fill, including its terminating NUL.
+ * Indices are not snapshots: restart enumeration after a mutation.
+ * On insufficient capacity returns INVALID_SIZE without truncation. */
+syscall V1 IO ReadDirectory [227] {
+    handle: IN HANDLE;
+    index: IN c<uint32_t>;
+    name: OUT string;
+    information: OUT struct<FileInformation>;
+    found: OUT c<uint32_t>;
+};
+
+/** Returns information for an open VFS file/directory handle with read access. */
+syscall V1 IO GetFileInformation [229] {
+    handle: IN HANDLE;
+    information: OUT struct<FileInformation>;
+};
+
+/** Copies one file to a nonexisting destination on the same mount.
+ * Both paths must be absolute, at most 255 bytes, with FAT short names.
+ * Open source entries and open directories block the operation.
+ * Directory copies and cross-volume copies are unsupported.
+ * Device failures can leave partial changes; no crash consistency is promised. */
+syscall V1 IO CopyFile [230] {
+    source: IN string;
+    destination: IN string;
+};
+
+/** Moves a file, or renames a directory within the same parent.
+ * Both paths must be absolute, at most 255 bytes, with FAT short names.
+ * The destination must not exist and must be on the same mount.
+ * Open source entries and open directories block the operation.
+ * Cross-parent directory moves and cross-volume moves are unsupported.
+ * Device failures can leave partial changes; no crash consistency is promised. */
+syscall V1 IO MoveFile [231] {
+    source: IN string;
+    destination: IN string;
+};
+
+/** Deletes a file or empty directory at an absolute path of at most 255 bytes.
+ * Requires FAT short names. Roots, . and .. are rejected.
+ * Open source entries, open directories and read-only entries block deletion.
+ * Recursive deletion is unsupported. Device failures can leave partial changes;
+ * no crash consistency is promised. */
+syscall V1 IO DeleteFile [232] {
+    path: IN string;
+};
+
+/** Creates a directory at a nonexisting absolute path of at most 255 bytes.
+ * Requires FAT short names and an existing parent directory.
+ * Open directory handles on the volume block creation.
+ * Device failures can leave partial changes; no crash consistency is promised. */
+syscall V1 IO CreateDirectory [233] {
+    path: IN string;
+};
+
 /** Device control codes understood by IO Control. */
 enum IoControlCode {
     /** Display: output is struct<IoctlDisplayMode>. */

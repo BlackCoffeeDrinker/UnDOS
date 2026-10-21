@@ -11,6 +11,7 @@ APPLICATIONS = {
     "Progman": ("Apps/Progman", ("progman.elf",)),
     "Terminal": ("Apps/Terminal", ("term.elf",)),
     "Demo": ("Apps/Demo", ("demo.elf",)),
+    "FileManager": ("Apps/FileManager", ("winfile.elf",)),
     "Init": ("Apps/Init", ("init.elf", "initlib.so")),
     "Fontloader": ("Apps/Fontloader", ("fontload.elf",)),
     "ABI": ("Tests/ABI", ("abitest.elf", "abitest.so", "abinext.so", "abimiss.elf")),
