@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+IMAGE_DIR="${UNDOS_IMAGE_DIR:-${SCRIPT_DIR}/build/image}"
 
 set -- -display "${UNDOS_DISPLAY:-none}"
 if [ -n "${UNDOS_QMP_SOCKET:-}" ]; then
@@ -9,12 +10,12 @@ fi
 
 qemu-system-i386 -machine isapc -cpu 486 -m 32 \
   -device isa-serial,chardev=ser0 \
-  -drive "file=${SCRIPT_DIR}/bin/fat32.img,format=raw,if=ide,index=0" \
+  -drive "file=${IMAGE_DIR}/fat32.img,format=raw,if=ide,index=0" \
   -chardev stdio,id=ser0,signal=off \
   -monitor none \
   -nodefaults \
   -vga "${UNDOS_VGA:-cirrus}" \
-  -drive file="${SCRIPT_DIR}/bin/os.iso",media=cdrom,readonly=on \
+  -drive file="${IMAGE_DIR}/os.iso",media=cdrom,readonly=on \
   -boot d "$@" &
 
 QEMU_PID=$!

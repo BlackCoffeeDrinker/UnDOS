@@ -1,8 +1,8 @@
 # Syscall IDL
 
 This document describes the small IDL (Interface Definition Language) used to declare syscalls, enums,
-and structs shared between the kernel and userland. The IDL is defined in `tools/syscalls.txt` and
-compiled by `tools/create-syscalls.py` (implemented in `tools/idlgen/`).
+and structs shared between the kernel and userland. The IDL is defined in `ABI/IDL/syscalls.txt` and
+compiled by `Tools/create-syscalls.py` (implemented in `Tools/idlgen/`).
 
 You should never need to read the generator source to write a new syscall — this file is the spec.
 
@@ -16,14 +16,14 @@ docker run --rm -v "$(pwd):/src" -w /src gcc-standalone:i686-elf \
 or directly:
 
 ```
-python3 tools/create-syscalls.py tools/syscalls.txt \
-    kernel_userland_shared/include/undos/syscalls userland/ kernel/src/syscalls
+python3 Tools/create-syscalls.py ABI/IDL/syscalls.txt \
+    ABI/include/undos/syscalls ABI/ Kernel/Source/src/syscalls
 ```
 
 This produces:
-- `kernel_userland_shared/include/undos/syscalls/*.h` — shared wire structs, enums, structs.
-- `userland/.../userspace.h` — userspace wrapper functions (e.g. `UD_SYS_CreateProcessV1(...)`).
-- `kernel/src/syscalls/handler_syscall.cpp` + `__kernel_types.h` — kernel dispatch code and
+- `ABI/include/undos/syscalls/*.h` — shared wire structs, enums, structs.
+- `ABI/userspace.h` — userspace wrapper functions (e.g. `UD_SYS_CreateProcessV1(...)`).
+- `Kernel/Source/src/syscalls/handler_syscall.cpp` + `__kernel_types.h` — kernel dispatch code and
   `handle_<Name>_<Version>()` declarations that you must implement.
 
 Handwritten kernel handlers return `kstd::error_code`, not wire-level
@@ -259,7 +259,7 @@ Writing a syscall in `syscalls.txt` gives you, for free:
 
 What you must still write by hand:
 - The `handle_<Name>_<Version>(__KRN_<CATEGORY>_<NAME>_<VERSION>&& args, uint32_t flags)` function
-  body in `kernel/src/syscalls/` — the generator only emits its declaration. Inside it, `string`
+  body in `Kernel/Source/src/syscalls/` — the generator only emits its declaration. Inside it, `string`
   fields are `kstd::string_view`, `MAP`-mode/`buffer<T>` fields are `kernel::borrowed_ptr<T>`
   (implicitly convertible to `kstd::span<T>`/`kstd::string_view`), and everything else is a plain
   value — you must never touch raw user pointers or call `KE_VMM_MapBorrowed`/`UnmapBorrowed`

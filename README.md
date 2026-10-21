@@ -214,7 +214,7 @@ notification even if its message ring is full. Program Manager refits its
 frame and workspace. Allocation failures preserve the previous mode; output
 enable failure is explicit and queryable as an inactive programmed mode.
 
-After building `BootIso`, `python3 tools/progman-smoke.py --scenario display
+After building the image, `python3 Tools/progman-smoke.py --scenario display
 --output /tmp/undos-display` exercises a second process switching resolutions
 and back while retaining a root DC. Repeat with `--vga std` for the single-mode
 VGA path. Both use the bounded QEMU wrapper.
@@ -241,6 +241,60 @@ remain unimplemented. Existing bitmap text is unchanged.
 * **Permissions:** Permissions model is intentionally minimal for now to mirror vintage single-user desktop experiences.
 
 ## Developer
+
+### Repository layout and build entry points
+
+The repository has independent CMake projects, not a root CMake project.
+Python 3 commands orchestrate builds on macOS, Windows, and Linux. Docker
+supplies the cross-toolchain and image utilities; native cross-builds require
+equivalent tools on PATH. Native hosted tests use the host compiler.
+
+| Directory | Ownership |
+|---|---|
+| `Docker/Toolchain`, `Docker/SDK` | Cross-toolchain and application SDK images |
+| `Kernel/` | Kernel source, private API, HAL, drivers, subsystems and bootstrap loader |
+| `CRT/` | Application startup, lifecycle and C library |
+| `Apps/` | Independent SDK-consuming applications |
+| `SDK/` | SDK producer, CMake package, compiler drivers, GUI and opt-in KStd headers |
+| `ABI/` | Public shared headers, generated bindings, ABI note and syscall IDL inputs |
+| `Tests/Hosted`, `Tests/ABI` | Native tests and SDK-built ABI fixtures |
+| `Image/` | Manifest-based image assembly, GRUB template and boot tools |
+| `BuildSupport/`, `Tools/`, `Scripts/` | Shared CMake helpers, development tools and orchestration |
+
+From the repository root:
+
+```sh
+python3 Scripts/build.py docker-toolchain
+python3 Scripts/build.py docker-sdk
+python3 Scripts/build.py sdk --docker
+python3 Scripts/build.py kernel --docker
+python3 Scripts/build.py apps --docker
+python3 Scripts/build.py image --docker
+python3 Scripts/build.py hosted
+```
+
+`apps` stages the SDK before building applications. `image` builds the kernel,
+SDK and applications, then assembles `build/image/os.iso` and
+`build/image/fat32.img`. Kernel and SDK builds remain independent.
+Use `--config Release`, `--jobs N`, or `--build-root PATH` as needed.
+Repeated `--cmake-arg=-DNAME=VALUE` arguments reach CMake configuration.
+With `--docker`, build roots and extra input directories must be inside the
+repository bind mount. Omit `--docker` to use tools installed on the host.
+
+Build trees are separated by component and configuration:
+`build/kernel/Debug`, `build/sdk-build/Debug`, `build/sdk/Debug`,
+`build/apps/<name>/Debug`, and `build/hosted/Debug`. Image assembly consumes
+generated artifact manifests and starts with fresh staging trees. It never
+reuses files left in the old `bin/filesystem` tree. Supply additional runtime
+probes explicitly with `--system-files build/probe`; each file in that directory
+is staged under `/System`.
+
+For CLion or another CMake IDE, open the component directory, such as
+`Kernel/`, `SDK/`, `CRT/`, `Apps/Progman/`, or `Tests/Hosted/`.
+Use the kernel toolchain in `BuildSupport/i686-toolchain.cmake` for kernel/HAL
+images. Use the SDK toolchain for application/runtime projects; their shared
+library contracts differ. Discard old IDE/CMake build profiles or select fresh
+build directories: their caches contain removed source paths.
 
 ### Kernel error conventions
 
@@ -383,7 +437,7 @@ address to a caller and no Linux auxiliary vector. `_start` clears DF and
 calls the CRT; normal applications implement `main(int argc, char **argv)`.
 Other entry registers are unspecified.
 
-`kernel_userland_shared/include/undos/abi.h` defines the public 48-byte
+`ABI/include/undos/abi.h` defines the public 48-byte
 structure. Every field is a fixed-width uint32; address fields are process
 virtual addresses, not host-sized pointers:
 
@@ -466,13 +520,13 @@ committed input or EOF rather than treating an empty input queue as EOF.
 
 #### ABI conformance workflow
 
-Build `BootIso` as below, then run the hosted `[application-abi]`,
+Build the image as below, then run the hosted `[application-abi]`,
 `[process-startup]`, and `[standard-handles]` tests. The real startup assembly
 has an additional bounded opcode/alignment check:
 
 ```sh
-python3 hosted_test/tests/process_startup_trampoline_test.py --build-dir build/abi-trampoline
-python3 tools/progman-smoke.py --output build/abi-smoke --scenario abi
+python3 Tests/Hosted/tests/process_startup_trampoline_test.py --build-dir build/abi-trampoline
+python3 Tools/progman-smoke.py --output build/abi-smoke --scenario abi
 ```
 
 The emulator check uses `run-qemu.sh` and launches `init --abi-test` through
@@ -510,12 +564,12 @@ From the repository root, build the existing cross-toolchain image if it is
 not already installed, then build the SDK image:
 
 ```sh
-docker build -f DockerGccCross/Dockerfile -t gcc-standalone:i686-elf .
-docker build -f sdk/Dockerfile -t undos-sdk:dev .
+python3 Scripts/build.py docker-toolchain
+python3 Scripts/build.py docker-sdk
 ```
 
 The first command builds GCC/binutils and can take substantially longer.
-`sdk/Dockerfile` is a multi-stage build: its build stage compiles and installs
+`Docker/SDK/Dockerfile` is a multi-stage build: its build stage compiles and installs
 the SDK and checks relocated external examples; the final image contains the
 base toolchain plus `/opt/undos-sdk`, without the UnDOS source tree or SDK
 build directories. It currently reuses the full toolchain image, including
@@ -600,18 +654,18 @@ startup objects, or freestanding flags, and do not link source-tree libraries.
 Application sources still use public `undoscrt` and syscall interfaces;
 this migration changes their build boundary, not their behavior.
 
-| Root target | Standalone source directory | SDK dependencies | Output |
+| Application | Standalone source directory | SDK dependencies | Output |
 |---|---|---|---|
-| `progman` | `userland/apps/progman` | `UnDOS::GUI` | `progman.elf` |
-| `term` | `userland/apps/term` | `UnDOS::GUI` | `term.elf` |
-| `demo` | `userland/apps/demo` | `UnDOS::GUI` | `demo.elf` |
-| `init` | `userland/apps/init` | `UnDOS::Application`, `UnDOS::Shared` | `init.elf`, `initlib.so` |
-| `abi_test` | `userland/apps/abitest` | `UnDOS::Application`, `UnDOS::Shared` | `abitest.elf`, `abitest.so`, `abinext.so`, `abimiss.elf` |
-| `fontloader` | `userland/fontloader` | `UnDOS::Application`, `UnDOS::FontResource`, `UnDOS::KStd` | `fontload.elf` |
+| `progman` | `Apps/Progman` | `UnDOS::GUI` | `progman.elf` |
+| `term` | `Apps/Terminal` | `UnDOS::GUI` | `term.elf` |
+| `demo` | `Apps/Demo` | `UnDOS::GUI` | `demo.elf` |
+| `init` | `Apps/Init` | `UnDOS::Application`, `UnDOS::Shared` | `init.elf`, `initlib.so` |
+| `abi_test` | `Tests/ABI` | `UnDOS::Application`, `UnDOS::Shared` | `abitest.elf`, `abitest.so`, `abinext.so`, `abimiss.elf` |
+| `fontloader` | `Apps/Fontloader` | `UnDOS::Application`, `UnDOS::FontResource`, `UnDOS::KStd` | `fontload.elf` |
 
-Each root target first stages the SDK, then configures and builds the application
-separately in `<build>/sdk-apps/<target>/<configuration>/`.
-`BootIso` depends on these targets and installs their outputs under `/System`.
+`python3 Scripts/build.py apps --docker` first stages the SDK, then configures
+and builds each application in `<build>/apps/<name>/<configuration>/`.
+The `image` command stages their manifest outputs under `/System`.
 The OS image build still stages configuration files and font fixtures.
 The ABI project retains its deliberately unmarked `abimiss.elf` rejection
 fixture and dependent-library lifecycle checks.
@@ -639,9 +693,9 @@ The installed SDK checker accepts repeated
 projects outside the source tree with the SDK relocated to a path containing
 spaces. `--progman-source` remains a compatible shorthand. With `--output`,
 the checker exports the application binaries and runtime probes.
-After staging the binaries and rebuilding `BootIso`, use the bounded
+After staging the binaries and rebuilding the image, use the bounded
 `launch`, `abi`, `font`, `terminal-stdio`, and `terminal-close` scenarios in
-`tools/progman-smoke.py`. Run image consumers sequentially.
+`Tools/progman-smoke.py`. Run image consumers sequentially.
 
 #### Stage or install the SDK without building an image
 
@@ -649,7 +703,7 @@ With a host-compatible `i686-elf` GCC/binutils toolchain on PATH, CMake 3.27+,
 Python 3, and a build tool:
 
 ```sh
-cmake -S . -B build-sdk --toolchain sdk/UnDOS-toolchain.cmake -DUNDOS_SDK_ONLY=ON -DCMAKE_BUILD_TYPE=Release
+cmake -S SDK -B build-sdk --toolchain "$PWD/SDK/UnDOS-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release
 cmake --build build-sdk --target sdk --parallel
 ```
 
@@ -661,13 +715,12 @@ installation is also supported:
 cmake --install build-sdk --component SDK --prefix /destination
 ```
 
-An ordinary OS cross-build also exposes the `sdk` target. Do not combine
-`UNDOS_SDK_ONLY` with `TESTING_ONLY`. The SDK-only configuration does not
-download hosted-test dependencies or require GRUB/QEMU.
+The independent SDK project replaces the old root `UNDOS_SDK_ONLY` option.
+It does not download hosted-test dependencies or require GRUB/QEMU.
 IDE configurations that select `i686-elf-gcc/g++` directly are also accepted:
 SDK validation checks the compiler's target, not just CMake's cross-compiling
 flag. Hosted tests must instead use native compilers in a separate build
-directory with `-DTESTING_ONLY=ON`.
+directory configured from `Tests/Hosted/`, not with the old `TESTING_ONLY` switch.
 
 The relocatable directory contains:
 
@@ -703,11 +756,11 @@ probe binaries through a bind mount:
 docker run --rm --mount "type=bind,source=${PWD}/build-sdk,target=/output" undos-sdk:dev python3 /opt/undos-sdk/share/undos/check-sdk.py --output /output/probe
 ```
 
-Copy `probe/sdkcheck.elf`, `probe/sdkmsg.so`, and `probe/libcin.txt` into
-`bin/filesystem/System/`, rebuild `BootIso`, then run:
+Stage the exported probe directory explicitly when assembling the image, then run:
 
 ```sh
-python3 tools/progman-smoke.py --output build/sdk-smoke --scenario sdk
+python3 Scripts/build.py image --docker --system-files build-sdk/probe
+python3 Tools/progman-smoke.py --output build/sdk-smoke --scenario sdk
 ```
 
 This launches an externally built SDK application and verifies heap/string
@@ -893,7 +946,7 @@ and callback tables have process-global state).
 
 #### Coverage and terminal integration
 
-`python3 sdk/tests/check-libc.py` compiles the actual library and CRT lifecycle
+`python3 SDK/tests/check-libc.py` compiles the actual library and CRT lifecycle
 with controlled I/O/page providers at `-O0` and `-O2`, using an ordinary C test
 caller. The library and controlled backend are compiled separately by the C
 compiler as strict C11 with pedantic errors; only the existing C++ lifecycle
@@ -903,7 +956,7 @@ allocation failure/overflow, stream exhaustion, normal-exit callback/flush
 ordering, and `_Exit` bypass. It is also registered as hosted CTest
 `libc_streams`. Test symbols are renamed to avoid interposing the host libc.
 Run the registered test with
-`ctest --test-dir <host-build>/hosted_test -R libc_streams --output-on-failure`.
+`ctest --test-dir <host-build> -R libc_streams --output-on-failure`.
 
 The installed SDK checker builds the standard hello example and a C runtime
 probe. `--scenario sdk` exercises formatting, allocation, file input, the real
@@ -914,11 +967,11 @@ installed SDK's `terminal` example (`ttytest.elf`) through `run` and exercises
 real terminal stdout/stderr, line input, Ctrl+D, and repeated launches.
 The separate `terminal-close` scenario closes the terminal while a child waits
 for input, keeping each emulator run within 15 seconds. Stage `ttytest.elf` from the SDK
-checker alongside the other probe binaries and rebuild `BootIso`, then run:
+checker alongside the other probe binaries with `--system-files`, then run:
 
 ```sh
-python3 tools/progman-smoke.py --output build/terminal-stdio --scenario terminal-stdio
-python3 tools/progman-smoke.py --output build/terminal-close --scenario terminal-close
+python3 Tools/progman-smoke.py --output build/terminal-stdio --scenario terminal-stdio
+python3 Tools/progman-smoke.py --output build/terminal-close --scenario terminal-close
 ```
 
 Inspect the captured child-output/response screenshots as well as the serial
@@ -926,21 +979,16 @@ markers. No debug-console fallback is used to make `puts` appear successful.
 
 ### How to build the OS
 
-1. Clone the repository and navigate to the project directory.
-2. In the `[DockerGccCross](DockerGccCross)` directory there's a Dockerfile for making a build container
-3. Run `cmake` in a compatible environment to generate the build system.
-4. Build `BootIso` target using the generated build system; this builds everything with the x86-old hal
-5. Debug!
-    1. Prefer the `run-qemu.sh` script, there's also `debug-and-run-for-15-seconds.sh` that builds and runs the OS for 15 seconds.
-    2. Use the wrapper's display/QMP options below for visual inspection and automated interaction.
+Build the toolchain once with `python3 Scripts/build.py docker-toolchain`.
+Build the OS with `python3 Scripts/build.py image --docker`.
+Use `run-qemu.sh` to run it, or `debug-and-run-for-15-seconds.sh` to build a
+debug image and run it. Both wrappers bound QEMU execution to 15 seconds.
 
 ### Bounded GUI development workflow
 
 Use the wrapper scripts rather than invoking QEMU directly:
 
 ```sh
-docker run --rm -v "$PWD:/src" -w /src gcc-standalone:i686-elf \
-  cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=i686-toolchain.cmake -DCMAKE_BUILD_TYPE=Debug
 ./debug-and-run-for-15-seconds.sh
 ```
 
@@ -950,7 +998,7 @@ inspection set `UNDOS_DISPLAY` to an available QEMU backend, for example
 fallback instead of Cirrus. `UNDOS_QMP_SOCKET=/absolute/path/to/socket` enables
 a local QMP socket for screenshot capture and input injection. All modes retain
 the 15-second runtime bound. A serial-only boot is not a visual GUI check.
-`python3 tools/progman-smoke.py --output /tmp/undos-smoke --vga cirrus`
+`python3 Tools/progman-smoke.py --output /tmp/undos-smoke --vga cirrus`
 uses that wrapper to capture shell/menu/application checkpoints and verify a
 quoted argument reaches the demo; use `--vga std` for the fallback path. Inspect
 the generated PPM captures as well as the serial log.
@@ -965,9 +1013,9 @@ they share the same writable disk image and must not run concurrently.
 Hosted tests can be configured independently:
 
 ```sh
-cmake -S . -B build-hosted -DTESTING_ONLY=ON
+cmake -S Tests/Hosted -B build-hosted
 cmake --build build-hosted --target KernelTests -j4
-build-hosted/hosted_test/tests/KernelTests '[progman],[user],[gfx]'
+build-hosted/tests/KernelTests '[progman],[user],[gfx]'
 ```
 
 See `TO_PROGRMAN.md` for the work-package contracts and remaining release gates.
