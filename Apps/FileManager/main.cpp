@@ -4,12 +4,15 @@
 
 namespace {
 using namespace filemanager;
-constexpr int ToolbarTop = 24;
-constexpr int ListTop = 104;
+constexpr int ToolbarTop = 4;
+constexpr int ListTop = 84;
 constexpr int RowHeight = 20;
 constexpr int TreeWidth = 208;
 
-enum Command { Open, Up, Location, Refresh, Copy, Move, Rename, Delete, NewFolder, Properties, Help, Exit };
+enum Command {
+  Open, Up, Location, Refresh, Copy, Move, Rename, Delete, NewFolder,
+  Properties, Help, Exit, SortName, SortSize, Reverse
+};
 constexpr const char *Toolbar[] = {"Open", "Up", "Path", "Refresh", "Copy", "Move", "Rename", "Delete", "New dir"};
 struct TreeNode {
   char path[PathCapacity]{};
@@ -18,6 +21,7 @@ struct TreeNode {
 };
 struct State {
   uint32_t hwnd{0};
+  uint32_t menu{0};
   bool running{true};
   char path[PathCapacity] = "/";
   char status[256] = "Ready";
@@ -39,6 +43,58 @@ struct State {
 };
 State app;
 void notice(const char *title, const char *text);
+
+bool append_menu(uint32_t menu, MenuItemFlags flags, uint32_t item, const char *text) {
+  return gui::check(UD_SYS_AppendMenuV1(menu, flags, item, text), "AppendMenu");
+}
+
+uint32_t create_menu(bool popup) {
+  uint32_t menu = 0;
+  if (!gui::check(UD_SYS_CreateMenuV1(popup, &menu), "CreateMenu")) return 0;
+  return menu;
+}
+
+bool append_command(uint32_t menu, Command commandId, const char *text) {
+  return append_menu(menu, MenuItemFlags_String, static_cast<uint32_t>(commandId), text);
+}
+
+bool append_popup(uint32_t root, const char *text, uint32_t &popup) {
+  popup = create_menu(true);
+  if (!popup) return false;
+  if (append_menu(root, MenuItemFlags_Popup, popup, text)) return true;
+  gui::check(UD_SYS_DestroyMenuV1(popup), "DestroyMenu");
+  popup = 0;
+  return false;
+}
+
+bool create_app_menu() {
+  const uint32_t root = create_menu(false);
+  if (!root) return false;
+  uint32_t file = 0, view = 0;
+  bool okay = append_popup(root, "File", file) &&
+              append_popup(root, "View", view);
+  okay = okay && append_command(file, Open, "Open / Run");
+  okay = okay && append_command(file, Up, "Parent directory");
+  okay = okay && append_command(file, Location, "Go to path...");
+  okay = okay && append_command(file, Refresh, "Refresh");
+  okay = okay && append_command(file, Copy, "Copy...");
+  okay = okay && append_command(file, Move, "Move...");
+  okay = okay && append_command(file, Rename, "Rename...");
+  okay = okay && append_command(file, Delete, "Delete...");
+  okay = okay && append_command(file, NewFolder, "Create directory...");
+  okay = okay && append_command(file, Properties, "Properties");
+  okay = okay && append_command(file, Exit, "Exit");
+  okay = okay && append_command(view, SortName, "Sort page by name");
+  okay = okay && append_command(view, SortSize, "Sort page by size");
+  okay = okay && append_command(view, Reverse, "Reverse order");
+  okay = okay && append_command(root, Help, "Help");
+  if (!okay || !gui::check(UD_SYS_SetMenuV1(app.hwnd, root), "SetMenu")) {
+    gui::check(UD_SYS_DestroyMenuV1(root), "DestroyMenu");
+    return false;
+  }
+  app.menu = root;
+  return true;
+}
 
 void focus() {
   gui::check(UD_SYS_SetFocusV1(app.hwnd), "SetFocus");
@@ -283,6 +339,16 @@ void command(Command action) {
     if (gui::dialog("Go to directory", "UnDOS paths start with / (no DOS drive letters).", &field, 1)) load(path);
     focus();
   } else if (action == Refresh) { reset_tree(); load(app.path); }
+  else if (action == SortName || action == SortSize || action == Reverse) {
+    if (action == SortName) app.sortSize = false;
+    else if (action == SortSize) app.sortSize = true;
+    else app.reverse = !app.reverse;
+    sort(app.entries, app.count, app.sortSize, app.reverse);
+    app.selection = app.count ? 0 : -1;
+    copy(app.status, sizeof(app.status), app.sortSize
+        ? "Current page sorted by size; directories first"
+        : "Current page sorted by name; directories first");
+  }
   else if (action == Properties) properties();
   else if (action == Help) message("File Manager",
       "WINFILE-style file management for UnDOS.\n"
@@ -317,14 +383,13 @@ void paint() {
   const Rect area = gui::client(app.hwnd);
   const int right = area.right, bottom = area.bottom;
   p.fill(0, 0, right, bottom, gui::Face);
-  p.text(8, 4, "File   View   Help", gui::Ink);
   for (int i = 0; i < 9; ++i) p.button(4 + i * 72, ToolbarTop, 70, Toolbar[i]);
-  p.fill(4, 54, right - 4, 78, gui::Paper);
-  text(p, 10, 58, app.path, right - 24);
-  p.text(8, 84, "[/] Directory tree", app.treeFocus ? gui::Highlight : gui::Ink);
-  p.text(TreeWidth + 10, 84, "Name", !app.treeFocus ? gui::Highlight : gui::Ink);
-  text(p, right - 186, 84, "Bytes", 104, gui::Ink, gui::Face);
-  text(p, right - 76, 84, "Attr", 40, gui::Ink, gui::Face);
+  p.fill(4, 34, right - 4, 58, gui::Paper);
+  text(p, 10, 38, app.path, right - 24);
+  p.text(8, 64, "[/] Directory tree", app.treeFocus ? gui::Highlight : gui::Ink);
+  p.text(TreeWidth + 10, 64, "Name", !app.treeFocus ? gui::Highlight : gui::Ink);
+  text(p, right - 186, 64, "Bytes", 104, gui::Ink, gui::Face);
+  text(p, right - 76, 64, "Attr", 40, gui::Ink, gui::Face);
   p.fill(4, ListTop, TreeWidth - 2, bottom - 54, gui::Paper);
   p.fill(TreeWidth + 2, ListTop, right - 4, bottom - 54, gui::Paper);
   for (int row = 0; row < visible_rows(); ++row) {
@@ -389,16 +454,6 @@ void page(bool next) {
   else if (!next && app.page) load(app.path, app.page - 1);
 }
 
-struct Menu {
-  uint32_t hwnd{0};
-  const char *const *labels{nullptr};
-  int count{0};
-  int selection{0};
-  int result{-1};
-  bool done{false};
-};
-Menu *activeMenu{nullptr};
-
 struct Notice {
   uint32_t hwnd{0};
   const char *text{nullptr};
@@ -450,95 +505,10 @@ void notice(const char *title, const char *value) {
   activeNotice = nullptr;
 }
 
-void menu_procedure(const Msg &msg) {
-  if (!activeMenu || msg.hwnd != activeMenu->hwnd) return;
-  auto &menu = *activeMenu;
-  if (msg.message == WindowMessage_Paint) {
-    gui::Paint p(menu.hwnd);
-    for (int i = 0; i < menu.count; ++i) {
-      const bool selected = i == menu.selection;
-      const auto bg = selected ? gui::Highlight : gui::Paper;
-      p.fill(1, i * 22 + 1, 249, (i + 1) * 22 + 1, bg);
-      p.text(8, i * 22 + 4, menu.labels[i], selected ? gui::Paper : gui::Ink, bg);
-    }
-  } else if (msg.message == WindowMessage_Close) menu.done = true;
-  else if (msg.message == WindowMessage_KeyDown) {
-    if (msg.wParam == 27) menu.done = true;
-    else if (msg.wParam == 38 || msg.wParam == 40) {
-      menu.selection = (menu.selection + (msg.wParam == 38 ? menu.count - 1 : 1)) % menu.count;
-      gui::invalidate(menu.hwnd);
-    } else if (msg.wParam == 13) { menu.result = menu.selection; menu.done = true; }
-  } else if (msg.message == WindowMessage_LButtonDown) {
-    const int index = (gui::mouse_y(msg) - 1) / 22;
-    if (index >= 0 && index < menu.count) { menu.result = index; menu.done = true; }
-  } else if (msg.message == WindowMessage_MouseMove) {
-    const int index = (gui::mouse_y(msg) - 1) / 22;
-    if (index >= 0 && index < menu.count && index != menu.selection) {
-      menu.selection = index;
-      gui::invalidate(menu.hwnd);
-    }
-  } else if (msg.message == WindowMessage_Activate && !msg.wParam) menu.done = true;
-}
-
-int menu(int left, const char *const *labels, int count) {
-  Rect frame{};
-  if (!gui::check(UD_SYS_GetWindowRectV1(app.hwnd, &frame), "Get menu anchor")) return -1;
-  const Rect area = gui::client(app.hwnd);
-  const int border = (frame.right - frame.left - area.right) / 2;
-  const int clientX = frame.left + border;
-  const int clientY = frame.bottom - area.bottom - border;
-  Menu popup;
-  popup.labels = labels;
-  popup.count = count;
-  activeMenu = &popup;
-  if (!gui::check(UD_SYS_CreateWindowV1("FileManagerMenu", "",
-      static_cast<WindowStyle>(WindowStyle_Visible | WindowStyle_Border),
-      clientX + left, clientY + 22, 252, count * 22 + 6, 0, 0, &popup.hwnd), "Create menu")) {
-    activeMenu = nullptr;
-    return -1;
-  }
-  if (popup.hwnd) {
-    gui::check(UD_SYS_SetFocusV1(popup.hwnd), "Focus menu");
-    Msg msg{};
-    while (!popup.done && gui::next(msg)) {
-      if (msg.hwnd == popup.hwnd || msg.message == WindowMessage_Paint) gui::dispatch(msg);
-      else if (msg.message == WindowMessage_KeyDown || msg.message == WindowMessage_Char) {
-        msg.hwnd = popup.hwnd;
-        menu_procedure(msg);
-      }
-    }
-
-    gui::destroy(popup.hwnd);
-  }
-  activeMenu = nullptr;
-  focus();
-  return popup.result;
-}
-
-void show_menu(bool view) {
-  if (!view) {
-    constexpr const char *labels[] = {"Open / Run      Enter", "Copy               F6", "Move               F7",
-        "Rename             F2", "Delete            Del", "Create directory   F8", "Properties         F4", "Exit"};
-    constexpr Command choices[] = {Open, Copy, Move, Rename, Delete, NewFolder, Properties, Exit};
-    const int selected = menu(0, labels, 8);
-    if (selected >= 0) command(choices[selected]);
-  } else {
-    constexpr const char *labels[] = {"Sort page by name", "Sort page by size", "Reverse order", "Go to path         F3", "Refresh            F5"};
-    const int selected = menu(56, labels, 5);
-    if (selected == 3) command(Location);
-    else if (selected == 4) command(Refresh);
-    else if (selected >= 0) {
-      if (selected == 2) app.reverse = !app.reverse;
-      else app.sortSize = selected == 1;
-      sort(app.entries, app.count, app.sortSize, app.reverse);
-      app.selection = app.count ? 0 : -1;
-      copy(app.status, sizeof(app.status), app.sortSize ? "Current page sorted by size; directories first" : "Current page sorted by name; directories first");
-    }
-  }
-}
-
 void procedure(const Msg &msg) {
   if (msg.message == WindowMessage_Close) app.running = false;
+  else if (msg.message == WindowMessage_Command && msg.wParam <= Reverse)
+    command(static_cast<Command>(msg.wParam));
   else if (msg.message == WindowMessage_Paint) paint();
   else if (msg.message == WindowMessage_Size) { ensure_visible(); gui::invalidate(app.hwnd); }
   else if (msg.message == WindowMessage_KeyDown) {
@@ -547,7 +517,6 @@ void procedure(const Msg &msg) {
     else if (key == 13) command(Open);
     else if (key == 8) command(Up);
     else if (key == 46) command(Delete);
-    else if (key == 121) show_menu(false);
     else if (key >= 112 && key <= 119) {
       constexpr Command keys[] = {Help, Rename, Location, Properties, Refresh, Copy, Move, NewFolder};
       command(keys[key - 112]);
@@ -576,15 +545,9 @@ void procedure(const Msg &msg) {
   } else if (msg.message == WindowMessage_LButtonDown || msg.message == WindowMessage_LButtonDblClk) {
     const int x = gui::mouse_x(msg), y = gui::mouse_y(msg);
     const Rect area = gui::client(app.hwnd);
-    if (y < 22) {
-      if (x < 56) {
-        show_menu(false);
-      } else if (x < 112) {
-        show_menu(true);
-      } else if (x < 170) command(Help);
-    } else if (y >= ToolbarTop && y < ToolbarTop + 24 && x >= 4 && x < 4 + 9 * 72) {
+    if (y >= ToolbarTop && y < ToolbarTop + 24 && x >= 4 && x < 4 + 9 * 72) {
       command(static_cast<Command>((x - 4) / 72));
-    } else if (y >= 80 && y < ListTop && x > TreeWidth) {
+    } else if (y >= 60 && y < ListTop && x > TreeWidth) {
       app.reverse = !app.reverse;
       app.sortSize = x >= area.right - 170;
       sort(app.entries, app.count, app.sortSize, app.reverse);
@@ -631,15 +594,18 @@ void procedure(const Msg &msg) {
 } // namespace
 
 extern "C" int main(int argc, char **argv) {
-  if (!gui::register_class("FileManager", procedure) || !gui::register_class("FileManagerMenu", menu_procedure) ||
+  if (!gui::register_class("FileManager", procedure) ||
       !gui::register_class("FileManagerNotice", notice_procedure)) return 1;
   app.hwnd = gui::window("FileManager", "File Manager", 30, 30, 680, 430);
   if (!app.hwnd) return 1;
+  if (!create_app_menu()) return 1;
   reset_tree();
   if (!load(argc > 1 && argv ? argv[1] : "/")) copy(app.status, sizeof(app.status), "Cannot load directory. Use Path or Refresh to retry.");
   else expand_tree(0);
   focus();
   Msg msg{};
   while (app.running && gui::next(msg)) gui::dispatch(msg);
-  return gui::destroy(app.hwnd) ? 0 : 1;
+  const bool destroyed = gui::destroy(app.hwnd);
+  const bool menuDestroyed = gui::check(UD_SYS_DestroyMenuV1(app.menu), "DestroyMenu");
+  return destroyed && menuDestroyed ? 0 : 1;
 }

@@ -5,9 +5,6 @@
 
 namespace {
 using namespace progman;
-constexpr int MenuHeight = 22;
-constexpr int MenuLeft[] = {0, 56, 136, 208, 264};
-constexpr const char *MenuLabels[] = {"File", "Options", "Window", "Help"};
 
 struct GroupView {
   uint32_t hwnd{0};
@@ -22,6 +19,7 @@ struct Shell {
   uint32_t frame{0};
   uint32_t frameState{0};
   uint32_t workspace{0};
+  uint32_t menu{0};
   int active{-1};
   bool running{true};
 };
@@ -31,9 +29,73 @@ void refresh_title() {
   gui::check(UD_SYS_SetWindowTextV1(shell.frame, "Program Manager"), "SetWindowText");
 }
 
+enum Command {
+  NewGroup = 1, NewProgram, Properties, DeleteProgram, DeleteGroup, Run, Exit,
+  ArrangeIcons, Cascade, Tile, About, GroupProperties, OpenGroupBase = 100
+};
+
+bool append_menu(uint32_t menu, MenuItemFlags flags, uint32_t item, const char *text) {
+  return gui::check(UD_SYS_AppendMenuV1(menu, flags, item, text), "AppendMenu");
+}
+
+uint32_t create_menu(bool popup) {
+  uint32_t menu = 0;
+  if (!gui::check(UD_SYS_CreateMenuV1(popup, &menu), "CreateMenu")) return 0;
+  return menu;
+}
+
+bool append_command(uint32_t menu, uint32_t command, const char *text) {
+  return append_menu(menu, MenuItemFlags_String, command, text);
+}
+
+bool append_popup(uint32_t root, const char *text, uint32_t &popup) {
+  popup = create_menu(true);
+  if (!popup) return false;
+  if (append_menu(root, MenuItemFlags_Popup, popup, text)) return true;
+  gui::check(UD_SYS_DestroyMenuV1(popup), "DestroyMenu");
+  popup = 0;
+  return false;
+}
+
+bool rebuild_menu() {
+  if (!shell.frame) return true;
+  const uint32_t root = create_menu(false);
+  if (!root) return false;
+  uint32_t file = 0, options = 0, window = 0, help = 0;
+  bool okay = append_popup(root, "File", file) &&
+              append_popup(root, "Options", options) &&
+              append_popup(root, "Window", window) &&
+              append_popup(root, "Help", help);
+  okay = okay && append_command(file, NewGroup, "New Group...");
+  okay = okay && append_command(file, NewProgram, "New Program...");
+  okay = okay && append_command(file, Properties, "Program Properties...");
+  okay = okay && append_command(file, GroupProperties, "Group Properties...");
+  okay = okay && append_command(file, DeleteProgram, "Delete Program...");
+  okay = okay && append_command(file, DeleteGroup, "Delete Group...");
+  okay = okay && append_command(file, Run, "Run...");
+  okay = okay && append_command(file, Exit, "Exit");
+  okay = okay && append_command(options, ArrangeIcons, "Arrange Icons");
+  okay = okay && append_command(options, About, "Session settings only");
+  okay = okay && append_command(window, Cascade, "Cascade");
+  okay = okay && append_command(window, Tile, "Tile");
+  for (unsigned i = 0; okay && i < MaxGroups; ++i) {
+    if (shell.model.groups[i].id)
+      okay = append_command(window, OpenGroupBase + i, shell.model.groups[i].title);
+  }
+  okay = okay && append_command(help, About, "About Program Manager...");
+  if (!okay || !gui::check(UD_SYS_SetMenuV1(shell.frame, root), "SetMenu")) {
+    gui::check(UD_SYS_DestroyMenuV1(root), "DestroyMenu");
+    return false;
+  }
+  if (shell.menu) gui::check(UD_SYS_DestroyMenuV1(shell.menu), "DestroyMenu");
+  shell.menu = root;
+  return true;
+}
+
 void refresh_groups() {
   for (const auto &v : shell.views) if (v.hwnd) gui::invalidate(v.hwnd);
   refresh_title();
+  rebuild_menu();
 }
 
 void focus(uint32_t hwnd) {
@@ -194,81 +256,6 @@ void arrange_windows(bool tile) {
   }
 }
 
-enum Command {
-  NewGroup = 1, NewProgram, Properties, DeleteProgram, DeleteGroup, Run, Exit,
-  ArrangeIcons, Cascade, Tile, About, GroupProperties, OpenGroupBase = 100
-};
-struct MenuEntry { const char *label; int command; bool enabled; };
-struct Menu {
-  uint32_t hwnd{0};
-  const MenuEntry *entries{nullptr};
-  int count{0};
-  int selected{0};
-  int result{0};
-  bool done{false};
-};
-Menu *activeMenu{nullptr};
-
-void menu_proc(const Msg &msg) {
-  if (!activeMenu || msg.hwnd != activeMenu->hwnd) return;
-  auto &menu = *activeMenu;
-  if (msg.message == WindowMessage_Paint) {
-    gui::Paint p(msg.hwnd);
-    for (int i = 0; i < menu.count; ++i) {
-      const bool selected = i == menu.selected;
-      const uint32_t bg = selected ? gui::Highlight : gui::Paper;
-      p.fill(1, i * 22 + 1, 245, i * 22 + 23, bg);
-      p.text(8, i * 22 + 4, menu.entries[i].label,
-             !menu.entries[i].enabled ? 8 : selected ? gui::Paper : gui::Ink, bg);
-    }
-  } else if (msg.message == WindowMessage_Close) menu.done = true;
-  else if (msg.message == WindowMessage_KeyDown) {
-    if (msg.wParam == 27) menu.done = true;
-    if (msg.wParam == 38 || msg.wParam == 40) {
-      menu.selected = (menu.selected + (msg.wParam == 38 ? menu.count - 1 : 1)) % menu.count;
-      gui::invalidate(menu.hwnd);
-    }
-    if (msg.wParam == 13 && menu.entries[menu.selected].enabled) {
-      menu.result = menu.entries[menu.selected].command;
-      menu.done = true;
-    }
-  } else if (msg.message == WindowMessage_LButtonDown) {
-    const int index = gui::mouse_y(msg) / 22;
-    if (index >= 0 && index < menu.count && menu.entries[index].enabled) {
-      menu.result = menu.entries[index].command;
-      menu.done = true;
-    }
-  } else if (msg.message == WindowMessage_Activate && !msg.wParam) menu.done = true;
-}
-
-int popup(int menuIndex, const MenuEntry *entries, int count) {
-  Rect frame{};
-  if (!gui::check(UD_SYS_GetWindowRectV1(shell.frame, &frame), "GetWindowRect")) return 0;
-  const Rect area = gui::client(shell.frame);
-  const int clientX = frame.left + (frame.right - frame.left - area.right) / 2;
-  const int clientY = frame.bottom - area.bottom - (frame.right - frame.left - area.right) / 2;
-  Menu menu{};
-  menu.entries = entries;
-  menu.count = count;
-  if (!gui::check(UD_SYS_CreateWindowV1("ProgramMenu", "", static_cast<WindowStyle>(WindowStyle_Visible | WindowStyle_Border),
-                                      clientX + MenuLeft[menuIndex], clientY + MenuHeight, 252, count * 22 + 6, 0, 0, &menu.hwnd),
-                  "Create menu")) return 0;
-  activeMenu = &menu;
-  focus(menu.hwnd);
-  Msg msg{};
-  while (!menu.done && gui::next(msg)) {
-    if (msg.hwnd == menu.hwnd) menu_proc(msg);
-    else if (msg.message == WindowMessage_KeyDown || msg.message == WindowMessage_Char) {
-      msg.hwnd = menu.hwnd;
-      menu_proc(msg);
-    }
-    else if (msg.message == WindowMessage_Paint) gui::dispatch(msg);
-  }
-  gui::destroy(menu.hwnd);
-  activeMenu = nullptr;
-  return menu.result;
-}
-
 void execute(int command) {
   switch (command) {
     case NewGroup: edit_group(true); break;
@@ -297,44 +284,8 @@ void execute(int command) {
   else focus(shell.frame);
 }
 
-void show_menu(int index) {
-  const bool group = shell.active >= 0;
-  const bool item = selected_item() >= 0;
-  if (index == 0) {
-    const MenuEntry entries[] = {{.label = "New Group...", .command = NewGroup, .enabled = true}, {.label = "New Program...", .command = NewProgram, .enabled = group},
-      {.label = "Program Properties...", .command = Properties, .enabled = item}, {.label = "Group Properties...", .command = GroupProperties, .enabled = group},
-      {.label = "Delete Program...", .command = DeleteProgram, .enabled = item}, {.label = "Delete Group...", .command = DeleteGroup, .enabled = group},
-      {.label = "Run...", .command = Run, .enabled = true}, {.label = "Exit", .command = Exit, .enabled = true}};
-    execute(popup(index, entries, 8));
-  } else if (index == 1) {
-    const MenuEntry entries[] = {{.label = "Arrange Icons", .command = ArrangeIcons, .enabled = group},
-      {.label = "Session settings only", .command = About, .enabled = true}};
-    execute(popup(index, entries, 2));
-  } else if (index == 2) {
-    MenuEntry entries[2 + MaxGroups] = {{.label = "Cascade", .command = Cascade, .enabled = true}, {.label = "Tile", .command = Tile, .enabled = true}};
-    int n = 2;
-    for (unsigned i = 0; i < MaxGroups; ++i)
-      if (shell.model.groups[i].id)
-        entries[n++] = {shell.model.groups[i].title, OpenGroupBase + static_cast<int>(i), true};
-    execute(popup(index, entries, n));
-  } else {
-    const MenuEntry entries[] = {{.label = "About Program Manager...", .command = About, .enabled = true}};
-    execute(popup(3, entries, 1));
-  }
-}
-
 void keyboard(const Msg &msg, bool inGroup) {
-  // F10 and Alt+F/O/W/H open the menus from either frame or group.
-  if (msg.wParam == 121) { show_menu(0); return; }
   if (msg.wParam == 112) { execute(About); return; }
-  const uint32_t modifiers = msg.lParam >> 16;
-  if (modifiers & 0x30) {
-    if (msg.wParam == 'F') show_menu(0);
-    else if (msg.wParam == 'O') show_menu(1);
-    else if (msg.wParam == 'W') show_menu(2);
-    else if (msg.wParam == 'H') show_menu(3);
-    return;
-  }
   if (!inGroup) {
     if (msg.wParam == 9 || msg.wParam == 13) {
       for (unsigned i = 0; i < MaxGroups; ++i)
@@ -429,26 +380,16 @@ void frame_proc(const Msg &msg) {
       gui::move(msg.hwnd, 4, 4, static_cast<int>(state.mode.width) - 8,
                 static_cast<int>(state.mode.height) - 12);
   } else if (msg.message == WindowMessage_Paint) {
-    gui::Paint p(msg.hwnd);
-    const Rect area = gui::client(msg.hwnd);
-    p.fill(0, 0, area.right, MenuHeight, gui::Face);
-    for (int i = 0; i < 4; ++i) {
-      p.text(MenuLeft[i] + 8, 3, MenuLabels[i]);
-      p.fill(MenuLeft[i] + 9, 17, MenuLeft[i] + 14, 18, gui::Ink);
-    }
-    p.fill(0, MenuHeight - 1, area.right, MenuHeight, gui::Ink);
-  } else if (msg.message == WindowMessage_Close) execute(Exit);
+    gui::Paint paint(msg.hwnd);
+  } else if (msg.message == WindowMessage_Command) execute(static_cast<int>(msg.wParam));
+  else if (msg.message == WindowMessage_Close) execute(Exit);
   else if (msg.message == WindowMessage_KeyDown) keyboard(msg, false);
-  else if (msg.message == WindowMessage_LButtonDown) {
-    if (gui::mouse_y(msg) >= 0 && gui::mouse_y(msg) < MenuHeight)
-      for (int i = 0; i < 4; ++i)
-        if (gui::mouse_x(msg) >= MenuLeft[i] && gui::mouse_x(msg) < MenuLeft[i + 1]) { show_menu(i); break; }
-  } else if (msg.message == WindowMessage_Size) {
+  else if (msg.message == WindowMessage_Size) {
     shell.frameState = msg.wParam;
     if (shell.workspace) {
       const Rect area = gui::client(msg.hwnd);
-      if (area.right > 0 && area.bottom > MenuHeight)
-        gui::move(shell.workspace, 0, MenuHeight, area.right, area.bottom - MenuHeight);
+      if (area.right > 0 && area.bottom > 0)
+        gui::move(shell.workspace, 0, 0, area.right, area.bottom);
     }
     gui::invalidate(msg.hwnd);
   }
@@ -502,20 +443,20 @@ extern "C" int main(int, char **) {
   }
   if (!gui::register_class("ProgramManager", frame_proc, 8) ||
       !gui::register_class("ProgramWorkspace", workspace_proc, 8) ||
-      !gui::register_class("ProgramGroup", group_proc, gui::Paper) ||
-      !gui::register_class("ProgramMenu", menu_proc)) return 1;
+      !gui::register_class("ProgramGroup", group_proc, gui::Paper)) return 1;
   shell.frame = gui::window("ProgramManager", "Program Manager", 4, 4,
                             static_cast<int>(caps.width) - 8, static_cast<int>(caps.height) - 12);
   if (!shell.frame) return 1;
-  const Rect area = gui::client(shell.frame);
-  if (!gui::check(UD_SYS_CreateWindowV1("ProgramWorkspace", "",
-                                      static_cast<WindowStyle>(WindowStyle_Visible | WindowStyle_Child),
-                                      0, MenuHeight, area.right, area.bottom - MenuHeight,
-                                      shell.frame, 0, &shell.workspace), "Create workspace")) return 1;
   if (!load_configuration()) {
     gui::message("Configuration error", "Cannot load PROGMAN.INI. Recovery session is empty.");
     shell.model.add_group("Recovery");
   }
+  if (!rebuild_menu()) return 1;
+  const Rect area = gui::client(shell.frame);
+  if (!gui::check(UD_SYS_CreateWindowV1("ProgramWorkspace", "",
+                                      static_cast<WindowStyle>(WindowStyle_Visible | WindowStyle_Child),
+                                      0, 0, area.right, area.bottom,
+                                      shell.frame, 0, &shell.workspace), "Create workspace")) return 1;
   int first = -1;
   for (unsigned i = 0; i < MaxGroups; ++i) {
     if (!shell.model.groups[i].id) continue;
@@ -529,8 +470,9 @@ extern "C" int main(int, char **) {
   Msg msg{};
   for (unsigned i = 0; i < 128 && UD_SYS_PeekMessageV1(&msg, 1) == SyscallReturnCode_OKAY; ++i)
     gui::dispatch(msg);
-  (void) UD_SYS_PrintV1("progman: session ready (F10 menus, Enter launches)");
+  (void) UD_SYS_PrintV1("progman: session ready (F10 opens menus, Enter launches)");
   while (shell.running && gui::next(msg)) gui::dispatch(msg);
   gui::destroy(shell.frame);
+  if (shell.menu) gui::check(UD_SYS_DestroyMenuV1(shell.menu), "DestroyMenu");
   return 0;
 }

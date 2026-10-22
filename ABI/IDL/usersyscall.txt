@@ -33,6 +33,7 @@ enum WindowMessage {
     KeyDown     = 0x0100,
     KeyUp       = 0x0101,
     Char        = 0x0102,
+    Command     = 0x0111,
     MouseMove   = 0x0200,
     LButtonDown = 0x0201,
     LButtonUp   = 0x0202,
@@ -84,6 +85,14 @@ enum WindowLongIndex {
     Style    = 2,
     /** Parent HWND, or zero for a root. Read-only. */
     Parent   = 3,
+};
+
+enum MenuItemFlags {
+    String    = 0,
+    Grayed    = 0x0001,
+    Disabled  = 0x0002,
+    Popup     = 0x0010,
+    Separator = 0x0800,
 };
 
 struct Msg {
@@ -242,6 +251,51 @@ syscall V1 USER SetFocus [417] {
 syscall V1 USER SetWindowText [418] {
     hwnd: IN c<uint32_t>;
     text: IN string;
+};
+
+/** Creates a menu handle owned by the calling process. popup must be zero for
+ * a menu bar or one for a popup menu.
+ */
+syscall V1 USER CreateMenu [419] {
+    popup: IN c<uint32_t>;
+    menu: OUT c<uint32_t>;
+};
+
+/** Destroys a process-owned menu and its submenu tree, and detaches it from
+ * windows. A submenu cannot be destroyed separately while it belongs to a
+ * parent menu.
+ */
+syscall V1 USER DestroyMenu [420] {
+    menu: IN c<uint32_t>;
+};
+
+/** Appends a command, submenu, or separator to a menu owned by the caller.
+ * Popup requires item to be an unparented popup menu owned by the caller.
+ * Separator ignores item and text. Other items require nonempty text, limited
+ * to 63 bytes. Supported flags are Grayed, Disabled, Popup, and Separator;
+ * Grayed and Disabled cannot be combined with Separator.
+ */
+syscall V1 USER AppendMenu [421] {
+    menu: IN c<uint32_t>;
+    flags: IN enum<MenuItemFlags>;
+    item: IN c<uint32_t>;
+    text: IN string;
+};
+
+/** Attaches a menu bar owned by the caller to one of its windows. menu zero
+ * detaches the current menu. Popup menus cannot be attached as menu bars.
+ */
+syscall V1 USER SetMenu [422] {
+    hwnd: IN c<uint32_t>;
+    menu: IN c<uint32_t>;
+};
+
+/** Retrieves the menu-bar handle attached to a window, or zero when none is
+ * attached.
+ */
+syscall V1 USER GetMenu [423] {
+    hwnd: IN c<uint32_t>;
+    menu: OUT c<uint32_t>;
 };
 
 // endregion
