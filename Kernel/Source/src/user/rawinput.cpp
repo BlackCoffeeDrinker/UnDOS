@@ -91,6 +91,16 @@ void mouse_locked(const input::MouseInputEvent &event) noexcept {
     else g_input.dragPending = true;
   }
 
+  const bool leftDown = (event.buttonFlags & input::mouse_button_flags::LeftDown) != 0;
+  if (menu_mouse_locked(g_input.mouseX, g_input.mouseY, leftDown)) {
+    if (event.buttonFlags & input::mouse_button_flags::LeftDown) g_input.buttons |= 1;
+    if (event.buttonFlags & input::mouse_button_flags::LeftUp) g_input.buttons &= ~1u;
+    if (event.buttonFlags & input::mouse_button_flags::RightDown) g_input.buttons |= 2;
+    if (event.buttonFlags & input::mouse_button_flags::RightUp) g_input.buttons &= ~2u;
+    cursor_move_locked(g_input.mouseX, g_input.mouseY);
+    return;
+  }
+
   auto *captured = lookup_locked(capture_locked());
   auto *target = mouse_target_locked(g_input.mouseX, g_input.mouseY);
   const bool dragging = g_input.dragHwnd != 0;
@@ -163,6 +173,7 @@ void keyboard_locked(const input::KeyboardInputEvent &event) noexcept {
   const bool control = (event.modifiers & input::modifier_flags::Control) != 0;
   const bool alt = (event.modifiers & input::modifier_flags::Alt) != 0;
   const bool shift = (event.modifiers & input::modifier_flags::Shift) != 0;
+  if (!released && menu_key_locked(event.virtualKey, alt)) return;
   if (!released && !(event.keyFlags & input::key_flags::Repeat)) {
     if ((event.virtualKey == 0x09 && (alt || control)) || (event.virtualKey == 0x75 && control)) {
       cycle_window_locked(control && !alt, shift); // Alt+Tab roots, Ctrl+Tab/F6 groups.

@@ -18,6 +18,21 @@ struct KThreadObject;
 namespace kernel::user {
 constexpr uint32_t kMaxWindows = 64;
 constexpr uint32_t kMaxClasses = 16;
+constexpr uint32_t kMaxMenus = 32;
+constexpr uint32_t kMaxMenuItems = 16;
+constexpr uint32_t kMenuTextLen = 64;
+constexpr int32_t kMenuBarHeight = 20;
+
+constexpr uint32_t kMenuItemGrayed = 0x0001;
+constexpr uint32_t kMenuItemDisabled = 0x0002;
+constexpr uint32_t kMenuItemPopup = 0x0010;
+constexpr uint32_t kMenuItemSeparator = 0x0800;
+
+struct MenuItemView {
+  kstd::string_view text;
+  uint32_t flags{0};
+  uint32_t item{0};
+};
 
 
 enum class HitTest : int32_t {
@@ -37,6 +52,7 @@ enum class HitTest : int32_t {
   BottomLeft = 16,
   BottomRight = 17,
   Border = 18,
+  MenuBar = 19,
   Close = 20,
 };
 
@@ -118,6 +134,19 @@ void cycle_window_locked(bool children, bool reverse) noexcept;
 void set_capture_locked(uint32_t hwnd) noexcept;
 uint32_t capture_locked() noexcept;
 void display_changed_locked(uint32_t bpp) noexcept;
+uint32_t menu_item_count_locked(uint32_t menu) noexcept;
+bool menu_item_locked(uint32_t menu, uint32_t index, MenuItemView &item) noexcept;
+void draw_open_menu_locked(const URect &limit) noexcept;
+void subtract_open_menus_locked(URegion &region) noexcept;
+bool menu_mouse_locked(int32_t x, int32_t y, bool down) noexcept;
+bool menu_key_locked(uint32_t virtualKey, bool alt) noexcept;
+// Menu/window integration hooks. Callers hold the USER lock.
+void close_menu_for_window_locked(uint32_t hwnd) noexcept;
+void destroy_process_menus(KProcessObject &process) noexcept;
+void detach_menu_from_windows_locked(uint32_t menu) noexcept;
+void refresh_attached_menu_locked(uint32_t menu) noexcept;
+kstd::error_code validate_menu_attachment_locked(const KProcessObject &caller,
+                                                 uint32_t menu) noexcept;
 
 // paint.cpp: fill a screen rectangle through the adapter (planar-safe), clipped to the screen.
 void fill_screen_locked(const URect &r, uint32_t color) noexcept;
@@ -246,5 +275,11 @@ kstd::error_code release_capture(KProcessObject &caller) noexcept;
 kstd::error_code set_focus(KProcessObject &caller, uint32_t hwnd) noexcept;
 // Errors: InvalidSize (text longer than the title capacity).
 kstd::error_code set_window_text(KProcessObject &caller, uint32_t hwnd, const kstd::string_view &text) noexcept;
+kstd::expected<uint32_t, kstd::error_code> create_menu(KProcessObject &caller, bool popup) noexcept;
+kstd::error_code destroy_menu(KProcessObject &caller, uint32_t menu) noexcept;
+kstd::error_code append_menu(KProcessObject &caller, uint32_t menu, uint32_t flags, uint32_t item,
+                             const kstd::string_view &text) noexcept;
+kstd::error_code set_menu(KProcessObject &caller, uint32_t hwnd, uint32_t menu) noexcept;
+kstd::expected<uint32_t, kstd::error_code> get_menu(uint32_t hwnd) noexcept;
 
 }// namespace kernel::user

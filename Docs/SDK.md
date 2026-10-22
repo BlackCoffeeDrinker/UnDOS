@@ -106,9 +106,49 @@ current FAT driver. Do not set Linux runtime paths or install a Linux ELF
 interpreter. The package supplies the bare-metal GCC-specific linker options
 needed to produce real `ET_DYN` objects.
 
-The image includes complete C, C++/shared-library, GUI, and runtime-probe
-examples under `/opt/undos-sdk/share/undos/examples`. Copy an example into a
-mounted application directory or configure it directly inside the container.
+The image includes C, C++/shared-library, GUI, and runtime-probe examples under
+`/opt/undos-sdk/share/undos/examples`. The GUI example uses the C `windows.h`
+surface. Copy an example into a mounted application directory or configure it
+directly inside the container.
+
+### C GUI API
+
+`UnDOS::GUI` exposes a C API through `<windows.h>`. It follows familiar Win32
+names and callback patterns for the window, message-loop, and paint operations
+that UnDOS currently supports. The initial API includes class registration,
+window creation and management, message dispatch, paint lifecycle, and basic
+2D drawing.
+
+The existing `<undosgui/gui.hpp>` helper remains available for current C++
+applications during migration. New GUI applications should use the C API.
+
+This is a source-oriented subset, not a Win32 implementation. The API is
+ANSI-only and uses the UnDOS cdecl ABI. It accepts only unfiltered `GetMessage`
+and `PeekMessage` calls. `CW_USEDEFAULT` selects position `(0, 0)` and size
+`320 x 200`. Unsupported extended styles fail instead of being ignored. Only
+`WS_CHILD`, `WS_VISIBLE`, `WS_BORDER`, `WS_CAPTION`, and
+`WS_OVERLAPPEDWINDOW` style bits are accepted. Window-class backgrounds use
+the UnDOS palette; `NULL` selects palette index 7, and
+`UNDOS_PALETTE_BRUSH(index)` encodes an index from 0 through 15. Drawing accepts
+palette indices or packed RGB colors, which map to the canonical VGA palette.
+`WNDCLASSA` style, extra-byte, icon, and cursor fields have no effect.
+`MSG.pt` is zero because the native message ABI does not provide a point.
+Device contexts are available only during `BeginPaint`/`EndPaint`.
+`ShowWindow` returns operation success, not the previous visibility state.
+`InvalidateRect` ignores its erase argument. `MoveToEx` requires a null
+previous-point argument. `GetLastError` returns the last UnDOS syscall status.
+`HMENU` supports menu bars, popup submenus, string commands, separators, and
+disabled or grayed items. Each menu can contain up to 16 items, and each label
+can contain up to 63 bytes. Menus support mouse selection, arrow-key navigation,
+Enter or Space activation, Escape, F10, and Alt+Down. Selecting a command posts
+`WM_COMMAND` with the item ID in `wParam` and zero in `lParam`. `DestroyMenu`
+destroys the menu and its submenu tree, and detaches it from windows.
+Unicode APIs, common controls, and general `GetDC` access are not provided.
+Keyboard input already arrives as `WM_CHAR`; `TranslateMessage` does not
+synthesize messages.
+
+The installed `examples/gui` project builds as a C-only application. It is a
+small reference for the supported callback and paint pattern.
 
 ### In-repository programs as SDK applications
 

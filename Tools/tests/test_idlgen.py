@@ -1,6 +1,7 @@
 """Focused regression coverage for public scalar aliases in syscall generation."""
 
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,78 @@ from idlgen.resolver import ResolverError, resolve_aliases
 
 
 class ScalarAliasTests(unittest.TestCase):
+    def test_cli_lists_complete_outputs_and_creates_build_directories(self):
+        script = Path(__file__).resolve().parents[1] / "create-syscalls.py"
+        with tempfile.TemporaryDirectory(prefix="undos-idl-") as directory:
+            root = Path(directory)
+            idl = root / "example.txt"
+            idl.write_text("""
+                using HANDLE = c<uint32_t>;
+                enum Kind { File = 1, };
+                flags Access : uint32 { Read; };
+                struct Info { handle: HANDLE; };
+                syscall V1 TEST Example [1] { info: OUT struct<Info>; };
+            """)
+            output = root / "build with spaces"
+            command = [sys.executable, str(script), str(idl),
+                       str(output / "include/undos/syscalls"), str(output / "include"),
+                       str(output / "kernel/syscalls")]
+            listed = subprocess.check_output([*command, "--list-outputs"], text=True).splitlines()
+            self.assertFalse(output.exists())
+            subprocess.run(command, check=True, capture_output=True)
+            generated = {path.as_posix(): path.read_bytes()
+                         for path in output.rglob("*") if path.is_file()}
+            self.assertEqual(set(listed), set(generated))
+            subprocess.run(command, check=True, capture_output=True)
+            self.assertEqual(generated, {path.as_posix(): path.read_bytes()
+                                         for path in output.rglob("*") if path.is_file()})
+
+    def test_cmake_generates_incrementally_and_tracks_idl_changes(self):
+        repository = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory(prefix="undos-idl-cmake-") as directory:
+            root = Path(directory)
+            for name in ("BuildSupport", "Tools/idlgen", "ABI/IDL"):
+                shutil.copytree(repository / name, root / name,
+                                ignore=shutil.ignore_patterns("__pycache__"))
+            shutil.copy2(repository / "Tools/create-syscalls.py", root / "Tools")
+            (root / "CMakeLists.txt").write_text("""
+                cmake_minimum_required(VERSION 3.27)
+                project(SyscallGenerationTest LANGUAGES CXX)
+                set(TESTING_ONLY ON)
+                include(BuildSupport/Project.cmake)
+                add_executable(probe probe.cpp)
+                target_include_directories(probe PRIVATE "${UNDOS_SYSCALL_INCLUDE_DIR}")
+                add_dependencies(probe undos-syscalls-gen)
+            """)
+            (root / "probe.cpp").write_text(
+                '#include <undos/syscalls/__aliases.h>\n'
+                'static_assert(sizeof(HANDLE) == 4);\nint main() { return 0; }\n')
+            build = root / "build with spaces"
+
+            def run(*args):
+                result = subprocess.run(args, text=True, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT)
+                self.assertEqual(result.returncode, 0, result.stdout)
+
+            run("cmake", "-S", str(root), "-B", str(build))
+            run("cmake", "--build", str(build), "--parallel", "2")
+            generated = build / "generated/syscalls"
+            original = {p: p.stat().st_mtime_ns for p in generated.rglob("*") if p.is_file()}
+            run("cmake", "--build", str(build))
+            self.assertEqual(original, {p: p.stat().st_mtime_ns for p in original})
+            missing = generated / "include/undos/syscalls/__aliases.h"
+            missing.unlink()
+            run("cmake", "--build", str(build))
+            self.assertTrue(missing.exists())
+            idl = root / "ABI/IDL/syscalls.txt"
+            idl.write_text(idl.read_text() + "\nsyscall V1 TEST BuildProbe [9999] { };\n")
+            run("cmake", "--build", str(build))
+            self.assertTrue((generated / "include/undos/syscalls/__syscall_BuildProbe_V1.h").is_file())
+            self.assertIn("UD_SYS_BuildProbeV1", (generated / "include/userspace.h").read_text())
+            self.assertFalse((root / "ABI/userspace.h").exists())
+            self.assertFalse((root / "ABI/include/undos/syscalls").exists())
+            self.assertFalse((root / "Kernel").exists())
+
     def test_kernel_errors_are_converted_only_at_public_dispatch(self):
         module = parse_idl("""
             syscall V1 TEST Example [1] {

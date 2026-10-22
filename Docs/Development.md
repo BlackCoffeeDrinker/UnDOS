@@ -19,7 +19,7 @@ equivalent tools on PATH. Native hosted tests use the host compiler.
 | `CRT/` | Application startup, lifecycle and C library |
 | `Apps/` | Independent SDK-consuming applications |
 | `SDK/` | SDK producer, CMake package, compiler drivers, GUI and opt-in KStd headers |
-| `ABI/` | Public shared headers, generated bindings, ABI note and syscall IDL inputs |
+| `ABI/` | Public shared headers, ABI note and syscall IDL inputs |
 | `Tests/Hosted`, `Tests/ABI` | Native tests and SDK-built ABI fixtures |
 | `Image/` | Manifest-based image assembly, GRUB template and boot tools |
 | `BuildSupport/`, `Tools/`, `Scripts/` | Shared CMake helpers, development tools and orchestration |
@@ -51,6 +51,11 @@ generated artifact manifests and starts with fresh staging trees. It never
 reuses files left in the old `bin/filesystem` tree. Supply additional runtime
 probes explicitly with `--system-files build/probe`; each file in that directory
 is staged under `/System`.
+
+Syscall bindings and dispatch code are generated under
+`<component-build-dir>/generated/syscalls/`, not in the source tree. Each
+component builds its own copy and the SDK installs its generated public headers.
+See [Syscall IDL](../SYSCALLS_IDL.md) for regeneration commands.
 
 For CLion with a Docker toolchain, open the **repository root**, not `Kernel/`
 or `SDK/`. CLion mounts the opened project directory; opening a component

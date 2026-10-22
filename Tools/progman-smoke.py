@@ -393,6 +393,8 @@ def main():
             (output / "serial.log").write_text("".join(lines))
         if any("PANIC" in line for line in lines):
             raise RuntimeError("Kernel panic during the bounded run; inspect serial.log")
+        if any("GUI: GetWndProc failed" in line or "GUI: GetMessage failed" in line for line in lines):
+            raise RuntimeError("GUI dispatch failed during the bounded run; inspect serial.log")
         print(f"{args.scenario} checkpoints captured for {args.vga}: {output}")
 
 

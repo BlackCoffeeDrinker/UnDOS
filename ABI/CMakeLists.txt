@@ -1,7 +1,8 @@
 
 
 add_library(KernelUserlandShared INTERFACE)
-target_include_directories(KernelUserlandShared INTERFACE include ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(KernelUserlandShared INTERFACE
+    "${UNDOS_SYSCALL_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_dependencies(KernelUserlandShared undos-syscalls-gen)
 
 add_library(undos_font_resource STATIC src/font_resource.cpp)

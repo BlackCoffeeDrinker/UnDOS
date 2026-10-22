@@ -298,13 +298,16 @@ void expose_locked(const URect &screenRect) noexcept {
     if (!w->rect.Intersect(screenRect).Empty()) draw_nonclient_locked(*w, screenRect);
     desktop.Subtract(clipped_rect_locked(*w));
   }
-  if (desktop.Empty()) return;
-  const auto display = primary_display();
-  if (!display) return;
-  cursor_hide_locked();
-  for (uint32_t i = 0; i < desktop.count; ++i) {
-    if (fill(display, desktop.rects[i], kDesktopColor)) add_frame_damage(desktop.rects[i]);
+  if (!desktop.Empty()) {
+    const auto display = primary_display();
+    if (display) {
+      cursor_hide_locked();
+      for (uint32_t i = 0; i < desktop.count; ++i) {
+        if (fill(display, desktop.rects[i], kDesktopColor)) add_frame_damage(desktop.rects[i]);
+      }
+    }
   }
+  draw_open_menu_locked(screenRect);
 }
 
 void visible_region_locked(const KWindowObject &window, URegion &out) noexcept {
@@ -312,6 +315,7 @@ void visible_region_locked(const KWindowObject &window, URegion &out) noexcept {
   for (const auto *w = topmost_locked(); w && w != &window; w = w->below) {
     if (effectively_visible_locked(*w)) out.Subtract(clipped_rect_locked(*w));
   }
+  subtract_open_menus_locked(out);
 }
 
 kstd::expected<PaintBegin, kstd::error_code> begin_paint_locked(KProcessObject &proc, KWindowObject &window) noexcept {

@@ -2,7 +2,7 @@
 #include <undoscrt/string.h>
 #include <stdbool.h>
 
-#include "../ABI/userspace.h"
+#include <userspace.h>
 #include <undos/syscalls.h>
 
 static HANDLE g_standard_handles[3];

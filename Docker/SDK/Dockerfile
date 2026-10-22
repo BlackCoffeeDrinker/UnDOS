@@ -6,8 +6,7 @@ COPY SDK/ SDK/
 COPY CRT/ CRT/
 COPY ABI/ ABI/
 COPY Tools/ Tools/
-RUN mkdir -p Kernel/Source/src/syscalls \
-    && cmake -S SDK -B /sdk-build \
+RUN cmake -S SDK -B /sdk-build \
        -DCMAKE_TOOLCHAIN_FILE=/src/SDK/UnDOS-toolchain.cmake \
        -DCMAKE_BUILD_TYPE=Release -DUNDOS_SDK_PREFIX=/opt/undos-sdk \
     && cmake --build /sdk-build --target sdk --parallel 4 \

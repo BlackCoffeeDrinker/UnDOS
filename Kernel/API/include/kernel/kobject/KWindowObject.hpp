@@ -50,6 +50,7 @@ struct KWindowObject : KObjectT<KWindowObject, 1, TYPE_WINDOW> {
   State state{State::Restored};
   uint32_t parent{0};
   uint32_t userData{0};
+  uint32_t menu{0};
   uint32_t wndProc{0};
   uint32_t background{0};
 

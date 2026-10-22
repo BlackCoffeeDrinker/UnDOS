@@ -11,8 +11,9 @@ URect client_rect_locked(const KWindowObject &window) noexcept {
   if (window.state == KWindowObject::State::Minimized) return {};
   const int32_t b = (window.style & kStyleBorder) ? kBorderWidth : 0;
   const int32_t c = (window.style & kStyleCaption) ? kCaptionHeight : 0;
+  const int32_t m = window.menu ? kMenuBarHeight : 0;
   const int32_t width = window.rect.right - window.rect.left - 2 * b;
-  const int32_t height = window.rect.bottom - window.rect.top - 2 * b - c;
+  const int32_t height = window.rect.bottom - window.rect.top - 2 * b - c - m;
   return {.left = 0, .top = 0, .right = width > 0 ? width : 0, .bottom = height > 0 ? height : 0};
 }
 
@@ -24,6 +25,7 @@ URect client_to_screen_locked(const KWindowObject &window, const URect &clientRe
     oy += kBorderWidth;
   }
   if (window.style & kStyleCaption) oy += kCaptionHeight;
+  if (window.menu) oy += kMenuBarHeight;
 
   return clientRect.Offset(window.rect.left + ox, window.rect.top + oy);
 }
@@ -36,6 +38,7 @@ URect screen_to_client_locked(const KWindowObject &window, const URect &screenRe
     oy += kBorderWidth;
   }
   if (window.style & kStyleCaption) oy += kCaptionHeight;
+  if (window.menu) oy += kMenuBarHeight;
 
   return screenRect.Offset(-(window.rect.left + ox), -(window.rect.top + oy));
 }
@@ -67,6 +70,10 @@ HitTest hit_test_locked(const KWindowObject &window, int32_t x, int32_t y) noexc
     if (x >= window.rect.right - b - 2 * kCaptionHeight) return HitTest::MinButton;
     return HitTest::Caption;
   }
+
+  if (window.menu &&
+      y < window.rect.top + b + c + kMenuBarHeight)
+    return HitTest::MenuBar;
 
   return HitTest::Client;
 }
@@ -168,6 +175,7 @@ void draw_nonclient_locked(KWindowObject &window, const URect &limit) noexcept {
         draw_rect(maxx + 5 + i, cy + (window.state == KWindowObject::State::Maximized ? 6 - i : 10 - i), 8 - 2 * i, 1, 0);
         if (window.state == KWindowObject::State::Maximized) draw_rect(maxx + 5 + i, cy + 10 + i, 8 - 2 * i, 1, 0);
       }
+
     }
     size_t length = 0;
     const int32_t available = cw - 3 * kCaptionHeight - 5;
@@ -186,6 +194,38 @@ void draw_nonclient_locked(KWindowObject &window, const URect &limit) noexcept {
                           draw_rect(static_cast<int32_t>(l), static_cast<int32_t>(t),
                                     static_cast<int32_t>(right - l) + 1, static_cast<int32_t>(bottom - t), ink);
                         });
+  }
+
+  if (window.menu) {
+    const int32_t border = (window.style & kStyleBorder) ? kBorderWidth : 0;
+    const int32_t caption = (window.style & kStyleCaption) ? kCaptionHeight : 0;
+    const int32_t menuTop = r.top + border + caption;
+    const int32_t menuLeft = r.left + border;
+    const int32_t menuWidth = r.right - r.left - 2 * border;
+    draw_rect(menuLeft, menuTop, menuWidth, kMenuBarHeight, kWindowFaceColor);
+    draw_rect(menuLeft, menuTop + kMenuBarHeight - 1, menuWidth, 1, 8);
+    int32_t x = menuLeft;
+    for (uint32_t i = 0; i < menu_item_count_locked(window.menu); ++i) {
+      MenuItemView item{};
+      if (!menu_item_locked(window.menu, i, item)) break;
+      const int32_t width = item.text.empty() ? 8 :
+          static_cast<int32_t>(item.text.size()) * static_cast<int32_t>(gfx::kFontCellWidth) + 16;
+      if (x + width > menuLeft + menuWidth) break;
+      const uint32_t foreground = item.flags & (kMenuItemDisabled | kMenuItemGrayed) ? 8 : 0;
+      if (item.flags & kMenuItemSeparator) {
+        draw_rect(x + width / 2, menuTop + 4, 1, kMenuBarHeight - 8, 8);
+      } else {
+        gfx::DrawBitmapText(x + 8, menuTop + 2, item.text.data(), item.text.size(),
+                            foreground, kWindowFaceColor, true,
+                            [&](int64_t left, int64_t top, int64_t right, int64_t bottom,
+                                uint32_t color) {
+                              draw_rect(static_cast<int32_t>(left), static_cast<int32_t>(top),
+                                        static_cast<int32_t>(right - left),
+                                        static_cast<int32_t>(bottom - top), color);
+                            });
+      }
+      x += width;
+    }
   }
 }
 

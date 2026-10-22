@@ -32,7 +32,7 @@ add_executable(kernel
         src/elf_segment_loader.cpp
         src/process.hpp
         src/process.cpp
-        src/syscalls/handler_syscall.cpp
+        "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
         src/pnp_manager.cpp
         src/dma_manager.cpp
         src/resource_manager.cpp
@@ -80,6 +80,7 @@ add_executable(kernel
         src/syscalls/User.cpp
         src/user/user.hpp
         src/user/window.cpp
+        src/user/menu.cpp
         src/user/msgqueue.cpp
         src/user/paint.cpp
         src/user/nonclient.cpp
@@ -112,6 +113,8 @@ target_link_libraries(kernel PRIVATE undos_warnings undos_options)
 target_link_libraries(kernel PUBLIC libkcpp KernelHeaders KernelUserlandShared)
 target_link_libraries(kernel PRIVATE undos_font_resource)
 target_include_directories(kernel PRIVATE src ${UNDOS_ROOT}/Kernel/Drivers/volmgr)
+target_include_directories(kernel PRIVATE
+        "${UNDOS_SYSCALL_GENERATED_DIR}/kernel" "${UNDOS_SYSCALL_KERNEL_DIR}" src/syscalls)
 
 target_compile_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)
 target_link_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)

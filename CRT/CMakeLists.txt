@@ -21,7 +21,6 @@ add_library(undoscrt STATIC
 
 target_include_directories(undoscrt PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../ABI
 )
 target_include_directories(undoscrt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/libc/include)
 

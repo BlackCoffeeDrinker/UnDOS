@@ -1,3 +1,4 @@
 
 add_library(KernelHeaders INTERFACE)
 target_include_directories(KernelHeaders INTERFACE include)
+target_link_libraries(KernelHeaders INTERFACE KernelUserlandShared)

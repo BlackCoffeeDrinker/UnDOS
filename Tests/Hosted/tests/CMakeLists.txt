@@ -71,6 +71,7 @@ add_executable(KernelTests
         ../../../Kernel/Source/src/tty/tty.cpp
         ../../../Kernel/Source/src/tty/tty_device.cpp
         ../../../Kernel/Source/src/user/window.cpp
+        ../../../Kernel/Source/src/user/menu.cpp
         ../../../Kernel/Source/src/user/msgqueue.cpp
         ../../../Kernel/Source/src/user/paint.cpp
         ../../../Kernel/Source/src/user/nonclient.cpp
@@ -96,7 +97,7 @@ add_executable(KernelTests
 )
 
 target_include_directories(KernelTests PRIVATE ../../../Kernel/Source/src ../../../Kernel/Drivers/disk_fake
-        ../../../ABI/include
+        "${UNDOS_SYSCALL_GENERATED_DIR}/kernel" "${UNDOS_SYSCALL_KERNEL_DIR}"
         ../../../Apps/Fontloader
         ../../../Kernel/Drivers/input_hid ../../../Kernel/Drivers/input_i8042 ../../../Kernel/Drivers/input_gameport)
 

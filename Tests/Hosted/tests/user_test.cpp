@@ -261,6 +261,175 @@ struct Scene {
 };
 } // namespace
 
+TEST_CASE("USER menus enforce ownership, attach to windows, and destroy submenu trees", "[user][menu]") {
+  Scene scene;
+  KWindowObject *root = nullptr;
+  KWindowObject *child = nullptr;
+  {
+    kernel::user::Guard guard;
+    root = &scene.add({20, 20, 300, 240}, 0,
+                      kernel::user::kStyleVisible | kernel::user::kStyleBorder |
+                          kernel::user::kStyleCaption);
+    child = &scene.add({40, 60, 140, 120}, root->hwnd);
+  }
+
+  const uint32_t menu = TakeExpected(kernel::user::create_menu(*scene.process, false));
+  const uint32_t popup = TakeExpected(kernel::user::create_menu(*scene.process, true));
+  const uint32_t nestedPopup = TakeExpected(kernel::user::create_menu(*scene.process, true));
+  const int32_t originalClientHeight =
+      TakeExpected(kernel::user::get_client_rect(root->hwnd)).bottom;
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, popup, 0, 17, "Run"));
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, nestedPopup, 0, 99, "Quit"));
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, popup, kernel::user::kMenuItemPopup,
+                                           nestedPopup, "More"));
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, menu, kernel::user::kMenuItemPopup,
+                                           popup, "File"));
+  REQUIRE(kernel::user::append_menu(*scene.process, popup, kernel::user::kMenuItemPopup,
+                                    menu, "Cycle") == KernelError::InvalidArgument);
+  REQUIRE(kernel::user::append_menu(*scene.process, menu, 0x1000, 1, "Invalid") ==
+          KernelError::InvalidArgument);
+  REQUIRE(kernel::user::destroy_menu(*scene.process, popup) == KernelError::InvalidState);
+  for (uint32_t i = 0; i < kernel::user::kMaxMenuItems - 1; ++i)
+    REQUIRE_FALSE(kernel::user::append_menu(*scene.process, menu, 0, i + 100, "Item"));
+  REQUIRE(kernel::user::append_menu(*scene.process, menu, 0, 200, "Full") ==
+          KernelError::ResourceLimitExceeded);
+
+  auto stranger = TakeExpected(CreateKObject<KProcessObject>("user-menu-stranger"));
+  REQUIRE(kernel::user::append_menu(*stranger, menu, 0, 1, "Denied") ==
+          KernelError::AccessDenied);
+  REQUIRE(kernel::user::set_menu(*stranger, root->hwnd, menu) == KernelError::AccessDenied);
+  REQUIRE(kernel::user::set_menu(*scene.process, root->hwnd, popup) ==
+          KernelError::InvalidArgument);
+  REQUIRE_FALSE(kernel::user::set_menu(*scene.process, root->hwnd, menu));
+  REQUIRE(TakeExpected(kernel::user::get_menu(root->hwnd)) == menu);
+  REQUIRE(TakeExpected(kernel::user::get_window_rect(child->hwnd)) == URect{40, 80, 140, 140});
+  REQUIRE(TakeExpected(kernel::user::get_client_rect(root->hwnd)).bottom ==
+          originalClientHeight - kernel::user::kMenuBarHeight);
+
+  {
+    kernel::user::Guard guard;
+    REQUIRE_FALSE(kernel::user::set_focus_locked(child->hwnd));
+    REQUIRE(kernel::user::menu_key_locked(0x79, false));
+    REQUIRE(kernel::user::menu_key_locked(27, false));
+    REQUIRE_FALSE(kernel::user::set_focus_locked(root->hwnd));
+    scene.queue.ring = {};
+    REQUIRE(kernel::user::menu_mouse_locked(25, 45, true));
+    REQUIRE(kernel::user::menu_mouse_locked(25, 45, false));
+    REQUIRE(kernel::user::menu_mouse_locked(30, 70, true));
+    REQUIRE(kernel::user::menu_mouse_locked(30, 70, false));
+    QueuedMessage message{};
+    bool commandFound = false;
+    while (scene.queue.ring.Pop(message))
+      if (message.message == kernel::user::kMsgCommand && message.wParam == 17 &&
+          message.hwnd == root->hwnd)
+        commandFound = true;
+    REQUIRE(commandFound);
+
+    REQUIRE(kernel::user::menu_key_locked(0x79, false));
+    REQUIRE(kernel::user::menu_key_locked(40, false));
+    REQUIRE(kernel::user::menu_key_locked(39, false));
+    REQUIRE(kernel::user::menu_key_locked(27, false));
+    REQUIRE(kernel::user::menu_key_locked(39, false));
+    REQUIRE(kernel::user::menu_key_locked(13, false));
+    commandFound = false;
+    while (scene.queue.ring.Pop(message))
+      if (message.message == kernel::user::kMsgCommand && message.wParam == 99 &&
+          message.hwnd == root->hwnd)
+        commandFound = true;
+    REQUIRE(commandFound);
+  }
+
+  REQUIRE_FALSE(kernel::user::destroy_menu(*scene.process, menu));
+  REQUIRE(TakeExpected(kernel::user::get_menu(root->hwnd)) == 0);
+  REQUIRE(TakeExpected(kernel::user::get_window_rect(child->hwnd)) == URect{40, 60, 140, 120});
+  REQUIRE(TakeExpected(kernel::user::get_client_rect(root->hwnd)).bottom == originalClientHeight);
+  REQUIRE(kernel::user::append_menu(*scene.process, menu, 0, 18, "Stale") ==
+          KernelError::InvalidHandle);
+
+  const uint32_t processMenu = TakeExpected(kernel::user::create_menu(*scene.process, false));
+  REQUIRE_FALSE(kernel::user::set_menu(*scene.process, root->hwnd, processMenu));
+  kernel::user::on_process_exit(*scene.process);
+  REQUIRE(kernel::user::get_menu(root->hwnd).error() == KernelError::InvalidHandle);
+  REQUIRE(kernel::user::destroy_menu(*scene.process, processMenu) == KernelError::InvalidHandle);
+}
+
+TEST_CASE("USER popup overlays clip window paints and partial redraws", "[user][menu][paint]") {
+  Scene scene;
+  KWindowObject *root = nullptr;
+  {
+    kernel::user::Guard guard;
+    root = &scene.add({20, 20, 300, 240}, 0,
+                      kernel::user::kStyleVisible | kernel::user::kStyleBorder |
+                          kernel::user::kStyleCaption);
+  }
+  const uint32_t menu = TakeExpected(kernel::user::create_menu(*scene.process, false));
+  const uint32_t popup = TakeExpected(kernel::user::create_menu(*scene.process, true));
+  const uint32_t nested = TakeExpected(kernel::user::create_menu(*scene.process, true));
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, popup, 0, 17, "Run"));
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, popup, kernel::user::kMenuItemPopup,
+                                         nested, "More"));
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, popup, kernel::user::kMenuItemSeparator,
+                                         0, ""));
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, nested, 0, 18, "Quit"));
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, menu, kernel::user::kMenuItemPopup,
+                                         popup, "File"));
+  REQUIRE_FALSE(kernel::user::set_menu(*scene.process, root->hwnd, menu));
+  {
+    kernel::user::Guard guard;
+    REQUIRE_FALSE(kernel::user::set_focus_locked(root->hwnd));
+    const URect popupBounds{23, 61, 79, 125};
+    uint32_t dc = 0;
+    URect paint{};
+    REQUIRE(BeginPaintInto(*scene.process, *root, dc, paint));
+    REQUIRE(kernel::user::menu_key_locked(0x79, false));
+    for (uint32_t i = 0; i < root->paintClip.count; ++i)
+      REQUIRE(root->paintClip.rects[i].Intersect(popupBounds).Empty());
+    REQUIRE_FALSE(kernel::user::end_paint_locked(*scene.process, *root, dc));
+
+    uint8_t expected[640 * 480]{};
+    kstd::memcpy(expected, scene.pixels, sizeof(expected));
+    SECTION("Client background erasure preserves the popup") {
+      REQUIRE(BeginPaintInto(*scene.process, *root, dc, paint));
+      for (int y = popupBounds.top; y < popupBounds.bottom; ++y)
+        for (int x = popupBounds.left; x < popupBounds.right; ++x)
+          REQUIRE(scene.pixels[y * 640 + x] == expected[y * 640 + x]);
+      REQUIRE_FALSE(kernel::user::end_paint_locked(*scene.process, *root, dc));
+      REQUIRE(kernel::user::menu_key_locked(27, false));
+      REQUIRE(BeginPaintInto(*scene.process, *root, dc, paint));
+      REQUIRE(scene.pixels[70 * 640 + 30] == root->background);
+      REQUIRE_FALSE(kernel::user::end_paint_locked(*scene.process, *root, dc));
+    }
+    SECTION("Partial popup repaint changes no pixels outside its limit") {
+      const URect limit{35, 88, 40, 93};
+      for (int y = limit.top; y < limit.bottom; ++y)
+        for (int x = limit.left; x < limit.right; ++x)
+          scene.pixels[y * 640 + x] = 0xEE;
+      kernel::user::draw_open_menu_locked(limit);
+      for (unsigned i = 0; i < sizeof(expected); ++i)
+        REQUIRE(scene.pixels[i] == expected[i]);
+    }
+    SECTION("Nested popup redraw retains its parent overlay") {
+      REQUIRE(kernel::user::menu_key_locked(40, false));
+      REQUIRE(kernel::user::menu_key_locked(39, false));
+      kstd::memcpy(expected, scene.pixels, sizeof(expected));
+      kernel::user::fill_screen_locked({23, 61, 133, 125}, 0xEE);
+      kernel::user::draw_open_menu_locked({0, 0, 640, 480});
+      for (int y = popupBounds.top; y < popupBounds.bottom; ++y)
+        for (int x = popupBounds.left; x < popupBounds.right; ++x)
+          REQUIRE(scene.pixels[y * 640 + x] == expected[y * 640 + x]);
+      URegion visible;
+      kernel::user::visible_region_locked(*root, visible);
+      for (uint32_t i = 0; i < visible.count; ++i) {
+        REQUIRE(visible.rects[i].Intersect(popupBounds).Empty());
+        REQUIRE(visible.rects[i].Intersect({77, 83, 133, 107}).Empty());
+      }
+      REQUIRE(kernel::user::menu_key_locked(27, false));
+      REQUIRE(kernel::user::menu_key_locked(27, false));
+    }
+  }
+  REQUIRE_FALSE(kernel::user::destroy_menu(*scene.process, menu));
+}
+
 TEST_CASE("USER display changes refit roots and refresh outstanding paint DCs", "[user][scene][mode]") {
   Scene scene;
   kernel::user::Guard guard;

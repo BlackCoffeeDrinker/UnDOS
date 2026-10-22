@@ -58,8 +58,7 @@ function(add_subsystem TARGET_NAME)
         add_dependencies(${TARGET_NAME} ${SUBSYS_DEPENDS})
     endif ()
     target_include_directories(${TARGET_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
-            ${UNDOS_ROOT}/Kernel/Source/src/syscalls
-            ${UNDOS_ROOT}/ABI/include)
+            "${UNDOS_SYSCALL_KERNEL_DIR}")
     target_link_libraries(${TARGET_NAME}
             PRIVATE
             libkcpp

@@ -166,6 +166,44 @@ kstd::error_code handle_SetWindowText_V1(__KRN_USER_SETWINDOWTEXT_V1 &&args) {
   return set_window_text(**process, args.hwnd, args.text);
 }
 
+kstd::error_code handle_CreateMenu_V1(__KRN_USER_CREATEMENU_V1 &&args) {
+  args.menu = 0;
+  if (args.popup > 1) return kernel::KernelError::InvalidArgument;
+  const auto process = caller_process();
+  if (!process) return process.error();
+  const auto menu = create_menu(**process, args.popup != 0);
+  if (!menu) return menu.error();
+  args.menu = *menu;
+  return {};
+}
+
+kstd::error_code handle_DestroyMenu_V1(__KRN_USER_DESTROYMENU_V1 &&args) {
+  const auto process = caller_process();
+  if (!process) return process.error();
+  return destroy_menu(**process, args.menu);
+}
+
+kstd::error_code handle_AppendMenu_V1(__KRN_USER_APPENDMENU_V1 &&args) {
+  const auto process = caller_process();
+  if (!process) return process.error();
+  return append_menu(**process, args.menu, static_cast<uint32_t>(args.flags),
+                     args.item, args.text);
+}
+
+kstd::error_code handle_SetMenu_V1(__KRN_USER_SETMENU_V1 &&args) {
+  const auto process = caller_process();
+  if (!process) return process.error();
+  return set_menu(**process, args.hwnd, args.menu);
+}
+
+kstd::error_code handle_GetMenu_V1(__KRN_USER_GETMENU_V1 &&args) {
+  args.menu = 0;
+  const auto menu = get_menu(args.hwnd);
+  if (!menu) return menu.error();
+  args.menu = *menu;
+  return {};
+}
+
 kstd::error_code handle_ReleaseCapture_V1(__KRN_USER_RELEASECAPTURE_V1 &&args) {
   (void) args;
   const auto process = caller_process();

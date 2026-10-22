@@ -9,22 +9,33 @@ You should never need to read the generator source to write a new syscall — th
 ## How to (re)generate code
 
 ```
-docker run --rm -v "$(pwd):/src" -w /src gcc-standalone:i686-elf \
-    cmake --build build --target undos-syscalls-gen
+cmake --build <component-build-dir> --target undos-syscalls-gen
 ```
 
-or directly:
+Normal component builds generate the files automatically. CMake tracks the IDL
+inputs, generator modules, and output files. Each Kernel, SDK, CRT, or Hosted
+build tree owns an independent set of bindings under `generated/syscalls/`.
+
+For a generator-only check without configuring CMake:
 
 ```
 python3 Tools/create-syscalls.py ABI/IDL/syscalls.txt \
-    ABI/include/undos/syscalls ABI/ Kernel/Source/src/syscalls
+    build/idl-check/generated/syscalls/include/undos/syscalls \
+    build/idl-check/generated/syscalls/include \
+    build/idl-check/generated/syscalls/kernel/syscalls
 ```
 
-This produces:
-- `ABI/include/undos/syscalls/*.h` — shared wire structs, enums, structs.
-- `ABI/userspace.h` — userspace wrapper functions (e.g. `UD_SYS_CreateProcessV1(...)`).
-- `Kernel/Source/src/syscalls/handler_syscall.cpp` + `__kernel_types.h` — kernel dispatch code and
-  `handle_<Name>_<Version>()` declarations that you must implement.
+Relative to `<component-build-dir>/generated/syscalls/`, this produces:
+- `include/undos/syscalls/*.h` — shared wire structs, enums, structs.
+- `include/userspace.h` — userspace wrapper functions (e.g. `UD_SYS_CreateProcessV1(...)`).
+- `kernel/syscalls/handler_syscall.cpp`, `__kernel_types.h`, and `syscalls.hpp` —
+  kernel dispatch code, argument types, and `handle_<Name>_<Version>()` declarations.
+
+Do not commit these outputs. Keep handwritten handlers in
+`Kernel/Source/src/syscalls/`. The SDK installs public generated headers from its
+own build tree; applications continue to include `<userspace.h>` and
+`<undos/syscalls.h>`. The generator's `--list-outputs` option lists expected paths
+without creating files so CMake can declare all outputs before the first build.
 
 Handwritten kernel handlers return `kstd::error_code`, not wire-level
 `SyscallReturnCode`. The generated dispatcher preserves kernel errors until

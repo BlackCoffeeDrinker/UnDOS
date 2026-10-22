@@ -24,15 +24,32 @@ if (NOT TESTING_ONLY)
 endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(PYTHON3_EXECUTABLE "${Python3_EXECUTABLE}")
-add_custom_target(undos-syscalls-gen
+set(UNDOS_SYSCALL_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated/syscalls")
+set(UNDOS_SYSCALL_INCLUDE_DIR "${UNDOS_SYSCALL_GENERATED_DIR}/include")
+set(UNDOS_SYSCALL_KERNEL_DIR "${UNDOS_SYSCALL_GENERATED_DIR}/kernel/syscalls")
+file(GLOB UNDOS_SYSCALL_INPUTS CONFIGURE_DEPENDS
+    "${UNDOS_ROOT}/ABI/IDL/*.txt"
+    "${UNDOS_ROOT}/Tools/idlgen/*.py")
+list(APPEND UNDOS_SYSCALL_INPUTS "${UNDOS_ROOT}/Tools/create-syscalls.py")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${UNDOS_SYSCALL_INPUTS})
+set(UNDOS_SYSCALL_GENERATOR_ARGS
+    "${UNDOS_ROOT}/ABI/IDL/syscalls.txt"
+    "${UNDOS_SYSCALL_INCLUDE_DIR}/undos/syscalls"
+    "${UNDOS_SYSCALL_INCLUDE_DIR}"
+    "${UNDOS_SYSCALL_KERNEL_DIR}")
+execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${UNDOS_ROOT}/Tools/create-syscalls.py"
-        ABI/IDL/syscalls.txt ABI/include/undos/syscalls ABI Kernel/Source/src/syscalls
-    WORKING_DIRECTORY "${UNDOS_ROOT}"
-    DEPENDS
-        "${UNDOS_ROOT}/ABI/IDL/syscalls.txt"
-        "${UNDOS_ROOT}/ABI/IDL/gfxsyscall.txt"
-        "${UNDOS_ROOT}/ABI/IDL/usersyscall.txt"
-        "${UNDOS_ROOT}/ABI/IDL/abisyscall.txt"
-        "${UNDOS_ROOT}/ABI/IDL/netsyscall.txt"
+        --list-outputs ${UNDOS_SYSCALL_GENERATOR_ARGS}
+    OUTPUT_VARIABLE UNDOS_SYSCALL_OUTPUTS
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    COMMAND_ERROR_IS_FATAL ANY)
+string(REPLACE "\n" ";" UNDOS_SYSCALL_OUTPUTS "${UNDOS_SYSCALL_OUTPUTS}")
+set(UNDOS_SYSCALL_PUBLIC_HEADERS ${UNDOS_SYSCALL_OUTPUTS})
+list(FILTER UNDOS_SYSCALL_PUBLIC_HEADERS INCLUDE REGEX "/include/undos/syscalls/[^/]+\\.h$")
+add_custom_command(OUTPUT ${UNDOS_SYSCALL_OUTPUTS}
+    COMMAND "${Python3_EXECUTABLE}" "${UNDOS_ROOT}/Tools/create-syscalls.py"
+        ${UNDOS_SYSCALL_GENERATOR_ARGS}
+    DEPENDS ${UNDOS_SYSCALL_INPUTS}
     COMMENT "Generating the shared syscall ABI"
     VERBATIM)
+add_custom_target(undos-syscalls-gen DEPENDS ${UNDOS_SYSCALL_OUTPUTS})

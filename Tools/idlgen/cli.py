@@ -1,8 +1,9 @@
 """Command-line entry point for the UnDOS IDL compiler."""
 
+import argparse
 import os
-import sys
 
+from .codegen_common import make_filename
 from .codegen_headers import generate_headers
 from .codegen_kernel import generate_kernel
 from .codegen_userspace import generate_userspace
@@ -11,42 +12,18 @@ from .resolver import ResolverError, resolve_aliases
 
 
 def main():
-    # Expect exactly 4 arguments:
-    #   1. root IDL file
-    #   2. output directory for definitions .h files
-    #   3. output directory for userspace calling files
-    #   4. output directory for kernel receiving files
-    if len(sys.argv) != 5:
-        print("UnDOS IDL Compiler")
-        print("Usage:")
-        print("    undos-idl <root.idl> <output-h-directory> <output-userspace-h-directory> <output-kernel-h-directory>")
-        print("")
-        print("Example:")
-        print("    undos-idl kernel.idl ./generated/h/ ./generated/userspace-h/ ./generated/kernel/h")
-        sys.exit(1)
-
-    idl_path = sys.argv[1]
-    out_h_dir = sys.argv[2]
-    out_userspace_h_dir = sys.argv[3]
-    out_kernel_h_dir = sys.argv[4]
-
-    print("Generating IDL files...")
-    print(f" Output H Directory: {out_h_dir}")
-    print(f" Output Userspace H Directory: {out_userspace_h_dir}")
-    print(f" Output Kernel H Directory: {out_kernel_h_dir}")
-
-    # Validate input file
-    if not os.path.isfile(idl_path):
-        print(f"ERROR: IDL file not found: {idl_path}")
-        sys.exit(1)
-
-    # Validate or create output directory
-    if not os.path.isdir(out_h_dir):
-        try:
-            os.makedirs(out_h_dir)
-        except Exception as e:
-            print(f"ERROR: Could not create output directory '{out_h_dir}': {e}")
-            sys.exit(1)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--list-outputs", action="store_true",
+                        help="List output paths for CMake without generating files")
+    parser.add_argument("idl_path")
+    parser.add_argument("out_h_dir")
+    parser.add_argument("out_userspace_h_dir")
+    parser.add_argument("out_kernel_h_dir")
+    args = parser.parse_args()
+    idl_path = args.idl_path
+    out_h_dir = args.out_h_dir
+    out_userspace_h_dir = args.out_userspace_h_dir
+    out_kernel_h_dir = args.out_kernel_h_dir
 
     # Load IDL text
     with open(idl_path, "r", encoding="utf-8") as f:
@@ -57,15 +34,30 @@ def main():
     try:
         module = parse_idl(idl_text, base_dir=os.path.dirname(os.path.abspath(idl_path)))
     except ParserError as e:
-        print(f"ERROR: {e}")
-        sys.exit(1)
+        parser.error(str(e))
 
     # Resolve `using` aliases before any codegen runs
     try:
         resolve_aliases(module)
     except ResolverError as e:
-        print(f"ERROR: {e}")
-        sys.exit(1)
+        parser.error(str(e))
+
+    if args.list_outputs:
+        outputs = [os.path.join(out_h_dir, name) for name in ("__aliases.h", "syscalls.h")]
+        outputs += [os.path.join(out_h_dir, make_filename(item))
+                    for item in (*module.enums, *module.flags, *module.structs, *module.syscalls)]
+        outputs.append(os.path.join(out_userspace_h_dir, "userspace.h"))
+        outputs += [os.path.join(out_kernel_h_dir, name)
+                    for name in ("__kernel_types.h", "syscalls.hpp", "handler_syscall.cpp")]
+        print("\n".join(path.replace(os.sep, "/") for path in outputs))
+        return
+
+    print("Generating IDL files...")
+    print(f" Output H Directory: {out_h_dir}")
+    print(f" Output Userspace H Directory: {out_userspace_h_dir}")
+    print(f" Output Kernel H Directory: {out_kernel_h_dir}")
+    for directory in (out_h_dir, out_userspace_h_dir, out_kernel_h_dir):
+        os.makedirs(directory, exist_ok=True)
 
     # Generate .h files
     generate_headers(module, out_h_dir)

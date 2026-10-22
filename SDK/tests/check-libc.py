@@ -4,6 +4,7 @@
 import argparse
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 
@@ -33,6 +34,12 @@ def main():
                root / "SDK/tests/libc-backend.c"]
     with tempfile.TemporaryDirectory(prefix="undos-libc-") as directory:
         build = Path(directory)
+        generated = build / "generated"
+        subprocess.run([sys.executable, str(root / "Tools/create-syscalls.py"),
+                        str(root / "ABI/IDL/syscalls.txt"),
+                        str(generated / "include/undos/syscalls"), str(generated / "include"),
+                        str(generated / "kernel/syscalls")], check=True)
+        flags.append(f"-I{generated / 'include'}")
         for optimize in ("-O0", "-O2"):
             process = build / "process.o"
             lifecycle = [
