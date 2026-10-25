@@ -7,3 +7,22 @@
 /build*
 !/BuildSupport/
 __pycache__
+.junie
+bin/filesystem
+bin/fat32.img
+**/.build
+
+# Syscall bindings belong in each CMake build tree, never in source directories.
+/ABI/include/undos/syscalls/
+/ABI/userspace.h
+/Kernel/Source/src/syscalls/__kernel_types.h
+/Kernel/Source/src/syscalls/handler_syscall.cpp
+/Kernel/Source/src/syscalls/syscalls.hpp
+.agents
+.ai-context
+.ai-development-framework
+.ai-work
+.claude
+.copilot-artifacts
+AGENTS.md
+CLAUDE.md

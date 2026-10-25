@@ -39,4 +39,4 @@ hosted C++, or Windows binary compatibility.
 | System calls | [Syscall IDL and generation](SYSCALLS_IDL.md) |
 | Plans | [SDK roadmap](SDK_ROADMAP.md), [kernel roadmap](Docs/KernelRoadmap.md), [Program Manager plan](TO_PROGRMAN.md), and [font plan](TTF_SPLIT_USER_KERNEL.md) |
 | Known issues | [Bug tracker](BUGS.md) |
-| Contribution constraints | [Repository and agent instructions](AGENTS.md) |
+| Contribution constraints | [Development rules](Docs/Development.md#code-generation-invariant-rules), [application ABI](Docs/ApplicationABI.md), and [SDK contracts](Docs/SDK.md) |

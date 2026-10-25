@@ -2,7 +2,8 @@
 
 This document describes the small IDL (Interface Definition Language) used to declare syscalls, enums,
 and structs shared between the kernel and userland. The IDL is defined in `ABI/IDL/syscalls.txt` and
-compiled by `Tools/create-syscalls.py` (implemented in `Tools/idlgen/`).
+its included files, including `ABI/IDL/abisyscall.txt`, and compiled by
+`Tools/create-syscalls.py` (implemented in `Tools/idlgen/`).
 
 You should never need to read the generator source to write a new syscall — this file is the spec.
 
@@ -31,7 +32,7 @@ Relative to `<component-build-dir>/generated/syscalls/`, this produces:
 - `kernel/syscalls/handler_syscall.cpp`, `__kernel_types.h`, and `syscalls.hpp` —
   kernel dispatch code, argument types, and `handle_<Name>_<Version>()` declarations.
 
-Do not commit these outputs. Keep handwritten handlers in
+Do not edit or commit these generated outputs. Keep handwritten handlers in
 `Kernel/Source/src/syscalls/`. The SDK installs public generated headers from its
 own build tree; applications continue to include `<userspace.h>` and
 `<undos/syscalls.h>`. The generator's `--list-outputs` option lists expected paths
