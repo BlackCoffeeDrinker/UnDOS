@@ -42,13 +42,25 @@ TEST_CASE("Program Manager model changes are bounded and validated", "[progman]"
 }
 
 TEST_CASE("Program Manager paging keeps selected icons reachable", "[progman]") {
-  const auto grid = progman::Grid::for_size(240, 180);
+  const auto grid = progman::Grid::for_size(240, 180, 16);
   REQUIRE(grid.columns == 2);
   REQUIRE(grid.rows == 2);
   REQUIRE(grid.page_start(5) == 4);
-  REQUIRE(progman::Grid::for_size(224, 144).page_size == 4);
-  const auto tiny = progman::Grid::for_size(1, 1);
+  REQUIRE(progman::Grid::for_size(224, 144, 16).page_size == 4);
+  const auto tiny = progman::Grid::for_size(1, 1, 16);
   REQUIRE(tiny.page_size == 1);
+}
+
+TEST_CASE("Program Manager cells widen to measured labels instead of truncating", "[progman]") {
+  REQUIRE(progman::Grid::for_size(400, 200, 16, 60).cell_width == 112);
+  const auto wide = progman::Grid::for_size(400, 200, 26, 150);
+  REQUIRE(wide.cell_width == 158);
+  REQUIRE(wide.columns == 2);
+  REQUIRE(wide.cell_height == 76);
+  REQUIRE(wide.columns * wide.cell_width <= 400);
+  const auto narrow = progman::Grid::for_size(100, 60, 26, 150);
+  REQUIRE(narrow.columns == 1);
+  REQUIRE(narrow.page_size == 1);
 }
 
 TEST_CASE("Program Manager identity exhaustion cannot wrap into an existing ID", "[progman]") {

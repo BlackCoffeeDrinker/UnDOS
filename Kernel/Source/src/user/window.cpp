@@ -3,6 +3,8 @@
 #include <kernel/kobject/KProcessObject.hpp>
 #include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/mutex.hpp>
+#include "gfx/font/default_font.hpp"
+#include "user/ui_text.hpp"
 #include <undos/syscalls/__enum_WindowLongIndex.h>
 
 namespace kernel::user {
@@ -11,7 +13,6 @@ constexpr uint32_t kIndexOffset = 1;
 constexpr uint32_t kFirstGeneration = 1;
 constexpr uint32_t kActiveWindowActivation = 1;
 constexpr uint32_t kCycleIndexStep = 1;
-constexpr int32_t kNextGridPositionOffset = 1;
 constexpr uint32_t kHandleIndexMask = 0xFFFF;
 constexpr uint32_t kHandleFieldShift = 16;
 constexpr uint32_t kPackedFieldMask = 0xFFFF;
@@ -34,7 +35,7 @@ constexpr uint8_t kPendingGeometryMoveAndSize = kPendingGeometryMove | kPendingG
 
 constexpr int32_t kChildIconWidth = 88;
 constexpr int32_t kRootIconWidth = 144;
-constexpr int32_t kChildIconHeight = 56;
+constexpr int32_t kIconLabelPadding = 8;
 constexpr int32_t kFrameBorderTotal = 2 * kBorderWidth;
 Mutex g_lock;
 
@@ -264,18 +265,23 @@ void set_active_window_locked(uint32_t hwnd) noexcept {
   auto *next = lookup_locked(hwnd);
   if (hwnd && (!next || !effectively_visible_locked(*next))) return;
 
+  URect targetRect{};
+  const uint32_t oldTopRoot = g_top ? root(*g_top)->hwnd : 0;
   if (next) {
     raise_branch(*next);
-    expose_locked(root(*next)->rect);
+    targetRect = next->rect;
     next = root(*next);
     hwnd = next->hwnd;
   }
+  const bool topRootChanged = g_top && root(*g_top)->hwnd != oldTopRoot;
 
   if (hwnd == g_activeHwnd) {
+    if (!targetRect.Empty()) expose_locked(targetRect);
     return;
   }
 
   auto *old = active_window_locked();
+  if (next) expose_locked(topRootChanged ? next->rect : targetRect);
   g_activeHwnd = hwnd;// Both captions must observe the new activation state.
 
   if (old) {
@@ -381,6 +387,10 @@ kstd::expected<uint32_t, kstd::error_code> insert_window_locked(const KObjectPtr
   return kstd::unexpected(KernelError::ResourceLimitExceeded);
 }
 
+namespace {
+void arrange_minimized_locked(uint32_t parent) noexcept;
+} // namespace
+
 void destroy_window_locked(KWindowObject &window) noexcept {
   const uint32_t index = (window.hwnd & kHandleIndexMask) - kIndexOffset;
   if (index >= kMaxWindows || g_windows[index].get() != &window) return;
@@ -400,8 +410,77 @@ void destroy_window_locked(KWindowObject &window) noexcept {
   const auto keep = g_windows[index];
   g_windows[index] = nullptr;
   if (wasVisible) expose_locked(old);
+  if (wasVisible && window.state == KWindowObject::State::Minimized) arrange_minimized_locked(window.parent);
   choose_active();
 }
+
+namespace {
+uint32_t g_iconOrder{0};
+
+URect minimized_bounds_locked(uint32_t parent) noexcept {
+  if (const auto *p = lookup_locked(parent)) return client_to_screen_locked(*p, client_rect_locked(*p));
+  return screen_rect();
+}
+
+// Child icons are wide enough for their measured label; root icons keep the
+// caption-bar width because their title is clipped like any caption.
+int32_t minimized_width_locked(const KWindowObject &window) noexcept {
+  if (!window.parent) return kRootIconWidth;
+  const int64_t label = static_cast<int64_t>(
+                            UiText::current().width(window.title.data(), window.title.size(), false)) +
+                        kIconLabelPadding;
+  return label > kChildIconWidth ? (label > kMaxWindowCoordinate ? kMaxWindowCoordinate
+                                                                  : static_cast<int32_t>(label))
+                                 : kChildIconWidth;
+}
+
+int32_t minimized_height_locked(const KWindowObject &window) noexcept {
+  return window.parent ? minimized_child_height_locked() : caption_height_locked() + kFrameBorderTotal;
+}
+
+// Flows visible minimized siblings in minimize order from the bottom-left of
+// the parent client, wrapping upward. Reports each slot to place().
+template <typename Place>
+void layout_minimized_locked(uint32_t parent, Place &&place) noexcept {
+  const URect bounds = minimized_bounds_locked(parent);
+  if (bounds.Empty()) return;
+  KWindowObject *icons[kMaxWindows]{};
+  size_t count = 0;
+  for (const auto &entry : g_windows) {
+    auto *w = entry.get();
+    if (!w || w->parent != parent || w->state != KWindowObject::State::Minimized || !w->Visible()) continue;
+    size_t at = count++;
+    while (at && icons[at - 1]->iconOrder > w->iconOrder) {
+      icons[at] = icons[at - 1];
+      --at;
+    }
+    icons[at] = w;
+  }
+  const int32_t available = bounds.right - bounds.left;
+  int32_t x = bounds.left;
+  int32_t bottom = bounds.bottom;
+  for (size_t i = 0; i < count; ++i) {
+    const int32_t measured = minimized_width_locked(*icons[i]);
+    const int32_t width = measured < available ? measured : available;
+    const int32_t height = minimized_height_locked(*icons[i]);
+    if (x != bounds.left && width > bounds.right - x) {
+      x = bounds.left;
+      if (bottom - height > bounds.top) bottom -= height;
+    }
+    URect target{.left = x, .top = bottom - height, .right = x + width, .bottom = bottom};
+    if (target.top < bounds.top) target = target.Offset(0, bounds.top - target.top);
+    place(*icons[i], target);
+    x += width;
+  }
+}
+
+void arrange_minimized_locked(uint32_t parent) noexcept {
+  layout_minimized_locked(parent, [](KWindowObject &w, const URect &target) {
+    // Slots lie within the parent client, which is already in range.
+    (void) move_window_locked(w, target);
+  });
+}
+} // namespace
 
 kstd::error_code move_window_locked(KWindowObject &window, const URect &rect) noexcept {
   const URect old = window.rect;
@@ -449,32 +528,26 @@ kstd::error_code move_window_locked(KWindowObject &window, const URect &rect) no
 
       // Children were range-checked with the parent move above; refitting
       // within the parent's client area cannot leave the coordinate space.
-      if (w->state == KWindowObject::State::Maximized) {
-        (void) move_window_locked(*w, bounds);
-      } else if (w->state == KWindowObject::State::Minimized) {
-        const auto iconWidth = w->parent ? kChildIconWidth : kRootIconWidth;
-        const auto iconHeight = w->parent ? kChildIconHeight : kCaptionHeight + kFrameBorderTotal;
-        const auto width = bounds.right - bounds.left < iconWidth ? bounds.right - bounds.left : iconWidth;
-
-        (void) move_window_locked(*w, {.left = bounds.left,
-                                .top = bounds.bottom - iconHeight,
-                                .right = bounds.left + width,
-                                .bottom = bounds.bottom});
-      }
+      if (w->state == KWindowObject::State::Maximized) (void) move_window_locked(*w, bounds);
     }
+    if (!bounds.Empty()) arrange_minimized_locked(window.hwnd);
   }
   return {};
 }
 
 void show_window_locked(KWindowObject &window, bool show) noexcept {
   if (show == window.Visible()) return;
+  const bool minimized = window.state == KWindowObject::State::Minimized;
   if (show) {
     window.style |= kStyleVisible;
+    // A re-shown icon rejoins the flow in its minimize order.
+    if (minimized) arrange_minimized_locked(window.parent);
     expose_locked(window.rect);
   } else {
     window.style &= ~kStyleVisible;
     clear_input_for(window);
     expose_locked(window.rect);
+    if (minimized) arrange_minimized_locked(window.parent);
     choose_active();
   }
 }
@@ -502,30 +575,29 @@ kstd::error_code show_command_locked(KWindowObject &window, uint32_t command) no
 
   if (next == KWindowObject::State::Maximized) { target = bounds; }
 
+  const uint32_t oldIconOrder = window.iconOrder;
   if (next == KWindowObject::State::Minimized) {
-    const int32_t iconWidth = window.parent ? kChildIconWidth : kRootIconWidth;
-    const int32_t width = bounds.right - bounds.left < iconWidth ? bounds.right - bounds.left : iconWidth;
-    const int32_t height = window.parent ? kChildIconHeight : kCaptionHeight + kFrameBorderTotal;
-    uint32_t icon = 0;
-    for (const auto *w = g_top; w; w = w->below)
-      if (w != &window && w->parent == window.parent &&
-          w->state == KWindowObject::State::Minimized && w->Visible()) ++icon;
-    const int32_t columns = (bounds.right - bounds.left) / width;
-    const auto column = static_cast<int32_t>(icon % static_cast<uint32_t>(columns));
-    const auto row = static_cast<int32_t>(icon / static_cast<uint32_t>(columns));
-    target = {bounds.left + column * width, bounds.bottom - (row + kNextGridPositionOffset) * height,
-              bounds.left + (column + kNextGridPositionOffset) * width, bounds.bottom - row * height};
-    if (target.top < bounds.top) target = target.Offset(0, bounds.top - target.top);
+    window.iconOrder = ++g_iconOrder;
+    // Hidden windows are placed as if visible, then join the flow when shown.
+    const uint32_t oldStyle = window.style;
+    window.style |= kStyleVisible;
+    layout_minimized_locked(window.parent, [&](KWindowObject &w, const URect &slot) {
+      if (&w == &window) target = slot;
+    });
+    window.style = oldStyle;
   }
 
   if (const kstd::error_code moved = move_window_locked(window, target); moved) {
     window.state = oldState;
     window.restoredRect = oldRestored;
+    window.iconOrder = oldIconOrder;
     return moved;
   }
   if (next == KWindowObject::State::Minimized) {
     clear_input_for(window);
   }
+  if (next == KWindowObject::State::Minimized || oldState == KWindowObject::State::Minimized)
+    arrange_minimized_locked(window.parent);
 
   show_window_locked(window, true);
 
@@ -682,6 +754,8 @@ kstd::expected<uint32_t, kstd::error_code> create_window(KProcessObject &caller,
   Guard guard;
   if (child) {
     if (const auto parent = owned_window_locked(caller, params.parent); !parent) return kstd::unexpected(parent.error());
+    if (const auto *parent = lookup_locked(params.parent))
+      window->pendingFontGeneration = parent->pendingFontGeneration;
   }
 
   const auto placement = placement_rect_locked(*window, params.x, params.y, params.width, params.height);
@@ -798,8 +872,8 @@ kstd::expected<uint32_t, kstd::error_code> set_style_locked(KWindowObject &w, ui
   if ((value ^ w.style) & kStyleChild) return kstd::unexpected(KernelError::InvalidArgument);
   const int32_t borderDelta = ((value & kStyleBorder) ? kBorderWidth : 0) -
                               ((w.style & kStyleBorder) ? kBorderWidth : 0);
-  const int32_t captionDelta = ((value & kStyleCaption) ? kCaptionHeight : 0) -
-                               ((w.style & kStyleCaption) ? kCaptionHeight : 0);
+  const int32_t captionDelta = ((value & kStyleCaption) ? caption_height_locked() : 0) -
+                               ((w.style & kStyleCaption) ? caption_height_locked() : 0);
   for (const auto *child = g_top; child; child = child->below) {
     if (!descendant_locked(*child, w)) continue;
     if (child->rect.left + borderDelta < kMinWindowCoordinate || child->rect.right + borderDelta > kMaxWindowCoordinate ||
@@ -963,6 +1037,138 @@ kstd::error_code set_menu(KProcessObject &caller, uint32_t hwnd, uint32_t handle
   close_menu_for_window_locked(hwnd);
   expose_locked(old);
   return {};
+}
+
+namespace {
+bool shifted_rect_in_range(const URect &rect, int64_t dy, int64_t bottomDelta = 0) noexcept {
+  if (rect.Empty()) return true;
+  return static_cast<int64_t>(rect.left) >= kMinWindowCoordinate &&
+         static_cast<int64_t>(rect.left) <= kMaxWindowCoordinate &&
+         static_cast<int64_t>(rect.right) >= kMinWindowCoordinate &&
+         static_cast<int64_t>(rect.right) <= kMaxWindowCoordinate &&
+         static_cast<int64_t>(rect.top) + dy >= kMinWindowCoordinate &&
+         static_cast<int64_t>(rect.top) + dy <= kMaxWindowCoordinate &&
+         static_cast<int64_t>(rect.bottom) + dy + bottomDelta >= kMinWindowCoordinate &&
+         static_cast<int64_t>(rect.bottom) + dy + bottomDelta <= kMaxWindowCoordinate;
+}
+
+kstd::error_code apply_default_font(void *, font::DefaultFont &defaults,
+                                    font::UiFont &&candidate) noexcept {
+  font::UiFont displacedDefault;
+  font::UiFont displacedMenu;
+  const UiText candidateText = UiText::of(candidate);
+  const int32_t candidateTextHeight = candidateText.text_height();
+  const int32_t candidateCaptionHeight =
+      candidateTextHeight + 4 > kCaptionButtonSize ? candidateTextHeight + 4
+                                                   : kCaptionButtonSize;
+  const int32_t candidateMenuHeight = candidateText.row_height();
+  const int32_t candidateMinimizedHeight = 40 + candidateTextHeight;
+  const uint32_t generation = candidate.generation;
+  {
+    Guard guard;
+    const int64_t captionDelta = static_cast<int64_t>(candidateCaptionHeight) -
+                                 caption_height_locked();
+    const int64_t rowDelta = static_cast<int64_t>(candidateMenuHeight) -
+                             menu_row_height_locked();
+    const int64_t minimizedDelta = static_cast<int64_t>(candidateMinimizedHeight) -
+                                   minimized_child_height_locked();
+    int64_t shifts[kMaxWindows]{};
+    for (size_t i = 0; i < kMaxWindows; ++i) {
+      auto *window = g_windows[i].get();
+      if (!window) continue;
+      int64_t ancestors = 0;
+      for (auto *parent = lookup_locked(window->parent);
+           parent && ancestors < static_cast<int64_t>(kMaxWindows);
+           parent = lookup_locked(parent->parent)) {
+        if (parent->style & kStyleCaption) shifts[i] += captionDelta;
+        if (parent->menu) shifts[i] += rowDelta;
+        ++ancestors;
+      }
+      if (ancestors >= static_cast<int64_t>(kMaxWindows))
+        return KernelError::OutOfRange;
+      const int64_t ownHeightDelta =
+          window->state == KWindowObject::State::Minimized
+              ? (window->parent ? minimizedDelta
+                                : ((window->style & kStyleCaption) ? captionDelta : 0))
+              : 0;
+      if (!shifted_rect_in_range(window->rect, shifts[i], ownHeightDelta) ||
+          !shifted_rect_in_range(window->restoredRect, shifts[i]))
+        return KernelError::OutOfRange;
+    }
+
+    close_all_menus_locked();
+    font::UiFont installedMenu = candidate;
+    defaults.commit(static_cast<font::UiFont &&>(candidate), displacedDefault);
+    install_menu_font_locked(static_cast<font::UiFont &&>(installedMenu), displacedMenu);
+
+    for (size_t i = 0; i < kMaxWindows; ++i) {
+      auto *window = g_windows[i].get();
+      if (!window) continue;
+      if (shifts[i]) {
+        const int32_t dy = static_cast<int32_t>(shifts[i]);
+        window->rect = window->rect.Offset(0, dy);
+        if (!window->restoredRect.Empty()) window->restoredRect = window->restoredRect.Offset(0, dy);
+        window->moveParam = pack_fields(window->rect.top, window->rect.left);
+        window->pendingGeometry |= kPendingGeometryMove;
+      }
+      if (window->state == KWindowObject::State::Minimized) {
+        const int64_t ownHeightDelta =
+            window->parent ? minimizedDelta
+                           : ((window->style & kStyleCaption) ? captionDelta : 0);
+        if (ownHeightDelta)
+          window->rect.bottom = static_cast<int32_t>(
+              static_cast<int64_t>(window->rect.bottom) + ownHeightDelta);
+      }
+      const bool ownChromeChanged =
+          (window->menu && rowDelta) || ((window->style & kStyleCaption) && captionDelta);
+      if (ownChromeChanged) {
+        const auto client = client_rect_locked(*window);
+        window->invalid = client;
+        window->sizeParam = pack_fields(client.bottom, client.right);
+        window->pendingGeometry |= kPendingGeometrySize;
+      }
+      if (window->paintDC && window->process) {
+        if (auto *slot = window->process->dcTable.Resolve(window->paintDC)) {
+          visible_region_locked(*window, window->paintClip);
+          if (effectively_visible_locked(*window))
+            window->paintClip.Intersect(client_to_screen_locked(*window, window->painting));
+          else
+            window->paintClip.Clear();
+          const URect origin = client_to_screen_locked(*window, {});
+          slot->lock.lock();
+          slot->originX = origin.left;
+          slot->originY = origin.top;
+          slot->clipRects = reinterpret_cast<const KClipRect *>(window->paintClip.rects);
+          slot->clipCount = window->paintClip.count;
+          slot->clipped = true;
+          slot->clipOwner = KObjectPtr<KObject>(window);
+          slot->lock.unlock();
+        }
+      }
+      if (window->queue && window->process) {
+        window->pendingFontGeneration = generation;
+        wake_locked(*window->queue);
+      }
+      if (window->queue && window->pendingGeometry) wake_locked(*window->queue);
+    }
+    // Icon widths and heights follow the new label metrics; reflow every
+    // minimized sibling set so no icon is stacked, shrunk, or dropped.
+    for (const auto &entry : g_windows)
+      if (entry && entry->state == KWindowObject::State::Minimized && entry->Visible())
+        arrange_minimized_locked(entry->parent);
+    expose_locked(screen_rect());
+  }
+  return {};
+}
+} // namespace
+
+kstd::error_code set_default_font(font::DefaultFont &defaults, uint32_t regularHandle,
+                                  uint32_t boldHandle, uint32_t ppem) noexcept {
+  return defaults.publish(regularHandle, boldHandle, ppem, apply_default_font, nullptr);
+}
+
+kstd::error_code set_builtin_default_font(font::DefaultFont &defaults) noexcept {
+  return defaults.publish_builtin(apply_default_font, nullptr);
 }
 
 void detach_menu_from_windows_locked(uint32_t menu) noexcept {

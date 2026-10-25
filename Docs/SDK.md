@@ -6,6 +6,7 @@
 
 See [SDK_ROADMAP.md](../SDK_ROADMAP.md) for Docker release, cross-host validation,
 and later runtime work.
+Native host compiler archives remain future work in that roadmap.
 
 The `sdk` CMake target builds and stages an application-only SDK. It can be
 built without compiling the kernel, HAL, drivers, ELoader, or disk images.
@@ -122,6 +123,29 @@ window creation and management, message dispatch, paint lifecycle, and basic
 The existing `<undosgui/gui.hpp>` helper remains available for current C++
 applications during migration. New GUI applications should use the C API.
 
+The C++ API uses `gui::Font` objects for metrics, measurement, and drawing.
+`gui::Font::acquire()` snapshots the published system font and its generation.
+`Font::metrics` and `Font::measure` query that retained object. `gui::TextLayout`
+provides measured prefix and suffix fitting. A `gui::Paint` selects the current
+SDK system-font object for its device context; `Paint::draw_text` and
+`Paint::button` use that selection.
+
+The C API exposes the same operations through `AcquireFont`, `GetFontMetrics`,
+`MeasureText`, `SelectFont`, and `DrawText`. `BeginPaint` selects a retained
+system-font object for the paint device context. Applications can acquire and
+select another font object when they need an explicit snapshot. `EndPaint`
+releases the C wrapper's retained handle. `TextMetricsV2` and `TextExtentV2`
+include the font generation so callers can verify that layout and drawing use
+the same snapshot. Font objects remain valid after publication changes until
+their owning handles or device-context references are released.
+
+Both surfaces use the unified bitmap/TrueType contract. They do not expose a
+second fixed-cell text API or a bitmap-rendering alias. The shared font engine
+provides UTF-8 decoding, measurement, fallback, and glyph drawing. A font-change
+message causes `gui::dispatch` to refresh the C++ system-font snapshot before
+the application handles the message. Message loops that call the syscall
+directly must still pass font-change messages through the SDK dispatcher.
+
 This is a source-oriented subset, not a Win32 implementation. The API is
 ANSI-only and uses the UnDOS cdecl ABI. It accepts only unfiltered `GetMessage`
 and `PeekMessage` calls. `CW_USEDEFAULT` selects position `(0, 0)` and size
@@ -166,7 +190,7 @@ this migration changes their build boundary, not their behavior.
 | `winfile` | `Apps/FileManager` | `UnDOS::GUI` | `winfile.elf` |
 | `init` | `Apps/Init` | `UnDOS::Application`, `UnDOS::Shared` | `init.elf`, `initlib.so` |
 | `abi_test` | `Tests/ABI` | `UnDOS::Application`, `UnDOS::Shared` | `abitest.elf`, `abitest.so`, `abinext.so`, `abimiss.elf` |
-| `fontloader` | `Apps/Fontloader` | `UnDOS::Application`, `UnDOS::FontResource`, `UnDOS::KStd` | `fontload.elf` |
+| `fontloader` | `Apps/Fontloader` | `UnDOS::GUI`, `UnDOS::FontResource`, `UnDOS::KStd` | `fontload.elf` |
 
 `python3 Scripts/build.py apps --docker` first stages the SDK, then configures
 and builds each application in `<build>/apps/<name>/<configuration>/`.
@@ -237,9 +261,11 @@ share/cmake/UnDOS/         Toolchain, platform module and find_package configura
 share/undos/              Examples and installed-SDK checks
 ```
 
-Kernel-private headers and the compiler binaries are not part of this staged
-directory. Moving it is supported, provided a compatible cross-compiler stays
-on PATH. For non-container applications, explicitly configure with
+Public headers come from the shared ABI, CRT, and GUI include trees. Do not
+export kernel-private headers or source-tree include paths. Kernel-private
+headers and the compiler binaries are not part of this staged directory.
+Moving it is supported, provided a compatible cross-compiler stays on PATH.
+For non-container applications, explicitly configure with
 `--toolchain /destination/share/cmake/UnDOS/UnDOS-toolchain.cmake`.
 The Docker image is the ready-to-use compiler-plus-SDK distribution.
 
@@ -253,6 +279,10 @@ lifecycle symbols. Repeat from the final source-free image with:
 ```sh
 docker run --rm undos-sdk:dev python3 /opt/undos-sdk/share/undos/check-sdk.py
 ```
+
+Build external consumers outside the source tree. The installed check must also
+cover the relocated SDK path containing spaces; run it in the final Docker image
+after building `Docker/SDK/Dockerfile`.
 
 For the runtime probe, create a host `build-sdk` directory and export the
 probe binaries through a bind mount:
@@ -345,3 +375,10 @@ and partial-link modes, archives, response-file paths, shared SONAMEs, ABI
 notes, failure propagation, and explicit startup suppression. Its exported
 runtime probe is built with the drivers, so the `--scenario sdk` emulator check
 exercises the command-line path as well as installed runtime objects.
+
+### C syscall wrapper linkage
+
+Header-defined C syscall wrappers must retain `static inline` linkage through
+`undos/__shared_core.h`. Plain C `inline` can leave unresolved calls at `-O0`.
+Keep both C and C++ callers in the installed-SDK probe so the wrapper is
+checked through both language interfaces.

@@ -16,10 +16,28 @@ The GUI is heavily inspired by GDI and the classic Windows 3.1 / Workgroups envi
 ## Native Program Manager session
 
 Normal startup uses `init.elf` as a small supervisor for
-`/System/progman.elf`. The shell loads `/System/PROGMAN.INI` and opens native
-program-group windows. This is a native ELF shell, not Windows binary
-compatibility. The `demo.elf` notes/argument exerciser and windowed `term.elf`
-are included in the initial disk image.
+`/System/progman.elf`. Before starting the shell, init reads
+`/System/FONTS.INI` and publishes the selected system-font backend. The shipped
+file selects `/System/Fonts/SSR.TTF` and `/System/Fonts/SSB.TTF` at 11 pt,
+which converts to 15 ppem at 96 DPI. A `Backend=bitmap` setting selects the
+built-in bitmap face without loading external files. Missing, unreadable, or
+invalid configuration and failed publication stop desktop startup with an
+explicit serial diagnostic. The shell loads
+`/System/PROGMAN.INI` and opens native program-group windows. This is a native
+ELF shell, not Windows binary compatibility. The `demo.elf` notes/argument
+exerciser and windowed `term.elf` are included in the initial disk image.
+
+The strict ASCII `/System/FONTS.INI` profile accepts one `[Fonts]` section and
+a required case-sensitive `Backend` key. `Backend=bitmap` selects the built-in
+face and does not accept face paths or a point size. `Backend=truetype`
+requires one each of the case-sensitive `Regular`, `Bold`, and `SizePt` keys.
+The file is limited to 1023 bytes. Each absolute font path is 1–255 bytes;
+quote paths that contain spaces. The parser rejects duplicate or unknown
+sections and keys. It does not support escapes or inline comments. `SizePt`
+is a base-10 integer from 1 through 192. Init converts the value with integer
+rounding at 96 DPI: `ppem = (SizePt * 96 + 36) / 72`. Image assembly installs
+the shipped `Apps/Init/FONTS.INI` as `/System/FONTS.INI`; an image overlay may
+replace it.
 
 Program Manager uses the classic gray MDI workspace, white group interiors,
 32-pixel original program icons, and a compact File/Options/Window/Help menu
@@ -27,11 +45,23 @@ bar. Main opens at startup; the other configured groups appear as minimized
 group icons. There is no taskbar or bottom status/help strip.
 
 The shell requires a primary display of at least 640x480. Both Cirrus and
-the planar VGA fallback use the same original bitmap font and classic palette.
-Shared window decorations follow the NT 3.51 style: centered bold captions,
+the planar VGA fallback use Source Sans 3 and the classic palette.
+Program Manager icon labels, File Manager panes and toolbars, dialogs, and
+Terminal use the published font through the SDK font-object API. Text-dependent
+row, control, and cell geometry uses font metrics and measured runs. Editing
+fields show a measured suffix so newly typed text remains visible. Font-change
+notifications reflow application-owned layouts without blocking publication.
+Shared window decorations follow the NT 3.51 style: centered captions,
 dark-blue active title bars, beveled gray frames, a system-menu box, and
 triangle minimize/maximize controls. Maximized windows show paired restore
 arrows; closing remains available through the system menu or Alt+F4.
+
+File Manager sizes its outer window to the active display. On a 640-pixel-wide
+display it uses a 580-pixel window and wraps its nine toolbar buttons into two
+rows; on a 1024-pixel-wide display it retains the 680-pixel window and one-row
+toolbar. The compact toolbar shifts the path field and list down by one button
+row. Painting, list hit testing, and scrolling use the same client-area layout.
+Text that does not fit a narrower column is shortened with an ellipsis.
 
 Use arrow keys and Enter to select/run a program, Tab to open the next group,
 and Page Up/Page Down to reach additional icons. F10 opens the menu; F1 opens
@@ -47,6 +77,10 @@ keyboard input goes to it, Enter commits a line, and Ctrl+D sends EOF (or
 commits a partially typed line). The command prompt returns when it exits.
 Closing the terminal closes its TTY source, releasing a child waiting for
 input with EOF; it does not forcibly terminate the child.
+The foreground child uses an independent blocking TTY reader. Keep terminal
+source/output reads nonblocking for the GUI loop. Keep the i8042 decoding
+worker above idle priority so polling applications cannot starve keyboard
+delivery.
 
 Configuration records are bounded and versioned. Groups must precede their
 items; IDs must be nonzero and unique across both kinds of record:
@@ -103,15 +137,31 @@ VGA path. Both use the bounded QEMU wrapper.
 
 ## Split TrueType infrastructure
 
-The first part of [the split font plan](../TTF_SPLIT_USER_KERNEL.md) is present:
-an UnDOS-owned user-mode TrueType decoder emits bounded UFT1 resources, and
-the kernel independently validates and retains an immutable private snapshot.
-Uploads are transactional, generation-checked, quota-limited and reclaimed
-when closed or when the process exits. No FreeType dependency is used.
+The [split font implementation](../TTF_SPLIT_USER_KERNEL.md) has an
+UnDOS-owned user-mode TrueType decoder and kernel VM, rasterizer, face registry
+and glyph cache. The kernel independently validates uploaded UFT1 resources.
+Process tables hold handles; the published default retains both faces after
+Font Loader exits. No FreeType dependency is used.
 
 Run `/System/fontload.elf` with argument `/System/Fonts/FTEST.TTF` from the
 Program Manager Run dialog to exercise decoding, registration and cleanup.
-The packaged font is original geometric test data, not a usable system font.
-The loader explicitly reports **rendering unavailable**: the TrueType
-interpreter, scalable rasterizer, shared glyph cache and GUI font selection
-remain unimplemented. Existing bitmap text is unchanged.
+FTEST is original geometric test data, not the startup font. That one-file
+command tests registration only. `/System/fontload.elf --preview` republishes
+the packaged Source Sans 3 pair at 12 ppem and displays both weights.
+The unmodified regular/bold fonts and their SIL Open Font License are packaged
+as `SSR.TTF`, `SSB.TTF` and `OFLSS.TXT` under `/System/Fonts`.
+
+Use `python3 Tools/progman-smoke.py --output build/font-default --scenario
+font-desktop` to capture the default 11-pt startup with Program Manager and
+File Manager. The `font-config`, `font-config-missing`,
+`font-config-invalid`, and `font-config-missing-face` scenarios require a
+separate test image selected with `UNDOS_IMAGE_DIR`; they verify the effective
+configuration and fail-fast startup paths.
+
+Menu bars, popup rows, captions, and minimized-window labels use the published
+font's measured ink and metrics. Font publication prepares geometry before
+commit. USER rejects a candidate with `OutOfRange` if cumulative descendant
+shifts exceed its signed 16-bit window-coordinate range, and retains the old
+font and geometry. Oversized menus retain their logical row heights, clip to
+the display viewport, and scroll keyboard selection into view. Applications
+use the same SDK font-object contract for layout and drawing.

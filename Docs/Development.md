@@ -36,9 +36,15 @@ python3 Scripts/build.py image --docker
 python3 Scripts/build.py hosted
 ```
 
+Use `Scripts/build.py` for orchestration, not compiler dependency management.
+
 `apps` stages the SDK before building applications. `image` builds the kernel,
 SDK and applications, then assembles `build/image/os.iso` and
 `build/image/fat32.img`. Kernel and SDK builds remain independent.
+Keep component dependencies within their ownership boundaries. Do not add
+application dependencies to the kernel or kernel dependencies to the SDK
+producer. `BuildSupport/` owns shared CMake helpers, and `ABI/IDL/` owns syscall
+inputs.
 Use `--config Release`, `--jobs N`, or `--build-root PATH` as needed.
 Repeated `--cmake-arg=-DNAME=VALUE` arguments reach CMake configuration.
 With `--docker`, build roots and extra input directories must be inside the
@@ -67,8 +73,9 @@ The Python commands and standalone component entry points remain independent.
 For Kernel, SDK, and CRT profiles, select the Docker cross-toolchain with
 `i686-elf-gcc/g++`. The launcher selects the matching toolchain file before
 compiler detection. Kernel/HAL images use `BuildSupport/i686-toolchain.cmake`;
-SDK/CRT use `SDK/UnDOS-toolchain.cmake`. Do not reuse a macOS/native cache or
-pass `CMAKE_OSX_ARCHITECTURES`/`-arch` flags to the cross-compiler.
+SDK/CRT use `SDK/UnDOS-toolchain.cmake`. Do not exchange their shared-library
+link modes. Do not reuse a macOS/native cache or pass
+`CMAKE_OSX_ARCHITECTURES`/`-arch` flags to the cross-compiler.
 For `Hosted`, select native host compilers, not the i386 cross-compiler.
 If CLion reports compiler-information errors from `cc`/`c++` rather than
 `i686-elf-gcc/g++`, check the profile's selected toolchain and reset its CMake
@@ -166,6 +173,12 @@ independent instances, and closing one instance), and `font` (user-mode
 TrueType decode, kernel registration, and private-face release). Run these sequentially:
 they share the same writable disk image and must not run concurrently.
 
+For terminal input or standard-handle changes, run the hosted `[tty]` and
+`[standard-handles]` selectors. Also run the SDK terminal example with
+`--scenario terminal-stdio` and `--scenario terminal-close` in separate
+invocations. These image checks share writable state and each uses the bounded
+15-second QEMU wrapper.
+
 Hosted tests can be configured independently:
 
 ```sh
@@ -189,14 +202,11 @@ and remaining release gates.
 > [!IMPORTANT]
 > When generating code modifications or additions for the UnDOS codebase, you must adhere strictly to these constraints:
 
-* **No Standard Library Headers:** Do not include `<iostream>`, `<string>`, `<vector>`, or any hosted standard header. You must use header-only equivalents provided by
-  `<strfmt.hpp>` or `libkcpp` in the `kstd` namespace.
+* **No hosted standard library headers:** Do not include `<iostream>`, `<string>`, `<vector>`, or another hosted standard header. Use the header-only equivalents provided by `<strfmt.hpp>` or `SDK/KStd` in the `kstd` namespace.
 * **PMM Initialization Placement:** Any allocation arrays, tracking structures, or page frame bitmaps generated for memory subsystem design must calculate their initial
   position pointers starting exactly at `boot_info->kernel_virtual_end`. Do not use hardcoded markers.
-* **Maintain C-Linkage on Exports:** Any function annotated with API visibility must use `extern "C"` to prevent C++ name-mangling, as the Stage 1.5 dynamic symbol map
-  matches string identifiers exactly.
-* **Naming Convention:** All exported API functions must follow the pattern: `<Module UpperCase: KE or HAL>_<System UpperCase>_<Name CamelCase>`.
-  - Examples: `KE_VMM_AllocateRegion`, `HAL_IO_Out8`, `KE_OB_InsertObject`.
-  - These functions **must not** be wrapped in C++ namespaces.
-* **References Over Pointers:** Prefer C++ references over raw pointers. Only use pointers if `nullptr` is a valid and expected state for the parameter or return value.
-* **Smart Pointer Efficiency:** Pass `KObjectPtr<T>` as `const &` to avoid atomic refcount churn when possible.
+* **C-linkage exports:** Functions with API visibility must use `extern "C"` so the Stage 1.5 symbol map can match their names exactly.
+* **Exported API names:** Use `<Module>_<SYSTEM>_<Name>` with `KE` or `HAL` as the module prefix, an uppercase system name, and a camel-case function name. For example, `KE_VMM_AllocateRegion`, `HAL_IO_Out8`, or `KE_OB_InsertObject`. Do not wrap exported functions in C++ namespaces.
+* **References and pointers:** Prefer references. Use a pointer only when `nullptr` is a valid and expected argument or result.
+* **Smart pointers:** Pass `KObjectPtr<T>` as `const &` when possible to avoid unnecessary atomic reference-count updates.
+* **Driver state:** Do not store mutable driver state in global variables. Put it in a context structure, register it with `KE_IO_CreateDeviceWithContext<CONTEXT_STRUCT_NAME>` when creating the FDO, and access it through `pdo->deviceExtension.as<CONTEXT_STRUCT_NAME>()`.

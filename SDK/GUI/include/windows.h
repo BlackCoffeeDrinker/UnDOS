@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <undos/syscalls.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,6 +39,7 @@ typedef struct HMENU__ *HMENU;
 typedef struct HINSTANCE__ *HINSTANCE;
 typedef struct HICON__ *HICON;
 typedef struct HCURSOR__ *HCURSOR;
+typedef uint32_t HFONT;
 
 typedef struct tagPOINT {
   LONG x;
@@ -101,6 +103,7 @@ typedef WNDCLASSA WNDCLASS;
 #define WM_CLOSE 0x0010
 #define WM_QUIT 0x0012
 #define WM_DISPLAYCHANGE 0x007E
+#define WM_FONTCHANGED 0x007D
 #define WM_NCHITTEST 0x0084
 #define WM_NCMOUSEMOVE 0x00A0
 #define WM_NCLBUTTONDOWN 0x00A1
@@ -192,7 +195,16 @@ BOOL Rectangle(HDC dc, int left, int top, int right, int bottom);
 BOOL Ellipse(HDC dc, int left, int top, int right, int bottom);
 BOOL MoveToEx(HDC dc, int x, int y, POINT *previous);
 BOOL LineTo(HDC dc, int x, int y);
-BOOL TextOutA(HDC dc, int x, int y, LPCSTR text, int length);
+BOOL AcquireFont(enum FontSource source, enum GlyphFallbackPolicy fallback,
+                 HFONT *font, uint32_t *generation);
+BOOL CloseFont(HFONT font);
+BOOL SelectFont(HDC dc, HFONT font, HFONT *previousFont);
+BOOL GetFontMetrics(HFONT font, enum TextStyle style, enum TextRepertoire repertoire,
+                    struct TextMetricsV2 *metrics);
+BOOL MeasureText(HFONT font, enum TextStyle style, enum TextLayoutMode layout,
+                 enum TextRepertoire repertoire, LPCSTR text, struct TextExtentV2 *extent);
+BOOL DrawText(HDC dc, int x, int y, enum TextStyle style, enum TextLayoutMode layout,
+              enum TextRepertoire repertoire, LPCSTR text);
 COLORREF SetTextColor(HDC dc, COLORREF color);
 COLORREF SetBkColor(HDC dc, COLORREF color);
 int SetBkMode(HDC dc, int mode);
@@ -213,7 +225,6 @@ void SetLastError(DWORD error);
 #define PeekMessage PeekMessageA
 #define DispatchMessage DispatchMessageA
 #define DefWindowProc DefWindowProcA
-#define TextOut TextOutA
 
 #ifdef __cplusplus
 }

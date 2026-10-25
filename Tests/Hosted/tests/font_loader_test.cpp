@@ -182,6 +182,51 @@ TEST_CASE("font loader decodes cmap formats 4 and 12", "[fontloader]") {
   }
 }
 
+TEST_CASE("font loader retains empty glyph metrics and optional instructions", "[fontloader]") {
+  for (const uint32_t size : {10u, 12u, 14u, 15u}) {
+    Fixture fixture;
+    auto &glyf = fixture.get(tag('g','l','y','f'));
+    glyf = Buffer(size);
+    if (size >= 14) {
+      be16(glyf, 10, 2);
+      glyf[12] = 0xb0; glyf[13] = 7;
+    }
+    auto &loca = fixture.get(tag('l','o','c','a'));
+    be32(loca, 8, size); be32(loca, 12, size);
+    Buffer output;
+    REQUIRE(run(fixture, output) == DecodeError::None);
+    REQUIRE(validate({output.data(), output.size()}) == Error::None);
+    ResourceView view({output.data(), output.size()});
+    const auto glyphs = view.section(Section::Glyphs);
+    const auto *glyph = glyphs.data + GlyphSize;
+    REQUIRE(read_u32(glyph) == 1);
+    REQUIRE(read_u32(glyph + 4) == 600);
+    REQUIRE(read_i32(glyph + 8) == -10);
+    REQUIRE(view.section(Section::Points).size == 0);
+    REQUIRE(view.section(Section::Contours).size == 0);
+    const auto program = view.section(Section::GlyphPrograms);
+    REQUIRE(program.size == (size >= 14 ? 2 : 0));
+    if (program.size) {
+      REQUIRE(program.data[0] == 0xb0);
+      REQUIRE(program.data[1] == 7);
+    }
+  }
+}
+
+TEST_CASE("font loader rejects truncated empty glyph instruction lengths and programs", "[fontloader]") {
+  for (const uint32_t size : {9u, 11u, 13u, 14u}) {
+    Fixture fixture;
+    auto &glyf = fixture.get(tag('g','l','y','f'));
+    glyf = Buffer(size);
+    if (size >= 13) be16(glyf, 10, 3);
+    auto &loca = fixture.get(tag('l','o','c','a'));
+    be32(loca, 8, size); be32(loca, 12, size);
+    Buffer output;
+    REQUIRE(run(fixture, output) == DecodeError::InvalidGlyph);
+    REQUIRE(output.empty());
+  }
+}
+
 TEST_CASE("font loader rejects truncated SFNT and glyph data", "[fontloader]") {
   Fixture fixture;
   const auto file = fixture.build();

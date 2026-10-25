@@ -112,16 +112,27 @@ struct Model {
   }
 };
 
+// Icon cells keep the classic 112-pixel minimum and widen to the widest
+// measured label plus padding; overflow pages instead of truncating labels.
+constexpr int MinimumCellWidth = 112;
+constexpr int LabelPadding = 8;
+
 struct Grid {
   int columns;
   int rows;
   int page_size;
-  static Grid for_size(int width, int height) {
-    int columns = width / 112;
-    int rows = height / 72;
+  int cell_width;
+  int cell_height;
+  static Grid for_size(int width, int height, int labelHeight, int labelWidth = 0) {
+    const int cellWidth = labelWidth > MinimumCellWidth - LabelPadding ? labelWidth + LabelPadding
+                                                                        : MinimumCellWidth;
+    int columns = width / cellWidth;
+    const int cellHeight = 50 + labelHeight;
+    int rows = height / cellHeight;
     if (columns < 1) columns = 1;
     if (rows < 1) rows = 1;
-    return {.columns = columns, .rows = rows, .page_size = columns * rows};
+    return {.columns = columns, .rows = rows, .page_size = columns * rows,
+            .cell_width = cellWidth, .cell_height = cellHeight};
   }
   int page_start(int selection) const { return selection / page_size * page_size; }
 };

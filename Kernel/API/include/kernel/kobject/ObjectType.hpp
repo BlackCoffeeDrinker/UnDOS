@@ -40,6 +40,7 @@ constexpr auto TYPE_TTY_SINK = "tty_sink"_type;
 constexpr auto TYPE_IO = "io"_type;
 constexpr auto TYPE_EVENT = "event"_type;
 constexpr auto TYPE_WINDOW = "window"_type;
+constexpr auto TYPE_FONT = "font"_type;
 
 template<ObjectType T>
 struct ObjectTypeOf {};

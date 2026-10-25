@@ -435,6 +435,8 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_OperateFile(kernel::VFSFileOperatio
 UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kstd::error_code> KE_VFS_ReadFile(const kernel::KObjectPtr<kernel::KIOObject> &file, const kstd::span<uint8_t> &readInto) noexcept {
   if (!file) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidHandle); }
   if (file->ops != &kernel::io::FileOps) [[unlikely]] { return kstd::unexpected(kernel::KernelError::WrongObjectType); }
+  if (!file->mountPoint) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidState); }
+  kstd::unique_lock volumeLock(file->mountPoint->fileMutex);
   if (file->isClosed || !file->vfsNode) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidState); }
   if (!file->FileSystem()) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidState); }
   if (!file->FileSystem()->ReadHandle) [[unlikely]] { return kstd::unexpected(kernel::KernelError::Unsupported); }
@@ -467,6 +469,11 @@ UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kstd::error_code> KE_VFS_WriteFile
 
 UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kstd::error_code> KE_VFS_SeekFile(const kernel::KObjectPtr<kernel::KIOObject> &file, uint64_t absolute_offset) noexcept {
   if (!file) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidHandle); }
+  if (file->ops == &kernel::io::FileOps && file->mountPoint) {
+    kstd::unique_lock volumeLock(file->mountPoint->fileMutex);
+    if (file->isClosed) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidState); }
+    return file->offset = absolute_offset;
+  }
   if (file->isClosed) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidState); }
 
   return file->offset = absolute_offset;

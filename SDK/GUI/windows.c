@@ -5,6 +5,8 @@
 
 typedef struct DCState {
   uint32_t handle;
+  HFONT font;
+  BOOL hasFont;
   COLORREF textColor;
   COLORREF backgroundColor;
   uint32_t opaque;
@@ -97,7 +99,26 @@ HWND CreateWindowExA(DWORD exStyle, LPCSTR className, LPCSTR windowName, DWORD s
   if (x == CW_USEDEFAULT) x = 0;
   if (y == CW_USEDEFAULT) y = 0;
   if (width == CW_USEDEFAULT) width = 320;
-  if (height == CW_USEDEFAULT) height = 200;
+  if (height == CW_USEDEFAULT) {
+    HFONT font = 0;
+    uint32_t generation = 0;
+    struct TextMetricsV2 metrics = {0};
+    if (!AcquireFont(FontSource_AcquireSystemDefault,
+                     GlyphFallbackPolicy_FallbackFaceNotdef, &font, &generation) ||
+        !GetFontMetrics(font, TextStyle_StyleRegular,
+                        TextRepertoire_RepertoireBasic, &metrics)) {
+      if (font) (void)CloseFont(font);
+      return NULL;
+    }
+    (void)generation;
+    (void)CloseFont(font);
+    const uint64_t defaultHeight = 10ull * metrics.lineHeight + 24;
+    if (!metrics.lineHeight || defaultHeight > INT32_MAX) {
+      lastError = SyscallReturnCode_INVALID_ARGUMENT;
+      return NULL;
+    }
+    height = (int)defaultHeight;
+  }
 
   uint32_t nativeStyle = 0;
   if (style & WS_CAPTION) nativeStyle |= WindowStyle_Caption | WindowStyle_Border;
@@ -367,9 +388,30 @@ HDC BeginPaint(HWND window, PAINTSTRUCT *paint) {
     return NULL;
   }
   state->handle = handle;
+  state->font = 0;
+  state->hasFont = FALSE;
   state->textColor = 0;
   state->backgroundColor = 7;
   state->opaque = 1;
+  uint32_t generation = 0;
+  HFONT font = 0;
+  if (!AcquireFont(FontSource_AcquireSystemDefault,
+                   GlyphFallbackPolicy_FallbackFaceNotdef, &font, &generation)) {
+    crt_free(state);
+    (void)UD_SYS_EndPaintV1(window_handle(window), handle);
+    return NULL;
+  }
+  (void)generation;
+  HFONT previousFont = 0;
+  if (!SelectFont((HDC)(uintptr_t)handle, font, &previousFont)) {
+    (void)CloseFont(font);
+    crt_free(state);
+    (void)UD_SYS_EndPaintV1(window_handle(window), handle);
+    return NULL;
+  }
+  if (previousFont) (void)CloseFont(previousFont);
+  state->font = font;
+  state->hasFont = TRUE;
   state->next = dcStates;
   dcStates = state;
 
@@ -400,6 +442,7 @@ BOOL EndPaint(HWND window, const PAINTSTRUCT *paint) {
   if (!syscall_result(UD_SYS_EndPaintV1(window_handle(window), handle))) return FALSE;
   DCState *state = *link;
   *link = state->next;
+  if (state->hasFont) (void)CloseFont(state->font);
   crt_free(state);
   return TRUE;
 }
@@ -447,28 +490,55 @@ BOOL LineTo(HDC dc, int x, int y) {
          syscall_result(UD_SYS_LineToV1(state->handle, x, y));
 }
 
-BOOL TextOutA(HDC dc, int x, int y, LPCSTR text, int length) {
-  DCState *state = find_dc(dc_handle(dc));
-  if (!state || !text || length < 0) {
+BOOL AcquireFont(enum FontSource source, enum GlyphFallbackPolicy fallback,
+                 HFONT *font, uint32_t *generation) {
+  if (!font || !generation) {
     lastError = SyscallReturnCode_INVALID_ARGUMENT;
     return FALSE;
   }
-  for (int i = 0; i < length; ++i) {
-    if (!text[i]) {
-      lastError = SyscallReturnCode_UNSUPPORTED;
-      return FALSE;
-    }
-  }
-  char *terminated = (char *)crt_malloc((size_t)length + 1);
-  if (!terminated) {
-    lastError = SyscallReturnCode_OUT_OF_MEMORY;
+  return syscall_result(UD_SYS_AcquireFontV1(source, fallback, font, generation));
+}
+
+BOOL CloseFont(HFONT font) {
+  return syscall_result(UD_SYS_CloseFontV1(font));
+}
+
+BOOL SelectFont(HDC dc, HFONT font, HFONT *previousFont) {
+  if (!previousFont) {
+    lastError = SyscallReturnCode_INVALID_ARGUMENT;
     return FALSE;
   }
-  for (int i = 0; i < length; ++i) terminated[i] = text[i];
-  terminated[length] = '\0';
+  return syscall_result(UD_SYS_SelectFontV1(dc_handle(dc), font, previousFont));
+}
+
+BOOL GetFontMetrics(HFONT font, enum TextStyle style, enum TextRepertoire repertoire,
+                    struct TextMetricsV2 *metrics) {
+  if (!metrics) {
+    lastError = SyscallReturnCode_INVALID_ARGUMENT;
+    return FALSE;
+  }
+  return syscall_result(UD_SYS_GetFontMetricsV1(font, style, repertoire, metrics));
+}
+
+BOOL MeasureText(HFONT font, enum TextStyle style, enum TextLayoutMode layout,
+                 enum TextRepertoire repertoire, LPCSTR text, struct TextExtentV2 *extent) {
+  if (!text || !extent) {
+    lastError = SyscallReturnCode_INVALID_ARGUMENT;
+    return FALSE;
+  }
+  return syscall_result(UD_SYS_MeasureTextV1(font, style, layout, repertoire, text, extent));
+}
+
+BOOL DrawText(HDC dc, int x, int y, enum TextStyle style, enum TextLayoutMode layout,
+              enum TextRepertoire repertoire, LPCSTR text) {
+  DCState *state = find_dc(dc_handle(dc));
+  if (!state || !text) {
+    lastError = SyscallReturnCode_INVALID_ARGUMENT;
+    return FALSE;
+  }
   const BOOL result = set_dc_colors(state) &&
-                      syscall_result(UD_SYS_TextOutV1(state->handle, x, y, terminated));
-  crt_free(terminated);
+                      syscall_result(UD_SYS_DrawTextV1(state->handle, x, y, style, layout,
+                                                       repertoire, text));
   return result;
 }
 

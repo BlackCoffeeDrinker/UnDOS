@@ -230,7 +230,9 @@ syscall V1 IO Write [223] {
 syscall V2 IO Write [226] {
     /** Open handle with write access. */
     handle: IN HANDLE;
-    /** Bytes to write, at most 4096 per call. Use null with length zero for an empty write. */
+    /** Bytes to write. The dispatcher rejects lengths above
+     * UNDOS_MAX_MAPPED_BUFFER_SIZE (64 MiB) with INVALID_SIZE; the target may
+     * accept fewer bytes. Use null with length zero for an empty write. */
     data: IN buffer<c<uint8_t>>;
     /** Actual bytes accepted, at most dataLength. Zero on handler failure;
      * undefined if dispatcher validation rejects the call before the handler. */

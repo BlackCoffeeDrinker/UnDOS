@@ -13,6 +13,8 @@ The installable sysroot, external CMake package, Docker SDK, and compiler-driver
 defaults are described in [the SDK guide](SDK.md). The initial standard
 C library subset is described in [the C library reference](Libc.md).
 This is not complete hosted ISO C/POSIX support.
+When changing this ABI, keep this document, the loader, CRT, syscall IDL inputs,
+and conformance probes consistent.
 
 ### CPU and C calling convention
 
@@ -193,17 +195,17 @@ committed input or EOF rather than treating an empty input queue as EOF.
 
 ### ABI conformance workflow
 
-[Build the image](Development.md#how-to-build-the-os), then run the hosted `[application-abi]`,
-`[process-startup]`, and `[standard-handles]` tests. The real startup assembly
-has an additional bounded opcode/alignment check:
+Build the image with `python3 Scripts/build.py image --docker`. Then run the
+hosted `[application-abi]`, `[process-startup]`, and `[standard-handles]` tests.
+The real startup assembly has an additional bounded opcode/alignment check:
 
 ```sh
 python3 Tests/Hosted/tests/process_startup_trampoline_test.py --build-dir build/abi-trampoline
 python3 Tools/progman-smoke.py --output build/abi-smoke --scenario abi
 ```
 
-The emulator check uses `run-qemu.sh` and launches `init --abi-test` through
-Program Manager. Its child checks quoted/empty arguments, initialized data
+The smoke test uses the bounded `run-qemu.sh` wrapper and launches
+`init --abi-test` through Program Manager. Its child checks quoted/empty arguments, initialized data
 and BSS, empty environment, standard-handle queries, FPU capability reporting,
 cross-library symbol resolution, dependency initialization, C++ destruction,
 atexit, reverse finalization, immediate exit without cleanup, full-width exit

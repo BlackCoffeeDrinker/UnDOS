@@ -17,6 +17,7 @@ constexpr uint32_t kMsgPaint = 0x000F;
 constexpr uint32_t kMsgClose = 0x0010;
 constexpr uint32_t kMsgCommand = 0x0111;
 constexpr uint32_t kMsgDisplayChange = 0x007E;
+constexpr uint32_t kMsgFontChanged = 0x007D;
 constexpr uint32_t kMsgKeyDown = 0x0100;
 constexpr uint32_t kMsgKeyUp = 0x0101;
 constexpr uint32_t kMsgChar = 0x0102;

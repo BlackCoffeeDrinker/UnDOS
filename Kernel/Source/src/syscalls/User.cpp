@@ -42,7 +42,12 @@ kstd::error_code handle_CreateWindow_V1(__KRN_USER_CREATEWINDOW_V1 &&args) {
       .width = args.width,
       .height = args.height,
       .userData = args.userData});
-  if (!window) return window.error();
+  if (!window) {
+    KE_Print("CreateWindow rejected class '{}' at {},{} size {}x{}: {}",
+             args.className, args.x, args.y, args.width, args.height,
+             window.error().message());
+    return window.error();
+  }
   args.hwnd = *window;
   return {};
 }

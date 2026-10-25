@@ -23,6 +23,8 @@ enum WindowMessage {
      * An inactive output reports zero dimensions and bpp. Query GetDisplayMode
      * for the current generation and full state. */
     DisplayChange = 0x007E,
+    /** Coalesced font generation change; wParam is the current generation. */
+    FontChanged = 0x007D,
     NcHitTest   = 0x0084,
     NcMouseMove = 0x00A0,
     /** Single system-box click: wParam=SysMenu (3), lParam signed screen x/y.

@@ -1,15 +1,21 @@
 // Included inside fat.cpp's private namespace; all operations run under the VFS volume lock.
 
-bool FAT_ValidCluster(const FAT_Volume &vol, uint32_t cluster) {
-  return cluster >= 2 && cluster - 2 < vol.totalClusters;
+void FAT_InvalidateTraversal(FAT_Volume &vol) {
+  if (vol.traversalGeneration == UINT64_MAX) {
+    vol.traversalReuseDisabled = true;
+    return;
+  }
+  ++vol.traversalGeneration;
 }
 
 kstd::error_code FAT_WriteBytes(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount,
     uint64_t offset, kstd::span<const uint8_t> bytes) {
+  auto *vol = mount->driverExtension.as<FAT_Volume>();
+  FAT_InvalidateTraversal(*vol);
   size_t transferred = 0;
   const auto status = KE_IO_WriteDevice(mount->volume, offset, bytes, transferred);
   if (!status && transferred == bytes.size()) return {};
-  mount->driverExtension.as<FAT_Volume>()->writable = false;
+  vol->writable = false;
   KE_Print("FS_FAT: write failed; volume mutations disabled until remount; filesystem check required");
   return status ? status : kernel::make_error_code(kernel::KernelError::IoError);
 }
@@ -102,18 +108,40 @@ kstd::expected<uint32_t, kstd::error_code> FAT_AllocateCluster(
 // Returns a physical sector or zero at end of chain. Bounds prevent corrupt cycles from hanging the kernel.
 kstd::expected<uint32_t, kstd::error_code> FAT_DirectorySector(
     const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const FAT_Volume &vol,
-    const FAT_VFSNode &dir, uint32_t index) {
+    const FAT_VFSNode &dir, uint32_t index, FAT_ChainCheckpoint &checkpoint) {
   if (dir.isFixedRoot) return index < vol.rootDirSectors ? vol.rootDirSector + index : 0u;
   if (index / vol.sectorsPerCluster >= vol.totalClusters) return kstd::unexpected(kernel::KernelError::InvalidFormat);
+  const uint64_t targetIndex = index / vol.sectorsPerCluster;
   uint32_t cluster = dir.startCluster;
-  for (uint32_t i = 0; i < index / vol.sectorsPerCluster; ++i) {
+  uint64_t clusterIndex = 0;
+  if (!vol.traversalReuseDisabled && checkpoint.valid &&
+      checkpoint.generation == vol.traversalGeneration &&
+      checkpoint.startCluster == dir.startCluster &&
+      checkpoint.clusterIndex <= targetIndex &&
+      FAT_ValidCluster(vol, checkpoint.cluster)) {
+    cluster = checkpoint.cluster;
+    clusterIndex = checkpoint.clusterIndex;
+  }
+  for (; clusterIndex < targetIndex; ++clusterIndex) {
     if (!FAT_ValidCluster(vol, cluster)) return kstd::unexpected(kernel::KernelError::InvalidFormat);
     const auto next = FAT_GetNextCluster(mount, &vol, cluster);
     if (!next) return kstd::unexpected(next.error());
     if (FAT_IsEndOfChain(&vol, *next)) return 0u;
+    if (!FAT_ValidCluster(vol, *next)) return kstd::unexpected(kernel::KernelError::InvalidFormat);
     cluster = *next;
   }
   if (!FAT_ValidCluster(vol, cluster)) return kstd::unexpected(kernel::KernelError::InvalidFormat);
+  if (!vol.traversalReuseDisabled) {
+    checkpoint = {
+        .valid = true,
+        .generation = vol.traversalGeneration,
+        .startCluster = dir.startCluster,
+        .clusterIndex = clusterIndex,
+        .cluster = cluster,
+    };
+  } else {
+    checkpoint.valid = false;
+  }
   return FAT_ClusterToSector(&vol, cluster) + index % vol.sectorsPerCluster;
 }
 
@@ -132,29 +160,95 @@ kstd::expected<bool, kstd::error_code> FAT_FindEntry(
   const auto &vol = *mount->driverExtension.as<FAT_Volume>();
   if (vol.type == FAT_Type::ExFAT) return kstd::unexpected(kernel::KernelError::Unsupported);
   if (parent.type != kernel::VFSNodeType::Directory) return kstd::unexpected(kernel::KernelError::NotDirectory);
-  const auto &dir = *parent.fsPrivate.as<FAT_VFSNode>();
+  auto &dir = *parent.fsPrivate.as<FAT_VFSNode>();
   auto buffer = kernel::DataBuffer::Alloc(vol.bytesPerSector);
   if (!buffer) return kstd::unexpected(kernel::KernelError::OutOfMemory);
-  uint32_t seen = 0;
+  const bool enumerate = name == nullptr;
+  const uint64_t generation = vol.traversalGeneration;
+  if (enumerate && (vol.traversalReuseDisabled ||
+      (dir.directoryOrdinal.valid && dir.directoryOrdinal.generation != generation) ||
+      (!dir.isFixedRoot && dir.directoryChain.valid && dir.directoryChain.generation != generation) ||
+      (dir.directoryEofKnown && dir.directoryEofGeneration != generation))) {
+    dir.directoryOrdinal.valid = false;
+    dir.directoryChain.valid = false;
+    dir.directoryEofKnown = false;
+  }
+  if (enumerate && dir.directoryEofKnown && dir.directoryEofGeneration == generation &&
+      ordinal >= dir.directoryEofCount) return false;
+
+  uint64_t seen = 0;
   bool longName = false;
-  for (uint32_t sectorIndex = 0;; ++sectorIndex) {
-    const auto sector = FAT_DirectorySector(mount, vol, dir, sectorIndex);
+  uint32_t sectorIndex = 0;
+  uint32_t firstSlot = 0;
+  FAT_ChainCheckpoint chain = {};
+  if (enumerate && !vol.traversalReuseDisabled && dir.directoryOrdinal.valid &&
+      dir.directoryOrdinal.generation == generation && dir.directoryOrdinal.ordinal <= ordinal) {
+    sectorIndex = dir.directoryOrdinal.sector;
+    firstSlot = dir.directoryOrdinal.slot;
+    seen = dir.directoryOrdinal.ordinal;
+    longName = dir.directoryOrdinal.pendingLongName;
+    chain = dir.directoryChain;
+  }
+
+  for (;;) {
+    auto nextChain = chain;
+    const auto sector = FAT_DirectorySector(mount, vol, dir, sectorIndex, nextChain);
     if (!sector) return kstd::unexpected(sector.error());
-    if (!*sector) return false;
+    if (!*sector) {
+      if (enumerate) {
+        dir.directoryEofKnown = true;
+        dir.directoryEofCount = seen;
+        dir.directoryEofGeneration = generation;
+      }
+      return false;
+    }
     size_t read = 0;
     const auto status = KE_IO_ReadDevice(mount->volume, static_cast<uint64_t>(*sector) * vol.bytesPerSector,
         kstd::span(buffer.as<uint8_t>(), vol.bytesPerSector), read);
     if (status) return kstd::unexpected(status);
     if (read != vol.bytesPerSector) return kstd::unexpected(kernel::KernelError::UnexpectedEndOfFile);
     const auto *entries = buffer.as<FAT_DirEntry>();
-    for (uint32_t slot = 0; slot < vol.bytesPerSector / sizeof(FAT_DirEntry); ++slot) {
+    chain = nextChain;
+    for (uint32_t slot = firstSlot; slot < vol.bytesPerSector / sizeof(FAT_DirEntry); ++slot) {
       const auto &entry = entries[slot];
       const bool unused = !entry.name[0] || static_cast<uint8_t>(entry.name[0]) == 0xe5;
       bool match = name && !name[0] && unused;
-      if (!match && !entry.name[0]) return false;
+      if (!match && !entry.name[0]) {
+        if (enumerate) {
+          dir.directoryEofKnown = true;
+          dir.directoryEofCount = seen;
+          dir.directoryEofGeneration = generation;
+        }
+        return false;
+      }
       if (!unused && entry.attr == kAttrLongName) { longName = true; continue; }
       if (!unused && !(entry.attr & kAttrVolumeId) && entry.name[0] != '.') {
-        match = name ? name[0] && kstd::string_view(entry.name, 11) == kstd::string_view(name, 11) : seen++ == ordinal;
+        if (enumerate) {
+          if (seen == ordinal) {
+            out = {.entry = entry, .address = static_cast<uint64_t>(*sector) * vol.bytesPerSector + slot * sizeof(FAT_DirEntry),
+                   .directorySector = sectorIndex, .slot = slot, .longName = longName};
+            if (!vol.traversalReuseDisabled) {
+              dir.directoryOrdinal = {
+                  .valid = true,
+                  .generation = generation,
+                  .ordinal = seen,
+                  .sector = sectorIndex,
+                  .slot = slot,
+                  .pendingLongName = longName,
+              };
+              dir.directoryChain = chain;
+              if (dir.isFixedRoot) dir.directoryChain.generation = generation;
+            } else {
+              dir.directoryOrdinal.valid = false;
+              dir.directoryChain.valid = false;
+            }
+            dir.directoryEofKnown = false;
+            return true;
+          }
+          ++seen;
+        } else {
+          match = name[0] && kstd::string_view(entry.name, 11) == kstd::string_view(name, 11);
+        }
       }
       if (match) {
         out = {.entry = entry, .address = static_cast<uint64_t>(*sector) * vol.bytesPerSector + slot * sizeof(FAT_DirEntry),
@@ -163,6 +257,9 @@ kstd::expected<bool, kstd::error_code> FAT_FindEntry(
       }
       longName = false;
     }
+    firstSlot = 0;
+    if (sectorIndex == UINT32_MAX) return kstd::unexpected(kernel::KernelError::InvalidFormat);
+    ++sectorIndex;
   }
 }
 
@@ -235,7 +332,8 @@ kstd::expected<FAT_EntryLocation, kstd::error_code> FAT_FreeSlot(
     const uint32_t entries = vol.bytesPerSector / sizeof(FAT_DirEntry);
     uint64_t nextAddress = slot.address + sizeof(FAT_DirEntry);
     if (slot.slot + 1 == entries) {
-      const auto nextSector = FAT_DirectorySector(mount, vol, dir, slot.directorySector + 1);
+      FAT_ChainCheckpoint checkpoint{};
+      const auto nextSector = FAT_DirectorySector(mount, vol, dir, slot.directorySector + 1, checkpoint);
       if (!nextSector) return kstd::unexpected(nextSector.error());
       if (!*nextSector) return slot;
       nextAddress = static_cast<uint64_t>(*nextSector) * vol.bytesPerSector;

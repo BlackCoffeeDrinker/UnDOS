@@ -33,6 +33,25 @@ add_executable(KernelTests
         standard_handles_test.cpp
         font_resource_test.cpp
         font_loader_test.cpp
+        font_config_test.cpp
+        font_corpus_test.cpp
+        font_glyph_test.cpp
+        font_raster_test.cpp
+        font_face_test.cpp
+        font_scaler_test.cpp
+        font_vm_test.cpp
+        ../../../Kernel/Source/src/gfx/font/glyph.cpp
+        ../../../Kernel/Source/src/gfx/font/raster.cpp
+        ../../../Kernel/Source/src/gfx/font/face.cpp
+        ../../../Kernel/Source/src/gfx/font/realization.cpp
+        ../../../Kernel/Source/src/gfx/font/glyph_cache.cpp
+        ../../../Kernel/Source/src/gfx/font/default_font.cpp
+        ../../../Kernel/Source/src/gfx/font/text.cpp
+        ../../../Kernel/Source/src/gfx/font/font_system.cpp
+        ../../../Kernel/Source/src/gfx/font/vm.cpp
+        ../../../Kernel/Source/src/gfx/font/vm_executor.cpp
+        ../../../Kernel/Source/src/gfx/font/vm_points.cpp
+        ../../../Kernel/Source/src/gfx/font/vm_hints.cpp
         ../../../Apps/Fontloader/decoder.cpp
         percpu_test.cpp
         input_scancode_test.cpp
@@ -90,6 +109,7 @@ add_executable(KernelTests
 
         ../../../Kernel/Drivers/disk_fake/fake_disk_file_backend.cpp
         disk_fake_test.cpp
+        ata_read_test.cpp
 
         vfs_test.cpp
 
@@ -110,6 +130,19 @@ target_compile_options(KernelTests PRIVATE -include new)
 target_link_libraries(KernelTests PRIVATE libkcpp KernelHeaders undos_warnings)
 target_link_libraries(KernelTests PRIVATE undos_font_resource)
 target_link_libraries(KernelTests PRIVATE Catch2::Catch2WithMain)
+
+set(_font_corpus "#pragma once\n#include <stdint.h>\nnamespace font_fixture {\n")
+foreach (_font SourceSans3-Regular SourceSans3-Bold SourceCodePro-Regular)
+    set(_font_path "${CMAKE_CURRENT_SOURCE_DIR}/../fixtures/fonts/${_font}.ttf")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_font_path}")
+    file(READ "${_font_path}" _font_bytes HEX)
+    string(REGEX REPLACE "(..)" "0x\\1," _font_bytes "${_font_bytes}")
+    string(REPLACE "-" "_" _font_symbol "${_font}")
+    string(APPEND _font_corpus "inline constexpr uint8_t ${_font_symbol}[] = {${_font_bytes}};\n")
+endforeach ()
+string(APPEND _font_corpus "}\n")
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/font_corpus.hpp" CONTENT "${_font_corpus}")
+target_include_directories(KernelTests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
 # The real fs_fat/volmgr driver sources define their own `extern "C" DriverEntry`,
 # which would collide if linked directly into KernelTests alongside each other.

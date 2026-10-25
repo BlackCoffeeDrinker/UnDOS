@@ -4,14 +4,24 @@
 #include <kernel/kobject/KDisplay.hpp>
 
 #include "user/bitmap_font.hpp"
+#include "user/ui_text.hpp"
 
 namespace kernel::user {
+
+int32_t caption_height_locked() noexcept {
+  const int32_t metricHeight = UiText::current().text_height() + 4;
+  return metricHeight > kCaptionButtonSize ? metricHeight : kCaptionButtonSize;
+}
+
+int32_t minimized_child_height_locked() noexcept {
+  return 40 + UiText::current().text_height();
+}
 
 URect client_rect_locked(const KWindowObject &window) noexcept {
   if (window.state == KWindowObject::State::Minimized) return {};
   const int32_t b = (window.style & kStyleBorder) ? kBorderWidth : 0;
-  const int32_t c = (window.style & kStyleCaption) ? kCaptionHeight : 0;
-  const int32_t m = window.menu ? kMenuBarHeight : 0;
+  const int32_t c = (window.style & kStyleCaption) ? caption_height_locked() : 0;
+  const int32_t m = window.menu ? menu_row_height_locked() : 0;
   const int32_t width = window.rect.right - window.rect.left - 2 * b;
   const int32_t height = window.rect.bottom - window.rect.top - 2 * b - c - m;
   return {.left = 0, .top = 0, .right = width > 0 ? width : 0, .bottom = height > 0 ? height : 0};
@@ -24,8 +34,8 @@ URect client_to_screen_locked(const KWindowObject &window, const URect &clientRe
     ox += kBorderWidth;
     oy += kBorderWidth;
   }
-  if (window.style & kStyleCaption) oy += kCaptionHeight;
-  if (window.menu) oy += kMenuBarHeight;
+  if (window.style & kStyleCaption) oy += caption_height_locked();
+  if (window.menu) oy += menu_row_height_locked();
 
   return clientRect.Offset(window.rect.left + ox, window.rect.top + oy);
 }
@@ -37,8 +47,8 @@ URect screen_to_client_locked(const KWindowObject &window, const URect &screenRe
     ox += kBorderWidth;
     oy += kBorderWidth;
   }
-  if (window.style & kStyleCaption) oy += kCaptionHeight;
-  if (window.menu) oy += kMenuBarHeight;
+  if (window.style & kStyleCaption) oy += caption_height_locked();
+  if (window.menu) oy += menu_row_height_locked();
 
   return screenRect.Offset(-(window.rect.left + ox), -(window.rect.top + oy));
 }
@@ -49,7 +59,7 @@ HitTest hit_test_locked(const KWindowObject &window, int32_t x, int32_t y) noexc
   if (window.state == KWindowObject::State::Minimized && window.parent) return HitTest::Caption;
 
   const int32_t b = (window.style & kStyleBorder) ? kBorderWidth : 0;
-  const int32_t c = (window.style & kStyleCaption) ? kCaptionHeight : 0;
+  const int32_t c = (window.style & kStyleCaption) ? caption_height_locked() : 0;
 
   if (x < window.rect.left + b) {
     if (y < window.rect.top + b) return HitTest::TopLeft;
@@ -65,14 +75,18 @@ HitTest hit_test_locked(const KWindowObject &window, int32_t x, int32_t y) noexc
   if (y >= window.rect.bottom - b) return HitTest::Bottom;
 
   if (c > 0 && y < window.rect.top + b + c) {
-    if (x < window.rect.left + b + kCaptionHeight) return HitTest::SysMenu;
-    if (x >= window.rect.right - b - kCaptionHeight) return HitTest::MaxButton;
-    if (x >= window.rect.right - b - 2 * kCaptionHeight) return HitTest::MinButton;
+    const int32_t buttonTop = window.rect.top + b + (c - kCaptionButtonSize) / 2;
+    if (x < window.rect.left + b + kCaptionButtonSize && y >= buttonTop &&
+        y < buttonTop + kCaptionButtonSize) return HitTest::SysMenu;
+    if (x >= window.rect.right - b - kCaptionButtonSize && y >= buttonTop &&
+        y < buttonTop + kCaptionButtonSize) return HitTest::MaxButton;
+    if (x >= window.rect.right - b - 2 * kCaptionButtonSize && y >= buttonTop &&
+        y < buttonTop + kCaptionButtonSize) return HitTest::MinButton;
     return HitTest::Caption;
   }
 
   if (window.menu &&
-      y < window.rect.top + b + c + kMenuBarHeight)
+      y < window.rect.top + b + c + menu_row_height_locked())
     return HitTest::MenuBar;
 
   return HitTest::Client;
@@ -111,19 +125,19 @@ void draw_nonclient_locked(KWindowObject &window, const URect &limit) noexcept {
     draw_rect(iconX + 3, iconY + 10, 26, 17, kWindowFaceColor);
     draw_rect(iconX + 6, iconY + 13, 7, 6, 1);
     draw_rect(iconX + 17, iconY + 13, 7, 6, 4);
-    constexpr auto cell = static_cast<int32_t>(gfx::kFontCellWidth);
-    size_t length = 0;
-    while (length < window.title.size() && window.title[length] &&
-           static_cast<int64_t>(length + 1) * cell <= width - 4) ++length;
-    const int32_t labelWidth = static_cast<int32_t>(length) * cell;
+    const UiText ui = UiText::current();
+    const int32_t labelHeight = ui.text_height();
+    const int32_t labelTop = r.top + 36;
+    const size_t length = ui.fit(window.title.data(), window.title.size(), false, width - 4);
+    const int32_t labelWidth = ui.width(window.title.data(), length, false);
     const int32_t labelX = r.left + (width - labelWidth) / 2;
-    draw_rect(labelX - 1, r.top + 36, labelWidth + 2, 16, selected ? kActiveCaptionColor : kWindowFaceColor);
-    gfx::DrawBitmapText(labelX, r.top + 36, window.title.data(), length,
-                        selected ? 15 : 0, kWindowFaceColor, false,
-                        [&](int64_t l, int64_t t, int64_t right, int64_t bottom, uint32_t ink) {
-                          draw_rect(static_cast<int32_t>(l), static_cast<int32_t>(t),
-                                    static_cast<int32_t>(right - l), static_cast<int32_t>(bottom - t), ink);
-                        });
+    draw_rect(labelX - 1, labelTop, labelWidth + 2, labelHeight + 4,
+              selected ? kActiveCaptionColor : kWindowFaceColor);
+    ui.draw(labelX, labelTop + 2, window.title.data(), length, false, selected ? 15 : 0, kWindowFaceColor, false,
+            [&](int64_t l, int64_t t, int64_t right, int64_t bottom, uint32_t ink) {
+              draw_rect(static_cast<int32_t>(l), static_cast<int32_t>(t),
+                        static_cast<int32_t>(right - l), static_cast<int32_t>(bottom - t), ink);
+            });
     return;
   }
 
@@ -151,82 +165,86 @@ void draw_nonclient_locked(KWindowObject &window, const URect &limit) noexcept {
     const int32_t cy = r.top + (window.style & kStyleBorder ? kBorderWidth : 0);
     const int32_t cx = r.left + (window.style & kStyleBorder ? kBorderWidth : 0);
     const int32_t cw = r.right - r.left - (window.style & kStyleBorder ? 2 * kBorderWidth : 0);
-    draw_rect(cx, cy, cw, kCaptionHeight, color);
-    draw_rect(cx, cy + kCaptionHeight - 1, cw, 1, kWindowFrameColor);
+    const int32_t captionHeight = caption_height_locked();
+    const int32_t buttonTop = cy + (captionHeight - kCaptionButtonSize) / 2;
+    draw_rect(cx, cy, cw, captionHeight, color);
+    draw_rect(cx, cy + captionHeight - 1, cw, 1, kWindowFrameColor);
 
     auto button = [&](int32_t x) {
-      draw_rect(x, cy, kCaptionHeight, kCaptionHeight, kWindowFrameColor);
-      draw_rect(x + 1, cy + 1, kCaptionHeight - 2, kCaptionHeight - 2, kWindowFaceColor);
-      draw_rect(x + 1, cy + 1, kCaptionHeight - 2, 1, 15);
-      draw_rect(x + 1, cy + 1, 1, kCaptionHeight - 2, 15);
-      draw_rect(x + kCaptionHeight - 2, cy + 2, 1, kCaptionHeight - 3, 8);
-      draw_rect(x + 2, cy + kCaptionHeight - 2, kCaptionHeight - 3, 1, 8);
+      draw_rect(x, buttonTop, kCaptionButtonSize, kCaptionButtonSize, kWindowFrameColor);
+      draw_rect(x + 1, buttonTop + 1, kCaptionButtonSize - 2, kCaptionButtonSize - 2, kWindowFaceColor);
+      draw_rect(x + 1, buttonTop + 1, kCaptionButtonSize - 2, 1, 15);
+      draw_rect(x + 1, buttonTop + 1, 1, kCaptionButtonSize - 2, 15);
+      draw_rect(x + kCaptionButtonSize - 2, buttonTop + 2, 1, kCaptionButtonSize - 3, 8);
+      draw_rect(x + 2, buttonTop + kCaptionButtonSize - 2, kCaptionButtonSize - 3, 1, 8);
     };
-    if (cw >= 3 * kCaptionHeight) {
+    if (cw >= 3 * kCaptionButtonSize) {
       button(cx);
-      button(cx + cw - 2 * kCaptionHeight);
-      button(cx + cw - kCaptionHeight);
-      draw_rect(cx + 4, cy + 6, 10, 5, 0);
-      draw_rect(cx + 5, cy + 7, 8, 2, 15);
-      const int32_t minx = cx + cw - 2 * kCaptionHeight;
-      for (int32_t i = 0; i < 4; ++i) draw_rect(minx + 5 + i, cy + 7 + i, 8 - 2 * i, 1, 0);
-      const int32_t maxx = cx + cw - kCaptionHeight;
+      button(cx + cw - 2 * kCaptionButtonSize);
+      button(cx + cw - kCaptionButtonSize);
+      draw_rect(cx + 4, buttonTop + 6, 10, 5, 0);
+      draw_rect(cx + 5, buttonTop + 7, 8, 2, 15);
+      const int32_t minx = cx + cw - 2 * kCaptionButtonSize;
+      for (int32_t i = 0; i < 4; ++i) draw_rect(minx + 5 + i, buttonTop + 7 + i, 8 - 2 * i, 1, 0);
+      const int32_t maxx = cx + cw - kCaptionButtonSize;
       for (int32_t i = 0; i < 4; ++i) {
-        draw_rect(maxx + 5 + i, cy + (window.state == KWindowObject::State::Maximized ? 6 - i : 10 - i), 8 - 2 * i, 1, 0);
-        if (window.state == KWindowObject::State::Maximized) draw_rect(maxx + 5 + i, cy + 10 + i, 8 - 2 * i, 1, 0);
+        draw_rect(maxx + 5 + i, buttonTop + (window.state == KWindowObject::State::Maximized ? 6 - i : 10 - i), 8 - 2 * i, 1, 0);
+        if (window.state == KWindowObject::State::Maximized) draw_rect(maxx + 5 + i, buttonTop + 10 + i, 8 - 2 * i, 1, 0);
       }
 
     }
-    size_t length = 0;
-    const int32_t available = cw - 3 * kCaptionHeight - 5;
-    while (length < window.title.size() && window.title[length] &&
-           static_cast<int64_t>(length + 1) * gfx::kFontCellWidth <= available) ++length;
-    const int32_t titleWidth = static_cast<int32_t>(length) * static_cast<int32_t>(gfx::kFontCellWidth) + 1;
-    const int32_t titleLeft = cx + kCaptionHeight + 2;
-    const int32_t titleRight = cx + cw - 2 * kCaptionHeight - 2;
+    const UiText ui = UiText::current();
+    const int32_t available = cw - 3 * kCaptionButtonSize - 5;
+    const size_t length = ui.fit(window.title.data(), window.title.size(), false, available);
+    const int32_t titleWidth = ui.width(window.title.data(), length, false) + 1;
+    const int32_t titleLeft = cx + kCaptionButtonSize + 2;
+    const int32_t titleRight = cx + cw - 2 * kCaptionButtonSize - 2;
     int32_t titleX = cx + (cw - titleWidth) / 2;
     if (titleX + titleWidth > titleRight) titleX = titleRight - titleWidth;
     if (titleX < titleLeft) titleX = titleLeft;
-    gfx::DrawBitmapText(titleX, cy,
-                        window.title.data(), length,
-                        kCaptionTextColor, color, false,
-                        [&](int64_t l, int64_t t, int64_t right, int64_t bottom, uint32_t ink) {
-                          draw_rect(static_cast<int32_t>(l), static_cast<int32_t>(t),
-                                    static_cast<int32_t>(right - l) + 1, static_cast<int32_t>(bottom - t), ink);
-                        });
+    const int32_t titleY = cy + (captionHeight - ui.text_height()) / 2;
+    ui.draw(titleX, titleY, window.title.data(), length, false, kCaptionTextColor, color, false,
+            [&](int64_t l, int64_t t, int64_t right, int64_t bottom, uint32_t ink) {
+              draw_rect(static_cast<int32_t>(l), static_cast<int32_t>(t),
+                        static_cast<int32_t>(right - l), static_cast<int32_t>(bottom - t), ink);
+            });
   }
 
   if (window.menu) {
     const int32_t border = (window.style & kStyleBorder) ? kBorderWidth : 0;
-    const int32_t caption = (window.style & kStyleCaption) ? kCaptionHeight : 0;
+    const int32_t caption = (window.style & kStyleCaption) ? caption_height_locked() : 0;
     const int32_t menuTop = r.top + border + caption;
     const int32_t menuLeft = r.left + border;
     const int32_t menuWidth = r.right - r.left - 2 * border;
-    draw_rect(menuLeft, menuTop, menuWidth, kMenuBarHeight, kWindowFaceColor);
-    draw_rect(menuLeft, menuTop + kMenuBarHeight - 1, menuWidth, 1, 8);
+    const int32_t menuHeight = menu_row_height_locked();
+    draw_rect(menuLeft, menuTop, menuWidth, menuHeight, kWindowFaceColor);
+    draw_rect(menuLeft, menuTop + menuHeight - 1, menuWidth, 1, 8);
+    const UiText ui = menu_text_locked();
     int32_t x = menuLeft;
     for (uint32_t i = 0; i < menu_item_count_locked(window.menu); ++i) {
       MenuItemView item{};
       if (!menu_item_locked(window.menu, i, item)) break;
-      const int32_t width = item.text.empty() ? 8 :
-          static_cast<int32_t>(item.text.size()) * static_cast<int32_t>(gfx::kFontCellWidth) + 16;
+      const int32_t width = item.text.empty() ? 8 : ui.width(item.text.data(), item.text.size(), false) + 16;
       if (x + width > menuLeft + menuWidth) break;
       const uint32_t foreground = item.flags & (kMenuItemDisabled | kMenuItemGrayed) ? 8 : 0;
       if (item.flags & kMenuItemSeparator) {
-        draw_rect(x + width / 2, menuTop + 4, 1, kMenuBarHeight - 8, 8);
+        draw_rect(x + width / 2, menuTop + 4, 1, menuHeight > 8 ? menuHeight - 8 : 1, 8);
       } else {
-        gfx::DrawBitmapText(x + 8, menuTop + 2, item.text.data(), item.text.size(),
-                            foreground, kWindowFaceColor, true,
-                            [&](int64_t left, int64_t top, int64_t right, int64_t bottom,
-                                uint32_t color) {
-                              draw_rect(static_cast<int32_t>(left), static_cast<int32_t>(top),
-                                        static_cast<int32_t>(right - left),
-                                        static_cast<int32_t>(bottom - top), color);
-                            });
+        ui.draw(x + 8, menuTop + 2, item.text.data(), item.text.size(), false, foreground,
+                kWindowFaceColor, true,
+                [&](int64_t left, int64_t top, int64_t right, int64_t bottom, uint32_t color) {
+                  draw_rect(static_cast<int32_t>(left), static_cast<int32_t>(top),
+                            static_cast<int32_t>(right - left), static_cast<int32_t>(bottom - top), color);
+                });
       }
       x += width;
     }
   }
+}
+
+void repaint_all() noexcept {
+  Guard guard;
+  expose_locked(screen_rect());
 }
 
 }// namespace kernel::user

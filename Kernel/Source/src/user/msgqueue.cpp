@@ -32,6 +32,11 @@ void reset_header(MessageQueue &queue) noexcept {
 }
 }// namespace
 
+bool should_serve_paint_before_input_locked(const MessageQueue &queue) noexcept {
+  return queue.ring.count >= kPaintFairnessBacklog &&
+         paint_candidate_locked(queue) != nullptr;
+}
+
 kstd::expected<MessageQueue *, kstd::error_code> queue_for_current_locked(bool create) noexcept {
   const auto self = KE_SCHED_GetCurrentThread();
   if (!self) return kstd::unexpected(KernelError::NoCurrentThread);
@@ -96,6 +101,18 @@ bool geometry_message_locked(const MessageQueue &queue, QueuedMessage &out, bool
   return false;
 }
 
+bool font_message_locked(const MessageQueue &queue, QueuedMessage &out, bool remove) noexcept {
+  for (auto *w = topmost_locked(); w; w = w->below) {
+    if (w->queue != &queue || !w->pendingFontGeneration) continue;
+    out = QueuedMessage{.hwnd = w->hwnd, .message = kMsgFontChanged,
+                        .wParam = w->pendingFontGeneration, .lParam = 0,
+                        .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
+    if (remove) w->pendingFontGeneration = 0;
+    return true;
+  }
+  return false;
+}
+
 kstd::expected<QueuedMessage, kstd::error_code> get_message(bool block, bool remove) noexcept {
   for (;;) {
     lock();
@@ -106,6 +123,18 @@ kstd::expected<QueuedMessage, kstd::error_code> get_message(bool block, bool rem
     }
     MessageQueue *q = *queue;
     QueuedMessage out{};
+    if (font_message_locked(*q, out, remove)) {
+      unlock();
+      return out;
+    }
+    if (should_serve_paint_before_input_locked(*q)) {
+      const auto *w = paint_candidate_locked(*q);
+      out = QueuedMessage{.hwnd = w->hwnd, .message = kMsgPaint, .wParam = 0,
+                          .lParam = 0,
+                          .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
+      unlock();
+      return out;
+    }
     if (remove ? q->ring.Pop(out) : q->ring.Peek(out)) {
       unlock();
       return out;

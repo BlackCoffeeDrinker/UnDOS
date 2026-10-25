@@ -39,7 +39,7 @@ enum class Section : uint32_t {
 // first-point/count, first-contour/count, first-component/count, program-offset/size.
 // Point: original signed x/y and on-curve(0/1). No implied or phantom points.
 // Contours: glyph-local inclusive endpoint indices.
-// Component: glyph-id, original flags, signed arg1/arg2, xx/xy/yx/yy in 2.14.
+// Component: glyph-id, original flags, signed arg1/arg2, then the 2.14 words xscale/scale01/scale10/yscale.
 // Cmap: first-codepoint, last-codepoint, first-glyph; inclusive sequential ranges.
 // CVT: signed int32 font units. Programs retain original instruction bytes.
 // Limits: maxp v1's thirteen uint16 fields widened to uint32 in original order.

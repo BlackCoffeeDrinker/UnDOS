@@ -46,6 +46,7 @@ struct KDeviceContextSlot {
   KObjectPtr<KDisplay> display;      // target display (primary DC)
   KObjectPtr<KSurface> target;       // currently selected surface (display surface or a bitmap)
   KObjectPtr<KSurface> selectedBitmap;// last SelectObject'd bitmap, if any
+  KObjectPtr<KObject> selectedFont;  // immutable font snapshot selected for text drawing
 
   uint32_t penColor = 0;
   uint32_t backgroundColor = 7;

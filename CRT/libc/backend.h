@@ -7,7 +7,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-// The syscall dispatcher limits each mapped buffer to 4096 bytes.
+// Bulk stdio transfers are split into requests of at most this many bytes.
 #define UNDOS_LIBC_IO_CHUNK_SIZE 4096
 int undos_libc_read(HANDLE handle, void *buffer, size_t *size);
 int undos_libc_write(HANDLE handle, const void *buffer, size_t *size);

@@ -1,3 +1,4 @@
+#include "gfx/font/face.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <kernel/gfx/KFontResourceTable.hpp>
 #include <undos/font/resource.hpp>
@@ -181,8 +182,13 @@ kstd::error_code BeginUpload(kernel::font::ResourceTable &table, kernel::font::R
   return result ? kernel::KernelError::Success : result.error();
 }
 
+kernel::font::FaceRegistry &registry() {
+  static kernel::font::FaceRegistry instance;
+  return instance;
+}
+
 kstd::error_code CommitUpload(kernel::font::ResourceTable &table, uint32_t handle, uint32_t &face, uint32_t &validationError) {
-  const auto result = table.commit(handle, validationError);
+  const auto result = table.commit(handle, registry(), validationError);
   face = result ? *result : 0;
   return result ? kernel::KernelError::Success : result.error();
 }
@@ -208,11 +214,23 @@ TEST_CASE("Font uploads commit immutable resources with generation-safe handles"
   REQUIRE_FALSE(CommitUpload(table, upload, face, error));
   REQUIRE(error == 0);
   REQUIRE(face != upload);
+  REQUIRE(table.registry_handle(upload) == 0);
+  const uint32_t published = table.registry_handle(face);
+  REQUIRE(published != 0);
+  REQUIRE(budget.used() == 0);
+  REQUIRE(registry().bytes() == bytes.size());
+  auto held = registry().acquire(published);
+  REQUIRE(held);
   REQUIRE(table.close(upload) == kernel::KernelError::InvalidHandle);
   REQUIRE(table.append(face, 0, bytes.data(), 1) == kernel::KernelError::InvalidState);
   REQUIRE(CommitUpload(table, face, upload, error) == kernel::KernelError::InvalidState);
   REQUIRE_FALSE(table.close(face));
   REQUIRE(table.close(face) == kernel::KernelError::InvalidHandle);
+  REQUIRE(table.registry_handle(face) == 0);
+  REQUIRE_FALSE(registry().acquire(published));
+  REQUIRE(held->byteSize() == bytes.size());
+  held.reset();
+  REQUIRE(registry().bytes() == 0);
   REQUIRE(budget.used() == 0);
 }
 

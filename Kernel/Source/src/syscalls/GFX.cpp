@@ -1,3 +1,6 @@
+#include "gfx/font/font_system.hpp"
+#include "gfx/font/font_object.hpp"
+#include "gfx/font/text.hpp"
 #include "gfx/gfx.hpp"
 #include "stdkrn.hpp"
 #include "syscalls.hpp"
@@ -19,9 +22,348 @@
 // (proc->dcTable), resolved via a generation-tagged HDC handle rather than
 // the generic ProcessHandleTable used for long-lived KObjects like KSurface.
 
+#if __STDC_HOSTED__
+// Hosted tests only: runs after DrawText retains its font and drops all locks.
+namespace kernel::gfx::test_hooks {
+void (*drawTextAfterRetain)() = nullptr;
+}
+#endif
+
 namespace {
 
 kernel::font::ResourceBudget fontResourceBudget;
+kernel::font::FontSystem *fontSystem() { return kernel::font::font_system(); }
+
+kernel::KObjectPtr<kernel::font::FontObject> ResolveFont(kernel::KProcessObject &process,
+                                                         uint32_t handle) {
+  const auto *entry = process.handles.Lookup(static_cast<kernel::KHandle>(handle));
+  return entry ? entry->object.As<kernel::font::FontObject>()
+               : kernel::KObjectPtr<kernel::font::FontObject>{};
+}
+
+const kernel::font::Ref<kernel::font::Realization> &RealizationFor(
+    const kernel::font::FontObject &font, uint32_t style) {
+  return style ? font.snapshot.bold : font.snapshot.regular;
+}
+
+kernel::font::Ref<kernel::font::GlyphMask> PinnedFontMask(
+    const kernel::font::FontObject &font, uint32_t style, uint32_t codepoint) {
+  if (!font.snapshot.ascii) return {};
+  if (codepoint == 0xfffd)
+    return font.snapshot.ascii->terminalReplacement[style];
+  if (codepoint < kernel::font::UiGlyphs::FirstCodepoint ||
+      codepoint >= kernel::font::UiGlyphs::FirstCodepoint +
+                       kernel::font::UiGlyphs::Count)
+    return {};
+  return font.snapshot.ascii->masks[style][codepoint -
+                                            kernel::font::UiGlyphs::FirstCodepoint];
+}
+
+void BitmapMetrics(uint32_t generation, uint32_t repertoire, TextMetricsV2 &metrics) {
+  metrics = {};
+  int32_t left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
+  auto include = [&](uint32_t codepoint) {
+    const uint8_t character = codepoint >= kernel::gfx::kFontFirstChar &&
+                                      codepoint <= kernel::gfx::kFontLastChar
+                                  ? static_cast<uint8_t>(codepoint)
+                                  : static_cast<uint8_t>(kernel::gfx::kFontDefaultChar);
+    for (uint32_t row = 0; row < 7; ++row) {
+      const uint8_t bits = kernel::gfx::BitmapGlyphRow(character, row);
+      for (uint32_t column = 0; column < 5; ++column) {
+        if (!(bits & (16u >> column))) continue;
+        const int32_t x = static_cast<int32_t>(column + 1);
+        const int32_t y = static_cast<int32_t>(row * 2);
+        if (x < left) left = x;
+        if (x + 1 > right) right = x + 1;
+        if (y < top) top = y;
+        if (y + 2 > bottom) bottom = y + 2;
+      }
+    }
+  };
+  for (uint32_t codepoint = kernel::gfx::kFontFirstChar;
+       codepoint <= kernel::gfx::kFontLastChar; ++codepoint)
+    include(codepoint);
+  if (repertoire == TextRepertoire_RepertoireTerminal) include(0xfffd);
+  if (left == INT32_MAX) left = top = right = bottom = 0;
+  metrics.generation = generation;
+  metrics.ascent = kernel::gfx::kFontAscent;
+  metrics.descent = kernel::gfx::kFontDescent;
+  metrics.lineHeight = kernel::gfx::kFontCellHeight;
+  metrics.baselineOffset = kernel::gfx::kFontAscent;
+  metrics.cellWidth = kernel::gfx::kFontCellWidth;
+  metrics.cellHeight = kernel::gfx::kFontCellHeight;
+  metrics.inkLeft = left;
+  metrics.inkTop = top;
+  metrics.inkRight = right;
+  metrics.inkBottom = bottom;
+}
+
+bool is_control_codepoint(uint32_t codepoint) {
+  return codepoint < 0x20 || codepoint == 0x7f;
+}
+
+bool use_bitmap_fallback(const kernel::font::FontObject &font, uint32_t codepoint,
+                         uint32_t glyphId) {
+  return font.fallback == GlyphFallbackPolicy_FallbackBitmapForUnmapped &&
+         !is_control_codepoint(codepoint) && glyphId == 0;
+}
+
+kstd::error_code FontMetrics(const kernel::font::FontObject &font, uint32_t style,
+                             uint32_t repertoire, TextMetricsV2 &metrics) {
+  if (style > 1) return kernel::KernelError::InvalidArgument;
+  if (repertoire != TextRepertoire_RepertoireBasic &&
+      repertoire != TextRepertoire_RepertoireTerminal)
+    return kernel::KernelError::InvalidArgument;
+  if (font.bitmap) {
+    BitmapMetrics(font.generation, repertoire, metrics);
+    return {};
+  }
+  const auto &realization = RealizationFor(font, style);
+  if (!realization || !font.snapshot.ascii)
+    return kernel::KernelError::InvalidState;
+  undos::font::PixelLineMetrics line{};
+  if (const auto error = realization->lineMetrics(line); error) return error;
+  int64_t above = line.ascent;
+  int64_t below = line.descent;
+  int64_t left = INT64_MAX, right = INT64_MIN, top = INT64_MAX, bottom = INT64_MIN;
+  uint32_t cellWidth = 0;
+  auto include = [&](uint32_t codepoint) -> kstd::error_code {
+    const uint32_t glyphId = realization->face()->glyphFor(codepoint);
+    if (use_bitmap_fallback(font, codepoint, glyphId)) {
+      constexpr int64_t glyphTop = kernel::gfx::kFontAscent;
+      constexpr int64_t glyphWidth = kernel::gfx::kFontCellWidth;
+      constexpr int64_t glyphHeight = kernel::gfx::kFontAscent;
+      const int64_t glyphBelow = glyphHeight - glyphTop;
+      if (glyphTop > above) above = glyphTop;
+      if (glyphBelow > below) below = glyphBelow;
+      const int64_t candidateWidth = glyphWidth;
+      if (candidateWidth > cellWidth) cellWidth = static_cast<uint32_t>(candidateWidth);
+      const uint8_t replacement = static_cast<uint8_t>(kernel::gfx::kFontDefaultChar);
+      for (uint32_t row = 0; row < 7; ++row) {
+        const uint8_t bits = kernel::gfx::BitmapGlyphRow(replacement, row);
+        for (uint32_t column = 0; column < 5; ++column) {
+          if (!(bits & (16u >> column))) continue;
+          const int64_t inkLeft = column + 1;
+          const int64_t inkTop = row * 2;
+          if (inkLeft < left) left = inkLeft;
+          if (inkLeft + 1 > right) right = inkLeft + 1;
+          if (inkTop < top) top = inkTop;
+          if (inkTop + 2 > bottom) bottom = inkTop + 2;
+        }
+      }
+      return {};
+    }
+    auto pinned = PinnedFontMask(font, style, codepoint);
+    kernel::font::Ref<kernel::font::GlyphMask> glyph;
+    if (pinned) {
+      glyph = pinned;
+    } else {
+      auto rendered = realization->glyph(is_control_codepoint(codepoint) ? 0 : glyphId);
+      if (!rendered) return rendered.error();
+      glyph = *rendered;
+    }
+    const auto &mask = *glyph;
+    const int64_t glyphBelow = static_cast<int64_t>(mask.height) - mask.top;
+    if (mask.top > above) above = mask.top;
+    if (glyphBelow > below) below = glyphBelow;
+    const int64_t inkLeft = mask.left;
+    const int64_t inkRight = inkLeft + mask.width;
+    const int64_t candidateLeft = inkLeft < 0 ? inkLeft : 0;
+    const int64_t candidateRight = inkRight > mask.advance ? inkRight : mask.advance;
+    const int64_t candidateWidth = candidateRight - candidateLeft;
+    if (candidateWidth > cellWidth) cellWidth = static_cast<uint32_t>(candidateWidth);
+    const int64_t inkTop = -static_cast<int64_t>(mask.top);
+    const int64_t inkBottom = inkTop + mask.height;
+    if (mask.width && mask.height) {
+      if (mask.left < left) left = mask.left;
+      if (static_cast<int64_t>(mask.left) + mask.width > right)
+        right = static_cast<int64_t>(mask.left) + mask.width;
+    }
+    if (inkTop < top) top = inkTop;
+    if (inkBottom > bottom) bottom = inkBottom;
+    return {};
+  };
+  for (uint32_t codepoint = 0x20; codepoint <= 0x7e; ++codepoint) {
+    if (const auto error = include(codepoint); error) return error;
+  }
+  if (repertoire == TextRepertoire_RepertoireTerminal)
+    if (const auto error = include(0xfffd); error) return error;
+  if (left == INT64_MAX) left = right = top = bottom = 0;
+  const uint64_t metricHeight = static_cast<uint64_t>(line.ascent) + line.descent + line.lineGap;
+  const uint64_t safeHeight = static_cast<uint64_t>(above) +
+                              static_cast<uint64_t>(below);
+  const uint64_t height = metricHeight > safeHeight ? metricHeight : safeHeight;
+  if (height > UINT32_MAX || above > UINT32_MAX || below > UINT32_MAX ||
+      left < INT32_MIN || right > INT32_MAX || top < INT32_MIN || bottom > INT32_MAX)
+    return kernel::KernelError::OutOfRange;
+  metrics = {};
+  metrics.generation = font.generation;
+  metrics.ascent = line.ascent;
+  metrics.descent = line.descent;
+  metrics.lineGap = line.lineGap;
+  metrics.lineHeight = static_cast<uint32_t>(height);
+  metrics.baselineOffset = static_cast<uint32_t>(above);
+  metrics.cellWidth = cellWidth;
+  metrics.cellHeight = static_cast<uint32_t>(height);
+  metrics.inkLeft = static_cast<int32_t>(left);
+  metrics.inkTop = static_cast<int32_t>(top);
+  metrics.inkRight = static_cast<int32_t>(right);
+  metrics.inkBottom = static_cast<int32_t>(bottom);
+  return {};
+}
+
+kstd::error_code LayoutFontText(const kernel::font::FontObject &font, uint32_t style,
+                                const char *text, size_t size,
+                                kernel::font::TextRun &run) {
+  run.glyphs = kstd::vector<kernel::font::Ref<kernel::font::GlyphMask>>();
+  run.width = 0;
+  if (size > kernel::font::MaxTextBytes) return kernel::KernelError::InvalidSize;
+  if (size && !text) return kernel::KernelError::InvalidArgument;
+  const auto &realization = RealizationFor(font, style);
+  if (!realization || !font.snapshot.ascii)
+    return kernel::KernelError::InvalidState;
+  const auto *bytes = reinterpret_cast<const uint8_t *>(text);
+  kernel::font::Ref<kernel::font::GlyphMask> fallbackMask;
+  uint32_t fallbackCodepoint = UINT32_MAX;
+  for (size_t at = 0; at < size;) {
+    const auto step = kernel::font::decode_utf8(bytes + at, size - at);
+    at += step.length;
+    const uint32_t glyphId = is_control_codepoint(step.codepoint)
+                                 ? 0 : realization->face()->glyphFor(step.codepoint);
+    bool bitmapFallback = use_bitmap_fallback(font, step.codepoint, glyphId);
+    kernel::font::Ref<kernel::font::GlyphMask> glyph;
+    if (bitmapFallback) {
+      const uint32_t bitmapCodepoint =
+          step.codepoint >= kernel::gfx::kFontFirstChar &&
+                  step.codepoint <= kernel::gfx::kFontLastChar
+              ? step.codepoint : kernel::gfx::kFontDefaultChar;
+      if (!fallbackMask || fallbackCodepoint != bitmapCodepoint) {
+        auto created = kernel::font::builtin_bitmap_glyph(bitmapCodepoint);
+        if (!created) return created.error();
+        fallbackMask = *created;
+        fallbackCodepoint = bitmapCodepoint;
+      }
+      glyph = fallbackMask;
+    } else {
+      glyph = PinnedFontMask(font, style, step.codepoint);
+      if (!glyph) {
+        auto rendered = realization->glyph(glyphId);
+        if (!rendered) return rendered.error();
+        glyph = *rendered;
+      }
+    }
+    const size_t before = run.glyphs.size();
+    run.glyphs.push_back(glyph);
+    if (run.glyphs.size() != before + 1)
+      return kernel::KernelError::OutOfMemory;
+    if (glyph->advance > INT32_MAX - run.width) return kernel::KernelError::OutOfRange;
+    run.width += glyph->advance;
+  }
+  return {};
+}
+
+kstd::error_code PrepareFontText(const kernel::font::FontObject &font, uint32_t style,
+                                 uint32_t layout, uint32_t repertoire,
+                                 const char *text, size_t size,
+                                 kernel::font::TextRun &run, TextMetricsV2 &metrics,
+                                 TextExtentV2 &extent) {
+  extent = {};
+  if (size > kernel::font::MaxTextBytes) return kernel::KernelError::InvalidSize;
+  if (size && !text) return kernel::KernelError::InvalidArgument;
+  if (layout != TextLayoutMode_LayoutProportional &&
+      layout != TextLayoutMode_LayoutUniformGrid)
+    return kernel::KernelError::InvalidArgument;
+  if (const auto error = FontMetrics(font, style, repertoire, metrics); error) return error;
+  if (font.bitmap) {
+    uint64_t pen = 0;
+    int64_t left = INT64_MAX, right = INT64_MIN, top = INT64_MAX, bottom = INT64_MIN;
+    const auto *bytes = reinterpret_cast<const uint8_t *>(text);
+    for (size_t at = 0; at < size;) {
+      const auto step = kernel::font::decode_utf8(bytes + at, size - at);
+      at += step.length;
+      const uint8_t character = !is_control_codepoint(step.codepoint) &&
+                                        step.codepoint >= kernel::gfx::kFontFirstChar &&
+                                        step.codepoint <= kernel::gfx::kFontLastChar
+                                    ? static_cast<uint8_t>(step.codepoint)
+                                    : static_cast<uint8_t>(kernel::gfx::kFontDefaultChar);
+      for (uint32_t row = 0; row < 7; ++row) {
+        const uint8_t bits = kernel::gfx::BitmapGlyphRow(character, row);
+        for (uint32_t column = 0; column < 5; ++column) {
+          if (!(bits & (16u >> column))) continue;
+          const int64_t inkLeft = static_cast<int64_t>(pen) + column + 1;
+          const int64_t inkTop = row * 2;
+          if (inkLeft < left) left = inkLeft;
+          if (inkLeft + 1 > right) right = inkLeft + 1;
+          if (inkTop < top) top = inkTop;
+          if (inkTop + 2 > bottom) bottom = inkTop + 2;
+        }
+      }
+      pen += metrics.cellWidth;
+    }
+    const uint64_t advance = pen;
+    if (advance > UINT32_MAX) return kernel::KernelError::OutOfRange;
+    if (left == INT64_MAX) left = right = top = bottom = 0;
+    extent.generation = font.generation;
+    extent.advanceWidth = static_cast<uint32_t>(advance);
+    extent.lineHeight = metrics.lineHeight;
+    extent.baselineOffset = metrics.baselineOffset;
+    if (right > INT32_MAX || bottom > INT32_MAX) return kernel::KernelError::OutOfRange;
+    extent.inkLeft = static_cast<int32_t>(left);
+    extent.inkTop = static_cast<int32_t>(top);
+    extent.inkRight = static_cast<int32_t>(right);
+    extent.inkBottom = static_cast<int32_t>(bottom);
+    return {};
+  }
+  if (const auto error = LayoutFontText(font, style, text, size, run); error)
+    return error;
+  int64_t above = metrics.ascent;
+  int64_t below = metrics.descent;
+  for (const auto &glyph : run.glyphs) {
+    if (glyph->top > above) above = glyph->top;
+    const int64_t glyphBelow = static_cast<int64_t>(glyph->height) - glyph->top;
+    if (glyphBelow > below) below = glyphBelow;
+  }
+  const uint64_t metricHeight = static_cast<uint64_t>(metrics.ascent) +
+                                metrics.descent + metrics.lineGap;
+  const uint64_t safeHeight = static_cast<uint64_t>(above) +
+                             static_cast<uint64_t>(below);
+  const uint64_t lineHeight = metricHeight > safeHeight ? metricHeight : safeHeight;
+  if (lineHeight > UINT32_MAX || above > UINT32_MAX) return kernel::KernelError::OutOfRange;
+  metrics.lineHeight = static_cast<uint32_t>(
+      lineHeight > metrics.lineHeight ? lineHeight : metrics.lineHeight);
+  metrics.baselineOffset = static_cast<uint32_t>(above);
+  const uint64_t advance = layout == TextLayoutMode_LayoutUniformGrid
+                               ? static_cast<uint64_t>(run.glyphs.size()) * metrics.cellWidth
+                               : static_cast<uint64_t>(run.width);
+  if (advance > UINT32_MAX) return kernel::KernelError::OutOfRange;
+  int64_t left = INT64_MAX, right = INT64_MIN, top = INT64_MAX, bottom = INT64_MIN, pen = 0;
+  for (const auto &glyph : run.glyphs) {
+    int64_t glyphX = pen + glyph->left;
+    if (layout == TextLayoutMode_LayoutUniformGrid && glyph->left < 0)
+      glyphX = pen - glyph->left;
+    const int64_t glyphTop = static_cast<int64_t>(metrics.baselineOffset) - glyph->top;
+    const int64_t glyphRight = glyphX + glyph->width;
+    const int64_t glyphBottom = glyphTop + glyph->height;
+    if (glyphX < left) left = glyphX;
+    if (glyphRight > right) right = glyphRight;
+    if (glyphTop < top) top = glyphTop;
+    if (glyphBottom > bottom) bottom = glyphBottom;
+    pen += layout == TextLayoutMode_LayoutUniformGrid
+               ? metrics.cellWidth : static_cast<uint32_t>(glyph->advance);
+  }
+  if (left == INT64_MAX) left = right = top = bottom = 0;
+  if (left < INT32_MIN || right > INT32_MAX || top < INT32_MIN || bottom > INT32_MAX)
+    return kernel::KernelError::OutOfRange;
+  extent.generation = font.generation;
+  extent.advanceWidth = static_cast<uint32_t>(advance);
+  extent.lineHeight = metrics.lineHeight;
+  extent.baselineOffset = metrics.baselineOffset;
+  extent.inkLeft = static_cast<int32_t>(left);
+  extent.inkTop = static_cast<int32_t>(top);
+  extent.inkRight = static_cast<int32_t>(right);
+  extent.inkBottom = static_cast<int32_t>(bottom);
+  return {};
+}
 
 struct OwnedBitmap final : kernel::KSurface {
   using KSurface::KSurface;
@@ -192,12 +534,6 @@ void Present(kernel::KDeviceContextSlot &slot, const DirtyRect &dirty) {
 
 }// namespace
 
-kstd::error_code handle_QueryFontEngine_V1(__KRN_GFX_QUERYFONTENGINE_V1 &&args) {
-  args.version = undos::font::Version;
-  args.capabilities = 1;
-  return {};
-}
-
 kstd::error_code handle_BeginFontUpload_V1(__KRN_GFX_BEGINFONTUPLOAD_V1 &&args) {
   args.upload = 0;
   auto *process = CurrentProcess();
@@ -219,7 +555,9 @@ kstd::error_code handle_CommitFontUpload_V1(__KRN_GFX_COMMITFONTUPLOAD_V1 &&args
   args.validationError = 0;
   auto *process = CurrentProcess();
   if (!process) return kernel::KernelError::NoCurrentProcess;
-  const auto face = process->fontResources.commit(args.upload, args.validationError);
+  auto *system = fontSystem();
+  if (!system) return kernel::KernelError::OutOfMemory;
+  const auto face = process->fontResources.commit(args.upload, system->faces, args.validationError);
   if (!face) {
     if (face.error() == kernel::KernelError::InvalidResource)
       KE_Print("GFX Font Engine: registration rejected: {}",
@@ -234,6 +572,140 @@ kstd::error_code handle_CloseFontResource_V1(__KRN_GFX_CLOSEFONTRESOURCE_V1 &&ar
   auto *process = CurrentProcess();
   if (!process) return kernel::KernelError::NoCurrentProcess;
   return process->fontResources.close(args.handle);
+}
+
+kstd::error_code handle_SetSystemFont_V1(__KRN_GFX_SETSYSTEMFONT_V1 &&args) {
+  args.generation = 0;
+  auto *process = CurrentProcess();
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  auto *system = fontSystem();
+  if (!system) return kernel::KernelError::OutOfMemory;
+  kstd::error_code result;
+  if (args.backend == FontBackend_BackendBuiltinBitmap) {
+    if (args.regularFace || args.boldFace || args.ppem)
+      return kernel::KernelError::InvalidArgument;
+    result = kernel::user::set_builtin_default_font(system->defaults);
+  } else if (args.backend == FontBackend_BackendTrueType) {
+    const uint32_t regular = process->fontResources.registry_handle(args.regularFace);
+    const uint32_t bold = process->fontResources.registry_handle(args.boldFace);
+    if (!regular || !bold) return kernel::KernelError::InvalidHandle;
+    result = kernel::user::set_default_font(system->defaults, regular, bold, args.ppem);
+  } else {
+    return kernel::KernelError::InvalidArgument;
+  }
+  if (result) return result;
+  args.generation = system->defaults.snapshot().generation;
+  return {};
+}
+
+kstd::error_code handle_AcquireFont_V1(__KRN_GFX_ACQUIREFONT_V1 &&args) {
+  args.font = args.generation = 0;
+  if (args.source != FontSource_AcquireSystemDefault &&
+      args.source != FontSource_AcquireBuiltinBitmap)
+    return kernel::KernelError::InvalidArgument;
+  if (args.fallback != GlyphFallbackPolicy_FallbackFaceNotdef &&
+      args.fallback != GlyphFallbackPolicy_FallbackBitmapForUnmapped)
+    return kernel::KernelError::InvalidArgument;
+  auto *process = CurrentProcess();
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  auto *system = fontSystem();
+  if (!system) return kernel::KernelError::OutOfMemory;
+  auto created = kernel::CreateAnonymousKObject<kernel::font::FontObject>();
+  if (!created) return created.error();
+  auto object = kstd::move(*created);
+  object->generation = system->defaults.snapshot().generation;
+  object->fallback = static_cast<uint32_t>(args.fallback);
+  if (args.source == FontSource_AcquireSystemDefault) {
+    object->snapshot = system->defaults.snapshot();
+    object->bitmap = !object->snapshot || object->snapshot.bitmapBackend;
+  }
+  args.generation = object->generation;
+  const auto handle = process->handles.Allocate(
+      kernel::KObjectPtr<kernel::KObject>(object.get()),
+      kernel::ProcessHandleTable::HandleAccess::Read |
+          kernel::ProcessHandleTable::HandleAccess::Write,
+      kernel::ProcessHandleTable::HandleFlags::None);
+  if (!handle) return handle.error();
+  args.font = static_cast<uint32_t>(*handle);
+  return {};
+}
+
+kstd::error_code handle_CloseFont_V1(__KRN_GFX_CLOSEFONT_V1 &&args) {
+  auto *process = CurrentProcess();
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  if (!ResolveFont(*process, args.font)) return kernel::KernelError::InvalidHandle;
+  return process->handles.Close(static_cast<kernel::KHandle>(args.font));
+}
+
+kstd::error_code handle_SelectFont_V1(__KRN_GFX_SELECTFONT_V1 &&args) {
+  args.previousFont = 0;
+  auto *process = CurrentProcess();
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  auto font = ResolveFont(*process, args.font);
+  if (!font) return kernel::KernelError::InvalidHandle;
+  // Reserve the previous-font handle before any lock: the handle table may
+  // grow, and binding the reservation later cannot fail or allocate.
+  const auto reserved = process->handles.Reserve(
+      kernel::ProcessHandleTable::HandleAccess::Read |
+          kernel::ProcessHandleTable::HandleAccess::Write,
+      kernel::ProcessHandleTable::HandleFlags::None);
+  if (!reserved) return reserved.error();
+  const kernel::KObjectPtr<kernel::KObject> selected(font.get());
+  kernel::KObjectPtr<kernel::KObject> previous;
+  bool resolved = false;
+  {
+    kernel::user::Guard scene;
+    // Resolve under the scene lock so a concurrent DeleteDC or slot reuse is
+    // seen through the generation check.
+    if (auto *slot = process->dcTable.Resolve(args.dc)) {
+      resolved = true;
+      slot->lock.lock();
+      previous = slot->selectedFont;
+      slot->selectedFont = selected;
+      slot->lock.unlock();
+    }
+  }
+  if (!resolved || !previous) {
+    (void) process->handles.Cancel(*reserved);
+    if (!resolved) return kernel::KernelError::InvalidHandle;
+    return {};
+  }
+  // Only this call holds the token, and user Close cannot remove a
+  // reservation, so Bind cannot fail here; report it if the invariant breaks.
+  const auto bound = process->handles.Bind(*reserved, previous);
+  if (!bound) return kernel::KernelError::InvalidState;
+  args.previousFont = static_cast<uint32_t>(*bound);
+  return {};
+}
+
+kstd::error_code handle_GetFontMetrics_V1(__KRN_GFX_GETFONTMETRICS_V1 &&args) {
+  args.metrics = {};
+  auto *process = CurrentProcess();
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  auto font = ResolveFont(*process, args.font);
+  if (!font) return kernel::KernelError::InvalidHandle;
+  if (args.repertoire != TextRepertoire_RepertoireBasic &&
+      args.repertoire != TextRepertoire_RepertoireTerminal)
+    return kernel::KernelError::InvalidArgument;
+  return FontMetrics(*font, static_cast<uint32_t>(args.style),
+                     static_cast<uint32_t>(args.repertoire), args.metrics);
+}
+
+kstd::error_code handle_MeasureText_V1(__KRN_GFX_MEASURETEXT_V1 &&args) {
+  args.extent = {};
+  auto *process = CurrentProcess();
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  auto font = ResolveFont(*process, args.font);
+  if (!font) return kernel::KernelError::InvalidHandle;
+  if (args.repertoire != TextRepertoire_RepertoireBasic &&
+      args.repertoire != TextRepertoire_RepertoireTerminal)
+    return kernel::KernelError::InvalidArgument;
+  kernel::font::TextRun run;
+  TextMetricsV2 metrics{};
+  return PrepareFontText(*font, static_cast<uint32_t>(args.style),
+                         static_cast<uint32_t>(args.layout),
+                         static_cast<uint32_t>(args.repertoire), args.text.data(),
+                         args.text.size(), run, metrics, args.extent);
 }
 
 kstd::error_code handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
@@ -321,8 +793,14 @@ kstd::error_code handle_SetDisplayMode_V1(__KRN_GFX_SETDISPLAYMODE_V1 &&args) {
 kstd::error_code handle_DeleteDC_V1(__KRN_GFX_DELETEDC_V1 &&args) {
   const auto proc = CurrentProcess();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
+  // Release the selected font after the scene lock; it may be the last reference.
+  kernel::KObjectPtr<kernel::KObject> releasedFont;
   kernel::user::Guard scene;
-
+  if (auto *slot = proc->dcTable.Resolve(args.dc)) {
+    slot->lock.lock();
+    releasedFont = slot->selectedFont;
+    slot->lock.unlock();
+  }
   return proc->dcTable.Close(args.dc);
 }
 
@@ -356,11 +834,6 @@ kstd::error_code handle_CreatePen_V1(__KRN_GFX_CREATEPEN_V1 &&args) {
 }
 
 kstd::error_code handle_CreateBrush_V1(__KRN_GFX_CREATEBRUSH_V1 &&args) {
-  (void) args;
-  return kernel::KernelError::NotImplemented;
-}
-
-kstd::error_code handle_CreateFont_V1(__KRN_GFX_CREATEFONT_V1 &&args) {
   (void) args;
   return kernel::KernelError::NotImplemented;
 }
@@ -520,12 +993,47 @@ kstd::error_code handle_Ellipse_V1(__KRN_GFX_ELLIPSE_V1 &&args) {
   return kernel::KernelError::NotImplemented;
 }
 
-kstd::error_code handle_TextOut_V1(__KRN_GFX_TEXTOUT_V1 &&args) {
+kstd::error_code handle_DrawText_V1(__KRN_GFX_DRAWTEXT_V1 &&args) {
   const auto proc = CurrentProcess();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
+  kernel::KDeviceContextSlot *slot = nullptr;
+  kernel::KObjectPtr<kernel::KObject> selected;
+  {
+    // Every selectedFont writer holds the scene lock, so resolving and
+    // retaining under it keeps the font alive through glyph preparation.
+    kernel::user::Guard scene;
+    slot = proc->dcTable.Resolve(args.dc);
+    if (!slot) return kernel::KernelError::InvalidHandle;
+    slot->lock.lock();
+    selected = slot->selectedFont;
+    slot->lock.unlock();
+  }
+#if __STDC_HOSTED__
+  if (kernel::gfx::test_hooks::drawTextAfterRetain) kernel::gfx::test_hooks::drawTextAfterRetain();
+#endif
+  auto font = selected.As<kernel::font::FontObject>();
+  if (!font) return kernel::KernelError::InvalidState;
+  if (args.style != TextStyle_StyleRegular && args.style != TextStyle_StyleBold)
+    return kernel::KernelError::InvalidArgument;
+  if (args.layout != TextLayoutMode_LayoutProportional &&
+      args.layout != TextLayoutMode_LayoutUniformGrid)
+    return kernel::KernelError::InvalidArgument;
+  if (args.repertoire != TextRepertoire_RepertoireBasic &&
+      args.repertoire != TextRepertoire_RepertoireTerminal)
+    return kernel::KernelError::InvalidArgument;
+  kernel::font::TextRun run;
+  TextMetricsV2 metrics{};
+  TextExtentV2 extent{};
+  if (const auto error = PrepareFontText(*font, static_cast<uint32_t>(args.style),
+                                          static_cast<uint32_t>(args.layout),
+                                          static_cast<uint32_t>(args.repertoire),
+                                          args.text.data(), args.text.size(), run,
+                                          metrics, extent); error)
+    return error;
+
   ScreenDrawGuard draw;
-  const auto slot = proc->dcTable.Resolve(args.dc);
-  if (!slot) return kernel::KernelError::InvalidHandle;
+  // The DC may have been deleted, and its slot reused, while glyphs were prepared.
+  if (proc->dcTable.Resolve(args.dc) != slot) return kernel::KernelError::InvalidHandle;
   slot->lock.lock();
   if (!slot->target || !slot->target->backing) {
     slot->lock.unlock();
@@ -533,14 +1041,62 @@ kstd::error_code handle_TextOut_V1(__KRN_GFX_TEXTOUT_V1 &&args) {
   }
   kstd::error_code result = kernel::KernelError::Success;
   DirtyRect dirty;
-  kernel::gfx::DrawBitmapText(static_cast<int64_t>(args.x) + slot->originX,
-                              static_cast<int64_t>(args.y) + slot->originY,
-                              args.text.data(), args.text.size(), slot->penColor,
-                              slot->backgroundColor, slot->opaqueText,
-                              [&](int64_t l, int64_t t, int64_t r, int64_t b, uint32_t color) {
-                                const auto error = Fill(*slot, l, t, r, b, color, dirty);
-                                if (!result) result = error;
-                              });
+  const int64_t originX = static_cast<int64_t>(args.x) + slot->originX;
+  const int64_t originY = static_cast<int64_t>(args.y) + slot->originY;
+  const int64_t baseline = originY + metrics.baselineOffset;
+  if (font->bitmap) {
+    const auto *bytes = reinterpret_cast<const uint8_t *>(args.text.data());
+    int64_t pen = 0;
+    for (size_t at = 0; at < args.text.size();) {
+      const auto step = kernel::font::decode_utf8(bytes + at, args.text.size() - at);
+      at += step.length;
+      const char character =
+          !is_control_codepoint(step.codepoint) &&
+                  step.codepoint >= kernel::gfx::kFontFirstChar &&
+                  step.codepoint <= kernel::gfx::kFontLastChar
+              ? static_cast<char>(step.codepoint)
+              : static_cast<char>(kernel::gfx::kFontDefaultChar);
+      kernel::gfx::DrawBitmapText(
+          originX + pen, originY, &character, 1, slot->penColor,
+          slot->backgroundColor, slot->opaqueText,
+          [&](int64_t l, int64_t t, int64_t r, int64_t b, uint32_t color) {
+            const auto error = Fill(*slot, l, t, r, b, color, dirty);
+            if (!result) result = error;
+          });
+      pen += metrics.cellWidth;
+    }
+  } else {
+    if (slot->opaqueText && extent.advanceWidth && metrics.lineHeight) {
+      const auto error = Fill(*slot, originX, originY,
+                              originX + extent.advanceWidth, originY + metrics.lineHeight,
+                            slot->backgroundColor, dirty);
+      if (!result) result = error;
+    }
+    int64_t pen = originX;
+    for (const auto &mask : run.glyphs) {
+      for (uint32_t row = 0; row < mask->height; ++row) {
+        const int64_t y = baseline - mask->top + row;
+        const uint8_t *bits = mask->bits.data() + static_cast<size_t>(row) * mask->stride;
+        for (uint32_t col = 0; col < mask->width;) {
+          if (!(bits[col / 8] & (0x80u >> (col % 8)))) {
+            ++col;
+            continue;
+          }
+          uint32_t end = col + 1;
+          while (end < mask->width && (bits[end / 8] & (0x80u >> (end % 8)))) ++end;
+          const int64_t glyphLeft = args.layout == TextLayoutMode_LayoutUniformGrid
+                                        ? pen - (mask->left < 0 ? mask->left : 0)
+                                        : pen + mask->left;
+          const int64_t x = glyphLeft;
+          const auto error = Fill(*slot, x + col, y, x + end, y + 1, slot->penColor, dirty);
+          if (!result) result = error;
+          col = end;
+        }
+      }
+      pen += args.layout == TextLayoutMode_LayoutUniformGrid
+                 ? metrics.cellWidth : static_cast<uint32_t>(mask->advance);
+    }
+  }
   Present(*slot, dirty);
   slot->lock.unlock();
   return result;
@@ -677,21 +1233,6 @@ kstd::error_code handle_SetViewportOrg_V1(__KRN_GFX_SETVIEWPORTORG_V1 &&args) {
 kstd::error_code handle_SetWindowOrg_V1(__KRN_GFX_SETWINDOWORG_V1 &&args) {
   (void) args;
   return kernel::KernelError::NotImplemented;
-}
-
-kstd::error_code handle_GetTextMetrics_V1(__KRN_GFX_GETTEXTMETRICS_V1 &&args) {
-  const auto proc = CurrentProcess();
-  kernel::user::Guard scene;
-  if (!proc) return kernel::KernelError::NoCurrentProcess;
-  if (!proc->dcTable.Resolve(args.dc)) return kernel::KernelError::InvalidHandle;
-  args.metrics.cellWidth = kernel::gfx::kFontCellWidth;
-  args.metrics.cellHeight = kernel::gfx::kFontCellHeight;
-  args.metrics.ascent = kernel::gfx::kFontAscent;
-  args.metrics.descent = kernel::gfx::kFontDescent;
-  args.metrics.firstChar = kernel::gfx::kFontFirstChar;
-  args.metrics.lastChar = kernel::gfx::kFontLastChar;
-  args.metrics.defaultChar = kernel::gfx::kFontDefaultChar;
-  return {};
 }
 
 kstd::error_code handle_SetDrawColors_V1(__KRN_GFX_SETDRAWCOLORS_V1 &&args) {

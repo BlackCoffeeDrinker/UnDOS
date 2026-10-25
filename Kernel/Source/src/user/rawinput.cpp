@@ -1,4 +1,5 @@
 #include "user/user.hpp"
+#include "user/ui_text.hpp"
 #include <kernel/input.hpp>
 #include <kernel/scheduler.hpp>
 
@@ -49,7 +50,9 @@ void drag_locked() noexcept {
     if (hit == HitTest::Right || hit == HitTest::TopRight || hit == HitTest::BottomRight) rect.right += dx;
     if (hit == HitTest::Top || hit == HitTest::TopLeft || hit == HitTest::TopRight) rect.top += dy;
     if (hit == HitTest::Bottom || hit == HitTest::BottomLeft || hit == HitTest::BottomRight) rect.bottom += dy;
-    const int32_t minWidth = 4 * kCaptionHeight, minHeight = 2 * kBorderWidth + kCaptionHeight + 16;
+    const int32_t minWidth = 4 * kCaptionButtonSize;
+    const int32_t minHeight = 2 * kBorderWidth + caption_height_locked() +
+                              UiText::current().text_height();
     if (rect.right - rect.left < minWidth) {
       if (hit == HitTest::Left || hit == HitTest::TopLeft || hit == HitTest::BottomLeft) rect.left = rect.right - minWidth;
       else rect.right = rect.left + minWidth;
@@ -173,7 +176,7 @@ void keyboard_locked(const input::KeyboardInputEvent &event) noexcept {
   const bool control = (event.modifiers & input::modifier_flags::Control) != 0;
   const bool alt = (event.modifiers & input::modifier_flags::Alt) != 0;
   const bool shift = (event.modifiers & input::modifier_flags::Shift) != 0;
-  if (!released && menu_key_locked(event.virtualKey, alt)) return;
+  if (menu_key_locked(event.virtualKey, alt, !released)) return;
   if (!released && !(event.keyFlags & input::key_flags::Repeat)) {
     if ((event.virtualKey == 0x09 && (alt || control)) || (event.virtualKey == 0x75 && control)) {
       cycle_window_locked(control && !alt, shift); // Alt+Tab roots, Ctrl+Tab/F6 groups.
@@ -193,7 +196,7 @@ void keyboard_locked(const input::KeyboardInputEvent &event) noexcept {
       if (window && window->queue && effectively_visible_locked(*window)) {
         const int32_t border = (window->style & kStyleBorder) ? kBorderWidth : 0;
         const int32_t x = window->rect.left + border;
-        const int32_t y = window->rect.top + border + kCaptionHeight;
+        const int32_t y = window->rect.top + border + caption_height_locked();
         post_locked(*window->queue, window->hwnd, 0x00A1, static_cast<uint32_t>(HitTest::SysMenu),
                     (static_cast<uint32_t>(y & 0xFFFF) << 16) | static_cast<uint32_t>(x & 0xFFFF));
       }
@@ -204,9 +207,11 @@ void keyboard_locked(const input::KeyboardInputEvent &event) noexcept {
   if (!window) window = active_window_locked();
   if (!window || !window->queue || !effectively_visible_locked(*window) || window->state == KWindowObject::State::Minimized) return;
   const uint32_t metadata = event.scanCode | ((event.keyFlags & 7u) << 8) | ((event.modifiers & 0x1FF) << 16);
-  post_locked(*window->queue, window->hwnd, released ? kMsgKeyUp : kMsgKeyDown, event.virtualKey, metadata);
+  post_locked(*window->queue, window->hwnd, released ? kMsgKeyUp : kMsgKeyDown,
+              event.virtualKey, metadata);
   if (event.character && !released && !alt && !control)
-    post_locked(*window->queue, window->hwnd, kMsgChar, static_cast<uint8_t>(event.character), metadata);
+    post_locked(*window->queue, window->hwnd, kMsgChar,
+                static_cast<uint8_t>(event.character), metadata);
 }
 
 void raw_input_thread(void *) {

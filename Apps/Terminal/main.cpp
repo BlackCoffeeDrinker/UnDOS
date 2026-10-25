@@ -8,12 +8,8 @@
 
 namespace {
 
-constexpr uint16_t TERM_ROWS = 23;
-constexpr uint16_t TERM_COLS = 72;
-
-constexpr int32_t CHAR_WIDTH = 8;
-constexpr int32_t CHAR_HEIGHT = 16;
 constexpr int32_t TERM_PADDING = 4;
+constexpr uint32_t MaxBufferRows = 4096;
 
 struct TerminalState {
   HANDLE sourceHandle{0};
@@ -25,9 +21,17 @@ struct TerminalState {
   HANDLE childHandle{0};
   bool childRunning{false};
 
-  char grid[TERM_ROWS][TERM_COLS]{};
-  uint8_t cursorRow{0};
-  uint8_t cursorCol{0};
+  char *grid{nullptr};
+  char *lineBuffer{nullptr};
+  uint32_t bufferRows{0};
+  uint16_t columns{0};
+  uint16_t visibleRows{0};
+  uint16_t visibleColumns{0};
+  uint32_t cursorRow{0};
+  uint16_t cursorCol{0};
+  uint32_t cellWidth{0};
+  uint32_t cellHeight{0};
+  uint16_t scrollbackOffset{0};
 
   // ANSI escape sequence parser state
   bool inEscape{false};
@@ -35,28 +39,103 @@ struct TerminalState {
   char csiParams[32]{};
   size_t csiParamLen{0};
 
-  void init() {
-    for (uint16_t r = 0; r < TERM_ROWS; ++r) {
-      for (uint16_t c = 0; c < TERM_COLS; ++c) {
-        grid[r][c] = ' ';
-      }
+  bool resize_storage(uint32_t rows, uint16_t cols) {
+    if (!cols || rows > MaxBufferRows || rows > SIZE_MAX / cols) return false;
+    char *replacement = static_cast<char *>(crt_malloc(static_cast<size_t>(rows) * cols));
+    if (!replacement) return false;
+    char *newLineBuffer = static_cast<char *>(crt_malloc(static_cast<size_t>(cols) + 1));
+    if (!newLineBuffer) {
+      crt_free(replacement);
+      return false;
     }
+    memset(replacement, ' ', static_cast<size_t>(rows) * cols);
+    const uint32_t copyRows = rows < bufferRows ? rows : bufferRows;
+    const uint16_t copyCols = cols < columns ? cols : columns;
+    if (grid) {
+      for (uint32_t row = 0; row < copyRows; ++row)
+        memcpy(replacement + static_cast<size_t>(row) * cols,
+               grid + static_cast<size_t>(row) * columns, copyCols);
+      crt_free(grid);
+    }
+    if (lineBuffer) crt_free(lineBuffer);
+    grid = replacement;
+    lineBuffer = newLineBuffer;
+    bufferRows = rows;
+    columns = cols;
+    if (cursorCol >= columns) cursorCol = columns - 1;
+    return true;
   }
 
-  void scroll_up() {
-    for (uint16_t r = 0; r < TERM_ROWS - 1; ++r) {
-      memcpy(grid[r], grid[r + 1], TERM_COLS);
+  bool ensure_row(uint32_t row) {
+    if (row < bufferRows) return true;
+    if (row >= MaxBufferRows) return false;
+    uint32_t rows = bufferRows ? bufferRows : 1;
+    while (rows <= row && rows < MaxBufferRows) {
+      const uint32_t doubled = rows > MaxBufferRows / 2 ? MaxBufferRows : rows * 2;
+      if (doubled == rows) break;
+      rows = doubled;
     }
-    memset(grid[TERM_ROWS - 1], ' ', TERM_COLS);
+    return resize_storage(rows, columns);
+  }
+
+  bool update_layout() {
+    gui::TextMetrics metrics{};
+    if (!gui::system_font().metrics(metrics, gui::FontStyle::Regular,
+                                    gui::TextRepertoire::Terminal) ||
+        !metrics.cellWidth || !metrics.cellHeight) return false;
+    const Rect area = gui::client(hwnd);
+    const uint32_t width = area.right > 2 * TERM_PADDING
+        ? static_cast<uint32_t>(area.right - 2 * TERM_PADDING) : 0;
+    const uint32_t height = area.bottom > 2 * TERM_PADDING
+        ? static_cast<uint32_t>(area.bottom - 2 * TERM_PADDING) : 0;
+    uint32_t cols = width / metrics.cellWidth;
+    uint32_t rows = height / metrics.cellHeight;
+    if (cols > UINT16_MAX || rows > UINT16_MAX) return false;
+    const uint32_t storageRows = rows ? (bufferRows > rows ? bufferRows : rows)
+                                      : (bufferRows ? bufferRows : 1);
+    const uint16_t storageColumns = static_cast<uint16_t>(
+        cols ? cols : (columns ? columns : 1));
+    if ((columns != storageColumns || bufferRows < storageRows) &&
+        !resize_storage(storageRows, storageColumns)) return false;
+    visibleColumns = static_cast<uint16_t>(cols);
+    visibleRows = static_cast<uint16_t>(rows);
+    cellWidth = metrics.cellWidth;
+    cellHeight = metrics.cellHeight;
+    if (columns && cursorCol >= columns) cursorCol = columns - 1;
+    const uint32_t bottom = cursorRow + 1;
+    const uint32_t maximumScroll = bottom > visibleRows ? bottom - visibleRows : 0;
+    if (scrollbackOffset > maximumScroll)
+      scrollbackOffset = static_cast<uint16_t>(
+          maximumScroll > UINT16_MAX ? UINT16_MAX : maximumScroll);
+    return gui::check(UD_SYS_SetConfigV1(
+        sourceHandle,
+        static_cast<TtyModeFlags>(TtyModeFlags_Echo | TtyModeFlags_Canonical |
+                                  TtyModeFlags_CrToNl | TtyModeFlags_NlToCrNl),
+        visibleRows, visibleColumns), "Resize TTY");
+  }
+
+  void init() {
+    if (grid) memset(grid, ' ', static_cast<size_t>(bufferRows) * columns);
+    cursorRow = cursorCol = 0;
+    scrollbackOffset = 0;
+  }
+
+  char *row(uint32_t index) {
+    return index < bufferRows ? grid + static_cast<size_t>(index) * columns : nullptr;
   }
 
   void newline() {
     cursorCol = 0;
-    if (cursorRow + 1 < TERM_ROWS) {
-      cursorRow++;
+    if (cursorRow + 1 < MaxBufferRows && ensure_row(cursorRow + 1)) ++cursorRow;
+    else if (bufferRows == MaxBufferRows) {
+      for (uint32_t rowIndex = 0; rowIndex + 1 < bufferRows; ++rowIndex)
+        memcpy(row(rowIndex), row(rowIndex + 1), columns);
+      memset(row(bufferRows - 1), ' ', columns);
+      cursorRow = bufferRows - 1;
     } else {
-      scroll_up();
+      running = false;
     }
+    scrollbackOffset = 0;
   }
 
   void handle_csi_command(char cmd) {
@@ -78,22 +157,22 @@ struct TerminalState {
           if (r > 0) row = r;
         }
       }
-      cursorRow = (row > 0 && row <= TERM_ROWS) ? static_cast<uint8_t>(row - 1) : 0;
-      cursorCol = (col > 0 && col <= TERM_COLS) ? static_cast<uint8_t>(col - 1) : 0;
+      const uint32_t top = cursorRow + 1 > visibleRows ? cursorRow + 1 - visibleRows : 0;
+      cursorRow = top + static_cast<uint32_t>(row - 1);
+      if (cursorRow >= MaxBufferRows || !ensure_row(cursorRow)) cursorRow = top;
+      cursorCol = col > 0 && col <= columns ? static_cast<uint16_t>(col - 1) : 0;
+      scrollbackOffset = 0;
     } else if (cmd == 'J') {
       init();
-      cursorRow = 0;
-      cursorCol = 0;
     } else if (cmd == 'K') {
-      for (uint16_t c = cursorCol; c < TERM_COLS; ++c) {
-        grid[cursorRow][c] = ' ';
-      }
+      if (char *current = row(cursorRow))
+        memset(current + cursorCol, ' ', columns - cursorCol);
     } else if (cmd == 'A') {
       if (cursorRow > 0) cursorRow--;
     } else if (cmd == 'B') {
-      if (cursorRow + 1 < TERM_ROWS) cursorRow++;
+      if (cursorRow + 1 < MaxBufferRows && ensure_row(cursorRow + 1)) cursorRow++;
     } else if (cmd == 'C') {
-      if (cursorCol + 1 < TERM_COLS) cursorCol++;
+      if (cursorCol + 1 < columns) cursorCol++;
     } else if (cmd == 'D') {
       if (cursorCol > 0) cursorCol--;
     }
@@ -139,14 +218,15 @@ struct TerminalState {
       }
     } else if (ch == '\t') {
       cursorCol = (cursorCol + 8) & ~7;
-      if (cursorCol >= TERM_COLS) {
+      if (cursorCol >= columns) {
         newline();
       }
     } else if (ch >= 32 && ch <= 126) {
-      if (cursorCol >= TERM_COLS) {
+      if (cursorCol >= columns) {
         newline();
       }
-      grid[cursorRow][cursorCol++] = ch;
+      if (ensure_row(cursorRow)) row(cursorRow)[cursorCol++] = ch;
+      scrollbackOffset = 0;
     }
   }
 
@@ -155,24 +235,31 @@ struct TerminalState {
     if (!paint) return;
     const Rect area = gui::client(hwnd);
     paint.fill(0, 0, area.right, area.bottom, 0);
-
-    // Draw text rows
-    char lineBuf[TERM_COLS + 1];
-    lineBuf[TERM_COLS] = '\0';
-
-    for (uint16_t r = 0; r < TERM_ROWS; ++r) {
-      memcpy(lineBuf, grid[r], TERM_COLS);
-      int lastNonSpace = TERM_COLS - 1;
-      while (lastNonSpace >= 0 && lineBuf[lastNonSpace] == ' ') {
-        lastNonSpace--;
+    if (!visibleRows || !visibleColumns || !cellWidth || !cellHeight) return;
+    const uint32_t bottom = cursorRow + 1;
+    const uint32_t maxTop = bottom > visibleRows ? bottom - visibleRows : 0;
+    const uint32_t top = maxTop > scrollbackOffset ? maxTop - scrollbackOffset : 0;
+    for (uint16_t screenRow = 0; screenRow < visibleRows; ++screenRow) {
+      const uint32_t logicalRow = top + screenRow;
+      const char *contents = row(logicalRow);
+      if (!contents) continue;
+      int last = static_cast<int>(visibleColumns) - 1;
+      while (last >= 0 && contents[last] == ' ') --last;
+      if (last >= 0) {
+        memcpy(lineBuffer, contents, static_cast<size_t>(last + 1));
+        lineBuffer[last + 1] = 0;
+        paint.draw_text(TERM_PADDING,
+                        TERM_PADDING + static_cast<int>(screenRow) * cellHeight,
+                        lineBuffer, gui::FontStyle::Regular, gui::Paper, 0, true,
+                        gui::TextLayoutMode::UniformGrid,
+                        gui::TextRepertoire::Terminal);
       }
-      lineBuf[lastNonSpace + 1] = '\0';
-
-      if (lastNonSpace >= 0) {
-        const int32_t x = TERM_PADDING;
-        const int32_t y = TERM_PADDING + r * CHAR_HEIGHT;
-        paint.text(x, y, lineBuf, 7, 0);
-      }
+    }
+    if (!scrollbackOffset && cursorRow >= top && cursorRow < top + visibleRows &&
+        cursorCol < visibleColumns) {
+      const int x = TERM_PADDING + static_cast<int>(cursorCol) * cellWidth;
+      const int y = TERM_PADDING + static_cast<int>(cursorRow - top) * cellHeight;
+      paint.fill(x, y, x + cellWidth, y + cellHeight, gui::Paper);
     }
   }
 };
@@ -258,13 +345,29 @@ void terminal_input(uint8_t ch) {
 void procedure(const Msg &msg) {
   if (msg.message == WindowMessage_Close) s_term.running = false;
   else if (msg.message == WindowMessage_Paint) s_term.render();
-  else if (msg.message == WindowMessage_Size) gui::invalidate(msg.hwnd);
+  else if (msg.message == WindowMessage_Size ||
+           msg.message == WindowMessage_FontChanged) {
+    if (!s_term.update_layout()) s_term.running = false;
+    gui::invalidate(msg.hwnd);
+  }
   else if (msg.message == WindowMessage_KeyDown || msg.message == WindowMessage_KeyUp) {
     s_term.modifiers = msg.lParam >> 16;
     if (msg.message == WindowMessage_KeyUp) return;
     if (msg.wParam == 13) terminal_input('\n');
     else if (msg.wParam == 8) terminal_input('\b');
     else if (msg.wParam == 9) terminal_input('\t');
+    else if (msg.wParam == 33) {
+      const uint32_t top = s_term.cursorRow + 1 > s_term.visibleRows
+          ? s_term.cursorRow + 1 - s_term.visibleRows : 0;
+      const uint32_t next = s_term.scrollbackOffset + s_term.visibleRows;
+      s_term.scrollbackOffset = static_cast<uint16_t>(
+          next > top ? top : next);
+      gui::invalidate(msg.hwnd);
+    } else if (msg.wParam == 34) {
+      s_term.scrollbackOffset = s_term.scrollbackOffset > s_term.visibleRows
+          ? s_term.scrollbackOffset - s_term.visibleRows : 0;
+      gui::invalidate(msg.hwnd);
+    }
     else if (msg.wParam == 'U' && (s_term.modifiers & 0x0c)) terminal_input(0x15);
     else if (msg.wParam == 'D' && (s_term.modifiers & 0x0c) && s_term.childRunning) terminal_input(0x04);
   } else if (msg.message == WindowMessage_Char && msg.wParam >= 32 && msg.wParam < 127 &&
@@ -285,15 +388,34 @@ extern "C" int main(int argc, char **argv) {
     return 1;
   }
 
-  if (!gui::check(UD_SYS_SetConfigV1(s_term.sourceHandle,
-                            static_cast<TtyModeFlags>(TtyModeFlags_Echo | TtyModeFlags_Canonical | TtyModeFlags_CrToNl | TtyModeFlags_NlToCrNl),
-                            TERM_ROWS, TERM_COLS), "Configure TTY")) return 1;
-
+  gui::TextMetrics metrics{};
+  if (!gui::system_font().metrics(metrics, gui::FontStyle::Regular,
+                                  gui::TextRepertoire::Terminal) ||
+      !metrics.cellWidth || !metrics.cellHeight) return 1;
+  uint32_t display = 0;
+  DeviceCaps caps{};
+  if (!gui::check(UD_SYS_CreateDCV1("", "", DCInitFlags_Primary, &display),
+                  "Open terminal display")) return 1;
+  const bool queried = gui::check(UD_SYS_GetDeviceCapsV1(display, &caps),
+                                  "Query terminal display");
+  gui::check(UD_SYS_DeleteDCV1(display), "Close terminal display");
+  if (!queried || !caps.width || !caps.height) return 1;
   if (!gui::register_class("Terminal", procedure, 0)) return 1;
+  const uint64_t requestedWidth = 72ull * metrics.cellWidth + 2 * TERM_PADDING + 6;
+  const uint64_t requestedHeight = 23ull * metrics.cellHeight + 2 * TERM_PADDING +
+                                  metrics.lineHeight + 12;
+  const uint64_t availableWidth = caps.width > 24 ? caps.width - 24 : caps.width;
+  const uint64_t availableHeight = caps.height > 34 ? caps.height - 34 : caps.height;
+  const uint64_t screenWidth = availableWidth < INT32_MAX ? availableWidth : INT32_MAX;
+  const uint64_t screenHeight = availableHeight < INT32_MAX ? availableHeight : INT32_MAX;
+  const int32_t width = static_cast<int32_t>(
+      requestedWidth < screenWidth ? requestedWidth : screenWidth);
+  const int32_t height = static_cast<int32_t>(
+      requestedHeight < screenHeight ? requestedHeight : screenHeight);
   s_term.hwnd = gui::window("Terminal", "UnDOS Terminal", 24, 34,
-                            TERM_COLS * CHAR_WIDTH + 2 * TERM_PADDING + 6,
-                            TERM_ROWS * CHAR_HEIGHT + 2 * TERM_PADDING + 24);
+                            width, height);
   if (!s_term.hwnd) return 1;
+  if (!s_term.update_layout()) return 1;
   gui::check(UD_SYS_SetFocusV1(s_term.hwnd), "SetFocus");
 
   // Initial banner into the terminal
@@ -333,6 +455,8 @@ extern "C" int main(int argc, char **argv) {
   }
   if (s_term.childRunning) gui::check(UD_SYS_CloseV1(s_term.childHandle), "Close process");
   gui::destroy(s_term.hwnd);
+  if (s_term.grid) crt_free(s_term.grid);
+  if (s_term.lineBuffer) crt_free(s_term.lineBuffer);
   gui::check(UD_SYS_CloseV1(s_term.sourceHandle), "Close TTY source");
   gui::check(UD_SYS_CloseV1(s_term.sinkHandle), "Close TTY sink");
   (void) UD_SYS_PrintV1("term: session ended");

@@ -1,4 +1,5 @@
 #include "user/user.hpp"
+#include "user/ui_text.hpp"
 
 #include <kernel/kobject/KProcessObject.hpp>
 
@@ -8,8 +9,6 @@ namespace kernel::user {
 namespace {
 constexpr uint32_t kMenuIndexMask = 0xFFFF;
 constexpr uint32_t kMenuGenerationShift = 16;
-constexpr int32_t kMenuCellWidth = 8;
-constexpr int32_t kMenuItemHeight = 20;
 constexpr int32_t kMenuPopupBorder = 2;
 
 struct MenuEntry {
@@ -38,6 +37,8 @@ struct OpenMenu {
   int32_t y{0};
   int32_t width{0};
   int32_t selected{-1};
+  int32_t viewBottom{0};
+  int32_t firstRow{0};
 };
 
 kstd::array<MenuRecord, kMaxMenus> g_menus;
@@ -45,6 +46,20 @@ OpenMenu g_openMenu;
 OpenMenu g_menuStack[kMaxMenus]{};
 uint32_t g_menuDepth{0};
 bool g_menuMouseCapture{false};
+font::UiFont g_menuFont;
+
+int32_t menu_row_height() noexcept {
+  return UiText::of(g_menuFont).row_height();
+}
+
+int64_t popup_logical_height(uint32_t count) noexcept {
+  return static_cast<int64_t>(count) * menu_row_height() + 2 * kMenuPopupBorder;
+}
+
+URect popup_visible_bounds(const OpenMenu &popup) noexcept {
+  return {popup.x, popup.y, popup.x + popup.width, popup.viewBottom};
+}
+void reveal_selected_row(OpenMenu &popup) noexcept;
 
 void destroy_menu_locked(uint32_t handle) noexcept;
 
@@ -64,9 +79,9 @@ uint32_t menu_handle_locked(const MenuRecord &menu) noexcept {
   return 0;
 }
 
-int32_t menu_entry_width(const MenuEntry &entry) noexcept {
+int32_t menu_entry_width(const UiText &ui, const MenuEntry &entry) noexcept {
   if (entry.flags & kMenuItemSeparator) return 8;
-  return static_cast<int32_t>(entry.text.size()) * kMenuCellWidth + 16;
+  return ui.width(entry.text.data(), entry.text.size(), false) + 16;
 }
 
 bool menu_contains_locked(uint32_t root, uint32_t target, uint32_t depth = 0) noexcept {
@@ -88,9 +103,7 @@ void close_menu_locked() noexcept {
   uint32_t count = 0;
   auto add_rect = [&](const OpenMenu &menu) {
     if (!menu.visible || count == kMaxMenus + 1) return;
-    oldMenus[count++] = {menu.x, menu.y, menu.x + menu.width,
-                         menu.y + kMenuPopupBorder * 2 +
-                             static_cast<int32_t>(menu_item_count_locked(menu.menu)) * kMenuItemHeight};
+    oldMenus[count++] = popup_visible_bounds(menu);
   };
   add_rect(g_openMenu);
   for (uint32_t i = 0; i < g_menuDepth; ++i) add_rect(g_menuStack[i]);
@@ -119,17 +132,35 @@ bool menu_item_locked(uint32_t handle, uint32_t index, MenuItemView &item) noexc
 namespace {
 void menu_draw_text(int32_t x, int32_t y, const kstd::string_view &text,
                     uint32_t foreground, uint32_t background, const URect &limit) noexcept {
-  gfx::DrawBitmapText(x, y, text.data(), text.size(), foreground, background, true,
-                      [&](int64_t left, int64_t top, int64_t right, int64_t bottom, uint32_t color) {
-                        fill_screen_locked(URect{static_cast<int32_t>(left), static_cast<int32_t>(top),
-                                                static_cast<int32_t>(right), static_cast<int32_t>(bottom)}
-                                               .Intersect(limit),
-                                           color);
-                      });
+  UiText::of(g_menuFont).draw(x, y, text.data(), text.size(), false, foreground, background, true,
+                         [&](int64_t left, int64_t top, int64_t right, int64_t bottom, uint32_t color) {
+                           fill_screen_locked(URect{static_cast<int32_t>(left), static_cast<int32_t>(top),
+                                                   static_cast<int32_t>(right), static_cast<int32_t>(bottom)}
+                                                  .Intersect(limit),
+                                              color);
+                         });
 }
 
 bool menu_item_enabled(const MenuEntry &entry) noexcept {
   return !(entry.flags & (kMenuItemDisabled | kMenuItemGrayed | kMenuItemSeparator));
+}
+
+int32_t popup_row_top(const OpenMenu &popup, int32_t index) noexcept {
+  return popup.y + kMenuPopupBorder + (index - popup.firstRow) * menu_row_height();
+}
+
+void reveal_selected_row(OpenMenu &popup) noexcept {
+  if (popup.selected < 0) return;
+  const int32_t rowHeight = menu_row_height();
+  const int32_t contentHeight = popup.viewBottom - popup.y - 2 * kMenuPopupBorder;
+  if (contentHeight <= 0 || rowHeight > contentHeight) {
+    popup.firstRow = popup.selected;
+    return;
+  }
+  const int32_t visibleRows = contentHeight / rowHeight;
+  if (popup.selected < popup.firstRow) popup.firstRow = popup.selected;
+  else if (popup.selected >= popup.firstRow + visibleRows)
+    popup.firstRow = popup.selected - visibleRows + 1;
 }
 
 int32_t first_enabled_item(const MenuRecord &menu) noexcept {
@@ -144,17 +175,38 @@ void open_popup_locked(uint32_t ownerWindow, uint32_t menuHandle, int32_t x, int
   auto *owner = lookup_locked(ownerWindow);
   if (!menu || !owner || !menu->popup || menu->owner != owner->process) return;
 
+  const UiText ui = UiText::of(g_menuFont);
   int32_t width = 48;
   for (uint32_t i = 0; i < menu->count; ++i) {
-    const auto itemWidth = static_cast<int32_t>(menu->entries[i].text.size()) * kMenuCellWidth + 24;
+    const auto itemWidth = ui.width(menu->entries[i].text.data(), menu->entries[i].text.size(), false) + 24;
     if (itemWidth > width) width = itemWidth;
   }
   const auto bounds = screen_rect();
-  const int32_t height = static_cast<int32_t>(menu->count) * kMenuItemHeight + kMenuPopupBorder * 2;
-  if (x + width > bounds.right) x = bounds.right - width;
-  if (y + height > bounds.bottom) y = bounds.bottom - height;
+  const int32_t screenWidth = bounds.right - bounds.left;
+  if (width > screenWidth) width = screenWidth;
+  const int64_t logicalHeight = popup_logical_height(menu->count);
+  const int32_t screenHeight = bounds.bottom - bounds.top;
+  const int32_t height = logicalHeight > INT32_MAX ? INT32_MAX : static_cast<int32_t>(logicalHeight);
+  if (static_cast<int64_t>(x) + width > bounds.right) x = bounds.right - width;
   if (x < bounds.left) x = bounds.left;
-  if (y < bounds.top) y = bounds.top;
+
+  int32_t viewportTop = y;
+  int32_t viewportBottom = y + height;
+  if (height <= screenHeight) {
+    if (static_cast<int64_t>(y) + height > bounds.bottom) {
+      if (static_cast<int64_t>(y) - height >= bounds.top) {
+        viewportTop = y - height;
+      } else {
+        viewportTop = (y - bounds.top <= bounds.bottom - y) ? bounds.top : bounds.bottom - height;
+      }
+    }
+    if (viewportTop < bounds.top) viewportTop = bounds.top;
+    if (viewportTop + height > bounds.bottom) viewportTop = bounds.bottom - height;
+    viewportBottom = viewportTop + height;
+  } else {
+    viewportTop = bounds.top;
+    viewportBottom = bounds.bottom;
+  }
 
   const OpenMenu previous = g_openMenu;
   if (previous.visible && previous.menu == parentMenu && g_menuDepth < kMaxMenus)
@@ -167,22 +219,21 @@ void open_popup_locked(uint32_t ownerWindow, uint32_t menuHandle, int32_t x, int
                 .parentMenu = parentMenu,
                 .parentIndex = parentIndex,
                 .x = x,
-                .y = y,
+                .y = viewportTop,
                 .width = width,
-                .selected = first_enabled_item(*menu)};
+                .selected = first_enabled_item(*menu),
+                .viewBottom = viewportBottom,
+                .firstRow = 0};
+  reveal_selected_row(g_openMenu);
   if (previous.visible) {
-    expose_locked({previous.x, previous.y, previous.x + previous.width,
-                   previous.y + kMenuPopupBorder * 2 +
-                       static_cast<int32_t>(menu_item_count_locked(previous.menu)) * kMenuItemHeight});
+    expose_locked(popup_visible_bounds(previous));
   }
-  expose_locked({x, y, x + width, y + height});
+  expose_locked(popup_visible_bounds(g_openMenu));
 }
 
 void close_popup_level_locked() noexcept {
   if (!g_openMenu.visible) return;
-  const URect old{g_openMenu.x, g_openMenu.y, g_openMenu.x + g_openMenu.width,
-                  g_openMenu.y + kMenuPopupBorder * 2 +
-                      static_cast<int32_t>(menu_item_count_locked(g_openMenu.menu)) * kMenuItemHeight};
+  const URect old = popup_visible_bounds(g_openMenu);
   g_openMenu = g_menuDepth ? g_menuStack[--g_menuDepth] : OpenMenu{};
   expose_locked(old);
 }
@@ -193,11 +244,12 @@ void open_top_level_popup_locked(KWindowObject &window, uint32_t index) noexcept
   const auto &entry = menu->entries[index];
   if (!(entry.flags & kMenuItemPopup) || !menu_item_enabled(entry)) return;
   const int32_t border = (window.style & kStyleBorder) ? kBorderWidth : 0;
-  const int32_t caption = (window.style & kStyleCaption) ? kCaptionHeight : 0;
+  const int32_t caption = (window.style & kStyleCaption) ? caption_height_locked() : 0;
   int32_t x = window.rect.left + border;
-  for (uint32_t i = 0; i < index; ++i) x += menu_entry_width(menu->entries[i]);
+  const UiText ui = UiText::of(g_menuFont);
+  for (uint32_t i = 0; i < index; ++i) x += menu_entry_width(ui, menu->entries[i]);
   open_popup_locked(window.hwnd, entry.item, x,
-                    window.rect.top + border + caption + kMenuBarHeight,
+                    window.rect.top + border + caption + menu_row_height(),
                     window.menu, index);
 }
 
@@ -223,17 +275,20 @@ bool menu_bar_hit_locked(KWindowObject &window, int32_t x, int32_t y,
   const auto *menu = lookup_menu_locked(window.menu);
   if (!menu || menu->popup) return false;
   const int32_t border = (window.style & kStyleBorder) ? kBorderWidth : 0;
-  const int32_t caption = (window.style & kStyleCaption) ? kCaptionHeight : 0;
+  const int32_t caption = (window.style & kStyleCaption) ? caption_height_locked() : 0;
   const int32_t left = window.rect.left + border;
   const int32_t top = window.rect.top + border + caption;
-  if (y < top || y >= top + kMenuBarHeight) return false;
+  const int32_t rowHeight = menu_row_height();
+  const int32_t right = window.rect.right - border;
+  if (x < left || x >= right || y < top || y >= top + rowHeight) return false;
+  const UiText ui = UiText::of(g_menuFont);
   int32_t cursor = left;
   for (uint32_t i = 0; i < menu->count; ++i) {
-    const int32_t width = menu_entry_width(menu->entries[i]);
+    const int32_t width = menu_entry_width(ui, menu->entries[i]);
     if (x >= cursor && x < cursor + width) {
       index = i;
       itemLeft = cursor;
-      barBottom = top + kMenuBarHeight;
+      barBottom = top + rowHeight;
       return true;
     }
     cursor += width;
@@ -248,8 +303,8 @@ void select_menu_item_locked(uint32_t menuHandle, uint32_t index) noexcept {
   if (entry.flags & kMenuItemPopup) {
     const auto parent = g_openMenu;
     if (parent.visible) {
-      const int32_t rowY = parent.y + kMenuPopupBorder +
-                           static_cast<int32_t>(index) * kMenuItemHeight;
+      reveal_selected_row(g_openMenu);
+      const int32_t rowY = popup_row_top(g_openMenu, static_cast<int32_t>(index));
       open_popup_locked(parent.ownerWindow, entry.item, parent.x + parent.width - 2, rowY,
                         menuHandle, index);
     }
@@ -282,16 +337,13 @@ void destroy_menu_locked(uint32_t handle) noexcept {
 
 namespace {
 URect popup_bounds_locked(const OpenMenu &popup) noexcept {
-  return {popup.x, popup.y, popup.x + popup.width,
-          popup.y + kMenuPopupBorder * 2 +
-              static_cast<int32_t>(menu_item_count_locked(popup.menu)) * kMenuItemHeight};
+  return popup_visible_bounds(popup);
 }
 
 void draw_popup_locked(const OpenMenu &popup, const URect &limit) noexcept {
   const auto *menu = lookup_menu_locked(popup.menu);
   if (!popup.visible || !menu) return;
-  const int32_t height = static_cast<int32_t>(menu->count) * kMenuItemHeight + kMenuPopupBorder * 2;
-  const URect bounds{popup.x, popup.y, popup.x + popup.width, popup.y + height};
+  const URect bounds = popup_visible_bounds(popup);
   const URect clipped = bounds.Intersect(limit);
   if (clipped.Empty()) return;
   auto fill_popup = [&](const URect &rect, uint32_t color) {
@@ -300,26 +352,31 @@ void draw_popup_locked(const OpenMenu &popup, const URect &limit) noexcept {
   fill_popup(bounds, 0);
   fill_popup({bounds.left + 1, bounds.top + 1, bounds.right - 1, bounds.bottom - 1}, 15);
 
+  const int32_t rowHeight = menu_row_height();
+  const int32_t bodyTop = popup.y + kMenuPopupBorder;
+  const int32_t bodyBottom = popup.viewBottom - kMenuPopupBorder;
+  fill_popup({popup.x + 1, bodyTop, popup.x + popup.width - 1, bodyBottom}, 15);
   for (uint32_t i = 0; i < menu->count; ++i) {
     const auto &entry = menu->entries[i];
-    const int32_t top = popup.y + kMenuPopupBorder +
-                        static_cast<int32_t>(i) * kMenuItemHeight;
-    const int32_t bottom = top + kMenuItemHeight;
+    const int32_t top = popup_row_top(popup, static_cast<int32_t>(i));
+    const int32_t bottom = top + rowHeight;
+    if (bottom <= bodyTop || top >= bodyBottom) continue;
     const bool enabled = menu_item_enabled(entry);
     const bool selected = static_cast<int32_t>(i) == popup.selected && enabled;
     const uint32_t background = selected ? kActiveCaptionColor : 15;
     const uint32_t foreground = enabled ? (selected ? 15 : 0) : 8;
     fill_popup({popup.x + 1, top, popup.x + popup.width - 1, bottom}, background);
     if (entry.flags & kMenuItemSeparator) {
-      fill_popup({popup.x + 7, top + kMenuItemHeight / 2,
-                  popup.x + popup.width - 7, top + kMenuItemHeight / 2 + 1}, 8);
+      fill_popup({popup.x + 7, top + rowHeight / 2,
+                  popup.x + popup.width - 7, top + rowHeight / 2 + 1}, 8);
     } else {
       menu_draw_text(popup.x + 8, top + 2,
                      {entry.text.data(), entry.text.size()}, foreground, background,
                      clipped);
       if (entry.flags & kMenuItemPopup) {
-        fill_popup({popup.x + popup.width - 8, top + 7,
-                    popup.x + popup.width - 5, top + 10}, foreground);
+        const int32_t markY = top + rowHeight / 2 - 1;
+        fill_popup({popup.x + popup.width - 8, markY,
+                    popup.x + popup.width - 5, markY + 3}, foreground);
       }
     }
   }
@@ -355,28 +412,25 @@ bool menu_mouse_locked(int32_t x, int32_t y, bool down) noexcept {
         close_menu_locked();
         return true;
       }
-      const int32_t height = static_cast<int32_t>(menu->count) * kMenuItemHeight +
-                             kMenuPopupBorder * 2;
       const bool insidePopup = x >= candidate.x && x < candidate.x + candidate.width &&
-                               y >= candidate.y && y < candidate.y + height;
+                               y >= candidate.y && y < candidate.viewBottom;
       if (!insidePopup) continue;
 
       if (level != static_cast<int32_t>(g_menuDepth)) {
         const OpenMenu old = g_openMenu;
         g_openMenu = candidate;
         g_menuDepth = static_cast<uint32_t>(level);
-        const auto oldHeight = kMenuPopupBorder * 2 +
-                               static_cast<int32_t>(menu_item_count_locked(old.menu)) *
-                                   kMenuItemHeight;
-        expose_locked({old.x, old.y, old.x + old.width, old.y + oldHeight});
+        expose_locked(popup_visible_bounds(old));
       }
-      const int32_t row = (y - g_openMenu.y - kMenuPopupBorder) / kMenuItemHeight;
+      const int32_t contentY = y - g_openMenu.y - kMenuPopupBorder;
+      const int32_t contentHeight = g_openMenu.viewBottom - g_openMenu.y - 2 * kMenuPopupBorder;
+      const bool insideContent = contentY >= 0 && contentY < contentHeight;
+      const int32_t row = insideContent ? g_openMenu.firstRow + contentY / menu_row_height() : -1;
       const bool validRow = row >= 0 && static_cast<uint32_t>(row) < menu->count;
       const int32_t selected = validRow && menu_item_enabled(menu->entries[row]) ? row : -1;
       if (g_openMenu.selected != selected) {
         g_openMenu.selected = selected;
-        expose_locked({g_openMenu.x, g_openMenu.y, g_openMenu.x + g_openMenu.width,
-                       g_openMenu.y + height});
+        expose_locked(popup_visible_bounds(g_openMenu));
       }
       if (down) {
         g_menuMouseCapture = true;
@@ -424,7 +478,8 @@ bool menu_mouse_locked(int32_t x, int32_t y, bool down) noexcept {
   return g_openMenu.visible && !down;
 }
 
-bool menu_key_locked(uint32_t virtualKey, bool alt) noexcept {
+bool menu_key_locked(uint32_t virtualKey, bool alt, bool pressed) noexcept {
+  if (!pressed) return g_openMenu.visible;
   if (!g_openMenu.visible) {
     if (virtualKey != 0x79 && !(alt && virtualKey == 40)) return false;
     auto *window = focused_window_locked();
@@ -457,6 +512,7 @@ bool menu_key_locked(uint32_t virtualKey, bool alt) noexcept {
     return true;
   }
   if (virtualKey == 38 || virtualKey == 40) {
+    const OpenMenu previous = g_openMenu;
     const int32_t direction = virtualKey == 38 ? -1 : 1;
     int32_t index = g_openMenu.selected;
     for (uint32_t attempt = 0; attempt < menu->count; ++attempt) {
@@ -464,12 +520,21 @@ bool menu_key_locked(uint32_t virtualKey, bool alt) noexcept {
               static_cast<int32_t>(menu->count);
       if (menu_item_enabled(menu->entries[index])) {
         g_openMenu.selected = index;
+        reveal_selected_row(g_openMenu);
         break;
       }
     }
-    expose_locked({g_openMenu.x, g_openMenu.y, g_openMenu.x + g_openMenu.width,
-                   g_openMenu.y + static_cast<int32_t>(menu->count) * kMenuItemHeight +
-                       kMenuPopupBorder * 2});
+    if (previous.firstRow != g_openMenu.firstRow) {
+      expose_locked(popup_visible_bounds(g_openMenu));
+    } else if (previous.selected != g_openMenu.selected) {
+      const URect oldRow{g_openMenu.x, popup_row_top(previous, previous.selected),
+                         g_openMenu.x + g_openMenu.width,
+                         popup_row_top(previous, previous.selected) + menu_row_height()};
+      const URect newRow{g_openMenu.x, popup_row_top(g_openMenu, g_openMenu.selected),
+                         g_openMenu.x + g_openMenu.width,
+                         popup_row_top(g_openMenu, g_openMenu.selected) + menu_row_height()};
+      expose_locked(oldRow.Union(newRow));
+    }
     return true;
   }
   if (virtualKey == 13 || virtualKey == 32) {
@@ -491,6 +556,17 @@ bool menu_key_locked(uint32_t virtualKey, bool alt) noexcept {
     return true;
   }
   return false;
+}
+
+int32_t menu_row_height_locked() noexcept { return menu_row_height(); }
+
+UiText menu_text_locked() noexcept { return UiText::of(g_menuFont); }
+
+void close_all_menus_locked() noexcept { close_menu_locked(); }
+
+void install_menu_font_locked(font::UiFont &&font, font::UiFont &displaced) noexcept {
+  displaced = static_cast<font::UiFont &&>(g_menuFont);
+  g_menuFont = static_cast<font::UiFont &&>(font);
 }
 
 kstd::expected<uint32_t, kstd::error_code> create_menu(KProcessObject &caller, bool popup) noexcept {
@@ -552,9 +628,7 @@ kstd::error_code append_menu(KProcessObject &caller, uint32_t handle, uint32_t f
   refresh_attached_menu_locked(handle);
   if (g_openMenu.visible &&
       (g_openMenu.menu == handle || menu_contains_locked(g_openMenu.menu, handle)))
-    expose_locked({g_openMenu.x, g_openMenu.y, g_openMenu.x + g_openMenu.width,
-                   g_openMenu.y + kMenuPopupBorder * 2 +
-                       static_cast<int32_t>(menu_item_count_locked(g_openMenu.menu)) * kMenuItemHeight});
+    expose_locked(popup_visible_bounds(g_openMenu));
   return {};
 }
 

@@ -283,12 +283,13 @@ bool get_symbol_at(const LoadedObject &obj, uint32_t index, Symbol &symbol) {
 // File I/O Helpers
 // ============================================================================
 
-// Reads exact byte count from handle into destination, breaking requests into small chunks
-// to handle partial reads from the kernel I/O subsystem.
+// Reads exact byte count from handle in bounded chunks while allowing the
+// kernel I/O subsystem to return partial reads.
 bool read_exact_bytes(HANDLE handle, void *destination, uint32_t size) {
   auto *bytes = static_cast<uint8_t *>(destination);
   while (size > 0) {
-    const uint32_t chunk_request = (size < 1024) ? size : 1024;
+    constexpr uint32_t kReadChunk = 64 * 1024;
+    const uint32_t chunk_request = size < kReadChunk ? size : kReadChunk;
     uint32_t bytes_read = chunk_request;
     if (UD_SYS_ReadV1(handle, bytes, &bytes_read) != SyscallReturnCode_OKAY ||
         bytes_read == 0 || bytes_read > chunk_request) {

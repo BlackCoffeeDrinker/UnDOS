@@ -125,7 +125,7 @@ def check_drivers(sdk, root, output):
     run(cc, "-O0", "-g", "-c", str(probe / "libc.c"), "-o", str(work / "libc.o"))
     run(cxx, "-O2", "-g", "-c", str(probe / "main.cpp"), "-o", str(work / "main.o"))
     run(cxx, str(work / "main.o"), str(work / "query.o"), str(work / "libc.o"),
-        str(work / "sdkmsg.so"), "-lundos_font_resource", "-o", str(work / "sdkcheck.elf"))
+        str(work / "sdkmsg.so"), "-lundos_font_resource", "-lundosgui", "-o", str(work / "sdkcheck.elf"))
     inspect(work / "sdkcheck.elf", 2)
     inspect(work / "sdkmsg.so", 3)
     dynamic = run("i686-elf-readelf", "-d", str(work / "sdkcheck.elf"),

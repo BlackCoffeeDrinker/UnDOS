@@ -5,4 +5,5 @@ find_package(UnDOS CONFIG REQUIRED)
 
 add_executable(progman main.cpp)
 target_compile_features(progman PRIVATE cxx_std_20)
+target_compile_options(progman PRIVATE -Os)
 target_link_libraries(progman PRIVATE UnDOS::GUI)

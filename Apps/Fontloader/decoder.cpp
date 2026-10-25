@@ -3,6 +3,16 @@
 namespace undos::font::loader {
 namespace {
 using Buffer = kstd::vector<uint8_t>;
+void resize_section(Buffer &buffer, size_t size) {
+  // kstd::vector::resize reserves exactly size. Growing sections geometrically
+  // avoids retaining thousands of near-identical allocations in the CRT heap.
+  if (size > buffer.capacity()) {
+    const size_t doubled = buffer.capacity() ? buffer.capacity() * 2 : 64;
+    const size_t capacity = doubled > size ? doubled : size;
+    buffer.reserve(capacity > MaxResourceBytes ? MaxResourceBytes : capacity);
+  }
+  buffer.resize(size);
+}
 constexpr uint32_t tag(char a, char b, char c, char d) {
   return (uint32_t(a) << 24) | (uint32_t(b) << 16) | (uint32_t(c) << 8) | uint32_t(d);
 }
@@ -68,7 +78,7 @@ private:
   }
   void word(Buffer &b, uint32_t v) {
     const auto at = b.size();
-    b.resize(at + 4);
+    resize_section(b, at + 4);
     write_u32(b.data() + at, v);
   }
   bool copy(Buffer &b, Bytes bytes) {
@@ -143,6 +153,8 @@ DecodeError Decoder::simple(Glyph &g, Cursor &cursor) {
   }
   g.points = g.contours ? previous + 1 : 0;
   if (g.points > limits[0]) return DecodeError::InvalidLimits;
+  // An empty glyph may consist of only the ten-byte glyph header.
+  if (!g.contours && cursor.at == cursor.bytes.size) return DecodeError::None;
   if (!cursor.take(2, p)) return DecodeError::InvalidGlyph;
   g.programs = u16(p);
   if (g.programs > limits[10] || !cursor.take(g.programs, p)) return DecodeError::InvalidGlyph;
@@ -164,7 +176,7 @@ DecodeError Decoder::simple(Glyph &g, Cursor &cursor) {
   if (!room(g.points * PointSize)) return DecodeError::ResourceLimit;
   auto &points = sections[1];
   const size_t start = points.size();
-  points.resize(start + g.points * PointSize);
+  resize_section(points, start + g.points * PointSize);
   for (uint32_t axis = 0; axis < 2; ++axis) {
     int32_t value = 0;
     for (uint32_t i = 0; i < g.points; ++i) {

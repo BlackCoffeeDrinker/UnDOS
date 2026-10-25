@@ -10,6 +10,8 @@ Repository test commands run from the repository root.
 The SDK extends the existing CRT rather than importing a separate libc. This
 keeps one allocator, stream state and exit lifecycle per process, with no new
 third-party dependency or additional upstream license/distribution obligations.
+The SDK installs the public C headers. Do not add the libc header directory to
+kernel or hosted-test include paths.
 The libc implementation, allocator and memory/string primitives are C sources
 compiled by the C compiler, including the legacy `crt_*` stdio helpers.
 Core library code uses C11; syscall-facing code uses GNU C23 to consume the
@@ -44,7 +46,8 @@ i686-undos-gcc hello.c -o hello.elf
 | `errno.h` | Process-global `errno`; `EIO`, `EBADF`, `ENOMEM`, `EINVAL`, `EMFILE`, `ERANGE`, `ENOSYS`, `EOVERFLOW` |
 | `stdint.h`, `stddef.h`, `stdarg.h`, `limits.h` | Reused from the selected cross-GCC's freestanding builtin headers; the probe checks i386 ILP32, fixed-width integers, 8-bit bytes, and size limits |
 
-This table is an explicit subset, **not full ISO C or POSIX conformance**.
+Keep this matrix aligned with the implemented and tested function set. This
+table is an explicit subset, **not full ISO C or POSIX conformance**.
 Unlisted facilities such as `scanf`, `sprintf`, floating conversions,
 locale/wide-character I/O, signals, time, threads/TLS, and hosted C++ libraries
 are not supplied. `abort` terminates unsuccessfully without cleanup, but has
@@ -79,8 +82,9 @@ Standard handles come from the startup runtime queries, never assumed handles
 kernel I/O API generally map to `EIO` because it does not distinguish all
 filesystem failure reasons. `WriteV2` (syscall 226) preserves `WriteV1` and
 reports actual bytes accepted, so stdio retries short writes and fails on
-zero-progress writes. Bulk stdio is split into at most 4096-byte syscall
-requests, respecting the current dispatcher limit. This SDK requires a kernel
+zero-progress writes. The dispatcher accepts `WriteV2` buffers up to
+`UNDOS_MAX_MAPPED_BUFFER_SIZE` (64 MiB); the target may accept fewer bytes.
+Bulk stdio still splits transfers into requests of at most 4096 bytes. This SDK requires a kernel
 with that additive syscall.
 The original `crt_*` APIs remain available and unchanged.
 
@@ -123,7 +127,8 @@ Run the registered test with
 `ctest --test-dir <host-build> -R libc_streams --output-on-failure`.
 
 The installed SDK checker builds the standard hello example and a C runtime
-probe. `--scenario sdk` exercises formatting, allocation, file input, the real
+probe. Export its input fixture as `libcin.txt`, a supported short filename.
+`--scenario sdk` exercises formatting, allocation, file input, the real
 versioned write syscall and unavailable stdout in UnDOS. **Valid stdout output
 is verified in the controlled-stream harness**, not inferred from debug output.
 Program Manager children may lack stdout. The `terminal-stdio` scenario runs the

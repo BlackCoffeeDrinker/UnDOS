@@ -76,6 +76,8 @@ struct FAT_Volume {
   uint32_t dataStartSector;
   uint32_t totalClusters;
   bool writable{true};
+  uint64_t traversalGeneration{1};
+  bool traversalReuseDisabled{false};
   uint32_t fsInfoSector{0};
   uint32_t backupFsInfoSector{0};
   mutable bool fsInfoInvalidated{false};
@@ -242,9 +244,32 @@ kstd::error_code FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountOb
   return {};
 }
 
+struct FAT_ChainCheckpoint {
+  bool valid{false};
+  uint64_t generation{0};
+  uint32_t startCluster{0};
+  uint64_t clusterIndex{0};
+  uint32_t cluster{0};
+};
+
+struct FAT_OrdinalCheckpoint {
+  bool valid{false};
+  uint64_t generation{0};
+  uint64_t ordinal{0};
+  uint32_t sector{0};
+  uint32_t slot{0};
+  bool pendingLongName{false};
+};
+
 struct FAT_VFSNode {
   uint32_t startCluster = 0;// 0 => fixed-size FAT12/16 root directory area
   bool isFixedRoot = false;
+  FAT_ChainCheckpoint fileChain{};
+  FAT_ChainCheckpoint directoryChain{};
+  FAT_OrdinalCheckpoint directoryOrdinal{};
+  bool directoryEofKnown{false};
+  uint64_t directoryEofCount{0};
+  uint64_t directoryEofGeneration{0};
 };
 
 constexpr uint32_t kFatEndOfChainThreshold12 = 0x0FF8;
@@ -259,6 +284,10 @@ bool FAT_IsEndOfChain(const FAT_Volume *vol, uint32_t cluster) {
     case FAT_Type::ExFAT: return cluster >= kFatEndOfChainThreshold32;
   }
   return true;
+}
+
+bool FAT_ValidCluster(const FAT_Volume &vol, uint32_t cluster) {
+  return cluster >= 2 && cluster - 2 < vol.totalClusters;
 }
 
 uint32_t FAT_ClusterToSector(const FAT_Volume *vol, uint32_t cluster) {
@@ -375,34 +404,46 @@ kstd::error_code FAT_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountO
 
 kstd::expected<uint64_t, kstd::error_code> FAT_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &node, uint64_t offset, const kstd::span<uint8_t> &destination) {
   uint64_t actually_read = 0;
-  uint64_t read_size = destination.size();
 
   if (node.type != kernel::VFSNodeType::File) return kstd::unexpected(kernel::KernelError::InvalidState);
-  if (offset >= node.size) return 0ull;
-  if (offset + read_size > node.size) read_size = node.size - offset;
-  if (read_size == 0) return 0ull;
+  if (offset >= node.size || destination.empty()) return 0ull;
+  const uint64_t read_size = destination.size() > node.size - offset ? node.size - offset : destination.size();
 
   const auto *vol = mountPoint->driverExtension.as<FAT_Volume>();
-  const auto *fatNode = node.fsPrivate.as<FAT_VFSNode>();
+  auto *fatNode = node.fsPrivate.as<FAT_VFSNode>();
   const uint32_t clusterSize = vol->bytesPerSector * vol->sectorsPerCluster;
 
   if (fatNode->startCluster == 0 || clusterSize == 0) return kstd::unexpected(kernel::KernelError::InvalidFormat);
 
-  uint32_t cluster = fatNode->startCluster;
   const uint64_t clusterIndex = offset / clusterSize;
   const uint64_t offsetInFirstCluster = offset % clusterSize;
+  uint32_t cluster = fatNode->startCluster;
+  uint64_t currentIndex = 0;
+  const bool checkpointCurrent = !vol->traversalReuseDisabled && fatNode->fileChain.valid &&
+      fatNode->fileChain.generation == vol->traversalGeneration &&
+      fatNode->fileChain.startCluster == fatNode->startCluster &&
+      FAT_ValidCluster(*vol, fatNode->fileChain.cluster);
+  const bool reusable = checkpointCurrent && fatNode->fileChain.clusterIndex <= clusterIndex;
+  if (reusable) {
+    cluster = fatNode->fileChain.cluster;
+    currentIndex = fatNode->fileChain.clusterIndex;
+  } else if (!checkpointCurrent) {
+    fatNode->fileChain.valid = false;
+  }
 
-  // Skip forward to the cluster containing `offset`.
-  for (uint64_t i = 0; i < clusterIndex; i++) {
+  while (currentIndex < clusterIndex) {
     const auto next = FAT_GetNextCluster(mountPoint, vol, cluster);
     if (!next) return kstd::unexpected(next.error());
     cluster = *next;
     if (FAT_IsEndOfChain(vol, cluster)) return kstd::unexpected(kernel::KernelError::UnexpectedEndOfFile);
+    ++currentIndex;
   }
 
   const auto clusterBuf = kernel::DataBuffer::Alloc(clusterSize);
   if (!clusterBuf) return kstd::unexpected(kernel::KernelError::OutOfMemory);
   uint64_t offsetInCluster = offsetInFirstCluster;
+  uint32_t lastReadCluster = cluster;
+  uint64_t lastReadIndex = currentIndex;
 
   while (actually_read < read_size) {
     if (FAT_IsEndOfChain(vol, cluster)) break;
@@ -429,7 +470,12 @@ kstd::expected<uint64_t, kstd::error_code> FAT_ReadHandle(const kernel::KObjectP
     }
 
     actually_read += chunk;
+    if (chunk) {
+      lastReadCluster = cluster;
+      lastReadIndex = currentIndex;
+    }
     if (transferred < clusterSize) break;
+    if (actually_read == read_size) break;
     offsetInCluster = 0;
     const auto next = FAT_GetNextCluster(mountPoint, vol, cluster);
     if (!next) {
@@ -437,9 +483,22 @@ kstd::expected<uint64_t, kstd::error_code> FAT_ReadHandle(const kernel::KObjectP
       break;
     }
     cluster = *next;
+    if (FAT_IsEndOfChain(vol, cluster)) break;
+    ++currentIndex;
   }
 
   if (actually_read == 0) return kstd::unexpected(kernel::KernelError::UnexpectedEndOfFile);
+  if (!vol->traversalReuseDisabled && FAT_ValidCluster(*vol, lastReadCluster)) {
+    fatNode->fileChain = {
+        .valid = true,
+        .generation = vol->traversalGeneration,
+        .startCluster = fatNode->startCluster,
+        .clusterIndex = lastReadIndex,
+        .cluster = lastReadCluster,
+    };
+  } else {
+    fatNode->fileChain.valid = false;
+  }
   return actually_read;
 }
 

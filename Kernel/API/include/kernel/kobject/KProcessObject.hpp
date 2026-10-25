@@ -45,11 +45,28 @@ struct ProcessHandleTable {
     HandleAccess access;
     HandleFlags flags;
     uint32_t refcount;
+    // Nonzero while the slot is an unbound reservation. Reserved entries are
+    // invisible to Lookup, HasAccess, Close and inheritance.
+    uint32_t reservation{0};
+  };
+
+  // Opaque proof of one Reserve() call: the slot number plus a per-table
+  // identity, so a stale token cannot name a later entry that reuses the slot.
+  class Reservation {
+   public:
+    Reservation() = default;
+
+   private:
+    friend struct ProcessHandleTable;
+    Reservation(KHandle handle, uint32_t identity) : handle_(handle), identity_(identity) {}
+    KHandle handle_{};
+    uint32_t identity_{0};
   };
 
   kstd::list<Entry> entries;
   kstd::list<KHandle> free_list;
   uint32_t next_raw_handle{0};
+  uint32_t next_reservation{0};
   struct StandardStreamHandle {
     KHandle value{};
     bool available{false};
@@ -96,9 +113,47 @@ struct ProcessHandleTable {
     return AllocateEntry(obj, access, flags);
   }
 
-  // Reserves a handle slot with no object yet; the caller publishes it later.
-  kstd::expected<KHandle, kstd::error_code> Reserve(HandleAccess access, HandleFlags flags) {
-    return AllocateEntry(nullptr, access, flags);
+  // Reserves a handle number with no object yet. It stays unusable by user
+  // handle operations until Bind() publishes it or Cancel() releases it.
+  // Validation relies on the same serialization as every other table
+  // operation: syscalls enter through an interrupt gate on one CPU.
+  kstd::expected<Reservation, kstd::error_code> Reserve(HandleAccess access, HandleFlags flags) {
+    const auto handle = AllocateEntry(nullptr, access, flags);
+    if (!handle) return kstd::unexpected(handle.error());
+    if (++next_reservation == 0) next_reservation = 1;
+    entries.back().reservation = next_reservation;
+    return Reservation{*handle, next_reservation};
+  }
+
+  // Publishes an object in a reservation. Never allocates. Fails only for a
+  // token that no longer names its own unbound reservation, or a null object.
+  kstd::expected<KHandle, kstd::error_code> Bind(const Reservation &token,
+                                                 const KObjectPtr<KObject> &obj) {
+    if (!obj) return kstd::unexpected(KernelError::InvalidArgument);
+    Entry *entry = FindReservation(token);
+    if (!entry) return kstd::unexpected(KernelError::InvalidHandle);
+    entry->object = obj;
+    entry->reservation = 0;
+    return entry->handle;
+  }
+
+  // Releases an unbound reservation; a stale token changes nothing.
+  kstd::error_code Cancel(const Reservation &token) {
+    for (auto it = entries.begin(); it != entries.end(); ++it) {
+      if (token.identity_ && it->reservation == token.identity_ && it->handle == token.handle_) {
+        free_list.push_back(it->handle);
+        entries.erase(it);
+        return KernelError::Success;
+      }
+    }
+    return KernelError::InvalidHandle;
+  }
+
+  Entry *FindReservation(const Reservation &token) {
+    if (!token.identity_) return nullptr;
+    for (auto &e: entries)
+      if (e.reservation == token.identity_ && e.handle == token.handle_) return &e;
+    return nullptr;
   }
 
   kstd::expected<KHandle, kstd::error_code> AllocateEntry(const KObjectPtr<KObject> &obj,
@@ -128,7 +183,7 @@ struct ProcessHandleTable {
 
   Entry *Lookup(KHandle h) {
     for (auto &e: entries)
-      if (e.handle == h)
+      if (e.handle == h && !e.reservation)
         return &e;
     return nullptr;
   }
@@ -140,7 +195,7 @@ struct ProcessHandleTable {
 
   kstd::error_code Close(KHandle h) {
     for (auto it = entries.begin(); it != entries.end(); ++it) {
-      if (it->handle == h) {
+      if (it->handle == h && !it->reservation) {
         if ((static_cast<uint32_t>(it->flags) & static_cast<uint32_t>(HandleFlags::ProtectFromClose)) != 0)
           return KernelError::AccessDenied;
 
@@ -204,10 +259,12 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
     const auto rollback = [this]() {
       while (!handles.entries.empty()) {
         const KHandle handle = handles.entries.front().handle;
-        (void) handles.Close(handle);
+        // A new child owns no reservations; stop rather than spin if one appears.
+        if (handles.Close(handle)) break;
       }
     };
     for (const auto &entry : parentHandles.entries) {
+      if (entry.reservation) continue;
       if ((static_cast<uint32_t>(entry.flags) & static_cast<uint32_t>(ProcessHandleTable::HandleFlags::Inheritable)) != 0) {
         const auto count = handles.entries.size();
         auto inheritedHandle = handles.Allocate(entry.object, entry.access, entry.flags);

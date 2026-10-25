@@ -13,15 +13,19 @@
 namespace kernel {
 struct KProcessObject;
 struct KThreadObject;
-}// namespace kernel
+namespace font {
+class DefaultFont;
+struct UiFont;
+}
+} // namespace kernel
 
 namespace kernel::user {
+class UiText;
 constexpr uint32_t kMaxWindows = 64;
 constexpr uint32_t kMaxClasses = 16;
 constexpr uint32_t kMaxMenus = 32;
 constexpr uint32_t kMaxMenuItems = 16;
 constexpr uint32_t kMenuTextLen = 64;
-constexpr int32_t kMenuBarHeight = 20;
 
 constexpr uint32_t kMenuItemGrayed = 0x0001;
 constexpr uint32_t kMenuItemDisabled = 0x0002;
@@ -56,7 +60,7 @@ enum class HitTest : int32_t {
   Close = 20,
 };
 
-constexpr int32_t kCaptionHeight = 18;
+constexpr int32_t kCaptionButtonSize = 18;
 constexpr int32_t kBorderWidth = 3;
 
 constexpr uint32_t kDesktopColor = 3;
@@ -109,6 +113,8 @@ bool effectively_visible_locked(const KWindowObject &window) noexcept;
 bool descendant_locked(const KWindowObject &window, const KWindowObject &ancestor) noexcept;
 URect clipped_rect_locked(const KWindowObject &window) noexcept;
 URect client_rect_locked(const KWindowObject &window) noexcept;
+int32_t caption_height_locked() noexcept;
+int32_t minimized_child_height_locked() noexcept;
 // Converts parent-client placement to a screen rectangle. Errors:
 // InvalidSize (non-positive extent), InvalidHandle (stale parent),
 // OutOfRange (outside the 16-bit coordinate space).
@@ -139,7 +145,11 @@ bool menu_item_locked(uint32_t menu, uint32_t index, MenuItemView &item) noexcep
 void draw_open_menu_locked(const URect &limit) noexcept;
 void subtract_open_menus_locked(URegion &region) noexcept;
 bool menu_mouse_locked(int32_t x, int32_t y, bool down) noexcept;
-bool menu_key_locked(uint32_t virtualKey, bool alt) noexcept;
+bool menu_key_locked(uint32_t virtualKey, bool alt, bool pressed = true) noexcept;
+int32_t menu_row_height_locked() noexcept;
+UiText menu_text_locked() noexcept;
+void close_all_menus_locked() noexcept;
+void install_menu_font_locked(font::UiFont &&font, font::UiFont &displaced) noexcept;
 // Menu/window integration hooks. Callers hold the USER lock.
 void close_menu_for_window_locked(uint32_t hwnd) noexcept;
 void destroy_process_menus(KProcessObject &process) noexcept;
@@ -181,6 +191,7 @@ kstd::expected<MessageQueue *, kstd::error_code> queue_for_current_locked(bool c
 // Errors: QueueFull (message dropped).
 kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept;
 void wake_locked(MessageQueue &queue) noexcept;
+bool should_serve_paint_before_input_locked(const MessageQueue &queue) noexcept;
 // Self-locking. Errors: WouldBlock (nothing pending and !block), the
 // queue_for_current_locked errors, or the scheduler's wait error.
 kstd::expected<QueuedMessage, kstd::error_code> get_message(bool block, bool remove) noexcept;
@@ -191,6 +202,9 @@ void free_queues_locked(KProcessObject &proc) noexcept;
 URect screen_rect() noexcept;
 void invalidate_locked(KWindowObject &window, const URect &windowRect) noexcept;
 void expose_locked(const URect &screenRect) noexcept;
+
+/** Repaints every window after system-wide chrome settings, such as the default font, change. Takes the scene lock. */
+void repaint_all() noexcept;
 void visible_region_locked(const KWindowObject &window, URegion &out) noexcept;
 struct PaintBegin {
   HDC dc{0};
@@ -214,6 +228,9 @@ void on_process_exit(KProcessObject &proc) noexcept;
 // own all USER validation: ownership, sizes, ranges and window relationships.
 // Common errors: InvalidHandle (unknown hwnd), AccessDenied (window owned by
 // another process).
+kstd::error_code set_default_font(font::DefaultFont &defaults, uint32_t regularHandle,
+                                  uint32_t boldHandle, uint32_t ppem) noexcept;
+kstd::error_code set_builtin_default_font(font::DefaultFont &defaults) noexcept;
 // ---------------------------------------------------------------------------
 
 // The calling thread's process. Errors: NoCurrentThread, NoCurrentProcess.

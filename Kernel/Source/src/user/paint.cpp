@@ -276,6 +276,7 @@ void invalidate_locked(KWindowObject &window, const URect &clientRect) noexcept 
 
 void expose_locked(const URect &screenRect) noexcept {
   SceneDrawGuard drawing;
+  const auto display = primary_display();
   URegion desktop;
   desktop.Set(screenRect.Intersect(screen_rect()));
   for (auto *w = topmost_locked(); w; w = w->below) {
@@ -294,12 +295,19 @@ void expose_locked(const URect &screenRect) noexcept {
       }
     }
     if (!effectively_visible_locked(*w)) continue;
+    URegion visible;
+    visible_region_locked(*w, visible);
+    const URect clientScreen = client_to_screen_locked(*w, client_rect_locked(*w));
+    for (uint32_t i = 0; display && i < visible.count; ++i) {
+      const URect exposed = visible.rects[i].Intersect(screenRect).Intersect(clientScreen);
+      if (!exposed.Empty() && fill(display, exposed, w->background))
+        damage_locked(display, exposed);
+    }
     invalidate_locked(*w, screen_to_client_locked(*w, screenRect));
     if (!w->rect.Intersect(screenRect).Empty()) draw_nonclient_locked(*w, screenRect);
     desktop.Subtract(clipped_rect_locked(*w));
   }
   if (!desktop.Empty()) {
-    const auto display = primary_display();
     if (display) {
       cursor_hide_locked();
       for (uint32_t i = 0; i < desktop.count; ++i) {

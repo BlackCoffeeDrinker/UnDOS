@@ -55,18 +55,31 @@ int sdk_libc_from_c(void) {
       transferred != 0 ||
       UD_SYS_WriteV2(sink, (const uint8_t *)"short write", 11, &transferred) !=
           SyscallReturnCode_OKAY || transferred != 11) { FAIL(); }
-  uint8_t bulk[4096];
-  memset(bulk, 'B', sizeof(bulk));
-  if (UD_SYS_WriteV2(sink, bulk, sizeof(bulk) + 1, &transferred) !=
+  // WriteV2 accepts mapped buffers up to UNDOS_MAX_MAPPED_BUFFER_SIZE (64 MiB);
+  // the TTY sink holds 4096 bytes, so larger writes are short, not rejected.
+  enum { TtyCapacity = 4096, BulkSize = TtyCapacity + 1 };
+  const uint32_t mappedLimit = 64u * 1024u * 1024u;
+  uint8_t *bulk = malloc(BulkSize);
+  if (!bulk) { FAIL(); }
+  memset(bulk, 'B', BulkSize);
+  if (UD_SYS_WriteV2(sink, bulk, mappedLimit + 1, &transferred) !=
           SyscallReturnCode_INVALID_SIZE ||
-      UD_SYS_WriteV2(sink, bulk, sizeof(bulk), &transferred) != SyscallReturnCode_OKAY ||
-      transferred != sizeof(bulk) - 11 ||
+      UD_SYS_WriteV2(sink, bulk, BulkSize, &transferred) != SyscallReturnCode_OKAY ||
+      transferred != TtyCapacity - 11 ||
       UD_SYS_WriteV2(sink, bulk, 1, &transferred) != SyscallReturnCode_OKAY ||
-      transferred != 0) { FAIL(); }
-  uint32_t length = sizeof(bulk);
+      transferred != 0) { free(bulk); FAIL(); }
+  uint32_t length = TtyCapacity;
   if (UD_SYS_ReadV1(source, bulk, &length) != SyscallReturnCode_OKAY ||
-      length != sizeof(bulk) || memcmp(bulk, "short write", 11) ||
-      UD_SYS_CloseV1(source) != SyscallReturnCode_OKAY ||
+      length != TtyCapacity || memcmp(bulk, "short write", 11) ||
+      bulk[11] != 'B' || bulk[TtyCapacity - 1] != 'B') { free(bulk); FAIL(); }
+  memset(bulk, 'C', BulkSize);
+  if (UD_SYS_WriteV2(sink, bulk, BulkSize, &transferred) != SyscallReturnCode_OKAY ||
+      transferred != TtyCapacity) { free(bulk); FAIL(); }
+  length = BulkSize;
+  if (UD_SYS_ReadV1(source, bulk, &length) != SyscallReturnCode_OKAY ||
+      length != TtyCapacity) { free(bulk); FAIL(); }
+  free(bulk);
+  if (UD_SYS_CloseV1(source) != SyscallReturnCode_OKAY ||
       UD_SYS_CloseV1(sink) != SyscallReturnCode_OKAY) { FAIL(); }
   if (UD_SYS_GetStdHandleV1(StdHandleSelector_Stdout, &handle) != SyscallReturnCode_OKAY) {
     if (puts("unavailable") != EOF || !ferror(stdout) || errno != EBADF) { FAIL(); }

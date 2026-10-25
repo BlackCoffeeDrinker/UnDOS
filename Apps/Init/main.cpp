@@ -4,10 +4,82 @@
 #include <userspace.h>
 #include <undos/syscalls.h>
 #include "display_config.hpp"
+#include "font_config.hpp"
 
 extern "C" const char *init_shared_message();
 
 namespace {
+bool init_fonts() {
+  HANDLE configurationFile = 0;
+  if (UD_SYS_OpenV1("/System/FONTS.INI", FileOpenMode_Read, &configurationFile) !=
+      SyscallReturnCode_OKAY) {
+    (void)UD_SYS_PrintV1("init: cannot open /System/FONTS.INI");
+    return false;
+  }
+  char configuration[1024]{};
+  uint32_t total = 0;
+  bool readFailed = false;
+  while (total < sizeof(configuration)) {
+    uint32_t length = sizeof(configuration) - total;
+    if (UD_SYS_ReadV1(configurationFile,
+                      reinterpret_cast<uint8_t *>(configuration + total), &length) !=
+            SyscallReturnCode_OKAY ||
+        length > sizeof(configuration) - total) {
+      readFailed = true;
+      break;
+    }
+    total += length;
+    if (!length) break;
+  }
+  const auto closeStatus = UD_SYS_CloseV1(configurationFile);
+  if (readFailed || closeStatus != SyscallReturnCode_OKAY) {
+    (void)UD_SYS_PrintV1(readFailed ? "init: cannot read /System/FONTS.INI"
+                                    : "init: cannot close /System/FONTS.INI");
+    return false;
+  }
+
+  init::FontConfiguration fonts{};
+  char arguments[1024]{};
+  char diagnostic[640]{};
+  if (total == sizeof(configuration) ||
+      !init::parse_font_config(configuration, total, fonts) ||
+      !init::make_font_config_diagnostic(fonts, diagnostic, sizeof(diagnostic))) {
+    (void)UD_SYS_PrintV1("init: invalid /System/FONTS.INI");
+    return false;
+  }
+  (void)UD_SYS_PrintV1(diagnostic);
+  if (fonts.backend == init::FontBackend::BuiltinBitmap) {
+    uint32_t generation = 0;
+    if (UD_SYS_SetSystemFontV1(FontBackend_BackendBuiltinBitmap, 0, 0, 0,
+                               &generation) != SyscallReturnCode_OKAY) {
+      (void)UD_SYS_PrintV1("init: cannot publish the built-in bitmap font");
+      return false;
+    }
+    (void)UD_SYS_PrintV1("init: default font ready");
+    return true;
+  }
+  if (!init::make_font_loader_arguments(fonts, arguments, sizeof(arguments))) {
+    (void)UD_SYS_PrintV1("init: invalid /System/FONTS.INI");
+    return false;
+  }
+  HANDLE loader = 0;
+  const auto created = UD_SYS_CreateProcessV1("/System/fontload.elf",
+      arguments, ProcessFlags_None, &loader);
+  if (created != SyscallReturnCode_OKAY) {
+    (void)UD_SYS_PrintV1("init: cannot start default font loader");
+    return false;
+  }
+  uint32_t exitCode = 0;
+  const auto waited = UD_SYS_WaitProcessV1(loader, WaitTimeout_Infinite, &exitCode);
+  const auto closed = UD_SYS_CloseV1(loader);
+  if (waited != SyscallReturnCode_OKAY || closed != SyscallReturnCode_OKAY || exitCode) {
+    (void)UD_SYS_PrintV1("init: default font loading failed; desktop not started");
+    return false;
+  }
+  (void)UD_SYS_PrintV1("init: default font ready");
+  return true;
+}
+
 bool init_display() {
   DisplayState state{};
   if (UD_SYS_GetDisplayModeV1(&state) != SyscallReturnCode_OKAY) {
@@ -227,6 +299,7 @@ extern "C" int main(int argc, char **argv) {
   if (argc == 2 && !strcmp(argv[1], "--display-test")) return init_probe_display();
   if (argc < 2 || strcmp(argv[1], "--diagnostic") != 0) {
     init_probe_device_control();
+    if (!init_fonts()) return 1;
     for (unsigned attempt = 0; attempt < 3; ++attempt) {
       HANDLE shell = 0;
       const auto created = UD_SYS_CreateProcessV1("/System/progman.elf", "", ProcessFlags_None, &shell);

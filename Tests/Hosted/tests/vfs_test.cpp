@@ -34,6 +34,7 @@ kstd::static_string<128> MakeTempImagePath(const char *name) {
 struct TestFsDriverState {
   bool mountVolumeCalled = false;
   bool createHandleSucceeds = true;
+  bool readCallbackSawVolumeLock = false;
   size_t closeCount = 0;
   kernel::KDevicePtr<kernel::KDevice> lastMountedVolume;
   kstd::static_string<64> lastMountOptions;
@@ -77,6 +78,12 @@ void TestFs_CloseHandle(const kernel::KObjectPtr<kernel::KIOObject> &) {
 }
 
 kstd::expected<uint64_t, kstd::error_code> TestFs_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &buffer) {
+  if (mount->fileMutex.try_lock()) {
+    mount->fileMutex.unlock();
+    g_testFsState.readCallbackSawVolumeLock = false;
+  } else {
+    g_testFsState.readCallbackSawVolumeLock = true;
+  }
   size_t transferred = 0;
   const auto status = KE_IO_ReadDevice(mount->volume, offset, buffer, transferred);
   if (status) return kstd::unexpected(status);
@@ -285,6 +292,7 @@ TEST_CASE("KE_VFS_OpenFile / ReadFile / WriteFile / SeekFile / TellFile / CloseF
   kstd::span<uint8_t> readSpan(readBuf);
   const auto read = KE_VFS_ReadFile(file, readSpan).value();
   REQUIRE(read == readBuf.size());
+  REQUIRE(g_testFsState.readCallbackSawVolumeLock);
   REQUIRE(KE_VFS_TellFile(file).value() == readBuf.size());
 
   for (size_t i = 0; i < readBuf.size(); i++) {

@@ -102,20 +102,65 @@ struct DisplayState {
     mode:       struct<DisplayMode>;
 };
 
-struct TextMetrics {
-    cellWidth:   c<uint32_t>;
-    cellHeight:  c<uint32_t>;
-    ascent:      c<uint32_t>;
-    descent:     c<uint32_t>;
-    firstChar:   c<uint32_t>;
-    lastChar:    c<uint32_t>;
-    defaultChar: c<uint32_t>;
-};
-
-
 // -----------------------------------------------------
 //  Pixel Formats & Raster Ops (Enums)
 // -----------------------------------------------------
+
+enum FontSource {
+    AcquireSystemDefault = 0,
+    AcquireBuiltinBitmap = 1,
+};
+
+enum FontBackend {
+    BackendBuiltinBitmap = 0,
+    BackendTrueType = 1,
+};
+
+enum TextStyle {
+    StyleRegular = 0,
+    StyleBold = 1,
+};
+
+enum TextLayoutMode {
+    LayoutProportional = 0,
+    LayoutUniformGrid = 1,
+};
+
+enum GlyphFallbackPolicy {
+    FallbackFaceNotdef = 0,
+    FallbackBitmapForUnmapped = 1,
+};
+
+enum TextRepertoire {
+    RepertoireBasic = 0,
+    RepertoireTerminal = 1,
+};
+
+struct TextMetricsV2 {
+    generation: c<uint32_t>;
+    ascent: c<uint32_t>;
+    descent: c<uint32_t>;
+    lineGap: c<uint32_t>;
+    lineHeight: c<uint32_t>;
+    baselineOffset: c<uint32_t>;
+    cellWidth: c<uint32_t>;
+    cellHeight: c<uint32_t>;
+    inkLeft: c<int32_t>;
+    inkTop: c<int32_t>;
+    inkRight: c<int32_t>;
+    inkBottom: c<int32_t>;
+};
+
+struct TextExtentV2 {
+    generation: c<uint32_t>;
+    advanceWidth: c<uint32_t>;
+    lineHeight: c<uint32_t>;
+    baselineOffset: c<uint32_t>;
+    inkLeft: c<int32_t>;
+    inkTop: c<int32_t>;
+    inkRight: c<int32_t>;
+    inkBottom: c<int32_t>;
+};
 
 enum PixelFormat {
     RGB24  = 0,
@@ -169,12 +214,7 @@ syscall V1 GFX CreateBrush [304] {
     color:   IN COLORREF;
 };
 
-syscall V1 GFX CreateFont [305] {
-    height:  IN c<int32_t>;
-    weight:  IN c<uint32_t>;
-    charset: IN c<uint32_t>;
-    name:    IN string;
-};
+// Retired font/text syscall tombstone. Do not reuse ID 305.
 
 // Top-down packed bitmap, zero initialized; maximum backing allocation 16 MiB.
 // INDEX8 uses palette16 indices; RGB24/ARGB32 stores native BGR/BGRA bytes.
@@ -223,14 +263,7 @@ syscall V1 GFX Ellipse [313] {
     bottom: IN c<int32_t>;
 };
 
-// Original fixed 8x16 single-line ASCII32..126; other bytes render '?'.
-// No wrapping, shaping, font objects, newlines or cursor advancement.
-syscall V1 GFX TextOut [314] {
-    dc:   IN HANDLER;
-    x:    IN c<int32_t>;
-    y:    IN c<int32_t>;
-    text: IN string;
-};
+// Retired fixed-bitmap text syscall tombstone. Do not reuse ID 314.
 
 
 // -----------------------------------------------------
@@ -311,10 +344,7 @@ syscall V1 GFX SetWindowOrg [334] {
 //  Metrics & Queries
 // -----------------------------------------------------
 
-syscall V1 GFX GetTextMetrics [340] {
-    dc:      IN HANDLER;
-    metrics: OUT struct<TextMetrics>;
-};
+// Retired font metrics syscall tombstone. Do not reuse ID 340.
 
 syscall V1 GFX GetBitmapBits [341] {
     bitmap: IN HANDLER;
@@ -331,8 +361,7 @@ syscall V1 GFX GetDeviceCaps [343] {
     caps: OUT struct<DeviceCaps>;
 };
 
-// Sets Rectangle/LineTo/TextOut foreground and TextOut background.
-// opaque is 0 (transparent) or 1 (fill each complete 8x16 character cell).
+// Sets Rectangle/LineTo/DrawText colors and opacity.
 syscall V1 GFX SetDrawColors [344] {
     dc:         IN c<uint32_t>;
     foreground: IN COLORREF;
@@ -340,13 +369,7 @@ syscall V1 GFX SetDrawColors [344] {
     opaque:     IN c<uint32_t>;
 };
 
-// Normalized UFT1 resources only, never original TTF bytes. Font resource
-// handles are process-local and distinct from DC/general object handles.
-// Capability bit 0: private resource registration; no rendering bit yet.
-syscall V1 GFX QueryFontEngine [345] {
-    version: OUT c<uint32_t>;
-    capabilities: OUT c<uint32_t>;
-};
+// Retired font-engine query tombstone. Do not reuse ID 345.
 
 syscall V1 GFX BeginFontUpload [346] {
     totalBytes: IN c<uint32_t>;
@@ -399,6 +422,59 @@ syscall V1 GFX GetDisplayMode [351] {
  * This call does not persist a preference. */
 syscall V1 GFX SetDisplayMode [352] {
     modeId: IN c<uint32_t>;
+};
+
+// Retired system-font and text syscall tombstones. Do not reuse IDs 353–356.
+
+syscall V1 GFX AcquireFont [357] {
+    source: IN enum<FontSource>;
+    fallback: IN enum<GlyphFallbackPolicy>;
+    font: OUT c<uint32_t>;
+    generation: OUT c<uint32_t>;
+};
+
+syscall V1 GFX CloseFont [358] {
+    font: IN c<uint32_t>;
+};
+
+syscall V1 GFX SelectFont [359] {
+    dc: IN HANDLER;
+    font: IN c<uint32_t>;
+    previousFont: OUT c<uint32_t>;
+};
+
+syscall V1 GFX GetFontMetrics [360] {
+    font: IN c<uint32_t>;
+    style: IN enum<TextStyle>;
+    repertoire: IN enum<TextRepertoire>;
+    metrics: OUT struct<TextMetricsV2>;
+};
+
+syscall V1 GFX MeasureText [361] {
+    font: IN c<uint32_t>;
+    style: IN enum<TextStyle>;
+    layout: IN enum<TextLayoutMode>;
+    repertoire: IN enum<TextRepertoire>;
+    text: IN string;
+    extent: OUT struct<TextExtentV2>;
+};
+
+syscall V1 GFX DrawText [362] {
+    dc: IN HANDLER;
+    x: IN c<int32_t>;
+    y: IN c<int32_t>;
+    style: IN enum<TextStyle>;
+    layout: IN enum<TextLayoutMode>;
+    repertoire: IN enum<TextRepertoire>;
+    text: IN string;
+};
+
+syscall V1 GFX SetSystemFont [363] {
+    backend: IN enum<FontBackend>;
+    regularFace: IN c<uint32_t>;
+    boldFace: IN c<uint32_t>;
+    ppem: IN c<uint32_t>;
+    generation: OUT c<uint32_t>;
 };
 
 // endregion

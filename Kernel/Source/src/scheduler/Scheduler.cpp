@@ -134,6 +134,9 @@ kstd::expected<VirtualAddress, kstd::error_code> alloc_kernel_stack(size_t size)
     }
     HAL_SMP_ShootdownTlb(base + i * ps);
   }
+  // Recycled frames may hold another thread's data or, after a process exits,
+  // its code. Clearing them keeps neither visible on the new stack.
+  __builtin_memset(base.as_ptr(), 0, bytes);
   return base;
 }
 

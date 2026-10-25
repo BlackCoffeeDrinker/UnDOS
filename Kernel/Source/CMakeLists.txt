@@ -89,6 +89,18 @@ add_executable(kernel
         src/gfx/gfx_software_fallback.cpp
         src/gfx/gfx_dc_table.cpp
         src/gfx/font/font_resources.cpp
+        src/gfx/font/glyph.cpp
+        src/gfx/font/raster.cpp
+        src/gfx/font/face.cpp
+        src/gfx/font/realization.cpp
+        src/gfx/font/glyph_cache.cpp
+        src/gfx/font/default_font.cpp
+        src/gfx/font/text.cpp
+        src/gfx/font/font_system.cpp
+        src/gfx/font/vm.cpp
+        src/gfx/font/vm_executor.cpp
+        src/gfx/font/vm_points.cpp
+        src/gfx/font/vm_hints.cpp
         src/gfx/monitor_config.cpp
 
         src/input/input_manager.cpp

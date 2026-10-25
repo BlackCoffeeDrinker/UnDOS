@@ -8,7 +8,8 @@
 #include <kernel/kobject/KObjectT.hpp>
 
 namespace kernel {
-constexpr uint32_t kQueueSize = 64;
+constexpr uint32_t kQueueSize = 256;
+constexpr uint32_t kPaintFairnessBacklog = 32;
 constexpr uint32_t kWindowClassNameLen = 32;
 constexpr uint32_t kWindowTitleLen = 64;
 
@@ -48,6 +49,7 @@ struct KWindowObject : KObjectT<KWindowObject, 1, TYPE_WINDOW> {
   user::URect rect{};// screen coordinates
   user::URect restoredRect{};
   State state{State::Restored};
+  uint32_t iconOrder{0};// minimize sequence; arranges sibling icons stably
   uint32_t parent{0};
   uint32_t userData{0};
   uint32_t menu{0};
@@ -65,6 +67,7 @@ struct KWindowObject : KObjectT<KWindowObject, 1, TYPE_WINDOW> {
   uint32_t moveParam{0}, sizeParam{0};
   uint8_t pendingGeometry{0};// coalesced Move/Size survive a full message ring
   bool pendingDisplayChange{false};
+  uint32_t pendingFontGeneration{0};
   uint32_t displayBpp{0}, displaySize{0};
 
   // z-order, topmost first; the window table holds the reference.

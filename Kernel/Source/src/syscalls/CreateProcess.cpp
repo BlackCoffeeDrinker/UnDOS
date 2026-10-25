@@ -33,17 +33,11 @@ kstd::error_code create(Arguments &args, const kernel::ProcessStreams *streams) 
       kernel::ProcessHandleTable::HandleAccess::Read,
       kernel::ProcessHandleTable::HandleFlags::None);
   if (!reserved) return reserved.error();
-  const auto h = *reserved;
-  auto *entry = proc->handles.Lookup(h);
-  if (!entry || entry->object) {
-    proc->handles.Close(h);
-    return kernel::KernelError::InvalidState;
-  }
   const auto created = streams
       ? KE_USER_CreateProcessWithStreams(kstd::string_view(args.path), kstd::string_view(args.argument), *streams)
       : KE_USER_CreateProcess(kstd::string_view(args.path), kstd::string_view(args.argument));
   if (!created) {
-      proc->handles.Close(h);
+    (void) proc->handles.Cancel(*reserved);
     return created.error();
   }
   const auto &child = *created;
@@ -53,11 +47,12 @@ kstd::error_code create(Arguments &args, const kernel::ProcessStreams *streams) 
   const auto status = KE_SCHED_WaitForObject(
       kernel::KObjectPtr<kernel::KObject>(child->startupEvent.get()), kernel::WAIT_INFINITE);
   if (status || !child->startupReady) {
-    proc->handles.Close(h);
+    (void) proc->handles.Cancel(*reserved);
     return status ? status : kernel::KernelError::ProcessStartupFailed;
   }
-  entry->object = kernel::KObjectPtr<kernel::KObject>(child.get());
-  args.handle = static_cast<uint32_t>(h);
+  const auto bound = proc->handles.Bind(*reserved, kernel::KObjectPtr<kernel::KObject>(child.get()));
+  if (!bound) return bound.error();
+  args.handle = static_cast<uint32_t>(*bound);
   return {};
 }
 }

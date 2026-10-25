@@ -40,6 +40,7 @@ def main():
     fonts.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "Apps/Progman/PROGMAN.INI", filesystem / "System")
     shutil.copy2(ROOT / "Apps/Init/DISPLAY.CFG", filesystem / "System")
+    shutil.copy2(ROOT / "Apps/Init/FONTS.INI", filesystem / "System")
     for directory in args.system_files:
         for source in directory.iterdir():
             if not source.is_file():
@@ -53,6 +54,13 @@ def main():
         subprocess.run([str(value) for value in command], cwd=ROOT, check=True)
 
     run(sys.executable, ROOT / "Tools/create-font-fixture.py", fonts / "FTEST.TTF")
+    corpus = ROOT / "Tests/Hosted/fixtures/fonts"
+    for source, destination in (
+        ("SourceSans3-Regular.ttf", "SSR.TTF"),
+        ("SourceSans3-Bold.ttf", "SSB.TTF"),
+        ("LICENSE-SourceSans.md", "OFLSS.TXT"),
+    ):
+        shutil.copy2(corpus / source, fonts / destination)
     run(sys.executable, ROOT / "Tools/configuration_editor/config.py",
         config / "MACHI", "author-localmachine",
         *kernel["subsystems"])

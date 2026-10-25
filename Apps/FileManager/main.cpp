@@ -5,9 +5,10 @@
 namespace {
 using namespace filemanager;
 constexpr int ToolbarTop = 4;
-constexpr int ListTop = 84;
-constexpr int RowHeight = 20;
+constexpr int CompactToolbarWidth = 4 + 9 * 72;
 constexpr int TreeWidth = 208;
+constexpr int MinimumDisplayWidth = 520;
+constexpr uint32_t MinimumDisplayHeight = 240;
 
 enum Command {
   Open, Up, Location, Refresh, Copy, Move, Rename, Delete, NewFolder,
@@ -25,6 +26,7 @@ struct State {
   bool running{true};
   char path[PathCapacity] = "/";
   char status[256] = "Ready";
+  char readyMarker[PathCapacity + 40]{};
   Entry entries[PageSize]{};
   Entry candidate[PageSize]{};
   int count{0};
@@ -43,6 +45,61 @@ struct State {
 };
 State app;
 void notice(const char *title, const char *text);
+
+struct Layout {
+  Rect area{};
+  bool compactToolbar{false};
+  int toolbarRows{1};
+  int lineHeight{0};
+  int rowHeight{0};
+  int buttonHeight{0};
+  int toolbarPitch{0};
+  int pathTop{34};
+  int pathBottom{58};
+  int pathTextY{38};
+  int headerY{64};
+  int listTop{84};
+  int listBottom{0};
+  int footerTop{0};
+  int footerTextY{0};
+};
+
+Layout layout() {
+  Layout result{};
+  result.area = gui::client(app.hwnd);
+  result.compactToolbar = result.area.right < CompactToolbarWidth;
+  gui::TextMetrics metrics{};
+  if (gui::system_font().metrics(metrics)) result.lineHeight = static_cast<int>(metrics.lineHeight);
+  result.rowHeight = result.lineHeight + 4;
+  for (const char *label : Toolbar) {
+    const int height = gui::button_height(label);
+    if (height > result.buttonHeight) result.buttonHeight = height;
+  }
+  const char *const footerLabels[] = {"Prev", "Next", "Props"};
+  for (const char *label : footerLabels) {
+    const int height = gui::button_height(label);
+    if (height > result.buttonHeight) result.buttonHeight = height;
+  }
+  result.toolbarPitch = result.buttonHeight + 4;
+  if (result.compactToolbar) {
+    result.toolbarRows = 2;
+  }
+  result.pathTop = ToolbarTop + result.toolbarRows * result.toolbarPitch;
+  result.pathBottom = result.pathTop + result.lineHeight + 8;
+  result.pathTextY = result.pathTop + 4;
+  result.headerY = result.pathBottom + 4;
+  result.listTop = result.headerY + result.lineHeight + 4;
+  result.footerTop = result.area.bottom - (result.buttonHeight + 2 * result.lineHeight + 14);
+  result.footerTextY = result.footerTop + result.buttonHeight + 4;
+  result.listBottom = result.footerTop - 4;
+  return result;
+}
+
+int visible_rows(const Layout &current) {
+  if (current.rowHeight <= 0 || current.listBottom <= current.listTop) return 0;
+  const int rows = (current.listBottom - current.listTop) / current.rowHeight;
+  return rows > 0 ? rows : 1;
+}
 
 bool append_menu(uint32_t menu, MenuItemFlags flags, uint32_t item, const char *text) {
   return gui::check(UD_SYS_AppendMenuV1(menu, flags, item, text), "AppendMenu");
@@ -161,26 +218,25 @@ bool load(const char *path, uint32_t page = 0) {
   app.scroll = 0;
   sort(app.entries, app.count, app.sortSize, app.reverse);
   copy(app.status, sizeof(app.status), count ? "Ready" : "Empty directory");
-  (void) UD_SYS_PrintV1("filemanager: directory ready");
+  copy(app.readyMarker, sizeof(app.readyMarker), "filemanager: directory ready path=");
+  const size_t prefix = strlen(app.readyMarker);
+  copy(app.readyMarker + prefix, sizeof(app.readyMarker) - prefix, app.path);
   gui::check(UD_SYS_SetWindowTextV1(app.hwnd, "File Manager"), "SetWindowText");
   gui::invalidate(app.hwnd);
   return true;
 }
 
-int visible_rows() {
-  const Rect area = gui::client(app.hwnd);
-  const int rows = (area.bottom - ListTop - 54) / RowHeight;
-  return rows > 0 ? rows : 1;
-}
-
 void ensure_visible() {
+  const auto current = layout();
+  const int rows = visible_rows(current);
+  if (rows <= 0) return;
   int &scroll = app.treeFocus ? app.treeScroll : app.scroll;
   const int selected = app.treeFocus ? app.treeSelection : app.selection;
   const int count = app.treeFocus ? app.treeCount : app.count;
   if (selected < scroll) scroll = selected;
-  if (selected >= scroll + visible_rows()) scroll = selected - visible_rows() + 1;
+  if (selected >= scroll + rows) scroll = selected - rows + 1;
   if (scroll < 0) scroll = 0;
-  const int maximum = count > visible_rows() ? count - visible_rows() : 0;
+  const int maximum = count > rows ? count - rows : 0;
   if (scroll > maximum) scroll = maximum;
 }
 
@@ -277,20 +333,22 @@ void operate(Command command) {
   char source[PathCapacity]{}, destination[PathCapacity]{}, input[PathCapacity]{};
   if (command == NewFolder) {
     gui::Field field{.label = "Folder name (8.3)", .value = input, .capacity = sizeof(input)};
-    if (!gui::dialog("Create directory", "Create a folder in the current directory.", &field, 1)) { focus(); return; }
+    if (!gui::dialog("Create directory", "Create a folder in the current directory.", &field, 1,
+                      true)) { focus(); return; }
     if (!input[0] || strchr(input, '/') || !join(app.path, input, source)) {
       message("Invalid name", "Enter one short folder name."); return;
     }
   } else {
     if (!selected_path(source)) return;
     if (command == Delete) {
-      if (!gui::dialog("Delete permanently", source, nullptr, 0)) { focus(); return; }
+      if (!gui::dialog("Delete permanently", source, nullptr, 0, true)) { focus(); return; }
     } else {
       if (command == Rename) copy(input, sizeof(input), app.entries[app.selection].name);
       else copy(input, sizeof(input), source);
       gui::Field field{.label = command == Rename ? "New name (8.3)" : "Destination path", .value = input, .capacity = sizeof(input)};
       if (!gui::dialog(command == Copy ? "Copy file" : command == Move ? "Move file" : "Rename",
-          "Existing destinations are never replaced. Same volume only.", &field, 1)) { focus(); return; }
+          "Existing destinations are never replaced. Same volume only.", &field, 1,
+          true)) { focus(); return; }
       if ((command == Rename && strchr(input, '/')) || !join(app.path, input, destination)) {
         message("Invalid destination", "Enter a valid short name or an absolute destination path."); return;
       }
@@ -325,7 +383,8 @@ void properties() {
   gui::Field fields[] = {{.label = "Path", .value = path, .capacity = sizeof(path)},
                         {.label = "Size in bytes", .value = size, .capacity = sizeof(size)},
                         {.label = "Attributes (R H S D A)", .value = attributes, .capacity = sizeof(attributes)}};
-  gui::dialog("Properties", "Information only. Edits in this dialog are not saved.", fields, 3, false);
+  gui::dialog("Properties", "Information only. Edits in this dialog are not saved.", fields, 3,
+               false);
   focus();
 }
 
@@ -336,7 +395,8 @@ void command(Command action) {
     char path[PathCapacity]{};
     copy(path, sizeof(path), app.path);
     gui::Field field{.label = "Absolute path", .value = path, .capacity = sizeof(path)};
-    if (gui::dialog("Go to directory", "UnDOS paths start with / (no DOS drive letters).", &field, 1)) load(path);
+    if (gui::dialog("Go to directory", "UnDOS paths start with / (no DOS drive letters).", &field, 1,
+                     true)) load(path);
     focus();
   } else if (action == Refresh) { reset_tree(); load(app.path); }
   else if (action == SortName || action == SortSize || action == Reverse) {
@@ -366,43 +426,48 @@ void command(Command action) {
 
 void text(gui::Paint &paint, int x, int y, const char *value, int width,
     uint32_t color = gui::Ink, uint32_t background = gui::Paper) {
-  if (width < gui::CellWidth) return;
+  if (width <= 0) return;
   char clipped[256]{};
-  size_t count = static_cast<size_t>(width / gui::CellWidth);
-  if (count > sizeof(clipped) - 1) count = sizeof(clipped) - 1;
-  const size_t n = length(value);
-  if (count > n) count = n;
-  memcpy(clipped, value, count);
-  if (n > count && count >= 3) clipped[count - 3] = clipped[count - 2] = clipped[count - 1] = '.';
-  paint.text(x, y, clipped, color, background);
+  gui::TextExtent extent{};
+  const gui::TextLayout layout(gui::system_font());
+  if (layout.fit_prefix(value, clipped, sizeof(clipped), static_cast<uint32_t>(width), extent))
+    paint.draw_text(x, y, clipped, gui::FontStyle::Regular, color, background);
 }
 
 void paint() {
   gui::Paint p(app.hwnd);
   if (!p) return;
-  const Rect area = gui::client(app.hwnd);
+  const auto current = layout();
+  if (current.lineHeight <= 0 || current.rowHeight <= 0) return;
+  const Rect area = current.area;
   const int right = area.right, bottom = area.bottom;
+  const int rowsVisible = visible_rows(current);
   p.fill(0, 0, right, bottom, gui::Face);
-  for (int i = 0; i < 9; ++i) p.button(4 + i * 72, ToolbarTop, 70, Toolbar[i]);
-  p.fill(4, 34, right - 4, 58, gui::Paper);
-  text(p, 10, 38, app.path, right - 24);
-  p.text(8, 64, "[/] Directory tree", app.treeFocus ? gui::Highlight : gui::Ink);
-  p.text(TreeWidth + 10, 64, "Name", !app.treeFocus ? gui::Highlight : gui::Ink);
-  text(p, right - 186, 64, "Bytes", 104, gui::Ink, gui::Face);
-  text(p, right - 76, 64, "Attr", 40, gui::Ink, gui::Face);
-  p.fill(4, ListTop, TreeWidth - 2, bottom - 54, gui::Paper);
-  p.fill(TreeWidth + 2, ListTop, right - 4, bottom - 54, gui::Paper);
-  for (int row = 0; row < visible_rows(); ++row) {
-    const int y = ListTop + row * RowHeight;
+  for (int i = 0; i < 9; ++i) {
+    const int buttonRow = current.compactToolbar ? i / 5 : 0;
+    const int buttonColumn = current.compactToolbar ? i % 5 : i;
+    p.button(4 + buttonColumn * 72, ToolbarTop + buttonRow * current.toolbarPitch, 70, Toolbar[i]);
+  }
+  p.fill(4, current.pathTop, right - 4, current.pathBottom, gui::Paper);
+  text(p, 10, current.pathTextY, app.path, right - 24);
+  p.draw_text(8, current.headerY, "[/] Directory tree", gui::FontStyle::Regular, app.treeFocus ? gui::Highlight : gui::Ink);
+  p.draw_text(TreeWidth + 10, current.headerY, "Name", gui::FontStyle::Regular, !app.treeFocus ? gui::Highlight : gui::Ink);
+  text(p, right - 186, current.headerY, "Bytes", 104, gui::Ink, gui::Face);
+  text(p, right - 76, current.headerY, "Attr", 40, gui::Ink, gui::Face);
+  p.fill(4, current.listTop, TreeWidth - 2, current.listBottom, gui::Paper);
+  p.fill(TreeWidth + 2, current.listTop, right - 4, current.listBottom, gui::Paper);
+  for (int row = 0; row < rowsVisible; ++row) {
+    const int y = current.listTop + row * current.rowHeight;
+    const int textY = y + (current.rowHeight - current.lineHeight) / 2;
     const int nodeIndex = app.treeScroll + row;
     if (nodeIndex < app.treeCount) {
       const auto &node = app.tree[nodeIndex];
       const bool selected = app.treeFocus && nodeIndex == app.treeSelection;
       const auto bg = selected ? gui::Highlight : gui::Paper;
-      p.fill(5, y, TreeWidth - 3, y + RowHeight, bg);
+      p.fill(5, y, TreeWidth - 3, y + current.rowHeight, bg);
       const int indent = node.depth < 8 ? node.depth * 14 : 112;
-      p.text(8 + indent, y + 2, node.expanded ? "-" : "+", selected ? gui::Paper : gui::Ink, bg);
-      text(p, 22 + indent, y + 2, nodeIndex ? basename(node.path) : "/", TreeWidth - 44 - indent,
+      p.draw_text(8 + indent, textY, node.expanded ? "-" : "+", gui::FontStyle::Regular, selected ? gui::Paper : gui::Ink, bg);
+      text(p, 22 + indent, textY, nodeIndex ? basename(node.path) : "/", TreeWidth - 44 - indent,
            selected ? gui::Paper : gui::Ink, bg);
     }
     const int index = app.scroll + row;
@@ -411,42 +476,44 @@ void paint() {
     const bool selected = !app.treeFocus && index == app.selection;
     const auto bg = selected ? gui::Highlight : gui::Paper;
     const auto fg = selected ? gui::Paper : gui::Ink;
-    p.fill(TreeWidth + 3, y, right - 21, y + RowHeight, bg);
-    p.text(TreeWidth + 8, y + 2, entry.directory() ? "+" : " ", fg, bg);
-    text(p, TreeWidth + 24, y + 2, entry.name, right - TreeWidth - 220, fg, bg);
+    p.fill(TreeWidth + 3, y, right - 21, y + current.rowHeight, bg);
+    p.draw_text(TreeWidth + 8, textY, entry.directory() ? "+" : " ", gui::FontStyle::Regular, fg, bg);
+    text(p, TreeWidth + 24, textY, entry.name, right - TreeWidth - 220, fg, bg);
     char number[24]{};
     if (entry.directory()) copy(number, sizeof(number), "<DIR>");
     else decimal(entry.size, number);
-    text(p, right - 186, y + 2, number, 104, fg, bg);
+    text(p, right - 186, textY, number, 104, fg, bg);
     char attributes[] = "----";
     if (entry.attributes & 1) attributes[0] = 'R';
     if (entry.attributes & 2) attributes[1] = 'H';
     if (entry.attributes & 4) attributes[2] = 'S';
     if (entry.attributes & 32) attributes[3] = 'A';
-    text(p, right - 76, y + 2, attributes, 40, fg, bg);
+    text(p, right - 76, textY, attributes, 40, fg, bg);
   }
   const int bars[] = {TreeWidth - 18, right - 20};
   const int counts[] = {app.treeCount, app.count};
   const int offsets[] = {app.treeScroll, app.scroll};
   for (int i = 0; i < 2; ++i) {
-    p.fill(bars[i], ListTop, bars[i] + 16, bottom - 54, gui::Face);
-    p.text(bars[i] + 4, ListTop + 2, "^");
-    p.text(bars[i] + 4, bottom - 72, "v");
-    const int track = bottom - 54 - ListTop - 48;
-    if (track > 0 && counts[i] > visible_rows()) {
-      const int thumb = ListTop + 20 + offsets[i] * track / (counts[i] - visible_rows());
-      p.fill(bars[i] + 2, thumb, bars[i] + 14, thumb + 8, 8);
+    p.fill(bars[i], current.listTop, bars[i] + 16, current.listBottom, gui::Face);
+    p.draw_text(bars[i] + 4, current.listTop + 2, "^");
+    p.draw_text(bars[i] + 4, current.listBottom - current.lineHeight - 2, "v");
+    const int arrowHeight = current.lineHeight + 4;
+    const int track = current.listBottom - current.listTop - 2 * arrowHeight;
+    if (track > 0 && counts[i] > rowsVisible) {
+      const int thumb = current.listTop + arrowHeight + offsets[i] * track / (counts[i] - rowsVisible);
+      p.fill(bars[i] + 2, thumb, bars[i] + 14, thumb + current.rowHeight, 8);
     }
   }
-  p.button(4, bottom - 50, 64, "Prev");
-  p.button(72, bottom - 50, 64, "Next");
-  p.button(144, bottom - 50, 64, "Props");
+  p.button(4, current.footerTop, 64, "Prev");
+  p.button(72, current.footerTop, 64, "Next");
+  p.button(144, current.footerTop, 64, "Props");
   char page[24]{};
   decimal(static_cast<uint64_t>(app.page) + 1, page);
-  p.text(222, bottom - 46, "Page");
-  p.text(266, bottom - 46, page);
-  p.text(330, bottom - 46, app.nextPage ? "(more entries)" : "(last page)");
-  text(p, 8, bottom - 20, app.status, right - 16, gui::Ink, gui::Face);
+  p.draw_text(222, current.footerTop + (current.buttonHeight - current.lineHeight) / 2, "Page");
+  p.draw_text(266, current.footerTop + (current.buttonHeight - current.lineHeight) / 2, page);
+  p.draw_text(330, current.footerTop + (current.buttonHeight - current.lineHeight) / 2,
+              app.nextPage ? "(more entries)" : "(last page)");
+  text(p, 8, current.footerTextY, app.status, right - 16, gui::Ink, gui::Face);
 }
 
 void page(bool next) {
@@ -454,64 +521,21 @@ void page(bool next) {
   else if (!next && app.page) load(app.path, app.page - 1);
 }
 
-struct Notice {
-  uint32_t hwnd{0};
-  const char *text{nullptr};
-  bool done{false};
-};
-Notice *activeNotice{nullptr};
-
-int notice_lines(const char *value, gui::Paint *paint = nullptr) {
-  int row = 0;
-  while (*value) {
-    char line[69]{};
-    int n = 0;
-    while (*value && *value != '\n' && n < 68) line[n++] = *value++;
-    if (*value == '\n') ++value;
-    if (paint) paint->text(12, 12 + row * 18, line);
-    ++row;
-  }
-  return row;
-}
-
-void notice_procedure(const Msg &msg) {
-  if (!activeNotice || msg.hwnd != activeNotice->hwnd) return;
-  auto &state = *activeNotice;
-  if (msg.message == WindowMessage_Paint) {
-    gui::Paint p(state.hwnd);
-    const int rows = notice_lines(state.text, &p);
-    p.button(244, rows * 18 + 24, 80, "OK", true);
-  } else if (msg.message == WindowMessage_Close ||
-             (msg.message == WindowMessage_KeyDown && (msg.wParam == 13 || msg.wParam == 27))) state.done = true;
-  else if (msg.message == WindowMessage_LButtonDown) {
-    const int y = notice_lines(state.text) * 18 + 24;
-    if (gui::inside(gui::mouse_x(msg), gui::mouse_y(msg), 244, y, 324, y + 24)) state.done = true;
-  }
-}
-
 void notice(const char *title, const char *value) {
-  Notice state;
-  state.text = value;
-  state.hwnd = gui::window("FileManagerNotice", title, 60, 65, 576, notice_lines(value) * 18 + 92);
-  if (!state.hwnd) return;
-  activeNotice = &state;
-  gui::check(UD_SYS_SetFocusV1(state.hwnd), "Focus notice");
-  Msg msg{};
-  while (!state.done && gui::next(msg)) {
-    if (msg.hwnd == state.hwnd || msg.message == WindowMessage_Paint) gui::dispatch(msg);
-    else if (msg.message == WindowMessage_KeyDown) { msg.hwnd = state.hwnd; gui::dispatch(msg); }
-  }
-  gui::destroy(state.hwnd);
-  activeNotice = nullptr;
+  gui::message(title, value);
 }
 
 void procedure(const Msg &msg) {
   if (msg.message == WindowMessage_Close) app.running = false;
+  else if (msg.message == WindowMessage_FontChanged) { ensure_visible(); gui::invalidate(app.hwnd); }
   else if (msg.message == WindowMessage_Command && msg.wParam <= Reverse)
     command(static_cast<Command>(msg.wParam));
   else if (msg.message == WindowMessage_Paint) paint();
   else if (msg.message == WindowMessage_Size) { ensure_visible(); gui::invalidate(app.hwnd); }
   else if (msg.message == WindowMessage_KeyDown) {
+    const auto current = layout();
+    const int rowsVisible = visible_rows(current);
+    if (current.rowHeight <= 0 || current.lineHeight <= 0) return;
     const auto key = msg.wParam;
     if (key == 9) app.treeFocus = !app.treeFocus;
     else if (key == 13) command(Open);
@@ -532,7 +556,7 @@ void procedure(const Msg &msg) {
     } else if (key == 33 || key == 34) {
       if (!app.treeFocus) page(key == 34);
       else {
-        app.treeSelection += key == 34 ? visible_rows() : -visible_rows();
+        app.treeSelection += key == 34 ? rowsVisible : -rowsVisible;
         if (app.treeSelection < 0) app.treeSelection = 0;
         if (app.treeSelection >= app.treeCount) app.treeSelection = app.treeCount - 1;
       }
@@ -544,24 +568,40 @@ void procedure(const Msg &msg) {
     gui::invalidate(app.hwnd);
   } else if (msg.message == WindowMessage_LButtonDown || msg.message == WindowMessage_LButtonDblClk) {
     const int x = gui::mouse_x(msg), y = gui::mouse_y(msg);
-    const Rect area = gui::client(app.hwnd);
-    if (y >= ToolbarTop && y < ToolbarTop + 24 && x >= 4 && x < 4 + 9 * 72) {
-      command(static_cast<Command>((x - 4) / 72));
-    } else if (y >= 60 && y < ListTop && x > TreeWidth) {
+    const auto current = layout();
+    const Rect area = current.area;
+    const int rowsVisible = visible_rows(current);
+    if (current.rowHeight <= 0 || current.lineHeight <= 0) return;
+    if (y >= ToolbarTop && y < ToolbarTop + current.toolbarRows * current.toolbarPitch && x >= 4) {
+      const int buttonRow = (y - ToolbarTop) / current.toolbarPitch;
+      const int buttonColumn = (x - 4) / 72;
+      const int buttonsInRow = current.compactToolbar && buttonRow == 1 ? 4 :
+                               current.compactToolbar ? 5 : 9;
+      if (buttonColumn < buttonsInRow && x < 4 + buttonColumn * 72 + 70 &&
+          y < ToolbarTop + buttonRow * current.toolbarPitch + current.buttonHeight) {
+        const int index = current.compactToolbar ? buttonRow * 5 + buttonColumn : buttonColumn;
+        command(static_cast<Command>(index));
+      }
+    } else if (y >= current.headerY - 4 && y < current.listTop && x > TreeWidth) {
       app.reverse = !app.reverse;
       app.sortSize = x >= area.right - 170;
       sort(app.entries, app.count, app.sortSize, app.reverse);
       app.selection = app.count ? 0 : -1;
-    } else if (y >= ListTop && y < area.bottom - 54 && x >= 4 && x < area.right - 4) {
-      const int row = (y - ListTop) / RowHeight;
+    } else if (y >= current.listTop && y < current.listBottom && x >= 4 && x < area.right - 4) {
+      const int row = (y - current.listTop) / current.rowHeight;
       const bool treeBar = x >= TreeWidth - 18 && x < TreeWidth - 2;
       const bool fileBar = x >= area.right - 20;
       if (treeBar || fileBar) {
         app.treeFocus = treeBar;
         int &selected = treeBar ? app.treeSelection : app.selection;
         const int count = treeBar ? app.treeCount : app.count;
-        const bool down = y >= area.bottom - 74 || (y >= ListTop + 20 && y > ListTop + visible_rows() * RowHeight / 2);
-        const int step = y < ListTop + 20 || y >= area.bottom - 74 ? 1 : visible_rows();
+        const int arrowHeight = current.lineHeight + 4;
+        const bool down = y >= current.listBottom - arrowHeight ||
+                          (y >= current.listTop + arrowHeight &&
+                           y > current.listTop + rowsVisible * current.rowHeight / 2);
+        const int step = y < current.listTop + arrowHeight ||
+                                 y >= current.listBottom - arrowHeight
+                             ? 1 : rowsVisible;
         selected += down ? step : -step;
         if (selected >= count) selected = count - 1;
         if (selected < 0 && count) selected = 0;
@@ -582,7 +622,7 @@ void procedure(const Msg &msg) {
           if (msg.message == WindowMessage_LButtonDblClk) open_selection();
         }
       }
-    } else if (y >= area.bottom - 50 && y < area.bottom - 26) {
+    } else if (y >= current.footerTop && y < current.footerTop + current.buttonHeight) {
       if (x >= 4 && x < 68) page(false);
       else if (x >= 72 && x < 136) page(true);
       else if (x >= 144 && x < 208) command(Properties);
@@ -594,9 +634,41 @@ void procedure(const Msg &msg) {
 } // namespace
 
 extern "C" int main(int argc, char **argv) {
-  if (!gui::register_class("FileManager", procedure) ||
-      !gui::register_class("FileManagerNotice", notice_procedure)) return 1;
-  app.hwnd = gui::window("FileManager", "File Manager", 30, 30, 680, 430);
+  gui::TextMetrics font{};
+  if (!gui::system_font().metrics(font) || !font.lineHeight) return 1;
+  DisplayState display{};
+  const auto displayStatus = UD_SYS_GetDisplayModeV1(&display);
+  if (displayStatus != SyscallReturnCode_OKAY) {
+    (void)gui::check(displayStatus, "GetDisplayMode");
+    (void)UD_SYS_PrintV1("filemanager: cannot query active display");
+    return 1;
+  }
+  if (!display.active || display.mode.width < MinimumDisplayWidth ||
+      display.mode.height < MinimumDisplayHeight) {
+    (void)UD_SYS_PrintV1("filemanager: active display is unavailable or too small");
+    return 1;
+  }
+  const int windowWidth = display.mode.width - 60 < 680
+                              ? static_cast<int>(display.mode.width - 60)
+                              : 680;
+  const int initialRows = 12;
+  int buttonHeight = 0;
+  for (const char *label : Toolbar) {
+    const int height = gui::button_height(label);
+    if (height > buttonHeight) buttonHeight = height;
+  }
+  const char *const footerLabels[] = {"Prev", "Next", "Props"};
+  for (const char *label : footerLabels) {
+    const int height = gui::button_height(label);
+    if (height > buttonHeight) buttonHeight = height;
+  }
+  // The list pages and clips to the client area, so the frame only needs to fit the display.
+  const int64_t wantedHeight = 4 + 2 * (buttonHeight + 4) +
+                               static_cast<int64_t>(initialRows + 4) * (font.lineHeight + 4) + 48;
+  const int64_t availableHeight = static_cast<int64_t>(display.mode.height) - 60;
+  const int initialHeight = static_cast<int>(wantedHeight < availableHeight ? wantedHeight : availableHeight);
+  if (!gui::register_class("FileManager", procedure)) return 1;
+  app.hwnd = gui::window("FileManager", "File Manager", 30, 30, windowWidth, initialHeight);
   if (!app.hwnd) return 1;
   if (!create_app_menu()) return 1;
   reset_tree();
@@ -604,7 +676,15 @@ extern "C" int main(int argc, char **argv) {
   else expand_tree(0);
   focus();
   Msg msg{};
-  while (app.running && gui::next(msg)) gui::dispatch(msg);
+  while (app.running && gui::next(msg)) {
+    gui::dispatch(msg);
+    // Report a loaded directory once its repaint has drained from the queue.
+    Msg pending{};
+    if (app.readyMarker[0] && UD_SYS_PeekMessageV1(&pending, 0) == SyscallReturnCode_TIMEOUT) {
+      (void) UD_SYS_PrintV1(app.readyMarker);
+      app.readyMarker[0] = 0;
+    }
+  }
   const bool destroyed = gui::destroy(app.hwnd);
   const bool menuDestroyed = gui::check(UD_SYS_DestroyMenuV1(app.menu), "DestroyMenu");
   return destroyed && menuDestroyed ? 0 : 1;

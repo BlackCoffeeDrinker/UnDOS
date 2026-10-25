@@ -3,6 +3,7 @@
 #include <array.hpp>
 #include <kernel/dma.hpp>
 #include <kernel/resource.hpp>
+#include <kernel/time.hpp>
 #include <span.hpp>
 #include <kernel/mutex.hpp>
 #include <mutex.hpp>
@@ -51,6 +52,7 @@ struct BusContext {
   uint16_t ioBase;  // command-block base, resolved from the grant (0 = unstarted)
   uint16_t ctrlBase;// control-block base, resolved from the grant
   uint32_t irq;     // assigned interrupt line
+  bool unusable{false};
   kernel::Mutex ioMutex;
 };
 
@@ -220,7 +222,8 @@ kstd::error_code Ata_Sector(uint16_t io, const AtaContext &disk, uint32_t lba,
   HAL_IO_Out8(AtaPort(io, kRegStatusCommand), write ? 0x30 : 0x20);
   if (const auto status = AtaWait(io); status) return status;
   for (uint32_t i = 0; i < kAtaSectorSize; i += 2) {
-    if (write) HAL_IO_Out16(AtaPort(io, kRegData), sector[i] | (static_cast<uint16_t>(sector[i + 1]) << 8));
+    if (write) HAL_IO_Out16(AtaPort(io, kRegData),
+        static_cast<uint16_t>(sector[i] | (static_cast<uint16_t>(sector[i + 1]) << 8)));
     else {
       const uint16_t word = HAL_IO_In16(AtaPort(io, kRegData));
       sector[i] = static_cast<uint8_t>(word);
@@ -228,6 +231,101 @@ kstd::error_code Ata_Sector(uint16_t io, const AtaContext &disk, uint32_t lba,
     }
   }
   return AtaWait(io, false);
+}
+
+struct AtaReadWaitResult {
+  kstd::error_code status{};
+  bool uncertain{false};
+};
+
+AtaReadWaitResult AtaWaitReadStatus(uint16_t io, bool expectData) {
+  uint8_t status = 0;
+  for (uint32_t poll = 0; poll < 1000000; ++poll) {
+    status = HAL_IO_In8(AtaPort(io, kRegStatusCommand));
+    if (!status || status == 0xff) return {kernel::KernelError::DeviceNotReady, true};
+    if (status & 0x80) continue;
+    if (status & 0x21) {
+      return {kernel::KernelError::DeviceError, (status & 0x08) != 0};
+    }
+    if (expectData ? (status & 0x08) != 0 : (status & 0x08) == 0) return {};
+  }
+  return {kernel::KernelError::Timeout, true};
+}
+
+void AtaRecoverChannel(BusContext &ctx) {
+  if (!ctx.ctrlBase) {
+    ctx.unusable = true;
+    return;
+  }
+
+  HAL_IO_Out8(ctx.ctrlBase, 0x04);
+  // The executive clock advances on the 100 Hz PIT tick. The first tick can
+  // occur immediately after assertion, so require two observed advances.
+  // The 64-bit clock is updated by IRQ and read non-atomically on i386, so a
+  // sample can be torn. Only the low 32 bits (each loaded atomically) may
+  // count ticks; the high 32 bits must not affect the decision.
+  auto lastTime = static_cast<uint32_t>(KE_TIME_GetSystemTime().count());
+  unsigned elapsedTicks = 0;
+  for (uint32_t poll = 0; poll < 1000000 && elapsedTicks < 2; ++poll) {
+    HAL_IO_Delay();
+    const auto now = static_cast<uint32_t>(KE_TIME_GetSystemTime().count());
+    if (now != lastTime) {
+      lastTime = now;
+      ++elapsedTicks;
+    }
+  }
+  HAL_IO_Out8(ctx.ctrlBase, 0x00);
+  if (elapsedTicks < 2) {
+    // A stopped clock cannot establish the minimum reset pulse. Poison the
+    // channel instead of waiting forever or trusting an unproven reset.
+    ctx.unusable = true;
+    return;
+  }
+  HAL_IO_Delay();
+
+  for (int i = 0; i < 4; ++i) (void) HAL_IO_In8(AtaPort(ctx.ioBase, kRegStatusCommand));
+  for (uint32_t poll = 0; poll < 100000; ++poll) {
+    const uint8_t status = HAL_IO_In8(AtaPort(ctx.ioBase, kRegStatusCommand));
+    if (status && status != 0xff && !(status & (0x80 | 0x08 | 0x21))) return;
+    HAL_IO_Delay();
+  }
+  ctx.unusable = true;
+}
+
+kstd::error_code Ata_ReadBatch(BusContext &ctx, const AtaContext &disk, uint32_t lba,
+    uint16_t sectorCount, uint8_t *output, size_t &transferred) {
+  HAL_IO_Out8(AtaPort(ctx.ioBase, kRegDrive), (disk.isMaster ? 0xe0 : 0xf0) | ((lba >> 24) & 15));
+  for (int i = 0; i < 4; ++i) (void) HAL_IO_In8(AtaPort(ctx.ioBase, kRegStatusCommand));
+  if (const auto status = AtaWait(ctx.ioBase, false, false); status) return status;
+  HAL_IO_Out8(AtaPort(ctx.ioBase, kRegFeatures), 0);
+  HAL_IO_Out8(AtaPort(ctx.ioBase, kRegSectorCount), sectorCount == 256 ? 0 : static_cast<uint8_t>(sectorCount));
+  HAL_IO_Out8(AtaPort(ctx.ioBase, kRegLbaLow), lba & 255);
+  HAL_IO_Out8(AtaPort(ctx.ioBase, kRegLbaMid), (lba >> 8) & 255);
+  HAL_IO_Out8(AtaPort(ctx.ioBase, kRegLbaHigh), (lba >> 16) & 255);
+  HAL_IO_Out8(AtaPort(ctx.ioBase, kRegStatusCommand), 0x20);
+
+  for (uint16_t sector = 0; sector < sectorCount; ++sector) {
+    const auto ready = AtaWaitReadStatus(ctx.ioBase, true);
+    if (ready.status) {
+      if (ready.uncertain) AtaRecoverChannel(ctx);
+      return ready.status;
+    }
+
+    for (uint32_t byte = 0; byte < kAtaSectorSize; byte += 2) {
+      const uint16_t word = HAL_IO_In16(AtaPort(ctx.ioBase, kRegData));
+      output[byte] = static_cast<uint8_t>(word);
+      output[byte + 1] = static_cast<uint8_t>(word >> 8);
+    }
+    output += kAtaSectorSize;
+    transferred += kAtaSectorSize;
+  }
+
+  const auto completed = AtaWaitReadStatus(ctx.ioBase, false);
+  if (completed.status) {
+    if (completed.uncertain) AtaRecoverChannel(ctx);
+    return completed.status;
+  }
+  return {};
 }
 
 kstd::error_code Ata_Transfer(const kernel::KDevicePtr<kernel::KDevice> &device,
@@ -244,22 +342,65 @@ kstd::error_code Ata_Transfer(const kernel::KDevicePtr<kernel::KDevice> &device,
   auto *ctx = bus->deviceExtension.as<BusContext>();
   if (!ctx || !ctx->ioBase) return kernel::KernelError::DeviceNotReady;
   kstd::unique_lock lock(ctx->ioMutex);
+  if (ctx->unusable) return kernel::KernelError::DeviceNotReady;
+
+  if (readBuffer) {
+    size_t remaining = size;
+    uint64_t position = offset;
+
+    const size_t leading = static_cast<size_t>(position % kAtaSectorSize);
+    if (leading) {
+      uint8_t sector[kAtaSectorSize]{};
+      size_t discarded = 0;
+      if (const auto status = Ata_ReadBatch(*ctx, *disk,
+              static_cast<uint32_t>(position / kAtaSectorSize), 1, sector, discarded); status) return status;
+      const size_t count = kstd::min(remaining, kAtaSectorSize - leading);
+      for (size_t i = 0; i < count; ++i) readBuffer[transferred + i] = sector[leading + i];
+      transferred += count;
+      position += count;
+      remaining -= count;
+    }
+
+    const uint32_t capacitySectors = kstd::min<uint32_t>(disk->sectorCount, 0x10000000u);
+    while (remaining >= kAtaSectorSize) {
+      const uint32_t lba = static_cast<uint32_t>(position / kAtaSectorSize);
+      const uint32_t throughCapacity = capacitySectors - lba;
+      const uint32_t throughLba28 = 0x10000000u - lba;
+      const size_t sectorsRemaining = remaining / kAtaSectorSize;
+      const uint16_t batch = static_cast<uint16_t>(kstd::min<size_t>(
+          kstd::min<uint32_t>(256, kstd::min(throughCapacity, throughLba28)), sectorsRemaining));
+      if (const auto status = Ata_ReadBatch(*ctx, *disk, lba, batch, readBuffer + transferred, transferred); status) return status;
+      const size_t bytes = static_cast<size_t>(batch) * kAtaSectorSize;
+      position += bytes;
+      remaining -= bytes;
+    }
+
+    if (remaining) {
+      uint8_t sector[kAtaSectorSize]{};
+      size_t discarded = 0;
+      if (const auto status = Ata_ReadBatch(*ctx, *disk,
+              static_cast<uint32_t>(position / kAtaSectorSize), 1, sector, discarded); status) return status;
+      for (size_t i = 0; i < remaining; ++i) readBuffer[transferred + i] = sector[i];
+      transferred += remaining;
+    }
+    return {};
+  }
+
   while (transferred < size) {
     const uint64_t position = offset + transferred;
     const uint32_t lba = static_cast<uint32_t>(position / kAtaSectorSize);
     const size_t begin = static_cast<size_t>(position % kAtaSectorSize);
     const size_t count = kstd::min(size - transferred, kAtaSectorSize - begin);
     uint8_t sector[kAtaSectorSize]{};
-    if (readBuffer || begin || count != kAtaSectorSize) {
-      if (const auto status = Ata_Sector(ctx->ioBase, *disk, lba, sector, false); status) return status;
-    }
     if (writeBuffer) {
+      if (begin || count != kAtaSectorSize) {
+        size_t discarded = 0;
+        if (const auto status = Ata_ReadBatch(*ctx, *disk, lba, 1, sector, discarded); status) return status;
+      }
       for (size_t i = 0; i < count; ++i) sector[begin + i] = writeBuffer[transferred + i];
       if (const auto status = Ata_Sector(ctx->ioBase, *disk, lba, sector, true); status) return status;
       HAL_IO_Out8(AtaPort(ctx->ioBase, kRegStatusCommand), 0xe7); // FLUSH CACHE
       if (const auto status = AtaWait(ctx->ioBase, false); status) return status;
-    } else {
-      for (size_t i = 0; i < count; ++i) readBuffer[transferred + i] = sector[begin + i];
     }
     transferred += count;
   }

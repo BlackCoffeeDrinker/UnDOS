@@ -37,6 +37,7 @@ kstd::expected<kstd::pair<KDeviceContextSlot *, HDC>, kstd::error_code> DeviceCo
   slot.display = nullptr;
   slot.target = nullptr;
   slot.selectedBitmap = nullptr;
+  slot.selectedFont = nullptr;
   slot.penColor = 0;
   slot.backgroundColor = 7;
   slot.opaqueText = false;
@@ -90,6 +91,7 @@ kstd::error_code DeviceContextTable::Close(HDC hdc) noexcept {
   slot->display = nullptr;
   slot->target = nullptr;
   slot->selectedBitmap = nullptr;
+  slot->selectedFont = nullptr;
   slot->clipped = false;
   slot->clipRects = nullptr;
   slot->clipCount = 0;

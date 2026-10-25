@@ -223,8 +223,14 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
             # Step 2: validate every pointer + length in the copied header, once.
             for field in sc.fields:
                 if isinstance(field.ftype, (StringType, DynArrayType, BufferType)):
+                    size_limit = (
+                        "UNDOS_MAX_COPY_SIZE"
+                        if isinstance(field.ftype, StringType) and
+                        field.mode == "COPY" and field.direction == "IN"
+                        else "UNDOS_MAX_MAPPED_BUFFER_SIZE"
+                    )
                     f.write(f"  if (headerCopy.{field.name} != nullptr) {{\n")
-                    f.write(f"    if (headerCopy.{field.name}Length > UNDOS_MAX_COPY_SIZE) return kernel::KernelError::InvalidSize;\n")
+                    f.write(f"    if (headerCopy.{field.name}Length > {size_limit}) return kernel::KernelError::InvalidSize;\n")
                     if not (isinstance(field.ftype, StringType) and field.mode == "COPY" and field.direction == "IN"):
                         f.write(f"    if (headerCopy.{field.name}Length == 0) return kernel::KernelError::InvalidArgument;\n")
                     f.write(f"  }}\n\n")

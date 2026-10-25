@@ -8,5 +8,5 @@ target_link_libraries(fontdecode PUBLIC UnDOS::KStd UnDOS::FontResource)
 target_include_directories(fontdecode PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(fontloader main.cpp)
-target_link_libraries(fontloader PRIVATE fontdecode UnDOS::Application)
+target_link_libraries(fontloader PRIVATE fontdecode UnDOS::GUI)
 set_target_properties(fontloader PROPERTIES OUTPUT_NAME fontload)

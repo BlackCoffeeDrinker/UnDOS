@@ -22,8 +22,31 @@ struct Shell {
   uint32_t menu{0};
   int active{-1};
   bool running{true};
+  uint32_t reflowGeneration{0};
 };
 Shell shell;
+
+bool group_grid(int width, int height, uint32_t group, Grid &grid) {
+  gui::TextMetrics metrics{};
+  if (!gui::system_font().metrics(metrics)) return false;
+  uint32_t labelHeight = 0;
+  uint32_t labelWidth = 0;
+  const gui::TextLayout layout(gui::system_font());
+  const int count = shell.model.count(group);
+  for (int ordinal = 0; ordinal < count; ++ordinal) {
+    const int itemIndex = shell.model.item_at(group, ordinal);
+    if (itemIndex < 0) return false;
+    gui::TextExtent extent{};
+    if (!layout.measure(shell.model.items[itemIndex].title, extent)) return false;
+    if (extent.height > labelHeight) labelHeight = extent.height;
+    if (extent.width > labelWidth) labelWidth = extent.width;
+  }
+  if (!labelHeight) labelHeight = metrics.lineHeight;
+  if (labelHeight > static_cast<uint32_t>(INT32_MAX - 50) ||
+      labelWidth > static_cast<uint32_t>(INT32_MAX - LabelPadding)) return false;
+  grid = Grid::for_size(width, height, static_cast<int>(labelHeight), static_cast<int>(labelWidth));
+  return true;
+}
 
 void refresh_title() {
   gui::check(UD_SYS_SetWindowTextV1(shell.frame, "Program Manager"), "SetWindowText");
@@ -114,6 +137,18 @@ bool launch(const char *path, const char *arguments) {
   return true;
 }
 
+bool ensure_group_window(unsigned index) {
+  if (index >= MaxGroups || !shell.model.groups[index].id) return false;
+  auto &view = shell.views[index];
+  if (!view.hwnd) {
+    view.hwnd = gui::window("ProgramGroup", shell.model.groups[index].title,
+                            12 + static_cast<int>(index) * 28,
+                            8 + static_cast<int>(index) * 28,
+                            390, 240, shell.workspace, index);
+  }
+  return view.hwnd != 0;
+}
+
 int selected_item() {
   if (shell.active < 0) return -1;
   const auto i = static_cast<unsigned>(shell.active);
@@ -123,11 +158,9 @@ int selected_item() {
 void open_group(unsigned index) {
   if (index >= MaxGroups || !shell.model.groups[index].id) return;
   auto &v = shell.views[index];
-  if (!v.hwnd) {
-    v.hwnd = gui::window("ProgramGroup", shell.model.groups[index].title,
-                         12 + static_cast<int>(index) * 28, 8 + static_cast<int>(index) * 28,
-                         390, 240, shell.workspace, index);
-  } else gui::show(v.hwnd, ShowCommand_Restore);
+  const bool existed = v.hwnd != 0;
+  if (!ensure_group_window(index)) return;
+  if (existed) gui::show(v.hwnd, ShowCommand_Restore);
   if (v.hwnd) {
     shell.active = static_cast<int>(index);
     focus(v.hwnd);
@@ -144,7 +177,8 @@ void edit_group(bool create) {
   char name[LabelLength]{};
   if (!create) copy(name, sizeof(name), shell.model.groups[shell.active].title);
   gui::Field field{.label = "Group name", .value = name, .capacity = sizeof(name)};
-  if (!gui::dialog(create ? "New group" : "Group properties", "Changes last for this session only.", &field, 1)) return;
+  if (!gui::dialog(create ? "New group" : "Group properties", "Changes last for this session only.",
+                    &field, 1, true)) return;
   if (!name[0]) { gui::message("Invalid group", "A group must have a name."); return; }
   if (create) {
     const int index = shell.model.add_group(name);
@@ -174,7 +208,7 @@ void edit_program(bool create) {
                          {.label = "Executable (absolute path)", .value = item.path, .capacity = sizeof(item.path)},
                          {.label = "Arguments", .value = item.arguments, .capacity = sizeof(item.arguments)}};
   if (!gui::dialog(create ? "New program" : "Program properties",
-                   "Changes last for this session only.", fields, 3)) return;
+                   "Changes last for this session only.", fields, 3, true)) return;
   if (!item.title[0] || item.path[0] != '/' ||
       strchr(item.title, '|') || strchr(item.path, '|') || strchr(item.arguments, '|')) {
     gui::message("Invalid program", "Enter a name and absolute path; no | characters.");
@@ -198,7 +232,8 @@ void edit_program(bool create) {
 void remove_selection() {
   const int index = selected_item();
   if (index < 0) return;
-  if (!gui::dialog("Delete program", "Remove the selected program from this session?", nullptr, 0)) return;
+  if (!gui::dialog("Delete program", "Remove the selected program from this session?", nullptr, 0,
+                    true)) return;
   shell.model.items[index] = Item{};
   shell.model.modified = true;
   auto &v = shell.views[shell.active];
@@ -208,7 +243,8 @@ void remove_selection() {
 
 void remove_group() {
   if (shell.active < 0) return;
-  if (!gui::dialog("Delete group", "Remove this group AND all its program entries?", nullptr, 0)) return;
+  if (!gui::dialog("Delete group", "Remove this group AND all its program entries?", nullptr, 0,
+                    true)) return;
   const int index = shell.active;
   if (shell.views[index].hwnd) gui::destroy(shell.views[index].hwnd);
   shell.views[index] = GroupView{};
@@ -221,7 +257,10 @@ bool run_dialog() {
   char path[PathLength]{}, arguments[ArgumentLength]{};
   gui::Field fields[] = {{.label = "Executable (absolute path)", .value = path, .capacity = sizeof(path)},
                          {.label = "Arguments", .value = arguments, .capacity = sizeof(arguments)}};
-  if (gui::dialog("Run", "Run a native UnDOS ELF program.", fields, 2)) {
+  const bool accepted = gui::dialog("Run", "Run a native UnDOS ELF program.", fields, 2, true);
+  crt_printf("run dialog accepted=%u path='%s' args='%s'\n",
+             accepted ? 1u : 0u, path, arguments);
+  if (accepted) {
     if (path[0] != '/') gui::message("Invalid path", "An absolute executable path is required.");
     else return launch(path, arguments);
   }
@@ -266,7 +305,8 @@ void execute(int command) {
     case DeleteGroup: remove_group(); break;
     case Run: if (run_dialog()) return; break;
     case Exit:
-      if (!shell.model.modified || gui::dialog("Exit Program Manager", "Discard unsaved session changes and exit?", nullptr, 0))
+      if (!shell.model.modified || gui::dialog("Exit Program Manager", "Discard unsaved session changes and exit?",
+                                               nullptr, 0, true))
         shell.running = false;
       break;
     case ArrangeIcons: if (shell.active >= 0) gui::invalidate(shell.views[shell.active].hwnd); break;
@@ -299,7 +339,8 @@ void keyboard(const Msg &msg, bool inGroup) {
   auto &v = shell.views[index];
   const auto group = shell.model.groups[index].id;
   const auto area = gui::client(msg.hwnd);
-  const Grid grid = Grid::for_size(area.right, area.bottom);
+  Grid grid{};
+  if (!group_grid(area.right, area.bottom, group, grid)) return;
   const int count = shell.model.count(group);
   if (msg.wParam == 13) { launch_selection(); return; }
   if (msg.wParam == 46) { remove_selection(); return; }
@@ -334,37 +375,45 @@ void group_proc(const Msg &msg) {
     gui::show(msg.hwnd, ShowCommand_Hide);
     if (shell.active == static_cast<int>(index)) shell.active = -1;
   } else if (msg.message == WindowMessage_Size) gui::invalidate(msg.hwnd);
-  else if (msg.message == WindowMessage_KeyDown) keyboard(msg, true);
+  else if (msg.message == WindowMessage_FontChanged) {
+    shell.reflowGeneration = msg.wParam;
+    gui::invalidate(msg.hwnd);
+  } else if (msg.message == WindowMessage_KeyDown) keyboard(msg, true);
   else if (msg.message == WindowMessage_Paint) {
     gui::Paint p(msg.hwnd);
     const Rect area = gui::client(msg.hwnd);
-    const Grid grid = Grid::for_size(area.right, area.bottom);
+    Grid grid{};
+    if (!group_grid(area.right, area.bottom, group, grid)) return;
     const int count = shell.model.count(group);
     const int start = grid.page_start(v.selection);
     for (int ordinal = start; ordinal < count && ordinal < start + grid.page_size; ++ordinal) {
       const int i = shell.model.item_at(group, ordinal);
       const auto &item = shell.model.items[i];
-      const int x = (ordinal - start) % grid.columns * 112;
-      const int y = (ordinal - start) / grid.columns * 72;
+      const int x = (ordinal - start) % grid.columns * grid.cell_width;
+      const int y = (ordinal - start) / grid.columns * grid.cell_height;
       const bool selected = ordinal == v.selection;
-      p.icon(x + 40, y + 10, item.icon, selected);
-      char label[14]{};
-      const size_t length = strlen(item.title);
-      const size_t n = length > 13 ? 13 : length;
-      memcpy(label, item.title, n);
-      if (length > 13) { label[10] = '.'; label[11] = '.'; label[12] = '.'; }
-      const int labelWidth = static_cast<int>(n) * gui::CellWidth;
-      const int left = x + (112 - labelWidth) / 2;
-      p.fill(left - 2, y + 46, left + labelWidth + 2, y + 64, selected ? gui::Highlight : gui::Paper);
-      p.text(left, y + 47, label, selected ? gui::Paper : gui::Ink, selected ? gui::Highlight : gui::Paper);
+      p.icon(x + (grid.cell_width - 32) / 2, y + 10, item.icon, selected);
+      char label[LabelLength]{};
+      gui::TextExtent extent{};
+      const gui::TextLayout layout(gui::system_font());
+      if (!layout.fit_prefix(item.title, label, sizeof(label),
+                             static_cast<uint32_t>(grid.cell_width - LabelPadding), extent)) continue;
+      const int labelWidth = static_cast<int>(extent.width);
+      const int left = x + (grid.cell_width - labelWidth) / 2;
+      p.fill(left - 2, y + 46, left + labelWidth + 2,
+              y + 50 + static_cast<int>(extent.height), selected ? gui::Highlight : gui::Paper);
+      p.draw_text(left, y + 48, label, gui::FontStyle::Regular,
+                  selected ? gui::Paper : gui::Ink, selected ? gui::Highlight : gui::Paper);
     }
   } else if (msg.message == WindowMessage_LButtonDown || msg.message == WindowMessage_LButtonDblClk) {
     shell.active = static_cast<int>(index);
     const auto area = gui::client(msg.hwnd);
-    const auto grid = Grid::for_size(area.right, area.bottom);
+    Grid grid{};
+    if (!group_grid(area.right, area.bottom, group, grid)) return;
     const int x = gui::mouse_x(msg), y = gui::mouse_y(msg);
-    if (x < 0 || y < 0 || y >= grid.rows * 72 || x >= grid.columns * 112) return;
-    const int ordinal = grid.page_start(v.selection) + (y / 72) * grid.columns + x / 112;
+    if (x < 0 || y < 0 || y >= grid.rows * grid.cell_height || x >= grid.columns * grid.cell_width) return;
+    const int ordinal = grid.page_start(v.selection) + (y / grid.cell_height) * grid.columns +
+                        x / grid.cell_width;
     if (ordinal >= shell.model.count(group)) return;
     v.selection = ordinal;
     gui::invalidate(msg.hwnd);
@@ -381,7 +430,8 @@ void frame_proc(const Msg &msg) {
                 static_cast<int>(state.mode.height) - 12);
   } else if (msg.message == WindowMessage_Paint) {
     gui::Paint paint(msg.hwnd);
-  } else if (msg.message == WindowMessage_Command) execute(static_cast<int>(msg.wParam));
+  } else if (msg.message == WindowMessage_FontChanged) shell.reflowGeneration = msg.wParam;
+  else if (msg.message == WindowMessage_Command) execute(static_cast<int>(msg.wParam));
   else if (msg.message == WindowMessage_Close) execute(Exit);
   else if (msg.message == WindowMessage_KeyDown) keyboard(msg, false);
   else if (msg.message == WindowMessage_Size) {
@@ -432,6 +482,8 @@ bool load_configuration() {
 } // namespace
 
 extern "C" int main(int, char **) {
+  gui::TextMetrics font{};
+  if (!gui::system_font().metrics(font)) return 1;
   uint32_t display = 0;
   DeviceCaps caps{};
   if (!gui::check(UD_SYS_CreateDCV1("", "", DCInitFlags_Primary, &display), "Open session display")) return 1;
@@ -461,17 +513,23 @@ extern "C" int main(int, char **) {
   for (unsigned i = 0; i < MaxGroups; ++i) {
     if (!shell.model.groups[i].id) continue;
     if (first < 0) first = static_cast<int>(i);
-    open_group(i);
+    if (!ensure_group_window(i)) return 1;
     if (static_cast<int>(i) != first && shell.views[i].hwnd)
       gui::show(shell.views[i].hwnd, ShowCommand_Minimize);
   }
   if (first >= 0) open_group(static_cast<unsigned>(first));
-  refresh_title();
   Msg msg{};
-  for (unsigned i = 0; i < 128 && UD_SYS_PeekMessageV1(&msg, 1) == SyscallReturnCode_OKAY; ++i)
-    gui::dispatch(msg);
   (void) UD_SYS_PrintV1("progman: session ready (F10 opens menus, Enter launches)");
-  while (shell.running && gui::next(msg)) gui::dispatch(msg);
+  while (shell.running && gui::next(msg)) {
+    gui::dispatch(msg);
+    // An empty queue means every font notification and resulting repaint has
+    // been handled, so the session shows the new font throughout.
+    Msg pending{};
+    if (shell.reflowGeneration && UD_SYS_PeekMessageV1(&pending, 0) == SyscallReturnCode_TIMEOUT) {
+      (void) UD_SYS_PrintV1("progman: font reflow complete");
+      shell.reflowGeneration = 0;
+    }
+  }
   gui::destroy(shell.frame);
   if (shell.menu) gui::check(UD_SYS_DestroyMenuV1(shell.menu), "DestroyMenu");
   return 0;

@@ -2,6 +2,8 @@
 #include <Kernel.hpp>
 
 #include "pnp_test_hooks.hpp"
+#include "sched_test_hooks.hpp"
+#include <kernel/kobject/KThreadObject.hpp>
 
 #include <cstdio>
 #include <kernel/input.hpp>
@@ -59,8 +61,18 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_PNP_RegisterDeviceInterest(kernel::Devi
 // (vmm.cpp) only consults this to resolve a user-mode fault's owning
 // address space, so returning a null thread here just means such tests
 // exercise the kernel-address-space fallback path.
+// Tests that call syscall handlers can install a current thread through
+// sched_test_hooks.hpp; it is null otherwise.
+namespace {
+kernel::KObjectPtr<kernel::KThreadObject> g_hostCurrentThread;
+}
+
+void test_sched::SetCurrentThread(kernel::KObjectPtr<kernel::KThreadObject> thread) noexcept {
+  g_hostCurrentThread = thread;
+}
+
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KThreadObject> KE_SCHED_GetCurrentThread() noexcept {
-  return nullptr;
+  return g_hostCurrentThread;
 }
 
 // Hosted tests run single-threaded (there is no real scheduler/HAL backing
