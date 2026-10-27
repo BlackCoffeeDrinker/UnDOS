@@ -11,7 +11,7 @@ namespace kernel::font {
 // the template keeps -Wuseless-cast quiet in the kernel build.
 template <typename T> constexpr uint32_t to_u32(T value) { return static_cast<uint32_t>(value); }
 
-// Base for objects shared between the registry, realizations, caches and
+// Base for objects shared between the registry, realizations and
 // drawing code. A new object holds one reference, which make_ref() adopts.
 class RefCounted {
 public:

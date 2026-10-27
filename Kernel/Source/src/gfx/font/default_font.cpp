@@ -7,9 +7,9 @@ kstd::expected<UiFont, kstd::error_code> DefaultFont::prepare(uint32_t regularHa
   const auto regularFace = faces_.acquire(regularHandle);
   const auto boldFace = faces_.acquire(boldHandle);
   if (!regularFace || !boldFace) return kstd::unexpected(KernelError::InvalidHandle);
-  auto regular = Realization::create(regularFace, ppem, HintPolicy::Hinted, &cache_);
+  auto regular = Realization::create(regularFace, ppem, HintPolicy::Hinted);
   if (!regular) return kstd::unexpected(regular.error());
-  auto bold = Realization::create(boldFace, ppem, HintPolicy::Hinted, &cache_);
+  auto bold = Realization::create(boldFace, ppem, HintPolicy::Hinted);
   if (!bold) return kstd::unexpected(bold.error());
 
   auto glyphs = make_ref<UiGlyphs>();

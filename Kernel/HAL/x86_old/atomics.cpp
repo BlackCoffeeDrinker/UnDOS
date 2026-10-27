@@ -51,6 +51,8 @@ void atomic_memory_order(PlatformMemoryOrder order) noexcept {
   }
 }
 
+#include "atomic_cmpxchg_loops.hpp"
+
 unsigned int atomic_fetch_add_386(volatile void *ptr,
                                   unsigned int val,
                                   PlatformMemoryOrder order) noexcept {
@@ -135,48 +137,6 @@ unsigned int atomic_fetch_sub_xadd(volatile void *ptr,
       : "memory");
   atomic_memory_order(order);
   return val;// old value
-}
-
-unsigned int atomic_fetch_add_cmpxchg(volatile void *ptr,
-                                      unsigned int val,
-                                      PlatformMemoryOrder order) noexcept {
-  volatile auto *p = static_cast<volatile unsigned int *>(ptr);
-  atomic_memory_order(order);
-  unsigned int old, newval;
-  do {
-    old = *p;
-    newval = old + val;
-
-    asm volatile(
-        "lock cmpxchg %2, %1"
-        : "+a"(old), "+m"(*p)
-        : "r"(newval)
-        : "memory");
-    // cmpxchg sets ZF=1 on success, but we don't need ZF explicitly:
-    // old == *p means success
-  } while (old != *p);
-  atomic_memory_order(order);
-  return old;
-}
-
-unsigned int atomic_fetch_sub_cmpxchg(volatile void *ptr,
-                                      unsigned int val,
-                                      PlatformMemoryOrder order) noexcept {
-  volatile auto *p = static_cast<volatile unsigned int *>(ptr);
-  atomic_memory_order(order);
-  unsigned int old, newval;
-  do {
-    old = *p;
-    newval = old - val;
-
-    asm volatile(
-        "lock cmpxchg %2, %1"
-        : "+a"(old), "+m"(*p)
-        : "r"(newval)
-        : "memory");
-  } while (old != *p);
-  atomic_memory_order(order);
-  return old;
 }
 
 bool atomic_compare_exchange_32_386(volatile void *ptr,

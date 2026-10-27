@@ -25,7 +25,8 @@ def run(*command):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=(
-        "sdk", "kernel", "apps", "image", "hosted", "docker-toolchain", "docker-sdk"))
+        "sdk", "kernel", "apps", "image", "grub-direct", "hosted",
+        "docker-toolchain", "docker-sdk"))
     parser.add_argument("--docker", action="store_true", help="Run in the cross-toolchain container")
     parser.add_argument("--toolchain-image", default="gcc-standalone:i686-elf")
     parser.add_argument("--sdk-image", default="undos-sdk:dev")
@@ -35,14 +36,38 @@ def main():
     parser.add_argument("--cmake-arg", action="append", default=[])
     parser.add_argument("--system-files", action="append", type=Path, default=[],
                         help="Explicit directory of extra files to stage under /System")
+    parser.add_argument("--direct-loader-manifest", type=Path,
+                        help="Validated undos_direct build manifest for image assembly")
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs must be positive")
-    if args.docker and args.command not in ("sdk", "kernel", "apps", "image"):
-        parser.error("--docker applies only to sdk, kernel, apps, and image")
+    if args.docker and args.command not in (
+            "sdk", "kernel", "apps", "image", "grub-direct"):
+        parser.error("--docker applies only to build commands")
     build_root = args.build_root.resolve()
     if args.docker:
+        if args.command == "grub-direct":
+            relative_build = build_root.relative_to(ROOT)
+            (build_root / "tmp").mkdir(parents=True, exist_ok=True)
+            run("docker", "run", "--rm", "-e",
+                f"TMPDIR=/src/{relative_build / 'tmp'}",
+                "-v", f"{ROOT}:/src", "-w", "/src",
+                args.toolchain_image, "python3", "Scripts/build.py", "kernel",
+                "--build-root", str(Path("/src") / relative_build),
+                "--config", args.config, "--jobs", args.jobs)
+            kernel_manifest = build_root / "kernel" / args.config / f"artifacts-{args.config}.json"
+            probe_manifest = (
+                build_root / "grub-direct-loader"
+                / f"bootinfo-layout-{args.config}.json"
+            )
+            direct_manifest = ROOT / "build/grub-direct-loader" / f"manifest-{args.config}.json"
+            run(sys.executable, ROOT / "Tools/build-grub-direct.py",
+                "--kernel-manifest", kernel_manifest,
+                "--bootinfo-probe-manifest", probe_manifest,
+                "--output-manifest", direct_manifest)
+            return
         relative_build = build_root.relative_to(ROOT)
+        (build_root / "tmp").mkdir(parents=True, exist_ok=True)
         command = ["python3", "Scripts/build.py", args.command,
                    "--build-root", str(Path("/src") / relative_build),
                    "--config", args.config, "--jobs", str(args.jobs)]
@@ -50,7 +75,12 @@ def main():
             command.append("--cmake-arg=" + argument)
         for directory in args.system_files:
             command.extend(("--system-files", str(Path("/src") / directory.resolve().relative_to(ROOT))))
-        run("docker", "run", "--rm", "-v", f"{ROOT}:/src", "-w", "/src",
+        if args.direct_loader_manifest:
+            command.extend(("--direct-loader-manifest",
+                            str(Path("/src") / args.direct_loader_manifest.resolve().relative_to(ROOT))))
+        run("docker", "run", "--rm", "-e",
+            f"TMPDIR=/src/{relative_build / 'tmp'}",
+            "-v", f"{ROOT}:/src", "-w", "/src",
             args.toolchain_image, *command)
         return
     if args.command.startswith("docker-"):
@@ -81,7 +111,32 @@ def main():
         cmake("SDK", "sdk-build", f"-DUNDOS_SDK_PREFIX={sdk_prefix}", target="sdk")
 
     def kernel():
-        return cmake("Kernel", "kernel")
+        directory = cmake("Kernel", "kernel")
+        run("cmake", "--build", directory, "--config", args.config,
+            "--parallel", args.jobs, "--target", "bootinfo_layout_probe")
+        objects = sorted(
+            path for pattern in (
+                "bootinfo_layout_probe.cpp.o",
+                "bootinfo_layout_probe.cpp.obj",
+            )
+            for path in directory.rglob(pattern)
+        )
+        if len(objects) != 1:
+            raise RuntimeError(
+                f"Expected one target BootInfo probe object, found {len(objects)}")
+        fixture = build_root / "grub-direct-loader" / "bootinfo_layout_fixture.bin"
+        probe_manifest = (
+            build_root / "grub-direct-loader"
+            / f"bootinfo-layout-{args.config}.json"
+        )
+        probe_directory = directory / "CMakeFiles/bootinfo_layout_probe.dir"
+        run(sys.executable, ROOT / "Tools/verify-bootinfo-layout.py",
+            "--object", objects[0], "--fixture", fixture,
+            "--depfile", Path(str(objects[0]) + ".d"),
+            "--flags", probe_directory / "flags.make",
+            "--kernel-manifest", directory / f"artifacts-{args.config}.json",
+            "--evidence-manifest", probe_manifest)
+        return directory
 
     def apps():
         sdk()
@@ -114,11 +169,27 @@ def main():
         directory = cmake("Tests/Hosted", "hosted", cross=False)
         run("ctest", "--test-dir", directory, "--build-config", args.config,
             "--output-on-failure", "--parallel", args.jobs)
+    elif args.command == "grub-direct":
+        directory = kernel()
+        kernel_manifest = directory / f"artifacts-{args.config}.json"
+        probe_manifest = (
+            build_root / "grub-direct-loader"
+            / f"bootinfo-layout-{args.config}.json"
+        )
+        direct_manifest = ROOT / "build/grub-direct-loader" / f"manifest-{args.config}.json"
+        run(sys.executable, ROOT / "Tools/build-grub-direct.py",
+            "--kernel-manifest", kernel_manifest,
+            "--bootinfo-probe-manifest", probe_manifest,
+            "--output-manifest", direct_manifest)
     elif args.command == "image":
+        if not args.direct_loader_manifest:
+            raise ValueError(
+                "image requires --direct-loader-manifest; run grub-direct explicitly first")
         directory = kernel()
         apps()
         run(sys.executable, ROOT / "Image/assemble.py",
             "--kernel-manifest", directory / f"artifacts-{args.config}.json",
+            "--direct-loader-manifest", args.direct_loader_manifest.resolve(),
             "--apps-manifest", build_root / "apps" / f"artifacts-{args.config}.json",
             "--output", build_root / "image",
             *(value for directory in args.system_files

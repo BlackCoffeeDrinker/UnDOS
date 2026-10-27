@@ -7,6 +7,7 @@
 #include "event_broadcaster.hpp"
 #include "gfx/gfx.hpp"
 #include "initial/boot_device_vfs.hpp"
+#include "initial/root_volume_selector.hpp"
 #include "input/input_manager.hpp"
 #include "module/module_registry.hpp"
 #include "object_manager.hpp"
@@ -235,29 +236,75 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
            kernel::cpu::online_count(),
            HAL_PLATFORM_GetCpuCount());
 
-  // Mount the root fs
-  if (parser.has_key("root")) {
-    // Find the root specified
-    if (const auto root = KE_OB_LookupObjectOfTypeWithRoot<kernel::KDeviceObject>(
-            KE_OB_GetDeviceDirectory(),
-            parser.get("root"))) {
-      // Drop the early-boot BootDeviceVolume mount before mounting the real
-      // root filesystem in its place: "/" is the same mount point both
-      // before and after this swap.
-      if (KE_VFS_Unmount("/")) {
-        HAL_PLATFORM_Panic("Failed to unmount BootDeviceVolume from root\r\n", __FILE__, __LINE__);
-      }
+  kernel::KObjectPtr<kernel::KDeviceObject> rootDeviceObject{};
+  const auto rootSelector = parser.get("root", {});
+  if (!parser.has_key("root")) {
+    HAL_PLATFORM_Panic("No root filesystem specified\r\n", __FILE__, __LINE__);
+  } else if (rootSelector.substr(0, 5) == "UUID=") {
+    uint32_t requestedId = 0;
+    const auto volumeIdText = rootSelector.substr(5);
+    if (!kernel::root_volume_selector::ParseVolumeId(volumeIdText, requestedId)) {
+      KE_Print("Malformed root UUID selector '{}'; expected UUID=XXXX-XXXX", rootSelector);
+      HAL_PLATFORM_Panic("Malformed root UUID selector\r\n", __FILE__, __LINE__);
+    }
 
-      if (KE_VFS_Mount(
-              root->device,
-              parser.get("rootfs", "FAT"),
-              "/",
-              parser.get("rootops", {}))) {
-        HAL_PLATFORM_Panic("Failed to mount root filesystem\r\n", __FILE__, __LINE__);
-      }
+    const auto filesystemName = parser.get("rootfs", "FAT");
+    if (filesystemName != "FAT") {
+      KE_Print("Root UUID selectors require rootfs=FAT, not '{}'", filesystemName);
+      HAL_PLATFORM_Panic("Incompatible filesystem for root UUID selector\r\n", __FILE__, __LINE__);
+    }
+
+    const auto filesystem = KE_OB_FindDirectChildOfType<kernel::KFilesystemObject>(
+        KE_OB_GetFilesystemDirectory(), "FAT");
+    if (!filesystem || !filesystem->ProbeVolumeId) {
+      KE_Print("FAT volume-ID probe is unavailable");
+      HAL_PLATFORM_Panic("Cannot resolve root UUID selector\r\n", __FILE__, __LINE__);
+    }
+
+    const auto result = kernel::root_volume_selector::FindVolumeById(
+        KE_OB_GetDeviceDirectory(), requestedId, filesystem->ProbeVolumeId);
+    switch (result.code) {
+      case kernel::root_volume_selector::ResultCode::Selected:
+        rootDeviceObject = result.deviceObject;
+        KE_Print("Root UUID {:04x}-{:04x} selected volume '{}'",
+                 requestedId >> 16, requestedId & 0xffff, rootDeviceObject->name);
+        break;
+      case kernel::root_volume_selector::ResultCode::NoMatch:
+        KE_Print("No FAT volume matches root UUID {}", volumeIdText);
+        HAL_PLATFORM_Panic("Root UUID volume not found\r\n", __FILE__, __LINE__);
+        break;
+      case kernel::root_volume_selector::ResultCode::Ambiguous:
+        KE_Print("Root UUID {} matches {} FAT volumes", volumeIdText, result.matchCount);
+        HAL_PLATFORM_Panic("Root UUID volume is ambiguous\r\n", __FILE__, __LINE__);
+        break;
+      case kernel::root_volume_selector::ResultCode::ProbeError:
+        KE_Print("Failed to probe volume '{}' for root UUID: {}",
+                 result.failingDeviceName, result.error.message());
+        HAL_PLATFORM_Panic("Root UUID volume probe failed\r\n", __FILE__, __LINE__);
+        break;
     }
   } else {
-    HAL_PLATFORM_Panic("No root filesystem specified\r\n", __FILE__, __LINE__);
+    rootDeviceObject = KE_OB_LookupObjectOfTypeWithRoot<kernel::KDeviceObject>(
+        KE_OB_GetDeviceDirectory(), rootSelector);
+    if (!rootDeviceObject) {
+      KE_Print("Root device '{}' was not found", rootSelector);
+      HAL_PLATFORM_Panic("Root device not found\r\n", __FILE__, __LINE__);
+    }
+  }
+
+  if (rootDeviceObject) {
+    // Keep the early-boot source mounted until root selection has succeeded.
+    if (KE_VFS_Unmount("/")) {
+      HAL_PLATFORM_Panic("Failed to unmount BootDeviceVolume from root\r\n", __FILE__, __LINE__);
+    }
+
+    if (KE_VFS_Mount(
+            rootDeviceObject->device,
+            parser.get("rootfs", "FAT"),
+            "/",
+            parser.get("rootops", {}))) {
+      HAL_PLATFORM_Panic("Failed to mount root filesystem\r\n", __FILE__, __LINE__);
+    }
   }
 
   // The root filesystem is mounted now: rebind LocalMachine from the

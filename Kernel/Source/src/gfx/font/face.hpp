@@ -38,8 +38,6 @@ public:
   uint32_t byteSize() const { return reserved_; }
   // The longest font, prep or glyph program. Execution buffers need one more byte.
   uint32_t maxProgramBytes() const { return maxProgramBytes_; }
-  // Kernel-assigned handle, valid once the registry publishes the face; zero before.
-  uint32_t identity() const { return identity_; }
   // Glyph for a Unicode code point, or glyph 0 (.notdef) when the cmap has no range for it.
   uint32_t glyphFor(uint32_t codepoint) const;
 
@@ -52,7 +50,6 @@ private:
   uint32_t unitsPerEm_{0};
   uint32_t glyphCount_{0};
   uint32_t maxProgramBytes_{0};
-  uint32_t identity_{0};
 };
 
 // Kernel-global table of committed faces. Handles use the layout of

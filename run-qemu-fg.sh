@@ -15,4 +15,4 @@ qemu-system-i386 -machine isapc -cpu 486 -m 32 \
   -vga "${UNDOS_VGA:-cirrus}" \
   -drive file="${IMAGE_DIR}/os.iso",media=cdrom,readonly=on \
   -boot d "$@"
-  
+

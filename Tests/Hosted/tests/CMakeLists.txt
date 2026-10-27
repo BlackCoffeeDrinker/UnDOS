@@ -22,6 +22,7 @@ add_executable(KernelTests
         resource_arbiter_test.cpp
         panic.cpp
         volume_manager_test.cpp
+        root_volume_selector_test.cpp
         fat_short_name_test.cpp
         scheduler_test.cpp
         cpu_context_test.cpp
@@ -44,7 +45,6 @@ add_executable(KernelTests
         ../../../Kernel/Source/src/gfx/font/raster.cpp
         ../../../Kernel/Source/src/gfx/font/face.cpp
         ../../../Kernel/Source/src/gfx/font/realization.cpp
-        ../../../Kernel/Source/src/gfx/font/glyph_cache.cpp
         ../../../Kernel/Source/src/gfx/font/default_font.cpp
         ../../../Kernel/Source/src/gfx/font/text.cpp
         ../../../Kernel/Source/src/gfx/font/font_system.cpp
@@ -67,6 +67,7 @@ add_executable(KernelTests
         kernel_host_stubs.cpp
         kernel_host_vmm_stubs.cpp
         ../../../Kernel/Source/src/object_manager.cpp
+        ../../../Kernel/Source/src/initial/root_volume_selector.cpp
         ../../../Kernel/Source/src/kerror.cpp
         ../../../Kernel/Source/src/syscalls/KErrorToSysReturnCode.cpp
         ../../../Kernel/Source/src/io.cpp
@@ -180,6 +181,24 @@ add_executable(KernelPrintTests konsole_test.cpp)
 target_compile_options(KernelPrintTests PRIVATE -include new)
 target_link_libraries(KernelPrintTests PRIVATE libkcpp KernelHeaders undos_warnings Catch2::Catch2WithMain)
 catch_discover_tests(KernelPrintTests)
+
+add_executable(GrubDirectTests
+        grub_direct_loader_test.cpp
+        ../../../Boot/GrubDirect/core/loader_core.c
+        ../../../Boot/GrubDirect/core/cpu_profile.c
+        ../../../Boot/GrubDirect/core/diagnostics.c)
+target_include_directories(GrubDirectTests PRIVATE ../../../Boot/GrubDirect/core)
+target_link_libraries(GrubDirectTests PRIVATE Catch2::Catch2WithMain)
+add_test(NAME GrubDirectTests COMMAND GrubDirectTests "[boot][grub-direct]")
+
+add_executable(AtomicCmpxchgTests atomic_cmpxchg_test.cpp)
+target_compile_definitions(AtomicCmpxchgTests PRIVATE
+        UNDOS_ATOMIC_CMPXCHG_TEST_HOOKS)
+if (APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+    set_target_properties(AtomicCmpxchgTests PROPERTIES OSX_ARCHITECTURES x86_64)
+endif ()
+add_test(NAME AtomicCmpxchgTests COMMAND AtomicCmpxchgTests)
+set_tests_properties(AtomicCmpxchgTests PROPERTIES TIMEOUT 15)
 
 add_test(NAME process_startup_trampoline
         COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/process_startup_trampoline_test.py

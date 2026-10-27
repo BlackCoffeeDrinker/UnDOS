@@ -63,7 +63,7 @@ TEST_CASE("face registry publishes, resolves and closes", "[font][face]") {
   REQUIRE_FALSE(registry.publish(static_cast<kstd::vector<uint8_t> &&>(junk), validation).has_value());
 }
 
-TEST_CASE("hinted output matches with cache attached and cacheless in forward and reverse order", "[font][face]") {
+TEST_CASE("hinted realizations render in forward and reverse order", "[font][face]") {
   FaceRegistry registry;
   uint32_t validation = 0;
   auto handle = registry.publish(regular(), validation);
@@ -71,22 +71,22 @@ TEST_CASE("hinted output matches with cache attached and cacheless in forward an
   auto face = registry.acquire(*handle);
   REQUIRE(face);
 
-  GlyphCache cache;
-  REQUIRE(cache.valid());
-  auto cached = Realization::create(face, 16, HintPolicy::Hinted, &cache);
-  auto plain = Realization::create(face, 16, HintPolicy::Hinted, nullptr);
-  REQUIRE(cached.has_value());
-  REQUIRE(plain.has_value());
+  auto first = Realization::create(face, 16, HintPolicy::Hinted);
+  auto second = Realization::create(face, 16, HintPolicy::Hinted);
+  REQUIRE(first.has_value());
+  REQUIRE(second.has_value());
 
   const uint32_t count = face->glyphCount();
   const uint32_t limit = count < 400 ? count : 400;
   for (uint32_t pass = 0; pass < 2; ++pass) {
     for (uint32_t i = 0; i < limit; ++i) {
       const uint32_t id = pass ? limit - 1 - i : i;
-      auto a = (*cached)->glyph(id);
-      auto b = (*plain)->glyph(id);
+      auto a = (*first)->glyph(id);
+      auto b = (*second)->glyph(id);
       REQUIRE(a.has_value());
       REQUIRE(b.has_value());
+      REQUIRE((*first)->stats().renders == pass * limit + i + 1);
+      REQUIRE((*second)->stats().renders == pass * limit + i + 1);
       const auto &x = **a;
       const auto &y = **b;
       REQUIRE(x.width == y.width);
@@ -101,77 +101,47 @@ TEST_CASE("hinted output matches with cache attached and cacheless in forward an
       for (size_t k = 0; k < x.bits.size(); ++k) REQUIRE(x.bits[k] == y.bits[k]);
     }
   }
-  REQUIRE((*cached)->stats().cacheHits == 0);
-  REQUIRE((*cached)->stats().renders == limit * 2);
-  const auto cacheStats = cache.stats();
-  REQUIRE(cacheStats.hits == 0);
-  REQUIRE(cacheStats.misses == 0);
-  REQUIRE(cacheStats.entries == 0);
-  REQUIRE(cacheStats.bytes == 0);
+  REQUIRE((*first)->stats().renders == limit * 2);
+  REQUIRE((*second)->stats().renders == limit * 2);
 }
 
-TEST_CASE("glyph cache evicts, purges and pins", "[font][face]") {
+TEST_CASE("unhinted realizations rerender and returned masks stay alive", "[font][face]") {
   FaceRegistry registry;
   uint32_t validation = 0;
   auto handle = registry.publish(regular(), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
-  GlyphCache small(4096, 8);
-  REQUIRE(small.valid());
-  auto realization = Realization::create(face, 16, HintPolicy::Unhinted, &small);
+  auto realization = Realization::create(face, 16, HintPolicy::Unhinted);
   REQUIRE(realization.has_value());
-  auto pinned = (*realization)->glyph(40);
-  REQUIRE(pinned.has_value());
-  const auto pinnedWidth = (*pinned)->width;
-  const auto pinnedHeight = (*pinned)->height;
-  const auto pinnedStride = (*pinned)->stride;
-  const auto pinnedLeft = (*pinned)->left;
-  const auto pinnedTop = (*pinned)->top;
-  const auto pinnedAdvance = (*pinned)->advance;
-  const auto pinnedBits = (*pinned)->bits;
-  const auto rendersBeforeHit = (*realization)->stats().renders;
-  auto same = (*realization)->glyph(40);
-  REQUIRE(same.has_value());
-  REQUIRE(same->get() == pinned->get());
-  REQUIRE((*realization)->stats().renders == rendersBeforeHit);
-  REQUIRE((*realization)->stats().cacheHits == 1);
-  for (uint32_t id = 1; id < 200; ++id) REQUIRE((*realization)->glyph(id).has_value());
-  const auto stats = small.stats();
-  REQUIRE(stats.entries <= 8);
-  REQUIRE(stats.bytes <= 4096);
-  REQUIRE(stats.evictions > 0);
-  REQUIRE((*pinned)->width == pinnedWidth);
-  REQUIRE((*pinned)->height == pinnedHeight);
-  REQUIRE((*pinned)->stride == pinnedStride);
-  REQUIRE((*pinned)->left == pinnedLeft);
-  REQUIRE((*pinned)->top == pinnedTop);
-  REQUIRE((*pinned)->advance == pinnedAdvance);
-  REQUIRE((*pinned)->bits.size() == pinnedBits.size());
-  for (size_t i = 0; i < pinnedBits.size(); ++i) REQUIRE((*pinned)->bits[i] == pinnedBits[i]);
 
-  uint32_t secondValidation = 0;
-  auto secondHandle = registry.publish(regular(), secondValidation);
-  REQUIRE(secondHandle.has_value());
-  auto secondFace = registry.acquire(*secondHandle);
-  auto secondRealization = Realization::create(secondFace, 16, HintPolicy::Unhinted, &small);
-  REQUIRE(secondRealization.has_value());
-  auto otherFaceMask = (*secondRealization)->glyph(40);
-  REQUIRE(otherFaceMask.has_value());
-  REQUIRE(otherFaceMask->get() != pinned->get());
-  REQUIRE(small.find((*secondRealization)->key(40)).get() == otherFaceMask->get());
-  small.purge((*realization)->key(1).face);
-  REQUIRE(small.stats().entries == 1);
-  small.clear();
-  REQUIRE(small.stats().entries == 0);
-  REQUIRE((*pinned)->bits.size() == pinnedBits.size());
-  for (size_t i = 0; i < pinnedBits.size(); ++i) REQUIRE((*pinned)->bits[i] == pinnedBits[i]);
-  REQUIRE((*otherFaceMask)->width > 0);
+  auto first = (*realization)->glyph(40);
+  REQUIRE(first.has_value());
+  const int32_t left = (*first)->left;
+  const int32_t top = (*first)->top;
+  const uint32_t width = (*first)->width;
+  const uint32_t height = (*first)->height;
+  const uint32_t stride = (*first)->stride;
+  const int32_t advance = (*first)->advance;
+  const auto bits = (*first)->bits;
+  REQUIRE((*realization)->stats().renders == 1);
+
+  auto second = (*realization)->glyph(40);
+  REQUIRE(second.has_value());
+  REQUIRE(second->get() != first->get());
+  REQUIRE((*realization)->stats().renders == 2);
+  REQUIRE((*first)->left == left);
+  REQUIRE((*first)->top == top);
+  REQUIRE((*first)->width == width);
+  REQUIRE((*first)->height == height);
+  REQUIRE((*first)->stride == stride);
+  REQUIRE((*first)->advance == advance);
+  REQUIRE((*first)->bits.size() == bits.size());
+  for (size_t i = 0; i < bits.size(); ++i) REQUIRE((*first)->bits[i] == bits[i]);
 }
 
 TEST_CASE("default font publication is atomic", "[font][face]") {
   FaceRegistry registry;
-  GlyphCache cache;
-  DefaultFont defaults(registry, cache);
+  DefaultFont defaults(registry);
   uint32_t validation = 0;
   auto r = registry.publish(regular(), validation);
   auto b = registry.publish(bold(), validation);
@@ -205,12 +175,11 @@ TEST_CASE("default font publication is atomic", "[font][face]") {
 
 TEST_CASE("text layout maps UTF-8 through the cmap and sums advances", "[font][face]") {
   FaceRegistry registry;
-  GlyphCache cache;
   uint32_t validation = 0;
   auto handle = registry.publish(regular(), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
-  auto realization = Realization::create(face, 16, HintPolicy::Hinted, &cache);
+  auto realization = Realization::create(face, 16, HintPolicy::Hinted);
   REQUIRE(realization.has_value());
 
   REQUIRE(face->glyphFor('A') != 0);
@@ -283,8 +252,7 @@ TEST_CASE("shared UTF-8 decoder and bitmap glyph masks preserve the bitmap face"
 TEST_CASE("chrome text uses pinned masks and falls back to the bitmap font", "[font][face]") {
   using kernel::user::UiText;
   FaceRegistry registry;
-  GlyphCache cache;
-  DefaultFont defaults(registry, cache);
+  DefaultFont defaults(registry);
   uint32_t validation = 0;
   auto r = registry.publish(regular(), validation);
   auto b = registry.publish(bold(), validation);
@@ -333,8 +301,7 @@ TEST_CASE("chrome text uses pinned masks and falls back to the bitmap font", "[f
 TEST_CASE("menu text derives rows from regular mask ink and paints pinned pixels", "[font][menu]") {
   using kernel::user::UiText;
   FaceRegistry registry;
-  GlyphCache cache;
-  DefaultFont defaults(registry, cache);
+  DefaultFont defaults(registry);
   uint32_t validation = 0;
   const auto regularFace = registry.publish(regular(), validation);
   const auto boldFace = registry.publish(bold(), validation);

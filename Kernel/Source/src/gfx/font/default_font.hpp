@@ -1,6 +1,6 @@
 #pragma once
 
-#include "glyph_cache.hpp"
+#include "realization.hpp"
 
 namespace kernel::font {
 
@@ -48,8 +48,8 @@ class DefaultFont {
 public:
   using PublishCallback = kstd::error_code (*)(void *, DefaultFont &, UiFont &&);
 
-  // The registry and cache must outlive this object.
-  DefaultFont(FaceRegistry &faces, GlyphCache &cache) : faces_(faces), cache_(cache) {}
+  // The registry must outlive this object.
+  explicit DefaultFont(FaceRegistry &faces) : faces_(faces) {}
 
   // Resolves both face handles, then prepares both realizations (slow: runs
   // font and prep programs) before replacing the configuration in one step.
@@ -73,7 +73,6 @@ private:
   kstd::expected<UiFont, kstd::error_code> prepare(uint32_t regularHandle, uint32_t boldHandle,
                                                    uint32_t ppem);
   FaceRegistry &faces_;
-  GlyphCache &cache_;
   mutable Mutex mutex_;
   UiFont current_;
   // Serializes publishers so slow preparation never runs under mutex_.

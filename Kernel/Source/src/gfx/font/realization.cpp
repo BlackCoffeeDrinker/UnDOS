@@ -1,7 +1,5 @@
 #include "realization.hpp"
 
-#include "glyph_cache.hpp"
-
 namespace kernel::font {
 namespace {
 using undos::font::Section;
@@ -35,18 +33,18 @@ size_t scratch_bytes(const Face &face) {
 } // namespace
 
 kstd::expected<Ref<Realization>, kstd::error_code> Realization::create(const Ref<Face> &face, uint32_t ppem,
-                                                                       HintPolicy policy, GlyphCache *cache) {
+                                                                       HintPolicy policy) {
   if (!face || ppem < undos::font::MinPpem || ppem > undos::font::MaxPpem) return kstd::unexpected(KernelError::InvalidArgument);
   if (scratch_bytes(*face) > MaxRealizationBytes) return kstd::unexpected(KernelError::ResourceLimitExceeded);
-  auto realization = make_ref<Realization>(face, ppem, policy, cache);
+  auto realization = make_ref<Realization>(face, ppem, policy);
   if (!realization) return kstd::unexpected(KernelError::OutOfMemory);
   if (!realization->buffers_ok()) return kstd::unexpected(KernelError::OutOfMemory);
   if (realization->prepared_) return kstd::unexpected(realization->prepared_);
   return realization;
 }
 
-Realization::Realization(const Ref<Face> &face, uint32_t ppem, HintPolicy policy, GlyphCache *cache)
-    : face_(face), ppem_(ppem), policy_(policy), cache_(cache),
+Realization::Realization(const Ref<Face> &face, uint32_t ppem, HintPolicy policy)
+    : face_(face), ppem_(ppem), policy_(policy),
       cvt_(face->view().section(Section::Cvt).size / sizeof(int32_t)),
       storage_(face->limits().maxStorage), stack_(stack_capacity(face->limits())),
       written_(face->limits().maxStorage), boundaries_(face->maxProgramBytes() + size_t{1}),
@@ -90,7 +88,7 @@ void Realization::wire_state() {
 }
 
 RealizationStats Realization::stats() const {
-  return {.cacheHits = hits_.load(), .renders = renders_.load(), .fallbacks = fallbacks_.load()};
+  return {.renders = renders_.load(), .fallbacks = fallbacks_.load()};
 }
 
 kstd::error_code Realization::lineMetrics(undos::font::PixelLineMetrics &metrics) const {
@@ -104,30 +102,8 @@ kstd::error_code Realization::lineMetrics(undos::font::PixelLineMetrics &metrics
 }
 
 kstd::expected<Ref<GlyphMask>, kstd::error_code> Realization::glyph(uint32_t glyphId) {
-  if (policy_ == HintPolicy::Hinted) {
-    kstd::unique_lock lock(mutex_);
-    return render(glyphId);
-  }
-
-  const GlyphKey cacheKey = key(glyphId);
-  if (cache_) {
-    if (auto hit = cache_->find(cacheKey)) {
-      hits_.fetch_add(1);
-      return hit;
-    }
-  }
   kstd::unique_lock lock(mutex_);
-  // Another caller may have rendered this glyph while this one waited.
-  if (cache_) {
-    if (auto hit = cache_->find(cacheKey)) {
-      hits_.fetch_add(1);
-      return hit;
-    }
-  }
-  auto mask = render(glyphId);
-  if (!mask) return mask;
-  if (cache_) return cache_->insert(cacheKey, *mask);
-  return mask;
+  return render(glyphId);
 }
 
 kstd::expected<Ref<GlyphMask>, kstd::error_code> Realization::render(uint32_t glyphId) {

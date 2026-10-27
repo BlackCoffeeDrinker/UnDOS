@@ -4,13 +4,12 @@
 
 namespace kernel::font {
 
-// The kernel's font state: committed faces, the glyph cache and the default
-// font. The kernel has no atexit, so it is heap-allocated on first use and
+// The kernel's font state: committed faces and the default font. The kernel
+// has no atexit, so it is heap-allocated on first use and
 // never destroyed, which lets it outlive every process table holding handles.
 struct FontSystem {
   FaceRegistry faces;
-  GlyphCache cache;
-  DefaultFont defaults{faces, cache};
+  DefaultFont defaults{faces};
 };
 
 // Creates the system on first call. May allocate and block: never call it

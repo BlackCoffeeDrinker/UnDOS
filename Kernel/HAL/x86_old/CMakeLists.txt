@@ -1,6 +1,3 @@
-## Include the actual boot loader
-add_subdirectory(boot)
-
 set_source_files_properties(
         intr.cpp
         PROPERTIES COMPILE_FLAGS "-mgeneral-regs-only -mno-80387 -mno-mmx -mno-sse -mno-sse2"
@@ -32,4 +29,3 @@ add_hal(hal_x86_old
         bootdev.cpp
         smp_up.cpp
 )
-

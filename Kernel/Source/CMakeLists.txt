@@ -63,6 +63,8 @@ add_executable(kernel
         src/user_process.cpp
         src/initial/boot_device_vfs.cpp
         src/initial/boot_device_vfs.hpp
+        src/initial/root_volume_selector.cpp
+        src/initial/root_volume_selector.hpp
         src/initial/mini_fat16.cpp
         src/initial/mini_fat16.hpp
         src/elf_loader.cpp
@@ -93,7 +95,6 @@ add_executable(kernel
         src/gfx/font/raster.cpp
         src/gfx/font/face.cpp
         src/gfx/font/realization.cpp
-        src/gfx/font/glyph_cache.cpp
         src/gfx/font/default_font.cpp
         src/gfx/font/text.cpp
         src/gfx/font/font_system.cpp

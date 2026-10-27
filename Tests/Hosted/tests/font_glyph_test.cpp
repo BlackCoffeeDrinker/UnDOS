@@ -2,7 +2,6 @@
 #include "font_corpus.hpp"
 #include "gfx/font/face.hpp"
 #include "gfx/font/glyph.hpp"
-#include "gfx/font/glyph_cache.hpp"
 #include "gfx/font/raster.hpp"
 #include "gfx/font/realization.hpp"
 #include <catch2/catch_test_macros.hpp>
@@ -365,13 +364,13 @@ TEST_CASE("glyph loader falls back to unhinted points when a program fails", "[f
   Rig rig(build({moved, failing, moved}), 64);
   REQUIRE(rig.loader->prepare(16) == kstd::error_code{});
   REQUIRE(rig.loader->hinting());
-  glyph::Outline plain, outline;
-  REQUIRE(rig.loader->load(1, false, plain) == glyph::Error::None);
-  REQUIRE(plain.points[0].x == 0);
+  glyph::Outline reference, outline;
+  REQUIRE(rig.loader->load(1, false, reference) == glyph::Error::None);
+  REQUIRE(reference.points[0].x == 0);
   kstd::vector<vm::Point> plainPoints;
   kstd::vector<uint8_t> plainOnCurve;
-  for (const auto point : plain.points) plainPoints.push_back(point);
-  for (const auto onCurve : plain.onCurve) plainOnCurve.push_back(onCurve);
+  for (const auto point : reference.points) plainPoints.push_back(point);
+  for (const auto onCurve : reference.onCurve) plainOnCurve.push_back(onCurve);
   REQUIRE(rig.loader->load(1, true, outline) == glyph::Error::None);
   REQUIRE(outline.fallbacks == 1);
   REQUIRE_FALSE(outline.hinted);
@@ -386,7 +385,7 @@ TEST_CASE("glyph loader falls back to unhinted points when a program fails", "[f
   REQUIRE(outline.points[0].x == 100);
 }
 
-TEST_CASE("realization preserves fpgm prep and hinted state transitions with a shared cache", "[font][glyph][face]") {
+TEST_CASE("realization preserves fpgm prep and reruns hinted state transitions on repeated glyph requests", "[font][glyph][face]") {
   Def writer = square();
   writer.program = state_writer_program();
   Def reader = square();
@@ -407,15 +406,14 @@ TEST_CASE("realization preserves fpgm prep and hinted state transitions with a s
   auto face = registry.acquire(*handle);
   REQUIRE(face);
 
-  GlyphCache cache;
-  auto cached = Realization::create(face, 64, HintPolicy::Hinted, &cache);
-  auto plain = Realization::create(face, 64, HintPolicy::Hinted);
-  REQUIRE(cached.has_value());
-  REQUIRE(plain.has_value());
-  REQUIRE((*cached)->hinting());
-  REQUIRE((*plain)->hinting());
+  auto realization = Realization::create(face, 64, HintPolicy::Hinted);
+  auto reference = Realization::create(face, 64, HintPolicy::Hinted);
+  REQUIRE(realization.has_value());
+  REQUIRE(reference.has_value());
+  REQUIRE((*realization)->hinting());
+  REQUIRE((*reference)->hinting());
 
-  const auto &initial = RealizationTestAccess::state(**cached);
+  const auto &initial = RealizationTestAccess::state(**realization);
   REQUIRE(initial.ready);
   REQUIRE(initial.storage.data()[0] == 11); // fpgm function called by prep.
   REQUIRE(initial.storage.data()[1] == 11); // prep read the fpgm write.
@@ -423,69 +421,72 @@ TEST_CASE("realization preserves fpgm prep and hinted state transitions with a s
   REQUIRE(initial.twilight.current.data()[0].x == 0);
   REQUIRE(initial.storageWritten.data()[0] == 1);
 
-  auto sentinel = make_ref<GlyphMask>();
-  REQUIRE(sentinel);
-  sentinel->width = 0xdead;
-  sentinel->height = 1;
-  sentinel->stride = 1;
-  sentinel->bits.push_back(0xa5);
-  const GlyphKey sentinelKey = (*cached)->key(0);
-  REQUIRE(cache.insert(sentinelKey, sentinel).get() == sentinel.get());
-  const auto beforeCache = cache.stats();
-
   const uint32_t requests[] = {0, 1, 2, 0};
   uint32_t writes = 0;
   int32_t lastTwilight = 0;
   int32_t readTwilight = 0;
   for (const uint32_t id : requests) {
-    auto actual = (*cached)->glyph(id);
-    const auto &plainBefore = RealizationTestAccess::state(**plain);
-    REQUIRE(plainBefore.storage.data()[0] == 11 + static_cast<int32_t>(writes));
-    REQUIRE(plainBefore.cvt.data()[0] == 64 + static_cast<int32_t>(writes));
-    auto expected = (*plain)->glyph(id);
+    const uint32_t rendersBefore = (*realization)->stats().renders;
+    auto actual = (*realization)->glyph(id);
+    const auto &comparisonBefore = RealizationTestAccess::state(**reference);
+    REQUIRE(comparisonBefore.storage.data()[0] == 11 + static_cast<int32_t>(writes));
+    REQUIRE(comparisonBefore.cvt.data()[0] == 64 + static_cast<int32_t>(writes));
+    auto expected = (*reference)->glyph(id);
     REQUIRE(actual.has_value());
     REQUIRE(expected.has_value());
+    REQUIRE((*realization)->stats().renders == rendersBefore + 1);
     REQUIRE(same_mask(**actual, **expected));
     REQUIRE((*actual)->hinted);
     if (id != 1) {
       ++writes;
       lastTwilight = static_cast<int32_t>(64 + writes);
     } else readTwilight = lastTwilight;
-    const auto &cachedState = RealizationTestAccess::state(**cached);
-    const auto &plainState = RealizationTestAccess::state(**plain);
+    const auto &realizationState = RealizationTestAccess::state(**realization);
+    const auto &comparisonState = RealizationTestAccess::state(**reference);
     const int32_t expectedStorage = 11 + static_cast<int32_t>(writes);
     const int32_t expectedCvt = 64 + static_cast<int32_t>(writes);
-    REQUIRE(cachedState.storage.data()[0] == expectedStorage);
-    REQUIRE(plainState.storage.data()[0] == expectedStorage);
-    REQUIRE(cachedState.storage.data()[1] == 11);
-    REQUIRE(plainState.storage.data()[1] == 11);
-    REQUIRE(cachedState.storage.data()[2] == readTwilight);
-    REQUIRE(plainState.storage.data()[2] == readTwilight);
-    REQUIRE(cachedState.cvt.data()[0] == expectedCvt);
-    REQUIRE(plainState.cvt.data()[0] == expectedCvt);
-    REQUIRE(cachedState.twilight.original.data()[0].x == lastTwilight);
-    REQUIRE(cachedState.twilight.current.data()[0].x == lastTwilight);
-    REQUIRE(plainState.twilight.original.data()[0].x == lastTwilight);
-    REQUIRE(plainState.twilight.current.data()[0].x == lastTwilight);
-    REQUIRE(cachedState.twilight.touched.data()[0] == 1);
-    REQUIRE(plainState.twilight.touched.data()[0] == 1);
+    REQUIRE(realizationState.storage.data()[0] == expectedStorage);
+    REQUIRE(comparisonState.storage.data()[0] == expectedStorage);
+    REQUIRE(realizationState.storage.data()[1] == 11);
+    REQUIRE(comparisonState.storage.data()[1] == 11);
+    REQUIRE(realizationState.storage.data()[2] == readTwilight);
+    REQUIRE(comparisonState.storage.data()[2] == readTwilight);
+    REQUIRE(realizationState.cvt.data()[0] == expectedCvt);
+    REQUIRE(comparisonState.cvt.data()[0] == expectedCvt);
+    REQUIRE(realizationState.twilight.original.data()[0].x == lastTwilight);
+    REQUIRE(realizationState.twilight.current.data()[0].x == lastTwilight);
+    REQUIRE(comparisonState.twilight.original.data()[0].x == lastTwilight);
+    REQUIRE(comparisonState.twilight.current.data()[0].x == lastTwilight);
+    REQUIRE(realizationState.twilight.touched.data()[0] == 1);
+    REQUIRE(comparisonState.twilight.touched.data()[0] == 1);
   }
 
-  auto rendered = (*cached)->glyph(0);
+  auto rendered = (*realization)->glyph(0);
   REQUIRE(rendered.has_value());
-  REQUIRE(rendered->get() != sentinel.get());
-  REQUIRE((*rendered)->width != sentinel->width);
-  REQUIRE((*cached)->stats().cacheHits == 0);
-  REQUIRE((*cached)->stats().renders == 5);
-  auto invalidGlyph = (*cached)->glyph(4);
+  REQUIRE((*realization)->stats().renders == 5);
+  const auto &repeatedState = RealizationTestAccess::state(**realization);
+  REQUIRE(repeatedState.storage.data()[0] == 15);
+  REQUIRE(repeatedState.cvt.data()[0] == 68);
+  REQUIRE(repeatedState.twilight.current.data()[0].x == 68);
+  auto invalidGlyph = (*realization)->glyph(4);
   REQUIRE_FALSE(invalidGlyph.has_value());
   REQUIRE(invalidGlyph.error() == glyph::Error::InvalidGlyph);
-  REQUIRE((*cached)->stats().renders == 5);
-  const auto afterCache = cache.stats();
-  REQUIRE(afterCache.hits == beforeCache.hits);
-  REQUIRE(afterCache.misses == beforeCache.misses);
-  REQUIRE(afterCache.entries == beforeCache.entries);
-  REQUIRE(afterCache.bytes == beforeCache.bytes);
+  REQUIRE((*realization)->stats().renders == 5);
+
+  auto unhinted = Realization::create(face, 64, HintPolicy::Unhinted);
+  REQUIRE(unhinted.has_value());
+  auto unhintedFirst = (*unhinted)->glyph(0);
+  REQUIRE(unhintedFirst.has_value());
+  REQUIRE_FALSE((*unhintedFirst)->hinted);
+  REQUIRE((*unhinted)->stats().renders == 1);
+  auto unhintedSecond = (*unhinted)->glyph(0);
+  REQUIRE(unhintedSecond.has_value());
+  REQUIRE_FALSE((*unhintedSecond)->hinted);
+  REQUIRE(unhintedSecond->get() != unhintedFirst->get());
+  REQUIRE((*unhinted)->stats().renders == 2);
+  const auto &unhintedState = RealizationTestAccess::state(**unhinted);
+  REQUIRE(unhintedState.storage.data()[0] == 11);
+  REQUIRE(unhintedState.cvt.data()[0] == 64);
 }
 
 TEST_CASE("realization shares state across ordered composite components", "[font][glyph][face]") {
@@ -541,29 +542,25 @@ TEST_CASE("component failures retain per-program fallback and dirty rebuild boun
                                        stateful_prep_program(), {0}, 3, 1, 1), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
-  GlyphCache cache;
-  auto realization = Realization::create(face, 64, HintPolicy::Hinted, &cache);
-  auto uncached = Realization::create(face, 64, HintPolicy::Hinted);
+  auto realization = Realization::create(face, 64, HintPolicy::Hinted);
+  auto comparison = Realization::create(face, 64, HintPolicy::Hinted);
   REQUIRE(realization.has_value());
-  REQUIRE(uncached.has_value());
+  REQUIRE(comparison.has_value());
   auto mask = (*realization)->glyph(3);
-  auto uncachedMask = (*uncached)->glyph(3);
+  auto comparisonMask = (*comparison)->glyph(3);
   REQUIRE(mask.has_value());
-  REQUIRE(uncachedMask.has_value());
-  REQUIRE(same_mask(**mask, **uncachedMask));
+  REQUIRE(comparisonMask.has_value());
+  REQUIRE(same_mask(**mask, **comparisonMask));
   REQUIRE((*mask)->hinted);
   REQUIRE((*mask)->fallbacks == 1);
   const auto &state = RealizationTestAccess::state(**realization);
-  const auto &uncachedState = RealizationTestAccess::state(**uncached);
+  const auto &comparisonState = RealizationTestAccess::state(**comparison);
   REQUIRE(state.ready);
   REQUIRE(state.storage.data()[0] == 12); // The third component ran after a full rebuild.
   REQUIRE(state.cvt.data()[0] == 65);
-  REQUIRE(uncachedState.ready);
-  REQUIRE(uncachedState.storage.data()[0] == state.storage.data()[0]);
-  REQUIRE(uncachedState.cvt.data()[0] == state.cvt.data()[0]);
-  REQUIRE(cache.stats().hits == 0);
-  REQUIRE(cache.stats().misses == 0);
-  REQUIRE(cache.stats().entries == 0);
+  REQUIRE(comparisonState.ready);
+  REQUIRE(comparisonState.storage.data()[0] == state.storage.data()[0]);
+  REQUIRE(comparisonState.cvt.data()[0] == state.cvt.data()[0]);
 
   Rig rig(build({writer, failing, lastWriter, composite}, stateful_font_program(),
                 stateful_prep_program(), {0}, 3, 1, 1), 64);
@@ -649,34 +646,30 @@ TEST_CASE("simple glyph failure rebuilds before a later realization program", "[
                                        stateful_prep_program(), {0}, 3, 1, 1), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
-  GlyphCache cache;
-  auto realization = Realization::create(face, 64, HintPolicy::Hinted, &cache);
-  auto uncached = Realization::create(face, 64, HintPolicy::Hinted);
+  auto realization = Realization::create(face, 64, HintPolicy::Hinted);
+  auto comparison = Realization::create(face, 64, HintPolicy::Hinted);
   REQUIRE(realization.has_value());
-  REQUIRE(uncached.has_value());
+  REQUIRE(comparison.has_value());
 
   auto failed = (*realization)->glyph(1);
-  auto uncachedFailed = (*uncached)->glyph(1);
+  auto comparisonFailed = (*comparison)->glyph(1);
   REQUIRE(failed.has_value());
-  REQUIRE(uncachedFailed.has_value());
-  REQUIRE(same_mask(**failed, **uncachedFailed));
+  REQUIRE(comparisonFailed.has_value());
+  REQUIRE(same_mask(**failed, **comparisonFailed));
   REQUIRE_FALSE((*failed)->hinted);
   REQUIRE((*failed)->fallbacks == 1);
   REQUIRE_FALSE(RealizationTestAccess::state(**realization).ready);
 
   auto recovered = (*realization)->glyph(0);
-  auto uncachedRecovered = (*uncached)->glyph(0);
+  auto comparisonRecovered = (*comparison)->glyph(0);
   REQUIRE(recovered.has_value());
-  REQUIRE(uncachedRecovered.has_value());
-  REQUIRE(same_mask(**recovered, **uncachedRecovered));
+  REQUIRE(comparisonRecovered.has_value());
+  REQUIRE(same_mask(**recovered, **comparisonRecovered));
   REQUIRE((*recovered)->hinted);
   REQUIRE((*recovered)->fallbacks == 0);
   REQUIRE(RealizationTestAccess::state(**realization).ready);
   REQUIRE(RealizationTestAccess::state(**realization).storage.data()[0] == 12);
-  REQUIRE(RealizationTestAccess::state(**uncached).storage.data()[0] == 12);
-  REQUIRE(cache.stats().hits == 0);
-  REQUIRE(cache.stats().misses == 0);
-  REQUIRE(cache.stats().entries == 0);
+  REQUIRE(RealizationTestAccess::state(**comparison).storage.data()[0] == 12);
 }
 
 TEST_CASE("parent failure restores assembled child output and rebuilds before the next program", "[font][glyph][face]") {
@@ -699,33 +692,29 @@ TEST_CASE("parent failure restores assembled child output and rebuilds before th
                                        stateful_prep_program(), {0}, 3, 1, 1), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
-  GlyphCache cache;
-  auto hinted = Realization::create(face, 64, HintPolicy::Hinted, &cache);
-  auto uncachedHinted = Realization::create(face, 64, HintPolicy::Hinted);
+  auto hinted = Realization::create(face, 64, HintPolicy::Hinted);
+  auto comparisonHinted = Realization::create(face, 64, HintPolicy::Hinted);
   auto assembled = Realization::create(face, 64, HintPolicy::Hinted);
   REQUIRE(hinted.has_value());
-  REQUIRE(uncachedHinted.has_value());
+  REQUIRE(comparisonHinted.has_value());
   REQUIRE(assembled.has_value());
 
   auto parentError = (*hinted)->glyph(1);
-  auto uncachedParentError = (*uncachedHinted)->glyph(1);
+  auto comparisonParentError = (*comparisonHinted)->glyph(1);
   auto assembledChildren = (*assembled)->glyph(2);
   REQUIRE(parentError.has_value());
-  REQUIRE(uncachedParentError.has_value());
+  REQUIRE(comparisonParentError.has_value());
   REQUIRE(assembledChildren.has_value());
   REQUIRE((*parentError)->hinted);
   REQUIRE((*parentError)->fallbacks == 1);
-  REQUIRE(same_mask(**parentError, **uncachedParentError));
+  REQUIRE(same_mask(**parentError, **comparisonParentError));
   REQUIRE(same_bitmap(**parentError, **assembledChildren));
   const auto &failedState = RealizationTestAccess::state(**hinted);
-  const auto &uncachedFailedState = RealizationTestAccess::state(**uncachedHinted);
+  const auto &comparisonFailedState = RealizationTestAccess::state(**comparisonHinted);
   REQUIRE_FALSE(failedState.ready);
   REQUIRE(failedState.storage.data()[0] == 13);
-  REQUIRE_FALSE(uncachedFailedState.ready);
-  REQUIRE(uncachedFailedState.storage.data()[0] == failedState.storage.data()[0]);
-  REQUIRE(cache.stats().hits == 0);
-  REQUIRE(cache.stats().misses == 0);
-  REQUIRE(cache.stats().entries == 0);
+  REQUIRE_FALSE(comparisonFailedState.ready);
+  REQUIRE(comparisonFailedState.storage.data()[0] == failedState.storage.data()[0]);
 
   auto next = (*hinted)->glyph(0);
   REQUIRE(next.has_value());
@@ -795,8 +784,7 @@ TEST_CASE("raster errors retain completed hinted state without publishing a mask
                                        stateful_prep_program(), {0}, 3, 1, 1), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
-  GlyphCache cache;
-  auto realization = Realization::create(face, 256, HintPolicy::Hinted, &cache);
+  auto realization = Realization::create(face, 256, HintPolicy::Hinted);
   REQUIRE(realization.has_value());
   auto error = (*realization)->glyph(0);
   REQUIRE_FALSE(error.has_value());
@@ -806,9 +794,6 @@ TEST_CASE("raster errors retain completed hinted state without publishing a mask
   REQUIRE(afterFailure.storage.data()[0] == 12);
   REQUIRE(afterFailure.cvt.data()[0] == 65);
   REQUIRE((*realization)->stats().renders == 0);
-  REQUIRE(cache.stats().hits == 0);
-  REQUIRE(cache.stats().misses == 0);
-  REQUIRE(cache.stats().entries == 0);
 }
 
 TEST_CASE("glyph loader loads every corpus glyph", "[font][glyph][fontloader]") {

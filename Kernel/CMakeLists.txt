@@ -14,6 +14,10 @@ add_subdirectory(Source)
 add_subdirectory(Drivers)
 add_subdirectory(Subsystems)
 add_subdirectory(Loader)
+add_library(bootinfo_layout_probe OBJECT EXCLUDE_FROM_ALL
+    ../Boot/GrubDirect/bootinfo_layout_probe.cpp)
+target_link_libraries(bootinfo_layout_probe PRIVATE
+    KernelHeaders libkcpp undos_warnings undos_options)
 target_compile_options(native_elf_loader PRIVATE -march=i386)
 target_sources(native_elf_loader PRIVATE "${UNDOS_ROOT}/ABI/abi_note.S")
 target_link_options(native_elf_loader PRIVATE
@@ -23,7 +27,7 @@ target_link_options(native_elf_loader PRIVATE
 set(artifacts "")
 foreach(entry IN ITEMS
     "kernel|boot/kernel.elf" "hal_x86_old|boot/hal_x86_old.elf"
-    "boot_x86_old|boot/undos-boot" "native_elf_loader|System/ELoader.elf"
+    "native_elf_loader|System/ELoader.elf"
     "bus_isa|System/Drivers/bus_isa.elf" "disk_ata|System/Drivers/disk_ata.elf"
     "volmgr|System/Drivers/volmgr.elf" "fs_fat|System/Drivers/fs_fat.elf"
     "gfx_vga|System/Drivers/gfx_vga.elf" "gfx_cirrus|System/Drivers/gfxcirr.elf"

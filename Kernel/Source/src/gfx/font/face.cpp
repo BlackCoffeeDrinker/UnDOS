@@ -86,7 +86,6 @@ kstd::expected<uint32_t, kstd::error_code> FaceRegistry::publish(kstd::vector<ui
     auto &slot = slots_[index];
     if (slot.face || !slot.generation) continue;
     const uint32_t handle = (slot.generation << HandleSlotBits) | (index + 1);
-    (*face)->identity_ = handle;
     slot.face = *face;
     return handle;
   }

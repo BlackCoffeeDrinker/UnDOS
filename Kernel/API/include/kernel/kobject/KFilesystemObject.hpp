@@ -15,6 +15,9 @@ struct KVFSNode;
 struct KVFSDirectoryEntry;
 enum class VFSFileOperation : uint32_t;
 
+using KVolumeIdProbeResult = kstd::expected<bool, kstd::error_code>;
+using KVolumeIdProbe = cfunc<KVolumeIdProbeResult(const KDevicePtr<KDevice> &, uint32_t &)>;
+
 struct KFilesystemObject : KObjectT<KFilesystemObject, 1, TYPE_FILE_SYSTEM> {
   using KObjectT::KObjectT;
   KObjectPtr<KDriverObject> driver;
@@ -46,6 +49,10 @@ struct KFilesystemObject : KObjectT<KFilesystemObject, 1, TYPE_FILE_SYSTEM> {
   cfunc<kstd::expected<uint64_t, kstd::error_code>(const KObjectPtr<KVolumeMountObject> &, const KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &out)> ReadHandle;
   // Write data at offset, return the number of bytes written (may be short).
   cfunc<kstd::expected<uint64_t, kstd::error_code>(const KObjectPtr<KVolumeMountObject> &, const KVFSNode &, uint64_t offset, const kstd::span<const uint8_t> &data)> WriteHandle;
+
+  // Returns true and writes the recognized volume ID. Returns false for a
+  // non-candidate, or an error when the probe cannot complete.
+  KVolumeIdProbe ProbeVolumeId;
 };
 
 template<>

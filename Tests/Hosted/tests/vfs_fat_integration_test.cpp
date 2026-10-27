@@ -97,9 +97,18 @@ struct ShortReadControl {
 };
 
 ShortReadControl g_shortRead;
+struct ReadErrorControl {
+  bool enabled{false};
+  uint64_t offset{0};
+};
+ReadErrorControl g_readError;
 
 kstd::error_code ShortableDiskRead(const kernel::KDevicePtr<kernel::KDevice> &device,
     uint64_t offset, kstd::span<uint8_t> buffer, size_t &transferred) {
+  if (g_readError.enabled && offset == g_readError.offset) {
+    transferred = 0;
+    return kernel::KernelError::DeviceError;
+  }
   const auto status = diskfake::Read(device, offset, buffer, transferred);
   if (!status && g_shortRead.enabled && offset == g_shortRead.offset &&
       buffer.size() == g_shortRead.requestSize && g_shortRead.reportedBytes < transferred)
@@ -162,6 +171,10 @@ kstd::array<uint8_t, kDiskSectors * kSectorSize> BuildFat12DiskImage() {
   PutLe16(bpb.subspan(19), static_cast<uint16_t>(kFat12Sectors));// totalSectors16
   bpb[21] = 0xF8;                                                    // media
   PutLe16(bpb.subspan(22), 1);                                       // fatSize16
+  bpb[38] = 0x29;
+  PutLe32(bpb.subspan(39), 0x12345678);
+  bpb[510] = 0x55;
+  bpb[511] = 0xaa;
 
   return disk;
 }
@@ -342,9 +355,15 @@ FatImageLayout SeedFatImage(diskfake::IBackingStore &backing, TestFatType type,
   if (type == TestFatType::Fat32) {
     PutLe32(kstd::span<uint8_t>(boot.data() + 36, 4), layout.fatSectors);
     PutLe32(kstd::span<uint8_t>(boot.data() + 44, 4), 2);
+    boot[66] = 0x29;
+    PutLe32(kstd::span<uint8_t>(boot.data() + 67, 4), 0x12345678);
   } else {
     PutLe16(kstd::span<uint8_t>(boot.data() + 22, 2), static_cast<uint16_t>(layout.fatSectors));
+    boot[38] = 0x29;
+    PutLe32(kstd::span<uint8_t>(boot.data() + 39, 4), 0x12345678);
   }
+  boot[510] = 0x55;
+  boot[511] = 0xaa;
   REQUIRE_FALSE(backing.WriteAt(partitionBase, kstd::span<const uint8_t>(boot.data(), boot.size())));
 
   std::vector<uint8_t> fat(static_cast<size_t>(layout.fatSectors) * kSectorSize);
@@ -1380,6 +1399,8 @@ TEST_CASE("End-to-end disk_fake -> volmgr -> fs_fat -> VFS mount", "[vfs][fat][i
     PutLe32(kstd::span(bpb).subspan(44), 2);
     PutLe16(kstd::span(bpb).subspan(48), 1);
     PutLe16(kstd::span(bpb).subspan(50), 6);
+    bpb[510] = 0x55;
+    bpb[511] = 0xaa;
     REQUIRE_FALSE(backing.WriteAt(0, bpb));
     kstd::array<uint8_t, 512> fat{};
     PutLe32(kstd::span(fat), 0x0ffffff8);
@@ -1494,6 +1515,149 @@ TEST_CASE("End-to-end disk_fake -> volmgr -> fs_fat -> VFS mount", "[vfs][fat][i
   // one (the singleton VFS directory persists for the whole process).
   if (auto mount = KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(KE_OB_GetVFSDirectory(), "/")) {
     KE_OB_RemoveObject(KE_OB_GetVFSDirectory(), mount);
+  }
+
+  std::remove(imagePath.data());
+}
+
+TEST_CASE("FAT volume-ID probe validates supported VBRs and preserves I/O errors", "[fat-volume-id]") {
+  EnsureObjectManagerInitialized();
+  g_shortRead = {};
+  g_readError = {};
+
+  const auto imagePath = MakeTempImagePath();
+  diskfake::FileBackingStore backing(imagePath);
+  REQUIRE(backing.IsOpen());
+  REQUIRE_FALSE(backing.Resize(static_cast<size_t>(kPartitionStartLba + kPartitionSectors) * kSectorSize));
+  const auto seed = BuildFat12DiskImage();
+  REQUIRE_FALSE(backing.WriteAt(0, kstd::span<const uint8_t>(seed)));
+
+  auto diskDriver = kernel::CreateKObject<kernel::KDriverObject>("FatVolumeIdDiskDriver").value_or(nullptr);
+  REQUIRE(diskDriver != nullptr);
+  diskDriver->Read = ShortableDiskRead;
+  diskDriver->Write = diskfake::Write;
+  static unsigned fixtureNumber = 0;
+  kstd::static_string<64> diskName;
+  kstd::format(diskName, "FatVolumeIdDisk{}", ++fixtureNumber);
+  auto diskDevice = KE_IO_CreateDeviceWithContext<diskfake::FakeDiskContext>(
+      diskDriver, diskName, kernel::device_type::Disk).value_or(nullptr);
+  REQUIRE(diskDevice != nullptr);
+  diskDevice->deviceExtension.as<diskfake::FakeDiskContext>()->backing = &backing;
+
+  auto volumeManager = LoadDriver(VOLMGR_DRIVER_PATH, "FatVolumeIdVolMgrDriver");
+  REQUIRE(volumeManager->AddDevice.valid());
+  REQUIRE(volumeManager->StartDevice.valid());
+  REQUIRE_FALSE(volumeManager->AddDevice(volumeManager, diskDevice));
+  g_lastReportedPdo = nullptr;
+  volumeManager->StartDevice(diskDevice);
+  const auto volume = g_lastReportedPdo;
+  REQUIRE(volume != nullptr);
+  REQUIRE(volume->deviceType == kernel::device_type::Volume);
+
+  auto filesystem = KE_OB_FindDirectChildOfType<kernel::KFilesystemObject>(
+      KE_OB_GetFilesystemDirectory(), "FAT");
+  if (!filesystem || !filesystem->ProbeVolumeId) {
+    LoadDriver(FS_FAT_DRIVER_PATH, "FatVolumeIdFilesystemDriver");
+    filesystem = KE_OB_FindDirectChildOfType<kernel::KFilesystemObject>(
+        KE_OB_GetFilesystemDirectory(), "FAT");
+  }
+  REQUIRE(filesystem != nullptr);
+  REQUIRE(filesystem->ProbeVolumeId);
+
+  const uint64_t partitionBase = static_cast<uint64_t>(kPartitionStartLba) * kSectorSize;
+  for (const auto type: {TestFatType::Fat12, TestFatType::Fat16, TestFatType::Fat32}) {
+    SeedFatImage(backing, type, 1);
+    uint32_t serial = 0;
+    const auto result = filesystem->ProbeVolumeId(volume, serial);
+    REQUIRE(result);
+    REQUIRE(*result);
+    REQUIRE(serial == 0x12345678);
+  }
+
+  SECTION("Non-candidates include invalid signatures, missing serials, and ExFAT") {
+    SeedFatImage(backing, TestFatType::Fat16, 1);
+    kstd::array<uint8_t, kSectorSize> boot{};
+    REQUIRE_FALSE(backing.ReadAt(partitionBase, kstd::span<uint8_t>(boot)));
+    boot[38] = 0;
+    REQUIRE_FALSE(backing.WriteAt(partitionBase, kstd::span<const uint8_t>(boot)));
+    uint32_t serial = 0;
+    auto result = filesystem->ProbeVolumeId(volume, serial);
+    REQUIRE(result);
+    REQUIRE_FALSE(*result);
+
+    SeedFatImage(backing, TestFatType::Fat12, 1);
+    REQUIRE_FALSE(backing.ReadAt(partitionBase, kstd::span<uint8_t>(boot)));
+    boot[510] = 0;
+    REQUIRE_FALSE(backing.WriteAt(partitionBase, kstd::span<const uint8_t>(boot)));
+    result = filesystem->ProbeVolumeId(volume, serial);
+    REQUIRE(result);
+    REQUIRE_FALSE(*result);
+
+    for (auto &byte: boot) byte = 0;
+    for (size_t i = 0; i < 8; ++i) boot[3 + i] = static_cast<uint8_t>("EXFAT   "[i]);
+    boot[108] = 9;
+    boot[109] = 0;
+    boot[510] = 0x55;
+    boot[511] = 0xaa;
+    REQUIRE_FALSE(backing.WriteAt(partitionBase, kstd::span<const uint8_t>(boot)));
+    result = filesystem->ProbeVolumeId(volume, serial);
+    REQUIRE(result);
+    REQUIRE_FALSE(*result);
+  }
+
+  SECTION("Invalid BPB layouts are non-candidates") {
+    auto rejectsBpbValue = [&](TestFatType type, size_t offset, size_t width, uint32_t value) {
+      SeedFatImage(backing, type, 1);
+      kstd::array<uint8_t, kSectorSize> boot{};
+      REQUIRE_FALSE(backing.ReadAt(partitionBase, kstd::span<uint8_t>(boot)));
+      if (width == 1) {
+        boot[offset] = static_cast<uint8_t>(value);
+      } else if (width == 2) {
+        PutLe16(kstd::span<uint8_t>(boot).subspan(offset), static_cast<uint16_t>(value));
+      } else {
+        PutLe32(kstd::span<uint8_t>(boot).subspan(offset), value);
+      }
+      REQUIRE_FALSE(backing.WriteAt(partitionBase, kstd::span<const uint8_t>(boot)));
+      uint32_t serial = 0;
+      const auto result = filesystem->ProbeVolumeId(volume, serial);
+      INFO("BPB offset " << offset << ", width " << width << ", value " << value);
+      REQUIRE(result);
+      REQUIRE_FALSE(*result);
+    };
+
+    rejectsBpbValue(TestFatType::Fat12, 11, 2, 256); // sector size below minimum
+    rejectsBpbValue(TestFatType::Fat12, 11, 2, 1000); // sector size is not a power of two
+    rejectsBpbValue(TestFatType::Fat12, 11, 2, 8192); // sector size above maximum
+    rejectsBpbValue(TestFatType::Fat12, 13, 1, 0); // sectors per cluster is zero
+    rejectsBpbValue(TestFatType::Fat12, 13, 1, 3); // sectors per cluster is not a power of two
+    rejectsBpbValue(TestFatType::Fat12, 13, 1, 192); // sectors per cluster exceeds limit
+    rejectsBpbValue(TestFatType::Fat12, 14, 2, 0); // reserved sector count is zero
+    rejectsBpbValue(TestFatType::Fat12, 14, 2, UINT16_MAX); // reserved and FAT sectors exceed volume
+    rejectsBpbValue(TestFatType::Fat12, 16, 1, 0); // FAT count is zero
+    rejectsBpbValue(TestFatType::Fat12, 22, 2, 0); // FAT size is zero
+    rejectsBpbValue(TestFatType::Fat12, 19, 2, 0); // total sector count is zero
+    rejectsBpbValue(TestFatType::Fat12, 17, 2, UINT16_MAX); // root metadata exceeds volume
+    rejectsBpbValue(TestFatType::Fat16, 22, 2, 1); // FAT cannot hold classified clusters
+    rejectsBpbValue(TestFatType::Fat32, 36, 4, 0); // FAT32 size is zero
+    rejectsBpbValue(TestFatType::Fat32, 44, 4, 1); // FAT32 root cluster is invalid
+  }
+
+  SECTION("Short reads and device errors remain probe errors") {
+    SeedFatImage(backing, TestFatType::Fat12, 1);
+    const uint64_t absoluteBootOffset = partitionBase;
+    g_shortRead = {.enabled = true, .offset = absoluteBootOffset,
+        .requestSize = kSectorSize, .reportedBytes = kSectorSize - 1};
+    uint32_t serial = 0;
+    const auto shortRead = filesystem->ProbeVolumeId(volume, serial);
+    g_shortRead = {};
+    REQUIRE_FALSE(shortRead);
+    REQUIRE(shortRead.error() == kernel::KernelError::UnexpectedEndOfFile);
+
+    g_readError = {.enabled = true, .offset = absoluteBootOffset};
+    const auto deviceError = filesystem->ProbeVolumeId(volume, serial);
+    g_readError = {};
+    REQUIRE_FALSE(deviceError);
+    REQUIRE(deviceError.error() == kernel::KernelError::DeviceError);
   }
 
   std::remove(imagePath.data());

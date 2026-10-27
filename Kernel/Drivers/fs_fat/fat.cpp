@@ -84,6 +84,137 @@ struct FAT_Volume {
   // maybe: pointers to on‑disk FSInfo, etc.
 };
 
+bool FAT_IsPowerOfTwo(uint32_t value) {
+  return value != 0 && (value & (value - 1)) == 0;
+}
+
+bool FAT_HasVbrSignature(const uint8_t *sector) {
+  return sector[510] == 0x55 && sector[511] == 0xAA;
+}
+
+kstd::error_code FAT_ReadVbr(const kernel::KDevicePtr<kernel::KDevice> &device,
+    uint8_t (&sector)[512]) {
+  size_t transferred = 0;
+  if (const auto status = KE_IO_ReadDevice(device, 0, kstd::span(sector), transferred); status)
+    return status;
+  if (transferred != sizeof(sector))
+    return kernel::make_error_code(kernel::KernelError::UnexpectedEndOfFile);
+  return {};
+}
+
+// Mounting and volume-ID discovery use this parser so both paths apply the
+// same VBR signature, BPB, cluster-count, and FAT-capacity checks.
+kstd::expected<FAT_Type, kstd::error_code> FAT_ParseVbr(
+    const uint8_t *sector, FAT_Volume &vol, bool &hasSerial, uint32_t &serial) {
+  hasSerial = false;
+  serial = 0;
+  if (!FAT_HasVbrSignature(sector))
+    return kstd::unexpected(kernel::make_error_code(kernel::KernelError::InvalidFormat));
+
+  const auto *exfat = reinterpret_cast<const EXFAT_BPB *>(sector);
+  if (kstd::string_view(reinterpret_cast<const char *>(exfat->fsName), 8) == "EXFAT   ") {
+    if (exfat->bytesPerSectorShift < 9 || exfat->bytesPerSectorShift > 12 ||
+        exfat->sectorsPerClusterShift > 7)
+      return kstd::unexpected(kernel::make_error_code(kernel::KernelError::InvalidFormat));
+    vol.type = FAT_Type::ExFAT;
+    vol.bytesPerSector = 1u << exfat->bytesPerSectorShift;
+    vol.sectorsPerCluster = 1u << exfat->sectorsPerClusterShift;
+    vol.numFATs = exfat->numFats;
+    vol.fatSizeSectors = exfat->fatLength;
+    vol.firstFATSector = exfat->fatOffset;
+    vol.dataStartSector = exfat->clusterHeapOffset;
+    vol.rootCluster = exfat->rootDirCluster;
+    vol.totalClusters = exfat->clusterCount;
+    return FAT_Type::ExFAT;
+  }
+
+  const auto *bpb = reinterpret_cast<const FAT_BPB_Common *>(sector);
+  const uint32_t totalSectors = bpb->totalSectors16 ? bpb->totalSectors16 : bpb->totalSectors32;
+  if (bpb->bytesPerSector < 512 || bpb->bytesPerSector > 4096 ||
+      !FAT_IsPowerOfTwo(bpb->bytesPerSector) ||
+      !FAT_IsPowerOfTwo(bpb->sectorsPerCluster) || bpb->sectorsPerCluster > 128 ||
+      !bpb->reservedSectors || !bpb->numFATs || !totalSectors)
+    return kstd::unexpected(kernel::make_error_code(kernel::KernelError::InvalidFormat));
+
+  const auto *fat32 = reinterpret_cast<const FAT_BPB_FAT32 *>(sector + sizeof(FAT_BPB_Common));
+  const uint32_t fatSize = bpb->fatSize16 ? bpb->fatSize16 : fat32->fatSize32;
+  if (!fatSize ||
+      static_cast<uint64_t>(bpb->reservedSectors) +
+              static_cast<uint64_t>(bpb->numFATs) * fatSize >= totalSectors)
+    return kstd::unexpected(kernel::make_error_code(kernel::KernelError::InvalidFormat));
+
+  const uint32_t rootDirSectors =
+      (static_cast<uint32_t>(bpb->rootEntryCount) * 32u + bpb->bytesPerSector - 1u) /
+      bpb->bytesPerSector;
+  const uint64_t metadataSectors = static_cast<uint64_t>(bpb->reservedSectors) +
+      static_cast<uint64_t>(bpb->numFATs) * fatSize + rootDirSectors;
+  if (metadataSectors >= totalSectors)
+    return kstd::unexpected(kernel::make_error_code(kernel::KernelError::InvalidFormat));
+
+  const uint32_t totalClusters =
+      (totalSectors - static_cast<uint32_t>(metadataSectors)) / bpb->sectorsPerCluster;
+  if (totalClusters >= 0x0ffffff0u)
+    return kstd::unexpected(kernel::make_error_code(kernel::KernelError::InvalidFormat));
+
+  vol.bytesPerSector = bpb->bytesPerSector;
+  vol.sectorsPerCluster = bpb->sectorsPerCluster;
+  vol.reservedSectors = bpb->reservedSectors;
+  vol.numFATs = bpb->numFATs;
+  vol.fatSizeSectors = fatSize;
+  vol.firstFATSector = bpb->reservedSectors;
+  vol.totalClusters = totalClusters;
+
+  if (totalClusters < 4085) {
+    vol.type = FAT_Type::FAT12;
+    vol.rootDirSector = bpb->reservedSectors + bpb->numFATs * fatSize;
+    vol.rootDirSectors = rootDirSectors;
+    vol.dataStartSector = vol.rootDirSector + rootDirSectors;
+  } else if (totalClusters < 65525) {
+    vol.type = FAT_Type::FAT16;
+    vol.rootDirSector = bpb->reservedSectors + bpb->numFATs * fatSize;
+    vol.rootDirSectors = rootDirSectors;
+    vol.dataStartSector = vol.rootDirSector + rootDirSectors;
+  } else {
+    vol.type = FAT_Type::FAT32;
+    vol.dataStartSector = bpb->reservedSectors + bpb->numFATs * fatSize;
+  }
+
+  const uint64_t requiredFatBytes = vol.type == FAT_Type::FAT12
+      ? (static_cast<uint64_t>(totalClusters + 2) * 3 + 1) / 2
+      : static_cast<uint64_t>(totalClusters + 2) *
+            (vol.type == FAT_Type::FAT16 ? 2 : 4);
+  if (requiredFatBytes > static_cast<uint64_t>(fatSize) * vol.bytesPerSector)
+    return kstd::unexpected(kernel::make_error_code(kernel::KernelError::InvalidFormat));
+
+  if (vol.type == FAT_Type::FAT32) {
+    vol.rootCluster = fat32->rootCluster;
+    if (vol.rootCluster < 2 || vol.rootCluster >= totalClusters + 2)
+      return kstd::unexpected(kernel::make_error_code(kernel::KernelError::InvalidFormat));
+    vol.writable = !(fat32->extFlags & 0x80) && fat32->fsVersion == 0;
+    if (fat32->fsInfo > 0 && fat32->fsInfo < bpb->reservedSectors) {
+      vol.fsInfoSector = fat32->fsInfo;
+      const uint32_t backup = static_cast<uint32_t>(fat32->backupBootSector) + fat32->fsInfo;
+      if (fat32->backupBootSector && backup < bpb->reservedSectors)
+        vol.backupFsInfoSector = backup;
+    }
+    if (sector[66] == 0x28 || sector[66] == 0x29) {
+      serial = static_cast<uint32_t>(sector[67]) |
+          (static_cast<uint32_t>(sector[68]) << 8) |
+          (static_cast<uint32_t>(sector[69]) << 16) |
+          (static_cast<uint32_t>(sector[70]) << 24);
+      hasSerial = true;
+    }
+  } else if (sector[38] == 0x28 || sector[38] == 0x29) {
+    serial = static_cast<uint32_t>(sector[39]) |
+        (static_cast<uint32_t>(sector[40]) << 8) |
+        (static_cast<uint32_t>(sector[41]) << 16) |
+        (static_cast<uint32_t>(sector[42]) << 24);
+    hasSerial = true;
+  }
+
+  return vol.type;
+}
+
 constexpr uint32_t kFatFirstDataCluster = 2;
 
 // Short (8.3) directory entry, 32 bytes.
@@ -116,16 +247,9 @@ kstd::error_code FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountOb
   (void) options;
 
   uint8_t sector[512];
-  size_t buffer_actual_transfer = 0;
-
-  if (const auto status = KE_IO_ReadDevice(mountPoint->volume, 0, sector, buffer_actual_transfer); status.value() != 0) {
+  if (const auto status = FAT_ReadVbr(mountPoint->volume, sector); status) {
     KE_Print("FS_FAT: Failed to read BPB");
     return status;
-  }
-
-  if (buffer_actual_transfer < sizeof(FAT_BPB_Common)) {
-    KE_Print("FS_FAT: Failed to read BPB");
-    return kernel::make_error_code(kernel::KernelError::UnexpectedEndOfFile);
   }
 
   const auto *bpb = reinterpret_cast<FAT_BPB_Common *>(sector);
@@ -146,102 +270,41 @@ kstd::error_code FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountOb
   KE_Print("  hiddenSectors: {}", bpb->hiddenSectors);
   KE_Print("  totalSectors32: {}", bpb->totalSectors32);
 
-  if (bpb->bytesPerSector == 0 || bpb->sectorsPerCluster == 0) {
-    KE_Print("FS_FAT: Invalid BPB");
-    return kernel::make_error_code(kernel::KernelError::InvalidFormat);
-  }
-
-  // Check for ExFAT by reading full EXFAT_BPB and fsName
-  {
-    EXFAT_BPB exfat{};
-    size_t exfat_transfer = 0;
-    const kstd::span exfatBuf(reinterpret_cast<uint8_t *>(&exfat), sizeof(EXFAT_BPB));
-
-    if (!KE_IO_ReadDevice(mountPoint->volume, 0, exfatBuf, exfat_transfer) &&
-        exfat_transfer >= exfatBuf.size()) {
-      const kstd::string_view fsName(reinterpret_cast<const char *>(exfat.fsName), 8);
-      if (fsName == "EXFAT   ") {
-        KE_Print("FS_FAT: ExFAT Detected");
-        auto vol = kernel::DataBuffer::Create<FAT_Volume>();
-        if (!vol) return kernel::make_error_code(kernel::KernelError::OutOfMemory);
-        vol.as<FAT_Volume>()->type = FAT_Type::ExFAT;
-        vol.as<FAT_Volume>()->bytesPerSector = 1u << exfat.bytesPerSectorShift;
-        vol.as<FAT_Volume>()->sectorsPerCluster = 1u << exfat.sectorsPerClusterShift;
-        vol.as<FAT_Volume>()->numFATs = exfat.numFats;
-        vol.as<FAT_Volume>()->fatSizeSectors = exfat.fatLength;
-        vol.as<FAT_Volume>()->firstFATSector = exfat.fatOffset;
-        vol.as<FAT_Volume>()->dataStartSector = exfat.clusterHeapOffset;
-        vol.as<FAT_Volume>()->rootCluster = exfat.rootDirCluster;
-        vol.as<FAT_Volume>()->totalClusters = exfat.clusterCount;
-        mountPoint->driverExtension = kstd::move(vol);
-        return {};
-      }
-    }
-  }
-
-  // Classic FAT (12/16/32)
-  const auto *fat32 = reinterpret_cast<FAT_BPB_FAT32 *>(sector + sizeof(FAT_BPB_Common));
-
-  const uint32_t totalSectors = bpb->totalSectors16 ? bpb->totalSectors16 : bpb->totalSectors32;
-  const uint32_t fatSize = bpb->fatSize16 ? bpb->fatSize16 : fat32->fatSize32;
-  if (bpb->bytesPerSector < 512 || bpb->bytesPerSector > 4096 ||
-      (bpb->bytesPerSector & (bpb->bytesPerSector - 1)) ||
-      bpb->sectorsPerCluster > 128 || (bpb->sectorsPerCluster & (bpb->sectorsPerCluster - 1)) ||
-      !bpb->reservedSectors || !bpb->numFATs || !fatSize ||
-      static_cast<uint64_t>(bpb->reservedSectors) + static_cast<uint64_t>(bpb->numFATs) * fatSize >= totalSectors)
-    return kernel::KernelError::InvalidFormat;
-  const uint32_t rootDirSectors = (static_cast<uint32_t>(bpb->rootEntryCount) * 32u + (static_cast<uint32_t>(bpb->bytesPerSector) - 1u)) / static_cast<uint32_t>(bpb->bytesPerSector);
-  const uint64_t metadataSectors = static_cast<uint64_t>(bpb->reservedSectors) +
-      static_cast<uint64_t>(bpb->numFATs) * fatSize + rootDirSectors;
-  if (metadataSectors >= totalSectors) return kernel::KernelError::InvalidFormat;
-  const uint32_t dataSectors = totalSectors - static_cast<uint32_t>(metadataSectors);
-  const uint32_t totalClusters = dataSectors / bpb->sectorsPerCluster;
-  if (totalClusters >= 0x0ffffff0u) return kernel::KernelError::InvalidFormat;
+  FAT_Volume parsedVolume{};
+  bool hasSerial = false;
+  uint32_t serial = 0;
+  const auto parsed = FAT_ParseVbr(sector, parsedVolume, hasSerial, serial);
+  if (!parsed) return parsed.error();
 
   mountPoint->driverExtension = kernel::DataBuffer::Create<FAT_Volume>();
   if (!mountPoint->driverExtension) return kernel::make_error_code(kernel::KernelError::OutOfMemory);
   const auto vol = mountPoint->driverExtension.as<FAT_Volume>();
+  *vol = parsedVolume;
 
-  vol->bytesPerSector = bpb->bytesPerSector;
-  vol->sectorsPerCluster = bpb->sectorsPerCluster;
-  vol->reservedSectors = bpb->reservedSectors;
-  vol->numFATs = bpb->numFATs;
-  vol->fatSizeSectors = fatSize;
-  vol->firstFATSector = bpb->reservedSectors;
-  vol->totalClusters = totalClusters;
-
-  if (totalClusters < 4085) {
-    vol->type = FAT_Type::FAT12;
-    vol->rootDirSector = bpb->reservedSectors + bpb->numFATs * fatSize;
-    vol->rootDirSectors = rootDirSectors;
-    vol->dataStartSector = vol->rootDirSector + rootDirSectors;
-    KE_Print("FS_FAT: FAT12 Detected");
-  } else if (totalClusters < 65525) {
-    vol->type = FAT_Type::FAT16;
-    vol->rootDirSector = bpb->reservedSectors + bpb->numFATs * fatSize;
-    vol->rootDirSectors = rootDirSectors;
-    vol->dataStartSector = vol->rootDirSector + rootDirSectors;
-    KE_Print("FS_FAT: FAT16 Detected");
-  } else {
-    vol->type = FAT_Type::FAT32;
-    vol->rootCluster = fat32->rootCluster;
-    vol->writable = !(fat32->extFlags & 0x80) && fat32->fsVersion == 0;
-    if (fat32->fsInfo > 0 && fat32->fsInfo < bpb->reservedSectors) {
-      vol->fsInfoSector = fat32->fsInfo;
-      const uint32_t backup = static_cast<uint32_t>(fat32->backupBootSector) + fat32->fsInfo;
-      if (fat32->backupBootSector && backup < bpb->reservedSectors) vol->backupFsInfoSector = backup;
-    }
-    vol->dataStartSector = bpb->reservedSectors + bpb->numFATs * fatSize;
-    KE_Print("FS_FAT: FAT32 Detected");
+  switch (*parsed) {
+    case FAT_Type::FAT12: KE_Print("FS_FAT: FAT12 Detected"); break;
+    case FAT_Type::FAT16: KE_Print("FS_FAT: FAT16 Detected"); break;
+    case FAT_Type::FAT32: KE_Print("FS_FAT: FAT32 Detected"); break;
+    case FAT_Type::ExFAT: KE_Print("FS_FAT: ExFAT Detected"); break;
   }
-  const uint64_t requiredFatBytes = vol->type == FAT_Type::FAT12 ?
-      (static_cast<uint64_t>(totalClusters + 2) * 3 + 1) / 2 :
-      static_cast<uint64_t>(totalClusters + 2) * (vol->type == FAT_Type::FAT16 ? 2 : 4);
-  if (requiredFatBytes > static_cast<uint64_t>(fatSize) * vol->bytesPerSector ||
-      (vol->type == FAT_Type::FAT32 && (vol->rootCluster < 2 || vol->rootCluster >= totalClusters + 2)))
-    return kernel::KernelError::InvalidFormat;
 
   return {};
+}
+
+kstd::expected<bool, kstd::error_code> FAT_ProbeVolumeId(
+    const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t &serial) {
+  uint8_t sector[512];
+  if (const auto status = FAT_ReadVbr(device, sector); status)
+    return kstd::unexpected(status);
+
+  FAT_Volume volume{};
+  bool hasSerial = false;
+  uint32_t parsedSerial = 0;
+  const auto parsed = FAT_ParseVbr(sector, volume, hasSerial, parsedSerial);
+  if (!parsed || *parsed == FAT_Type::ExFAT || !hasSerial) return false;
+
+  serial = parsedSerial;
+  return true;
 }
 
 struct FAT_ChainCheckpoint {
@@ -587,6 +650,7 @@ UNDOS_DRIVER_ENTRY {
 
   if (const auto fs = KE_VFS_RegisterFilesystemDriver(g_driver, "FAT")) {
     (*fs)->MountVolume = FAT_MountVolume;
+    (*fs)->ProbeVolumeId = FAT_ProbeVolumeId;
     (*fs)->Lookup = FAT_Lookup;
     (*fs)->GetRootNode = FAT_GetRootNode;
     (*fs)->CreateHandle = FAT_CreateHandle;
