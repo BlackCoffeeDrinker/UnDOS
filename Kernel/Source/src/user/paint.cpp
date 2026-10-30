@@ -1,4 +1,5 @@
 #include "user/user.hpp"
+#include "gfx/gfx.hpp"
 
 #include <kernel/gfx.hpp>
 #include <kernel/kobject/KDisplay.hpp>
@@ -36,7 +37,7 @@ uint32_t pixel_bytes(const KSurface &surface) noexcept {
 }
 
 KObjectPtr<KDisplay> primary_display() noexcept {
-  auto display = KE_GFX_GetPrimaryDisplay();
+  auto display = gfx::active_video_present_target();
   if (!display || !display->surface || !display->isAttachedToDesktop) return nullptr;
   return display;
 }

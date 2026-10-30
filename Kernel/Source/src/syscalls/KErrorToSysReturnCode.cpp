@@ -47,6 +47,8 @@ SyscallReturnCode KErrorToSysReturnCode(const kstd::error_code &error) {
 
     case KernelError::Timeout:
       return SyscallReturnCode_TIMEOUT;
+    case KernelError::Retry:
+      return SyscallReturnCode_RETRY;
 
     // The current syscall ABI has no equivalent for these failures.
     case KernelError::Unknown:

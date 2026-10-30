@@ -60,6 +60,10 @@ extern "C" void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noexcept;
 
 // Fallback for a #GP raised outside v86 mode (EFLAGS.VM==0); preserves
 // today's panic behavior for regular ring0/ring3 general-protection faults.
+// C++ side of the IRQ0-15 stubs when the interrupted EFLAGS.VM==1: reflects
+// the IRQ into the BIOS IVT, or defers it while virtual IF is clear.
+extern "C" void v86_irq_dispatch(hal::x86::v86_context_t *ctx) noexcept;
+
 extern "C" [[noreturn]] void v86_non_v86_gp_panic(uint32_t error_code, uint32_t eip) noexcept;
 
 // Entry trampoline: pushes the current v86 session's iret frame (filled in
@@ -72,7 +76,8 @@ extern "C" [[noreturn]] void v86_non_v86_gp_panic(uint32_t error_code, uint32_t 
 extern "C" void hal_x86_v86_enter() noexcept;
 
 // Single in-flight v86 session state (synchronous, non-reentrant by design;
-// HAL_x86_ExecBiosInt disables interrupts for the duration of the call).
+// hardware IRQs taken during the call are reflected to the BIOS, never to
+// kernel handlers).
 // Referenced by name from raw asm (hal_x86_v86_enter/v86_gp_stub), so every
 // one of these is marked [[gnu::used]] to survive LTO.
 extern "C" {
@@ -80,6 +85,7 @@ extern HAL_x86_BiosRegs *g_v86_regs_ptr;
 extern uint32_t g_v86_saved_esp0;
 extern uint32_t g_v86_resume_esp;
 extern uint32_t g_v86_virtual_if;
+extern int32_t g_v86_pending_irq;
 
 extern uint32_t g_v86_eax, g_v86_ebx, g_v86_ecx, g_v86_edx, g_v86_esi, g_v86_edi;
 extern uint32_t g_v86_cs, g_v86_eip, g_v86_eflags, g_v86_esp, g_v86_ss;

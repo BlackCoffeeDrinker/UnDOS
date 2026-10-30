@@ -21,6 +21,7 @@ enum SyscallReturnCode {
     INVALID_ARGUMENT = 0xFFFFFFFB,
     UNSUPPORTED = 0xFFFFFFFA,
     TIMEOUT = 0xFFFFFFF9,
+    RETRY = 0xFFFFFFF8,
 
 };
 

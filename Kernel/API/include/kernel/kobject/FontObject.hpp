@@ -1,6 +1,6 @@
 #pragma once
 
-#include "font_system.hpp"
+#include "gfx/font/font_system.hpp"
 
 #include <kernel/kobject/KObjectT.hpp>
 

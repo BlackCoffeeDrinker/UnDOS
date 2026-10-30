@@ -79,6 +79,8 @@ extern "C" {
 uint32_t g_v86_saved_esp0 = 0;
 [[gnu::used]] uint32_t g_v86_resume_esp = 0;
 uint32_t g_v86_virtual_if = 0;
+// IRQ line (0-15) taken while the BIOS had virtual IF clear, or -1.
+int32_t g_v86_pending_irq = -1;
 
 [[gnu::used]] uint32_t g_v86_eax = 0, g_v86_ebx = 0, g_v86_ecx = 0, g_v86_edx = 0, g_v86_esi = 0, g_v86_edi = 0;
 [[gnu::used]] uint32_t g_v86_cs = 0, g_v86_eip = 0, g_v86_eflags = 0, g_v86_esp = 0, g_v86_ss = 0;
@@ -121,9 +123,8 @@ __asm__(
     ".size hal_x86_v86_enter, . - hal_x86_v86_enter\n\t");
 
 extern "C" [[noreturn, gnu::used]] void v86_non_v86_gp_panic(uint32_t error_code, uint32_t eip) noexcept {
-  kstd::ignore = eip;
   __asm__ volatile("cli");
-  KE_Print("Exception: 0x{:x}", error_code);
+  KE_Print("#VEC 0d EIP {:08x} Exception: 0x{:x}", eip, error_code);
   HAL_PLATFORM_Panic("Unhandled Exception", __FILE__, __LINE__);
 }
 
@@ -170,6 +171,44 @@ namespace {
       : "r"(resume_esp)
       : "memory");
   __builtin_unreachable();
+}
+
+// Delivers hardware IRQ `irq` to the BIOS handler named by the real-mode IVT
+// (INT 08h-0Fh for IRQ0-7, INT 70h-77h for IRQ8-15), exactly as a real-mode
+// CPU would: push FLAGS/CS/IP on the v86 stack and clear IF. The BIOS handler
+// sends its own EOI through the emulated OUT path.
+void reflect_irq(v86_context_t &ctx, uint32_t irq) noexcept {
+  const uint8_t vector = irq < 8 ? static_cast<uint8_t>(0x08 + irq)
+                                 : static_cast<uint8_t>(0x70 + (irq - 8));
+  const auto *ivt_entry = reinterpret_cast<const volatile uint16_t *>(static_cast<uint32_t>(vector) * 4u);
+
+  auto flags = static_cast<uint16_t>(ctx.eflags);
+  flags = g_v86_virtual_if ? (flags | EFLAGS_IF) : static_cast<uint16_t>(flags & ~EFLAGS_IF);
+
+  auto sp = static_cast<uint16_t>(ctx.esp);
+  const auto ss = static_cast<uint16_t>(ctx.ss);
+  sp -= 2;
+  *v86_word_ptr(ss, sp) = flags;
+  sp -= 2;
+  *v86_word_ptr(ss, sp) = static_cast<uint16_t>(ctx.cs);
+  sp -= 2;
+  *v86_word_ptr(ss, sp) = static_cast<uint16_t>(ctx.eip);
+  ctx.esp = (ctx.esp & 0xFFFF0000u) | sp;
+
+  ctx.cs = ivt_entry[1];
+  ctx.eip = ivt_entry[0];
+  g_v86_virtual_if = 0;
+  ctx.eflags |= EFLAGS_IF;
+}
+
+// Called after the BIOS sets virtual IF again (STI/POPF/IRET).
+void deliver_pending_irq(v86_context_t &ctx) noexcept {
+  ctx.eflags |= EFLAGS_IF;
+  if (g_v86_virtual_if && g_v86_pending_irq >= 0) {
+    const auto irq = static_cast<uint32_t>(g_v86_pending_irq);
+    g_v86_pending_irq = -1;
+    reflect_irq(ctx, irq);
+  }
 }
 }// namespace
 
@@ -291,6 +330,7 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
     case 0xFB:// STI
       g_v86_virtual_if = 1;
       set_ip(static_cast<uint16_t>(ip + prefix_len + 1));
+      hal::x86::deliver_pending_irq(*ctx);
       return;
 
     case 0x9C: {// PUSHF
@@ -310,10 +350,19 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
       ctx->eflags = (ctx->eflags & 0xFFFF0000u) | flags | hal::x86::EFLAGS_IF;
       ctx->esp = static_cast<uint16_t>(sp + 2);
       set_ip(static_cast<uint16_t>(ip + prefix_len + 1));
+      hal::x86::deliver_pending_irq(*ctx);
       return;
     }
 
     case 0xF4:// HLT: BIOS routine returned, complete the call.
+      if (g_v86_pending_irq >= 0) {
+        // The PIC still holds this IRQ in service. Let the BIOS handle it
+        // first; its IRET returns to this HLT, which then completes.
+        const auto irq = static_cast<uint32_t>(g_v86_pending_irq);
+        g_v86_pending_irq = -1;
+        hal::x86::reflect_irq(*ctx, irq);
+        return;
+      }
       hal::x86::complete_v86_session(*ctx);
       __builtin_unreachable();
 
@@ -338,6 +387,7 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
 
       ctx->cs = target_cs;
       set_ip(target_ip);
+      g_v86_virtual_if = 0;
       return;
     }
 
@@ -356,6 +406,7 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
       g_v86_virtual_if = (new_flags & hal::x86::EFLAGS_IF) ? 1 : 0;
       ctx->eflags = (ctx->eflags & 0xFFFF0000u) | new_flags | hal::x86::EFLAGS_IF;
       set_ip(new_ip);
+      hal::x86::deliver_pending_irq(*ctx);
       return;
     }
 
@@ -498,6 +549,20 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
   }
 }
 
+// Hardware IRQ taken while EFLAGS.VM==1 (see the IRQ stubs in intr.cpp).
+// ctx->error_code holds the IRQ line pushed by the stub.
+extern "C" [[gnu::used]] void v86_irq_dispatch(hal::x86::v86_context_t *ctx) noexcept {
+  const uint32_t irq = ctx->error_code;
+  if (g_v86_virtual_if) {
+    hal::x86::reflect_irq(*ctx, irq);
+    return;
+  }
+  // BIOS has interrupts virtually disabled: hold the IRQ (still in service
+  // at the PIC) and block further ones until STI/POPF/IRET or completion.
+  g_v86_pending_irq = static_cast<int32_t>(irq);
+  ctx->eflags &= ~hal::x86::EFLAGS_IF;
+}
+
 UNDOS_HAL_API_DEF void HAL_x86_ExecBiosInt(uint8_t interrupt_number, HAL_x86_BiosRegs &regs) noexcept {
   hal::x86::ensure_low_memory_identity_mapped();
 
@@ -508,6 +573,7 @@ UNDOS_HAL_API_DEF void HAL_x86_ExecBiosInt(uint8_t interrupt_number, HAL_x86_Bio
 
   g_v86_regs_ptr = &regs;
   g_v86_virtual_if = (regs.flags & (1u << 9)) ? 1u : 0u;
+  g_v86_pending_irq = -1;
 
   g_v86_eax = regs.ax;
   g_v86_ebx = regs.bx;
@@ -524,6 +590,9 @@ UNDOS_HAL_API_DEF void HAL_x86_ExecBiosInt(uint8_t interrupt_number, HAL_x86_Bio
   g_v86_ds = regs.ds ? regs.ds : hal::x86::V86_STUB_SEGMENT;
   g_v86_fs = hal::x86::V86_STUB_SEGMENT;
   g_v86_gs = hal::x86::V86_STUB_SEGMENT;
+  // Real IF is set so hardware IRQs reach the BIOS (e.g. Award INT 13h waits
+  // for IRQ14). The IRQ stubs reflect them into the real-mode IVT; the BIOS
+  // sees only the virtual IF tracked in g_v86_virtual_if.
   g_v86_eflags = hal::x86::EFLAGS_VM | hal::x86::EFLAGS_IF | hal::x86::EFLAGS_RESERVED |
                  (regs.flags & 0x0CD5u);
 
@@ -539,7 +608,14 @@ UNDOS_HAL_API_DEF void HAL_x86_ExecBiosInt(uint8_t interrupt_number, HAL_x86_Bio
   hal::x86::tss_set_esp0(reinterpret_cast<uintptr_t>(trap_stack + sizeof(trap_stack)));
 
   HAL_CPU_DisableInterrupts();
+  // BIOS disk services need the IDE lines (IRQ14/15, via cascade IRQ2).
+  const uint8_t saved_master_mask = HAL_IO_In8(0x21);
+  const uint8_t saved_slave_mask = HAL_IO_In8(0xA1);
+  HAL_IO_Out8(0x21, static_cast<uint8_t>(saved_master_mask & ~0x04u));
+  HAL_IO_Out8(0xA1, static_cast<uint8_t>(saved_slave_mask & ~0xC0u));
   hal_x86_v86_enter();// returns only once the v86 session has completed
+  HAL_IO_Out8(0xA1, saved_slave_mask);
+  HAL_IO_Out8(0x21, saved_master_mask);
   HAL_CPU_EnableInterrupts();
 
   g_v86_regs_ptr = nullptr;

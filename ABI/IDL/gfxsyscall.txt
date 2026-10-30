@@ -83,23 +83,81 @@ struct DeviceCaps {
     accelFlags: c<uint32_t>;
 };
 
-/** Primary-display mode. modeId is an opaque driver mode ID, not the
- * enumeration ordinal. Refresh rate is in Hz; colorDepth is bits per pixel. */
-struct DisplayMode {
-    modeId:     c<uint32_t>;
-    width:      c<uint32_t>;
-    height:     c<uint32_t>;
+/** One logical source mode. IDs are valid only for the reported generation. */
+struct VideoPresentSourceMode {
+    sourceId: c<uint32_t>;
+    modeId: c<uint32_t>;
+    width: c<uint32_t>;
+    height: c<uint32_t>;
     colorDepth: c<uint32_t>;
-    refreshHz:  c<uint32_t>;
+    pixelFormat: c<uint32_t>;
 };
 
-struct DisplayState {
-    /** Zero before activation or after an output-enable failure. */
-    active:     c<uint32_t>;
-    /** Changes when a new mode is programmed, including enable failure. */
+/** One discovered physical output. Adaptive sync is descriptive only. */
+struct VideoPresentTarget {
+    targetId: c<uint32_t>;
+    connected: c<uint32_t>;
+    modeCount: c<uint32_t>;
+    maxWidth: c<uint32_t>;
+    maxHeight: c<uint32_t>;
+    maxRefreshHz: c<uint32_t>;
+    adaptiveSyncSupported: c<uint32_t>;
+    adaptiveSyncMinMilliHz: c<uint32_t>;
+    adaptiveSyncMaxMilliHz: c<uint32_t>;
+};
+
+/** A fixed-refresh target mode. */
+struct VideoPresentTargetMode {
+    targetId: c<uint32_t>;
+    modeId: c<uint32_t>;
+    width: c<uint32_t>;
+    height: c<uint32_t>;
+    colorDepth: c<uint32_t>;
+    pixelFormat: c<uint32_t>;
+    refreshHz: c<uint32_t>;
+};
+
+/** One source-to-target route. This phase accepts one untransformed path. */
+struct VideoPresentPath {
+    sourceId: c<uint32_t>;
+    sourceModeId: c<uint32_t>;
+    targetId: c<uint32_t>;
+    targetModeId: c<uint32_t>;
+    sourceX: c<int32_t>;
+    sourceY: c<int32_t>;
+    width: c<uint32_t>;
+    height: c<uint32_t>;
+    flags: c<uint32_t>;
+};
+
+/** Generation-tagged bounded topology summary. */
+struct VideoPresentTopology {
     generation: c<uint32_t>;
-    /** All zero before the first mode is programmed. */
-    mode:       struct<DisplayMode>;
+    sourceCount: c<uint32_t>;
+    sourceModeCount: c<uint32_t>;
+    targetCount: c<uint32_t>;
+    targetModeCount: c<uint32_t>;
+    pathCount: c<uint32_t>;
+    recordLimit: c<uint32_t>;
+    degraded: c<uint32_t>;
+};
+
+enum VideoPresentOutcome {
+    Success = 0,
+    ProgrammingFailed = 1,
+    EnableFailed = 2,
+    StateUnknown = 3,
+};
+
+/** Result of a target programming attempt, including actual active state. */
+struct VideoPresentTargetResult {
+    targetId: c<uint32_t>;
+    requestedModeId: c<uint32_t>;
+    actualModeId: c<uint32_t>;
+    /** 0 means disabled, 1 means active, and 2 means hardware state is unknown. */
+    active: c<uint32_t>;
+    outcome: enum<VideoPresentOutcome>;
+    degraded: c<uint32_t>;
 };
 
 // -----------------------------------------------------
@@ -182,7 +240,7 @@ enum RasterOp {
 // -----------------------------------------------------
 
 // Zero/Primary selects the active screen; never implicitly programs a mode.
-// Returns UNSUPPORTED until SetDisplayMode activates the display.
+// Returns UNSUPPORTED until a video-present path activates the desktop.
 // Memory/Offscreen creates a DC with no target
 // until SelectObject selects a bitmap. Primary cannot combine with these flags.
 // NoAccel bypasses packed acceleration, never the required planar adapter path.
@@ -397,34 +455,80 @@ syscall V1 GFX CloseFontResource [349] {
     handle: IN c<uint32_t>;
 };
 
-/** Enumerates monitor-approved primary-display modes without activating output.
- * Ordinals start at zero. OKAY with available=0 and a zero mode marks the end.
- * UNSUPPORTED means no usable primary display. */
-syscall V1 GFX EnumDisplayModes [350] {
-    index:     IN c<uint32_t>;
-    mode:      OUT struct<DisplayMode>;
-    available: OUT c<uint32_t>;
+/** Reads the current topology summary. Every array class is limited to 64 records. */
+syscall V1 GFX GetVideoPresentTopology [350] {
+    topology: OUT struct<VideoPresentTopology>;
 };
 
-/** Queries the primary display, including its inactive pre-graphics state.
- * Returns UNSUPPORTED when no primary display exists. */
-syscall V1 GFX GetDisplayMode [351] {
-    state: OUT struct<DisplayState>;
+/** Queries or fills source modes pinned to one immutable generation.
+ * queryOnly=1 requires zero capacity and returns required, written=0.
+ * Fill requires capacity >= required; INVALID_SIZE reports required without partial writes.
+ * Stale generation returns RETRY with required=written=0. */
+syscall V1 GFX EnumVideoPresentSourceModes [351] {
+    generation: IN c<uint32_t>;
+    sourceId: IN c<uint32_t>;
+    firstIndex: IN c<uint32_t>;
+    queryOnly: IN c<uint32_t>;
+    modes: OUT buffer<struct<VideoPresentSourceMode>>;
+    required: OUT c<uint32_t>;
+    written: OUT c<uint32_t>;
 };
 
-/** Activates or changes the primary display. Any process may call this.
- * modeId comes from EnumDisplayModes, not its enumeration ordinal.
- * Existing screen DC handles remain valid; pixels are lost and all windows
- * repaint. DisplayChange is coalesced per window and survives a full queue.
- * Invalid/monitor-rejected IDs fail without changing the display. Allocation
- * failures preserve the previous mode. Hardware enable failure reports UNKNOWN;
- * GetDisplayMode then reports the programmed mode as inactive.
- * This call does not persist a preference. */
-syscall V1 GFX SetDisplayMode [352] {
-    modeId: IN c<uint32_t>;
+/** Queries or fills targets from one immutable generation.
+ * queryOnly=1 requires zero capacity. Fill reports required on INVALID_SIZE without writes.
+ * firstIndex equal to count succeeds with required=written=0. */
+syscall V1 GFX EnumVideoPresentTargets [352] {
+    generation: IN c<uint32_t>;
+    firstIndex: IN c<uint32_t>;
+    queryOnly: IN c<uint32_t>;
+    targets: OUT buffer<struct<VideoPresentTarget>>;
+    required: OUT c<uint32_t>;
+    written: OUT c<uint32_t>;
 };
 
-// Retired system-font and text syscall tombstones. Do not reuse IDs 353–356.
+/** Queries or fills fixed-refresh modes for a target from one immutable generation.
+ * queryOnly must be 0 (fill) or 1 (zero-capacity count query).
+ * Undersized fills return INVALID_SIZE and required with written=0, without partial writes. */
+syscall V1 GFX EnumVideoPresentTargetModes [353] {
+    generation: IN c<uint32_t>;
+    targetId: IN c<uint32_t>;
+    firstIndex: IN c<uint32_t>;
+    queryOnly: IN c<uint32_t>;
+    modes: OUT buffer<struct<VideoPresentTargetMode>>;
+    required: OUT c<uint32_t>;
+    written: OUT c<uint32_t>;
+};
+
+/** Queries or fills committed paths from one immutable generation.
+ * queryOnly=1 requires zero capacity; queryOnly=0 fills exactly required records.
+ * RETRY writes no records; INVALID_SIZE reports required without partial writes. */
+syscall V1 GFX EnumVideoPresentPaths [354] {
+    generation: IN c<uint32_t>;
+    firstIndex: IN c<uint32_t>;
+    queryOnly: IN c<uint32_t>;
+    paths: OUT buffer<struct<VideoPresentPath>>;
+    required: OUT c<uint32_t>;
+    written: OUT c<uint32_t>;
+};
+
+/** Copies and validates a complete single-path topology for the supplied generation.
+ * The returned process-local token owns that immutable candidate. */
+syscall V1 GFX ValidateVideoPresentTopology [355] {
+    generation: IN c<uint32_t>;
+    paths: IN buffer<struct<VideoPresentPath>>;
+    token: OUT c<uint32_t>;
+};
+
+/** Commits a validated topology; required is always 1 and written initially 0.
+ * Stale RETRY takes precedence over capacity and consumes the token.
+ * Current-token INVALID_SIZE or OUT_OF_MEMORY preserves reservations with no hardware change.
+ * A hardware attempt returns actual state in the result rather than hiding failure. */
+syscall V1 GFX CommitVideoPresentTopology [356] {
+    token: IN c<uint32_t>;
+    results: OUT buffer<struct<VideoPresentTargetResult>>;
+    required: OUT c<uint32_t>;
+    written: OUT c<uint32_t>;
+};
 
 syscall V1 GFX AcquireFont [357] {
     source: IN enum<FontSource>;

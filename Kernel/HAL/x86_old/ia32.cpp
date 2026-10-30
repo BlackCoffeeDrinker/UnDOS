@@ -32,8 +32,6 @@ UNDOS_HAL_API_DEF void HAL_PLATFORM_Init(const kernel::BootInfoT &boot_info, ker
     atomic_platform = hal::x86::AtomicPlatorm::X86_XADD;
   }
 
-  KE_Print("CPU Family: {}, Model: {}", cpu_id.family, cpu_id.model);
-
   hal::x86::init_atomic_ops(atomic_platform);
   hal::x86::init_gdt();
   hal::x86::init_idt();
@@ -63,6 +61,14 @@ UNDOS_HAL_API_DEF void HAL_PLATFORM_Init(const kernel::BootInfoT &boot_info, ker
   }
 
   kernel_address_space.limit = kernel::VirtualAddress(kernel::VirtualAddress::Invalid);
+  switch (atomic_platform) {
+    case hal::x86::AtomicPlatorm::X86_386: KE_Print("Using 386 atomics"); break;
+    case hal::x86::AtomicPlatorm::X86_XADD: KE_Print("Using XADD atomics"); break;
+    case hal::x86::AtomicPlatorm::X86_CMPXCHG: KE_Print("Using CMPXCHG atomics"); break;
+    case hal::x86::AtomicPlatorm::X86_CMPXCHG8B: KE_Print("Using CMPXCHG8B atomics"); break;
+  }
+  hal::x86::report_pmm(boot_info);
+  KE_Print("CPU Family: {}, Model: {}", cpu_id.family, cpu_id.model);
 }
 
 UNDOS_HAL_API_DEF uint32_t HAL_PLATFORM_GetCpuCount() noexcept {

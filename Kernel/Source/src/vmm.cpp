@@ -562,10 +562,14 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
   // privilege level, faulting IP) into `info`; this is the single place
   // where all platforms funnel into for demand paging / copy-on-write /
   // pagefile handling.
-  KE_Print(
-      "Page Fault: addr={} ip={} present={} write={} user={} exec={}",
-      info.fault_addr.as_ptr<>(), info.ip.as_ptr<>(),
-      info.present, info.write, info.user, info.exec);
+  const auto fatal = [&](const char *message) {
+    HAL_CPU_DisableInterrupts();
+    KE_Print(
+        "Page Fault: addr={} ip={} present={} write={} user={} exec={}",
+        info.fault_addr.as_ptr<>(), info.ip.as_ptr<>(),
+        info.present, info.write, info.user, info.exec);
+    HAL_PLATFORM_Panic(message, __FILE__, __LINE__);
+  };
 
   // 1. Identify the address space the fault occurred in: a user-mode fault
   // belongs to the currently running thread's owning process, while a
@@ -576,7 +580,7 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
     if (const auto current_thread = KE_SCHED_GetCurrentThread(); current_thread && current_thread->owner_process) {
       as = &current_thread->owner_process->address_space;
     } else {
-      HAL_PLATFORM_Panic("Page Fault: user-mode fault with no owning process", __FILE__, __LINE__);
+      fatal("Page Fault: user-mode fault with no owning process");
     }
   }
 
@@ -585,7 +589,7 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
   // address space -- an invalid access that must be fatal.
   const auto *vad = as->vads.find(info.fault_addr);
   if (!vad) {
-    HAL_PLATFORM_Panic("Page Fault: access to unmapped/invalid address", __FILE__, __LINE__);
+    fatal("Page Fault: access to unmapped/invalid address");
   }
 
   // 3. Protection checks: reject accesses that violate the VAD's declared
@@ -593,13 +597,13 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
   // indicate either a user-mode bug (illegal access) or a kernel bug
   // (accessing user memory incorrectly).
   if (info.write && !kernel::vmm::has_flag(vad->flags, kernel::vmm::ProtectFlags::WRITE)) {
-    HAL_PLATFORM_Panic("Page Fault: write fault on non-writable region", __FILE__, __LINE__);
+    fatal("Page Fault: write fault on non-writable region");
   }
   if (info.exec && !kernel::vmm::has_flag(vad->flags, kernel::vmm::ProtectFlags::EXECUTE)) {
-    HAL_PLATFORM_Panic("Page Fault: exec fault on non-executable region", __FILE__, __LINE__);
+    fatal("Page Fault: exec fault on non-executable region");
   }
   if (info.user && !kernel::vmm::has_flag(vad->flags, kernel::vmm::ProtectFlags::USER)) {
-    HAL_PLATFORM_Panic("Page Fault: user-mode fault on kernel-only region", __FILE__, __LINE__);
+    fatal("Page Fault: user-mode fault on kernel-only region");
   }
 
   // 4. A VAD exists for the faulting address and the access is permitted by
@@ -615,11 +619,11 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
       // faulting page.
       const kernel::PhysicalAddress phys = HAL_PMM_AllocateFrames(1);
       if (!phys) {
-        HAL_PLATFORM_Panic("Page Fault: out of physical memory", __FILE__, __LINE__);
+        fatal("Page Fault: out of physical memory");
       }
       if (const auto page_base = info.fault_addr.align_down(g_page_size);
           !HAL_VMM_MapPage(page_base, phys, vad->flags)) {
-        HAL_PLATFORM_Panic("Page Fault: HAL_VMM_MapPage failed", __FILE__, __LINE__);
+        fatal("Page Fault: HAL_VMM_MapPage failed");
       }
       break;
     }
@@ -627,16 +631,16 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
       // TODO: read the page's contents from backing->file at
       // backing->file_offset + page_index * PAGE_SIZE once VFS read
       // integration is wired up here. For now, this is just a stub.
-      HAL_PLATFORM_Panic("Page Fault: file-backed read not implemented", __FILE__, __LINE__);
+      fatal("Page Fault: file-backed read not implemented");
       break;
     case kernel::KMemoryBackingObject::Kind::Shared:
       // TODO: shared-memory semantics (mirrors Anonymous/File depending on
       // design) are not implemented yet.
-      HAL_PLATFORM_Panic("Page Fault: shared-memory fault not implemented", __FILE__, __LINE__);
+      fatal("Page Fault: shared-memory fault not implemented");
       break;
     case kernel::KMemoryBackingObject::Kind::KernelModule:
       // TODO: file-backed kernel module page-in not implemented yet.
-      HAL_PLATFORM_Panic("Page Fault: kernel-module-backed fault not implemented", __FILE__, __LINE__);
+      fatal("Page Fault: kernel-module-backed fault not implemented");
       break;
   }
 }

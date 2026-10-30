@@ -8,13 +8,13 @@
 #include <vector.hpp>
 
 #include <kernel/__core.hpp>
+#include <kernel/fwd/KDisplay.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/kerror.hpp>
 #include <kernel/spinlock.hpp>
 
 namespace kernel {
 struct KObject;
-struct KDisplay;
 struct KSurface;
 
 // Half-open clip rectangle in target (screen) coordinates.

@@ -63,6 +63,7 @@ enum class KernelError : uint32_t {
   InvalidExecutable,
   UnresolvedSymbol,
   ProcessStartupFailed,
+  Retry,
 };
 
 }// namespace kernel

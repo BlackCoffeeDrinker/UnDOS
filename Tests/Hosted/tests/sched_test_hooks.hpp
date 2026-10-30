@@ -12,4 +12,7 @@ namespace test_sched {
 
 void SetCurrentThread(kernel::KObjectPtr<kernel::KThreadObject> thread) noexcept;
 
+// One-shot cooperative scheduling at a contended kernel::Mutex.
+void SetYieldHook(void (*hook)()) noexcept;
+
 }// namespace test_sched

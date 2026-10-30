@@ -54,7 +54,7 @@ void KE_Print(kstd::string_view fmt, Args &&...args) noexcept {
   static_assert(BUFFER_SIZE > 3, "BUFFER_SIZE must be greater than 3.");
 
   char buffer[BUFFER_SIZE];
-  kernel::detail::PrintBufferSink sink{kstd::span<char>(buffer)};
+  kernel::detail::PrintBufferSink sink{.buffer = kstd::span<char>(buffer)};
   const auto fmt_args = kstd::detail::make_args(args...);
   kstd::detail::format_args_to(sink, fmt, kstd::span<const kstd::detail::format_arg>(fmt_args));
 

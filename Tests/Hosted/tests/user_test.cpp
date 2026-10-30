@@ -20,7 +20,7 @@
 #include <kernel/object_manager.hpp>
 #include <undos/syscalls/__enum_WindowLongIndex.h>
 #include <kernel/kobject/KThreadObject.hpp>
-#include "gfx/font/font_object.hpp"
+#include <kernel/kobject/FontObject.hpp>
 #include "sched_test_hooks.hpp"
 #include "syscalls/syscalls.hpp"
 
@@ -35,6 +35,7 @@ using kernel::user::client_to_screen_locked;
 using kernel::user::screen_to_client_locked;
 
 namespace {
+uint8_t g_userDisplayBuffer[640 * 480]{};
 constexpr uint32_t kMove = 0x200;
 using Ring = MessageRing<4, kMove>;
 
@@ -159,16 +160,72 @@ kstd::expected<KDisplayModeInfo, kstd::error_code> UserMode(const KObjectPtr<KDi
   return out;
 }
 
-kstd::expected<KDisplaySurfaceBinding, kstd::error_code> UserSetMode(const KObjectPtr<KDisplay> &, size_t) {
-  KDisplaySurfaceBinding binding{};
-  binding.type = SurfaceType::OffscreenBitmap;
-  binding.flags = SurfaceFlags::Linear | SurfaceFlags::TopDown;
-  return binding;
+kstd::error_code UserPrepareMode(const KObjectPtr<KDisplay> &display, size_t index,
+                                 KDisplayModeReservation &reservation) {
+  const auto mode = UserMode(display, index);
+  if (!mode) return mode.error();
+  auto backing = KE_VMM_CreateDirectBacking(
+      kernel::VirtualAddress::from_ptr(g_userDisplayBuffer), sizeof(g_userDisplayBuffer));
+  if (!backing) return backing.error();
+  reservation = {};
+  reservation.modeIndex = index;
+  reservation.mode = *mode;
+  reservation.binding.backing = kstd::move(*backing);
+  reservation.binding.type = SurfaceType::OffscreenBitmap;
+  reservation.binding.flags = SurfaceFlags::Linear | SurfaceFlags::TopDown;
+  return KernelError::Success;
+}
+
+kstd::error_code UserProgramMode(const KObjectPtr<KDisplay> &display,
+                                 KDisplayModeReservation &reservation) {
+  display->currentMode = reservation.mode;
+  if (!display->modeGeneration) display->modeGeneration = 1;
+  return KernelError::Success;
+}
+
+void UserFinishMode(const KObjectPtr<KDisplay> &, KDisplayModeReservation &, bool) {}
+
+kstd::error_code UserRestoreMode(const KObjectPtr<KDisplay> &display, size_t index,
+                                 KDisplayModeReservation &) {
+  const auto mode = UserMode(display, index);
+  if (!mode) return mode.error();
+  display->currentMode = *mode;
+  return KernelError::Success;
+}
+
+kstd::expected<KDisplayActualState, kstd::error_code>
+UserQueryActualState(const KObjectPtr<KDisplay> &display) {
+  return KDisplayActualState{
+      .known = display->modeGeneration != 0,
+      .enabled = display->isAttachedToDesktop,
+      .modeIndex = display->currentMode.modeIndex};
+}
+
+kstd::error_code UserEnable(const KObjectPtr<KDisplay> &display) {
+  display->isAttachedToDesktop = true;
+  return KernelError::Success;
+}
+
+kstd::error_code UserDisable(const KObjectPtr<KDisplay> &display) {
+  display->isAttachedToDesktop = false;
+  return KernelError::Success;
+}
+
+kstd::error_code UserValidate(const KObjectPtr<KDisplay> &display) {
+  return display && display->isPresent ? KernelError::Success
+                                       : KernelError::NotFound;
 }
 
 kstd::error_code UserConfigure(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KDisplay> &display) {
   display->GetModeInfo = UserMode;
-  display->SetMode = UserSetMode;
+  display->PrepareMode = UserPrepareMode;
+  display->ProgramMode = UserProgramMode;
+  display->FinishMode = UserFinishMode;
+  display->RestoreMode = UserRestoreMode;
+  display->QueryActualState = UserQueryActualState;
+  display->Enable = UserEnable;
+  display->Disable = UserDisable;
+  display->Validate = UserValidate;
   return KernelError::Success;
 }
 
@@ -202,8 +259,60 @@ void UserPresent(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KSurface
   }
 }
 
+KObjectPtr<KDisplay> ExistingVideoTarget() {
+  auto active = kernel::gfx::active_video_present_target();
+  if (active) return active;
+  KObjectPtr<KDisplay> target;
+  KE_OB_GetGfxDirectory()->Each<KDisplay>([&](const KObjectPtr<KDisplay> &candidate) {
+    if (!target && candidate->videoPresentTargetId) target = candidate;
+  });
+  return target;
+}
+
+void EnsureCommittedVideoPath(const KObjectPtr<KDisplay> &target) {
+  if (kernel::gfx::active_video_present_target() || !target) return;
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  const auto targetMode = kernel::gfx::video_present_target_mode(
+      topology.generation, target->videoPresentTargetId, 0);
+  REQUIRE(targetMode);
+  kernel::gfx::VideoPresentSourceModeInfo sourceMode{};
+  bool found = false;
+  for (uint32_t i = 0; i < topology.sourceModeCount; ++i) {
+    const auto candidate = kernel::gfx::video_present_source_mode(
+        topology.generation, kernel::gfx::DesktopSourceId, i);
+    REQUIRE(candidate);
+    if (candidate->width == targetMode->mode.width &&
+        candidate->height == targetMode->mode.height &&
+        candidate->colorDepth == targetMode->mode.bpp &&
+        candidate->pixelFormat == targetMode->mode.pixelFormat) {
+      sourceMode = *candidate;
+      found = true;
+      break;
+    }
+  }
+  REQUIRE(found);
+  const kernel::gfx::VideoPresentPathInfo path{
+      .sourceId = kernel::gfx::DesktopSourceId,
+      .sourceModeId = sourceMode.modeId,
+      .targetId = targetMode->targetId,
+      .targetModeId = targetMode->modeId,
+      .width = targetMode->mode.width,
+      .height = targetMode->mode.height};
+  kernel::KObjectPtr<kernel::KDisplay> preparedTarget;
+  size_t modeIndex = 0;
+  kernel::KDisplayModeReservation reservation{};
+  REQUIRE_FALSE(kernel::gfx::video_present_prepare_path(
+      topology.generation, path, preparedTarget, modeIndex, reservation));
+  const auto committed = kernel::gfx::commit_video_present_path(
+      topology.generation, path, preparedTarget, reservation);
+  REQUIRE(committed);
+  REQUIRE(committed->outcome == 0);
+}
+
 struct Scene {
   KObjectPtr<KDisplay> display;
+  KObjectPtr<kernel::gfx::KVideoPresentSource> source;
   KObjectPtr<KSurface> oldSurface;
   bool oldAttached{};
   KObjectPtr<KGraphicsAdapter> oldAdapter;
@@ -216,19 +325,25 @@ struct Scene {
 
   Scene() {
     EnsureObjectManagerInitialized();
-    display = KE_GFX_GetPrimaryDisplay();
+    display = ExistingVideoTarget();
     if (!display) {
       auto device = TakeExpected(KE_IO_CreateDevice(nullptr, 0, "UserTestVideo", device_type::Video));
       auto adapter = TakeExpected(KE_GFX_RegisterGraphicsAdapter(nullptr, device, "UserTestAdapter"));
       adapter->ProbeDisplay = UserProbe;
       adapter->ConfigureDisplay = UserConfigure;
       gfx::start_adapter(adapter);
-      display = KE_GFX_GetPrimaryDisplay();
+      display = ExistingVideoTarget();
     }
     REQUIRE(display);
+    EnsureCommittedVideoPath(display);
     oldSurface = display->surface;
     oldAttached = display->isAttachedToDesktop;
     oldAdapter = display->adapter;
+    KE_OB_GetGfxDirectory()->Each<kernel::gfx::KVideoPresentSource>(
+        [&](const KObjectPtr<kernel::gfx::KVideoPresentSource> &candidate) {
+          source = candidate;
+        });
+    REQUIRE(source);
     surface = TakeExpected(CreateKObject<KSurface>("user-test-surface"));
     process = TakeExpected(CreateKObject<KProcessObject>("user-test-process"));
     auto backing = TakeExpected(CreateKObject<KMemoryBackingObject>("user-test-pixels"));
@@ -241,6 +356,7 @@ struct Scene {
     surface->flags = SurfaceFlags::Linear | SurfaceFlags::TopDown;
     display->surface = surface;
     display->isAttachedToDesktop = true;
+    source->surface = surface;
     display->adapter = nullptr; // exercise real software raster, not fake success
   }
 
@@ -266,6 +382,7 @@ struct Scene {
     display->surface = oldSurface;
     display->isAttachedToDesktop = oldAttached;
     display->adapter = oldAdapter;
+    source->surface = oldSurface;
   }
 };
 
@@ -353,6 +470,16 @@ struct RestoreMenuFont {
 struct RestoreDefaultFont {
   kernel::font::FontSystem &system;
   ~RestoreDefaultFont() { (void)kernel::user::set_builtin_default_font(system.defaults); }
+};
+
+struct PublishedFaces {
+  kernel::font::FaceRegistry &registry;
+  uint32_t regular{};
+  uint32_t bold{};
+  ~PublishedFaces() {
+    if (regular) (void)registry.close(regular);
+    if (bold) (void)registry.close(bold);
+  }
 };
 
 void clear_menu_font() {
@@ -784,6 +911,7 @@ TEST_CASE("USER font publication reflows minimized icons to measured label width
   const auto bold = system.faces.publish(
       decode_fixture(font_fixture::SourceSans3_Bold, sizeof(font_fixture::SourceSans3_Bold)),
       validation);
+  PublishedFaces published{system.faces, regular ? *regular : 0, bold ? *bold : 0};
   REQUIRE(regular);
   REQUIRE(bold);
 
@@ -1794,11 +1922,6 @@ uint32_t ink_in(const uint8_t *pixels, URect area, uint8_t background) {
   return ink;
 }
 
-struct PublishedFaces {
-  uint32_t regular{0};
-  uint32_t bold{0};
-};
-
 PublishedFaces publish_source_sans(kernel::font::FontSystem &system) {
   uint32_t validation = 0;
   const auto regular = system.faces.publish(
@@ -1809,7 +1932,7 @@ PublishedFaces publish_source_sans(kernel::font::FontSystem &system) {
       validation);
   REQUIRE(regular);
   REQUIRE(bold);
-  return {*regular, *bold};
+  return {system.faces, *regular, *bold};
 }
 } // namespace
 

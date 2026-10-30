@@ -54,6 +54,11 @@ __asm__(
     ".global hal_x86_ring3_entry_trampoline\n\t"
     ".type hal_x86_ring3_entry_trampoline, @function\n\t"
     "hal_x86_ring3_entry_trampoline:\n\t"
+    "    movw 16(%esp), %ax\n\t"
+    "    movw %ax, %ds\n\t"
+    "    movw %ax, %es\n\t"
+    "    movw %ax, %fs\n\t"
+    "    movw %ax, %gs\n\t"
     "    iret\n\t"
     ".size hal_x86_ring3_entry_trampoline, . - hal_x86_ring3_entry_trampoline\n\t");
 

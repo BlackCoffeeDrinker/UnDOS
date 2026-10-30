@@ -112,43 +112,14 @@ template<uint8_t IRQ>
 
 // [Exception and Page Fault Handlers remain exactly as you wrote them]
 [[gnu::interrupt]] void interrupt_handler(stack_frame *f) {
-  // These handlers are fatal (they always end in HAL_PLATFORM_Panic), and by
-  // the time we get here interrupts are globally enabled (the scheduler
-  // turns them on once threads start running). Without disabling them first,
-  // a timer/keyboard IRQ can fire mid-panic -- e.g. while early_print_fmt is
-  // still formatting -- and preempt into the scheduler, corrupting whatever
-  // we were in the middle of printing and never coming back.
   __asm__ volatile("cli");
   KE_Print("Unhandled Interrupt/Exception at EIP: 0x{:x}", f->eip);
   HAL_PLATFORM_Panic("Unhandled Interrupt/Exception", __FILE__, __LINE__);
 }
-// Writes "#VEC xx EIP xxxxxxxx" straight to COM1, without the formatter, so
-// the first exception is still named if the stack or formatter is broken.
-static void raw_serial_hex(uint32_t value, int digits) {
-  for (int i = digits - 1; i >= 0; --i) {
-    const uint8_t nib = (value >> (i * 4)) & 0xF;
-    const uint8_t c = nib < 10 ? '0' + nib : 'a' + nib - 10;
-    while ((HAL_IO_In8(0x3FD) & 0x20) == 0) {}
-    HAL_IO_Out8(0x3F8, c);
-  }
-}
-static void raw_serial_str(const char *s) {
-  for (; *s; ++s) {
-    while ((HAL_IO_In8(0x3FD) & 0x20) == 0) {}
-    HAL_IO_Out8(0x3F8, static_cast<uint8_t>(*s));
-  }
-}
-
 template<uint8_t VEC>
 [[gnu::interrupt]] void vector_handler(stack_frame *f) {
   __asm__ volatile("cli");
-  raw_serial_str("\r\n#VEC ");
-  raw_serial_hex(VEC, 2);
-  raw_serial_str(" EIP ");
-  raw_serial_hex(f->eip, 8);
-  raw_serial_str(" CS ");
-  raw_serial_hex(f->cs, 4);
-  raw_serial_str("\r\n");
+  KE_Print("#VEC {:02x} EIP {:08x} CS {:04x}", VEC, f->eip, f->cs);
   HAL_PLATFORM_Panic("Unhandled Interrupt/Exception", __FILE__, __LINE__);
 }
 
@@ -158,9 +129,8 @@ static void set_vector_handlers(kstd::integer_sequence<uint8_t, V...>) {
 }
 
 [[gnu::interrupt]] void exception_handler(stack_frame *frame, uword_t error_code) {
-  kstd::ignore = frame;
   __asm__ volatile("cli");
-  KE_Print("Exception: 0x{:x}", error_code);
+  KE_Print("Exception: 0x{:x} EIP {:08x} CS {:04x}", error_code, frame->eip, frame->cs);
   HAL_PLATFORM_Panic("Unhandled Exception", __FILE__, __LINE__);
 }
 
@@ -217,6 +187,13 @@ __asm__(
     "    testl $0x20000, 12(%esp)\n\t"
     "    jz    1f\n\t"
     "    pushal\n\t"
+    // Leaving v86 loads null DS/ES/FS/GS; real CPUs #GP on data access
+    // through them. iret restores the v86 segments from the saved frame.
+    "    movl  $0x10, %eax\n\t"
+    "    movw  %ax, %ds\n\t"
+    "    movw  %ax, %es\n\t"
+    "    movw  %ax, %fs\n\t"
+    "    movw  %ax, %gs\n\t"
     "    pushl %esp\n\t"
     "    call  v86_gp_dispatch\n\t"
     "    addl  $4, %esp\n\t"
@@ -230,6 +207,60 @@ __asm__(
     "    pushl %eax\n\t"
     "    call  v86_non_v86_gp_panic\n\t"
     ".size v86_gp_stub, . - v86_gp_stub\n\t");
+
+// Vectors 32-47: IRQ0-15 entry stubs.
+//
+// An IRQ taken while EFLAGS.VM==1 (a BIOS call in progress) belongs to the
+// BIOS: the stub loads kernel data segments (leaving v86 loads null ones)
+// and v86_irq_dispatch reflects it into the real-mode IVT. Otherwise the
+// stub jumps to the unchanged kernel handler in g_irq_native_handlers.
+// Without an error code, EFLAGS sits at 8(%esp); the pushed IRQ number takes
+// the error-code slot so the frame matches hal::x86::v86_context_t.
+extern "C" {
+[[gnu::used]] uintptr_t g_irq_native_handlers[16] = {};
+void hal_x86_v86_irq_common();
+#define UNDOS_IRQ_STUB_DECL(n) void hal_x86_irq_stub_##n();
+UNDOS_IRQ_STUB_DECL(0) UNDOS_IRQ_STUB_DECL(1) UNDOS_IRQ_STUB_DECL(2) UNDOS_IRQ_STUB_DECL(3)
+UNDOS_IRQ_STUB_DECL(4) UNDOS_IRQ_STUB_DECL(5) UNDOS_IRQ_STUB_DECL(6) UNDOS_IRQ_STUB_DECL(7)
+UNDOS_IRQ_STUB_DECL(8) UNDOS_IRQ_STUB_DECL(9) UNDOS_IRQ_STUB_DECL(10) UNDOS_IRQ_STUB_DECL(11)
+UNDOS_IRQ_STUB_DECL(12) UNDOS_IRQ_STUB_DECL(13) UNDOS_IRQ_STUB_DECL(14) UNDOS_IRQ_STUB_DECL(15)
+#undef UNDOS_IRQ_STUB_DECL
+}
+
+#define UNDOS_IRQ_STUB_ASM(n)                          \
+  ".global hal_x86_irq_stub_" #n "\n\t"               \
+  ".type hal_x86_irq_stub_" #n ", @function\n\t"      \
+  "hal_x86_irq_stub_" #n ":\n\t"                      \
+  "    testl $0x20000, 8(%esp)\n\t"                   \
+  "    jnz   1f\n\t"                                  \
+  "    jmp   *g_irq_native_handlers + 4 * " #n "\n\t" \
+  "1:\n\t"                                            \
+  "    pushl $" #n "\n\t"                             \
+  "    jmp   hal_x86_v86_irq_common\n\t"
+
+__asm__(
+    ".text\n\t"
+    ".global hal_x86_v86_irq_common\n\t"
+    ".type hal_x86_v86_irq_common, @function\n\t"
+    "hal_x86_v86_irq_common:\n\t"
+    "    pushal\n\t"
+    "    movl  $0x10, %eax\n\t"
+    "    movw  %ax, %ds\n\t"
+    "    movw  %ax, %es\n\t"
+    "    movw  %ax, %fs\n\t"
+    "    movw  %ax, %gs\n\t"
+    "    pushl %esp\n\t"
+    "    call  v86_irq_dispatch\n\t"
+    "    addl  $4, %esp\n\t"
+    "    popal\n\t"
+    "    addl  $4, %esp\n\t"// drop the IRQ number
+    "    iret\n\t"
+    ".size hal_x86_v86_irq_common, . - hal_x86_v86_irq_common\n\t"
+    UNDOS_IRQ_STUB_ASM(0) UNDOS_IRQ_STUB_ASM(1) UNDOS_IRQ_STUB_ASM(2) UNDOS_IRQ_STUB_ASM(3)
+    UNDOS_IRQ_STUB_ASM(4) UNDOS_IRQ_STUB_ASM(5) UNDOS_IRQ_STUB_ASM(6) UNDOS_IRQ_STUB_ASM(7)
+    UNDOS_IRQ_STUB_ASM(8) UNDOS_IRQ_STUB_ASM(9) UNDOS_IRQ_STUB_ASM(10) UNDOS_IRQ_STUB_ASM(11)
+    UNDOS_IRQ_STUB_ASM(12) UNDOS_IRQ_STUB_ASM(13) UNDOS_IRQ_STUB_ASM(14) UNDOS_IRQ_STUB_ASM(15));
+#undef UNDOS_IRQ_STUB_ASM
 
 // Vector 0x80: int 0x80 syscall gate (DPL3, callable from ring 3).
 //
@@ -292,25 +323,39 @@ void init_idt() {
 
   // 2. Register Remapped Hardware Vectors (32+). IRQ0 keeps its dedicated
   //    handler; IRQ1-15 each get a template-instantiated hw_irq_handler<N>
-  //    stub dispatching through g_hardware_interrupts[N]. remap_pic() above
-  //    still masks everything except IRQ0/IRQ1/IRQ2, so most of these lines
-  //    are inert until HAL_INTR_ConnectInterrupt unmasks them.
-  idt.set(32, KERNEL_GDT_SELECTOR, &pit_irq_handler, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(33, KERNEL_GDT_SELECTOR, &hw_irq_handler<1>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(34, KERNEL_GDT_SELECTOR, &hw_irq_handler<2>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(35, KERNEL_GDT_SELECTOR, &hw_irq_handler<3>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(36, KERNEL_GDT_SELECTOR, &hw_irq_handler<4>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(37, KERNEL_GDT_SELECTOR, &hw_irq_handler<5>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(38, KERNEL_GDT_SELECTOR, &hw_irq_handler<6>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(39, KERNEL_GDT_SELECTOR, &hw_irq_handler<7>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(40, KERNEL_GDT_SELECTOR, &hw_irq_handler<8>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(41, KERNEL_GDT_SELECTOR, &hw_irq_handler<9>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(42, KERNEL_GDT_SELECTOR, &hw_irq_handler<10>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(43, KERNEL_GDT_SELECTOR, &hw_irq_handler<11>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(44, KERNEL_GDT_SELECTOR, &hw_irq_handler<12>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(45, KERNEL_GDT_SELECTOR, &hw_irq_handler<13>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(46, KERNEL_GDT_SELECTOR, &hw_irq_handler<14>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
-  idt.set(47, KERNEL_GDT_SELECTOR, &hw_irq_handler<15>, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  //    stub dispatching through g_hardware_interrupts[N]. The IDT points at
+  //    the v86-aware entry stubs, which jump to these handlers outside v86.
+  //    remap_pic() above still masks everything except IRQ0/IRQ2, so most
+  //    lines are inert until HAL_INTR_ConnectInterrupt unmasks them.
+  g_irq_native_handlers[0] = reinterpret_cast<uintptr_t>(&pit_irq_handler);
+  g_irq_native_handlers[1] = reinterpret_cast<uintptr_t>(&hw_irq_handler<1>);
+  g_irq_native_handlers[2] = reinterpret_cast<uintptr_t>(&hw_irq_handler<2>);
+  g_irq_native_handlers[3] = reinterpret_cast<uintptr_t>(&hw_irq_handler<3>);
+  g_irq_native_handlers[4] = reinterpret_cast<uintptr_t>(&hw_irq_handler<4>);
+  g_irq_native_handlers[5] = reinterpret_cast<uintptr_t>(&hw_irq_handler<5>);
+  g_irq_native_handlers[6] = reinterpret_cast<uintptr_t>(&hw_irq_handler<6>);
+  g_irq_native_handlers[7] = reinterpret_cast<uintptr_t>(&hw_irq_handler<7>);
+  g_irq_native_handlers[8] = reinterpret_cast<uintptr_t>(&hw_irq_handler<8>);
+  g_irq_native_handlers[9] = reinterpret_cast<uintptr_t>(&hw_irq_handler<9>);
+  g_irq_native_handlers[10] = reinterpret_cast<uintptr_t>(&hw_irq_handler<10>);
+  g_irq_native_handlers[11] = reinterpret_cast<uintptr_t>(&hw_irq_handler<11>);
+  g_irq_native_handlers[12] = reinterpret_cast<uintptr_t>(&hw_irq_handler<12>);
+  g_irq_native_handlers[13] = reinterpret_cast<uintptr_t>(&hw_irq_handler<13>);
+  g_irq_native_handlers[14] = reinterpret_cast<uintptr_t>(&hw_irq_handler<14>);
+  g_irq_native_handlers[15] = reinterpret_cast<uintptr_t>(&hw_irq_handler<15>);
+  const uintptr_t irq_stubs[16] = {
+      reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_0), reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_1),
+      reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_2), reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_3),
+      reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_4), reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_5),
+      reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_6), reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_7),
+      reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_8), reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_9),
+      reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_10), reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_11),
+      reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_12), reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_13),
+      reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_14), reinterpret_cast<uintptr_t>(&hal_x86_irq_stub_15),
+  };
+  for (uint8_t irq = 0; irq < 16; ++irq) {
+    idt.idt[32 + irq] = idt_entry_t(irq_stubs[irq], KERNEL_GDT_SELECTOR, GateType::INTERRUPT_32, IDTFlags::PRESENT);
+  }
 
   // Vector 13: #GP. Raw-assembly stub (see above) so v86-mode faults with
   // their extended (ES/DS/FS/GS) frame can be handled by the v86 monitor;

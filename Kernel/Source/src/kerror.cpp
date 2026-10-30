@@ -53,6 +53,7 @@ class KernelErrorCategory : public kstd::error_category {
       case kernel::KernelError::InvalidExecutable: return "Invalid executable";
       case kernel::KernelError::UnresolvedSymbol: return "Unresolved symbol";
       case kernel::KernelError::ProcessStartupFailed: return "Process startup failed";
+      case kernel::KernelError::Retry: return "Retry with a current topology snapshot";
     }
     return "Unknown kernel error";
   }

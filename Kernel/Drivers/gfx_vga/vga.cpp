@@ -3,6 +3,7 @@
 
 #include "vga_registers.hpp"
 #include "vga_palette.hpp"
+#include "vga_mode.hpp"
 
 #include <undos/syscalls/__enum_IoControlCode.h>
 #include <undos/syscalls/__struct_IoctlDisplayMode.h>
@@ -12,15 +13,18 @@ namespace {
 constexpr size_t kVgaFramebufferSize = 0x10000;// 64 KiB (4 planes x 16 KiB window)
 constexpr size_t kPageSize = 4096;
 
-constexpr uint32_t kModeWidth = 640;
-constexpr uint32_t kModeHeight = 480;
-constexpr uint32_t kModePitch = kModeWidth / 8;// bytes per scanline, per plane
+constexpr uint32_t kModeWidth = kernel::gfx::vga::ModeWidth;
+constexpr uint32_t kModeHeight = kernel::gfx::vga::ModeHeight;
+constexpr uint32_t kModePitch = kernel::gfx::vga::ModePitch;
 
 // Per-instance state, held in the function device object's extension (see
 // Vga_AddDevice); the driver keeps no mutable globals.
 struct VgaContext {
   kernel::KObjectPtr<kernel::KGraphicsAdapter> adapter;
   kernel::VirtualAddress framebuffer;
+  bool modeKnown{false};
+  bool enabled{false};
+  size_t modeIndex{};
 };
 
 // region Low-level register programming
@@ -29,7 +33,8 @@ void Vga_ProgramMode12h() {
 
   for (uint8_t i = 0; i < vga_regs::kSequencer.size(); ++i) {
     HAL_IO_Out8(vga_regs::kSequencerIndex, i);
-    HAL_IO_Out8(vga_regs::kSequencerData, vga_regs::kSequencer[i]);
+    HAL_IO_Out8(vga_regs::kSequencerData, static_cast<uint8_t>(
+        vga_regs::kSequencer[i] | (i == 1 ? 0x20 : 0)));
   }
 
   // Clear the CRTC write-protect bit (bit 7 of index 0x11) so indices 0-7
@@ -57,9 +62,6 @@ void Vga_ProgramMode12h() {
 
   vga_regs::ProgramPalette16([](uint16_t port, uint8_t value) { HAL_IO_Out8(port, value); });
 
-  // Re-enable video output (set the Palette Address Source bit).
-  HAL_IO_In8(vga_regs::kInputStatus1);
-  HAL_IO_Out8(vga_regs::kAttributeControllerIndexData, 0x20);
 }
 
 // Sets a single pixel through the classic "Set/Reset + Bit Mask" planar
@@ -129,83 +131,132 @@ kstd::error_code Vga_ProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdap
 
 kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> Vga_GetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
                                                                        size_t modeIndex) {
-  if (modeIndex != 0) {
+  kernel::KDisplayModeInfo outInfo{};
+  if (!kernel::gfx::vga::GetModeInfo(modeIndex, outInfo)) {
     return kstd::unexpected(kernel::KernelError::OutOfRange);
   }
-
-  kernel::KDisplayModeInfo outInfo{};
-  outInfo.modeIndex = 0;
-  outInfo.width = kModeWidth;
-  outInfo.height = kModeHeight;
-  outInfo.pitch = kModePitch;
-  outInfo.videoMemoryBitmapWidth = kModeWidth;
-  outInfo.videoMemoryBitmapHeight = kModeHeight;
-  outInfo.bpp = 4;
-  outInfo.numberOfPlanes = 4;// Planar VGA: one bit of the index per plane
-  outInfo.bitsPerPlane = 1;
-  outInfo.refreshRate = 60;
-  outInfo.pixelFormat = kernel::PixelFormat::INDEX8;
-  outInfo.attributeFlags = kernel::DisplayModeFlags::GraphicsMode |
-                           kernel::DisplayModeFlags::ColorMode |
-                           kernel::DisplayModeFlags::PaletteDriven;
   return outInfo;
 }
 
-kstd::expected<kernel::KDisplaySurfaceBinding, kstd::error_code> Vga_SetMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
-                                                                         size_t modeIndex) {
+kstd::error_code Vga_PrepareMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
+                                 size_t modeIndex,
+                                 kernel::KDisplayModeReservation &reservation) {
   if (modeIndex != 0) {
-    return kstd::unexpected(kernel::KernelError::OutOfRange);
+    return kernel::KernelError::OutOfRange;
   }
   if (!display || !display->adapter) {
-    return kstd::unexpected(kernel::KernelError::InvalidArgument);
+    return kernel::KernelError::InvalidArgument;
   }
 
   const auto *ctx_vga = display->adapter->GetDeviceExtensionAs<VgaContext>();
   if (!ctx_vga || !ctx_vga->framebuffer) {
-    return kstd::unexpected(kernel::KernelError::DeviceNotReady);
+    return kernel::KernelError::DeviceNotReady;
   }
 
   auto backing = KE_VMM_CreateDirectBacking(ctx_vga->framebuffer, kVgaFramebufferSize);
   if (!backing) {
     KE_Print("gfx_vga: could not allocate mode backing, keeping the current mode: {}", backing.error().message());
-    return kstd::unexpected(backing.error());
+    return backing.error();
   }
+
+  auto mode = Vga_GetModeInfo(display, modeIndex);
+  if (!mode) return mode.error();
+  reservation = {};
+  reservation.modeIndex = modeIndex;
+  reservation.mode = *mode;
+  reservation.binding.backing = kstd::move(*backing);
+  reservation.binding.type = kernel::SurfaceType::Framebuffer;
+  reservation.binding.flags = kernel::SurfaceFlags::TopDown;
+  return kernel::KernelError::Success;
+}
+
+kstd::error_code Vga_ProgramMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
+                                 kernel::KDisplayModeReservation &reservation) {
+  if (!display || !display->adapter || reservation.modeIndex != 0 ||
+      reservation.mode.width != kModeWidth || reservation.mode.height != kModeHeight ||
+      !reservation.binding.backing)
+    return kernel::KernelError::InvalidArgument;
+  const auto *ctx_vga = display->adapter->GetDeviceExtensionAs<VgaContext>();
+  if (!ctx_vga || !ctx_vga->framebuffer) return kernel::KernelError::DeviceNotReady;
 
   Vga_ProgramMode12h();
 
-  // Clear all four planes: whatever text mode left in the window (font,
-  // characters) otherwise shows up as garbage in mode 12h.
   HAL_IO_Out8(vga_regs::kSequencerIndex, 0x02);// Map Mask
   HAL_IO_Out8(vga_regs::kSequencerData, 0x0F);
   HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcEnableSetReset);
   HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0x00);
   HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcBitMask);
   HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0xFF);
-  auto *fb = ctx_vga->framebuffer.as_ptr<volatile uint8_t>();
-  for (size_t i = 0; i < static_cast<size_t>(kModePitch) * kModeHeight; ++i) {
+  auto *fb = reservation.binding.backing->directAddress.as_ptr<volatile uint8_t>();
+  for (size_t i = 0; i < static_cast<size_t>(kModePitch) * kModeHeight; ++i)
     fb[i] = 0;
-  }
 
-  kernel::KDisplaySurfaceBinding outBinding{};
-  outBinding.backing = kstd::move(*backing);
+  auto *mutableContext = display->adapter->GetDeviceExtensionAs<VgaContext>();
+  mutableContext->modeKnown = true;
+  mutableContext->modeIndex = reservation.modeIndex;
+  return kernel::KernelError::Success;
+}
 
-  outBinding.type = kernel::SurfaceType::Framebuffer;
-  outBinding.flags = kernel::SurfaceFlags::TopDown;
-  return outBinding;
+void Vga_FinishMode(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
+                    kernel::KDisplayModeReservation & /*reservation*/,
+                    bool /*committed*/) {}
+
+kstd::error_code Vga_RestoreMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
+                                 size_t modeIndex,
+                                 kernel::KDisplayModeReservation & /*reservation*/) {
+  if (!display || !display->adapter || modeIndex != 0)
+    return kernel::KernelError::Unsupported;
+  const auto *ctx_vga = display->adapter->GetDeviceExtensionAs<VgaContext>();
+  if (!ctx_vga || !ctx_vga->framebuffer) return kernel::KernelError::DeviceNotReady;
+  Vga_ProgramMode12h();
+  auto *mutableContext = display->adapter->GetDeviceExtensionAs<VgaContext>();
+  mutableContext->modeKnown = true;
+  mutableContext->modeIndex = modeIndex;
+  return kernel::KernelError::Success;
+}
+
+kstd::expected<kernel::KDisplayActualState, kstd::error_code>
+Vga_QueryActualState(const kernel::KObjectPtr<kernel::KDisplay> &display) {
+  if (!display || !display->adapter)
+    return kstd::unexpected(kernel::KernelError::InvalidArgument);
+  const auto *ctx_vga = display->adapter->GetDeviceExtensionAs<VgaContext>();
+  if (!ctx_vga) return kstd::unexpected(kernel::KernelError::DeviceNotReady);
+  return kernel::KDisplayActualState{
+      .known = ctx_vga->modeKnown,
+      .enabled = ctx_vga->enabled,
+      .modeIndex = ctx_vga->modeIndex};
 }
 
 // Video output is gated by the Attribute Controller's Palette Address Source
 // bit (0x20 written to the index port): set means "display", clear means
 // "blank, registers accessible".
-kstd::error_code Vga_Enable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
+kstd::error_code Vga_Enable(const kernel::KObjectPtr<kernel::KDisplay> &display) {
+  if (!display || !display->adapter) return kernel::KernelError::InvalidArgument;
   HAL_IO_In8(vga_regs::kInputStatus1);// Reset the index/data flip-flop
   HAL_IO_Out8(vga_regs::kAttributeControllerIndexData, 0x20);
+  auto *context = display->adapter->GetDeviceExtensionAs<VgaContext>();
+  if (!context) return kernel::KernelError::DeviceNotReady;
+  context->enabled = true;
   return kernel::KernelError::Success;
 }
 
-void Vga_Disable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
+kstd::error_code Vga_Disable(const kernel::KObjectPtr<kernel::KDisplay> &display) {
   HAL_IO_In8(vga_regs::kInputStatus1);
   HAL_IO_Out8(vga_regs::kAttributeControllerIndexData, 0x00);
+  if (display && display->adapter) {
+    if (auto *context = display->adapter->GetDeviceExtensionAs<VgaContext>())
+      context->enabled = false;
+  }
+  return kernel::KernelError::Success;
+}
+
+kstd::error_code Vga_Validate(const kernel::KObjectPtr<kernel::KDisplay> &display) {
+  if (!display || !display->adapter || !display->isPresent)
+    return kernel::KernelError::NotFound;
+  const auto *context = display->adapter->GetDeviceExtensionAs<VgaContext>();
+  return context && context->framebuffer
+             ? kernel::KernelError::Success
+             : kernel::KernelError::DeviceNotReady;
 }
 
 // Binds this driver's per-head entry points on the display the graphics
@@ -216,9 +267,14 @@ kstd::error_code Vga_ConfigureDisplay(const kernel::KObjectPtr<kernel::KGraphics
   }
 
   display->GetModeInfo = Vga_GetModeInfo;
-  display->SetMode = Vga_SetMode;
+  display->PrepareMode = Vga_PrepareMode;
+  display->ProgramMode = Vga_ProgramMode;
+  display->FinishMode = Vga_FinishMode;
+  display->RestoreMode = Vga_RestoreMode;
+  display->QueryActualState = Vga_QueryActualState;
   display->Enable = Vga_Enable;
   display->Disable = Vga_Disable;
+  display->Validate = Vga_Validate;
   return kernel::KernelError::Success;
 }
 

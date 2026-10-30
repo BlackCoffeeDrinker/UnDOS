@@ -34,6 +34,7 @@ add_executable(kernel
         src/process.cpp
         "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
         src/pnp_manager.cpp
+        src/pnp_device_state.cpp
         src/dma_manager.cpp
         src/resource_manager.cpp
         src/resource_manager.hpp

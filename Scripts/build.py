@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Build independent UnDOS projects without using the root IDE launcher."""
 import argparse
+import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -49,7 +51,7 @@ def main():
         if args.command == "grub-direct":
             relative_build = build_root.relative_to(ROOT)
             (build_root / "tmp").mkdir(parents=True, exist_ok=True)
-            run("docker", "run", "--rm", "-e",
+            run("docker", "run", "--rm", "--pull=never", "--network=none", "-e",
                 f"TMPDIR=/src/{relative_build / 'tmp'}",
                 "-v", f"{ROOT}:/src", "-w", "/src",
                 args.toolchain_image, "python3", "Scripts/build.py", "kernel",
@@ -78,7 +80,7 @@ def main():
         if args.direct_loader_manifest:
             command.extend(("--direct-loader-manifest",
                             str(Path("/src") / args.direct_loader_manifest.resolve().relative_to(ROOT))))
-        run("docker", "run", "--rm", "-e",
+        run("docker", "run", "--rm", "--pull=never", "--network=none", "-e",
             f"TMPDIR=/src/{relative_build / 'tmp'}",
             "-v", f"{ROOT}:/src", "-w", "/src",
             args.toolchain_image, *command)
@@ -110,8 +112,8 @@ def main():
     def sdk():
         cmake("SDK", "sdk-build", f"-DUNDOS_SDK_PREFIX={sdk_prefix}", target="sdk")
 
-    def kernel():
-        directory = cmake("Kernel", "kernel")
+    def kernel(name="kernel", *options):
+        directory = cmake("Kernel", name, *options)
         run("cmake", "--build", directory, "--config", args.config,
             "--parallel", args.jobs, "--target", "bootinfo_layout_probe")
         objects = sorted(

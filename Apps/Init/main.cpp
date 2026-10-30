@@ -1,14 +1,40 @@
 #include <undoscrt/stdio.h>
 #include <undoscrt/string.h>
 #include <undoscrt/process.h>
+#include <undoscrt/heap.h>
 #include <userspace.h>
 #include <undos/syscalls.h>
 #include "display_config.hpp"
+#include "display_probe.hpp"
 #include "font_config.hpp"
 
 extern "C" const char *init_shared_message();
 
 namespace {
+template<typename T>
+struct DisplayRecords {
+  T *data{};
+  uint32_t count{};
+  ~DisplayRecords() { if (data) crt_free(data); }
+  bool allocate(uint32_t size) {
+    if (size > SIZE_MAX / sizeof(T)) return false;
+    count = size;
+    if (!size) return true;
+    data = static_cast<T *>(crt_malloc(static_cast<size_t>(size) * sizeof(T)));
+    return data != nullptr;
+  }
+};
+
+template<typename T, typename Enumerate>
+bool read_display_records(DisplayRecords<T> &records, Enumerate enumerate) {
+  uint32_t capacity = 0, required = 0, written = 0;
+  if (enumerate(1, nullptr, &capacity, &required, &written) != SyscallReturnCode_OKAY ||
+      written || !records.allocate(required)) return false;
+  capacity = records.count;
+  return enumerate(0, records.data, &capacity, &required, &written) == SyscallReturnCode_OKAY &&
+         required == records.count && written == records.count;
+}
+
 bool init_fonts() {
   HANDLE configurationFile = 0;
   if (UD_SYS_OpenV1("/System/FONTS.INI", FileOpenMode_Read, &configurationFile) !=
@@ -81,12 +107,18 @@ bool init_fonts() {
 }
 
 bool init_display() {
-  DisplayState state{};
-  if (UD_SYS_GetDisplayModeV1(&state) != SyscallReturnCode_OKAY) {
-    (void) UD_SYS_PrintV1("init: no primary display is available");
+  VideoPresentTopology topology{};
+  if (UD_SYS_GetVideoPresentTopologyV1(&topology) != SyscallReturnCode_OKAY ||
+      topology.targetCount == 0) {
+    (void) UD_SYS_PrintV1("init: no video-present target is available");
     return false;
   }
-  if (state.active) return true;
+  if (topology.pathCount == 1) {
+    if (init::confirm_existing_display_path(topology, UD_SYS_EnumVideoPresentPathsV1))
+      return true;
+    (void) UD_SYS_PrintV1("init: existing display path is stale, degraded or inactive");
+    return false;
+  }
   HANDLE file = 0;
   if (UD_SYS_OpenV1("/System/DISPLAY.CFG", FileOpenMode_Read, &file) != SyscallReturnCode_OKAY) {
     (void) UD_SYS_PrintV1("init: cannot open /System/DISPLAY.CFG");
@@ -107,67 +139,114 @@ bool init_display() {
   if (UD_SYS_CloseV1(file) != SyscallReturnCode_OKAY) readable = false;
   init::DisplayPreference preference{};
   if (!readable || total == sizeof(configuration) || !init::parse_display_config(configuration, total, preference)) {
-    (void) UD_SYS_PrintV1("init: DISPLAY.CFG must contain width height bpp refreshHz (refresh 0 means any)");
+    (void) UD_SYS_PrintV1("init: DISPLAY.CFG must contain width height bpp refreshHz (refresh 0 prefers 60 Hz)");
     return false;
   }
-  DisplayMode chosen{};
-  bool haveMode = false, matched = false;
-  for (uint32_t index = 0;; ++index) {
-    DisplayMode mode{};
-    uint32_t available = 0;
-    if (UD_SYS_EnumDisplayModesV1(index, &mode, &available) != SyscallReturnCode_OKAY) {
-      (void) UD_SYS_PrintV1("init: display mode enumeration failed");
+  DisplayRecords<VideoPresentSourceMode> sourceModes;
+  if (!read_display_records(sourceModes, [&](uint32_t query, VideoPresentSourceMode *data,
+      uint32_t *capacity, uint32_t *required, uint32_t *written) {
+        return UD_SYS_EnumVideoPresentSourceModesV1(topology.generation, 1, 0, query,
+            data, capacity, required, written);
+      })) {
+    (void) UD_SYS_PrintV1("init: source-mode enumeration failed");
+    return false;
+  }
+  DisplayRecords<VideoPresentTarget> targets;
+  if (!read_display_records(targets, [&](uint32_t query, VideoPresentTarget *data,
+      uint32_t *capacity, uint32_t *required, uint32_t *written) {
+        return UD_SYS_EnumVideoPresentTargetsV1(topology.generation, 0, query,
+            data, capacity, required, written);
+      })) {
+    (void) UD_SYS_PrintV1("init: target enumeration failed");
+    return false;
+  }
+  for (uint32_t targetIndex = 0; targetIndex < targets.count; ++targetIndex) {
+    const auto &target = targets.data[targetIndex];
+    if (!target.connected) continue;
+    DisplayRecords<VideoPresentTargetMode> modes;
+    if (!read_display_records(modes, [&](uint32_t query, VideoPresentTargetMode *data,
+        uint32_t *capacity, uint32_t *required, uint32_t *written) {
+          return UD_SYS_EnumVideoPresentTargetModesV1(topology.generation, target.targetId,
+              0, query, data, capacity, required, written);
+        })) {
+      (void) UD_SYS_PrintV1("init: target-mode enumeration failed");
       return false;
     }
-    if (!available) break;
-    if (!haveMode) { chosen = mode; haveMode = true; }
-    if (mode.width == preference.width && mode.height == preference.height &&
-        mode.colorDepth == preference.bpp && (!preference.refreshHz || mode.refreshHz == preference.refreshHz)) {
-      chosen = mode;
-      matched = true;
-      break;
+    for (uint32_t modeIndex = 0; modeIndex < modes.count; ++modeIndex) {
+      const auto &mode = modes.data[modeIndex];
+      if (!init::matches_display_preference(preference, mode.width, mode.height,
+                                            mode.colorDepth, mode.refreshHz))
+        continue;
+      uint32_t sourceModeId = 0;
+      for (uint32_t sourceIndex = 0; sourceIndex < sourceModes.count; ++sourceIndex) {
+        const auto &source = sourceModes.data[sourceIndex];
+        if (source.width == mode.width && source.height == mode.height &&
+            source.colorDepth == mode.colorDepth && source.pixelFormat == mode.pixelFormat) {
+          sourceModeId = source.modeId;
+          break;
+        }
+      }
+      if (!sourceModeId) continue;
+      const VideoPresentPath path{
+          .sourceId = 1, .sourceModeId = sourceModeId, .targetId = target.targetId,
+          .targetModeId = mode.modeId, .sourceX = 0, .sourceY = 0,
+          .width = mode.width, .height = mode.height, .flags = 0};
+      HANDLE token = 0;
+      const auto validated = UD_SYS_ValidateVideoPresentTopologyV1(
+          topology.generation, &path, 1, &token);
+      if (validated != SyscallReturnCode_OKAY) continue;
+      VideoPresentTargetResult result{};
+      uint32_t resultCapacity = 1, required = 0, written = 0;
+      const auto committed = UD_SYS_CommitVideoPresentTopologyV1(
+          token, &result, &resultCapacity, &required, &written);
+      crt_printf("init: initial display %ux%ux%u@%u ret=%x outcome=%u active=%u\n",
+                 mode.width, mode.height, mode.colorDepth, mode.refreshHz,
+                 committed, result.outcome, result.active);
+      if (committed == SyscallReturnCode_OKAY && written == 1 &&
+          result.outcome == 0 && result.active == 1) {
+        (void) UD_SYS_PrintV1("init: initial display active");
+        return true;
+      }
+      if (committed != SyscallReturnCode_OKAY) (void)UD_SYS_CloseV1(token);
+      (void) UD_SYS_PrintV1("init: initial display activation failed");
+      return false;
     }
   }
-  if (!haveMode) { (void) UD_SYS_PrintV1("init: display has no supported modes"); return false; }
-  if (!matched) (void) UD_SYS_PrintV1("init: configured mode unavailable; explicitly selecting first supported mode");
-  const auto result = UD_SYS_SetDisplayModeV1(chosen.modeId);
-  crt_printf("init: initial display %ux%ux%u@%u ret=%x\n",
-             chosen.width, chosen.height, chosen.colorDepth, chosen.refreshHz, result);
-  (void) UD_SYS_PrintV1(result == SyscallReturnCode_OKAY ?
-                      "init: initial display active" : "init: initial display activation failed");
-  return result == SyscallReturnCode_OKAY;
+  (void) UD_SYS_PrintV1("init: configured fixed-refresh mode is unsupported");
+  return false;
 }
 
 int init_probe_display() {
-  DisplayState before{}, after{};
+  VideoPresentTopology topology{};
+  VideoPresentPath paths[1]{};
+  uint32_t pathCapacity = 1, pathCount = 0, required = 0;
   uint32_t dc = 0;
-  if (UD_SYS_GetDisplayModeV1(&before) != SyscallReturnCode_OKAY || !before.active ||
+  if (UD_SYS_GetVideoPresentTopologyV1(&topology) != SyscallReturnCode_OKAY ||
+      topology.pathCount != 1 ||
+      UD_SYS_EnumVideoPresentPathsV1(topology.generation, 0, 0, paths,
+          &pathCapacity, &required, &pathCount) != SyscallReturnCode_OKAY || pathCount != 1 ||
       UD_SYS_CreateDCV1("", "", DCInitFlags_Primary, &dc) != SyscallReturnCode_OKAY) return 1;
-  bool switched = false;
-  bool okay = UD_SYS_SetDisplayModeV1(UINT32_MAX) == SyscallReturnCode_INVALID_ARGUMENT;
-  for (uint32_t index = 0; okay; ++index) {
-    DisplayMode mode{};
-    uint32_t available = 0;
-    okay = UD_SYS_EnumDisplayModesV1(index, &mode, &available) == SyscallReturnCode_OKAY;
-    if (!okay || !available) break;
-    if (mode.width == before.mode.width && mode.height == before.mode.height) continue;
-    okay = UD_SYS_SetDisplayModeV1(mode.modeId) == SyscallReturnCode_OKAY;
-    if (!okay) break;
-    DeviceCaps caps{};
-    okay = UD_SYS_GetDeviceCapsV1(dc, &caps) == SyscallReturnCode_OKAY &&
-           caps.width == mode.width && caps.height == mode.height &&
-           caps.colorDepth == mode.colorDepth &&
-           UD_SYS_GetDisplayModeV1(&after) == SyscallReturnCode_OKAY && after.active &&
-           after.generation != before.generation && after.mode.modeId == mode.modeId &&
-           UD_SYS_RectangleV1(dc, 2, 2, 18, 18) == SyscallReturnCode_OKAY;
-    switched = true;
-    break;
-  }
-  const bool restored = UD_SYS_SetDisplayModeV1(before.mode.modeId) == SyscallReturnCode_OKAY;
+  auto invalidPath = paths[0];
+  invalidPath.flags = 1;
+  HANDLE invalidToken = 0;
+  bool okay = UD_SYS_ValidateVideoPresentTopologyV1(
+      topology.generation, &invalidPath, 1, &invalidToken) ==
+      SyscallReturnCode_INVALID_ARGUMENT;
+  HANDLE token = 0;
+  okay = okay && UD_SYS_ValidateVideoPresentTopologyV1(
+      topology.generation, paths, 1, &token) == SyscallReturnCode_OKAY;
+  VideoPresentTargetResult result{};
+  uint32_t resultCapacity = 1, written = 0;
+  okay = okay && UD_SYS_CommitVideoPresentTopologyV1(
+      token, &result, &resultCapacity, &required, &written) == SyscallReturnCode_OKAY &&
+      written == 1 && result.outcome == 0 && result.active == 1;
+  DeviceCaps caps{};
+  okay = okay && UD_SYS_GetDeviceCapsV1(dc, &caps) == SyscallReturnCode_OKAY &&
+         caps.width == paths[0].width && caps.height == paths[0].height &&
+         UD_SYS_RectangleV1(dc, 2, 2, 18, 18) == SyscallReturnCode_OKAY;
   const bool closed = UD_SYS_DeleteDCV1(dc) == SyscallReturnCode_OKAY;
-  okay = okay && restored && closed;
-  if (!switched && okay) (void) UD_SYS_PrintV1("display probe: single-mode adapter (switch skipped)");
-  (void) UD_SYS_PrintV1(okay ? "display probe: PASS" : "display probe: FAIL");
+  okay = okay && closed;
+  (void) UD_SYS_PrintV1(okay ? "topology display probe: PASS" : "topology display probe: FAIL");
   return okay ? 0 : 1;
 }
 

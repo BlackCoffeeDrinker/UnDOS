@@ -14,10 +14,103 @@
 #include <kernel/object_manager.hpp>
 #include <kernel/virtual_memory.hpp>
 #include "../../../Apps/Init/display_config.hpp"
+#include "../../../Apps/Init/display_probe.hpp"
+#include "../../../Kernel/Drivers/gfx_vga/vga_mode.hpp"
+#include "sched_test_hooks.hpp"
+#include "sync_test_hooks.hpp"
 #include "syscalls/syscalls.hpp"
 #include "user/user.hpp"
+#include "event_broadcaster.hpp"
+#include <undos/syscalls/__syscall_ValidateVideoPresentTopology_V1.h>
+#include <undos/syscalls/__syscall_CommitVideoPresentTopology_V1.h>
+#include <undos/syscalls/__syscall_EnumVideoPresentTargets_V1.h>
+#include <undos/syscalls/__syscall_EnumVideoPresentSourceModes_V1.h>
+#include <undos/syscalls/__syscall_EnumVideoPresentTargetModes_V1.h>
+#include <undos/syscalls/__syscall_EnumVideoPresentPaths_V1.h>
+#include "syscalls/KErrorToSysReturnCode.hpp"
 
 namespace {
+constexpr size_t UNDOS_MAX_MAPPED_BUFFER_SIZE = 64 * 1024 * 1024;
+size_t dispatchInputCount{};
+size_t dispatchInputLength{};
+size_t dispatchEmptyMaps{};
+void *dispatchInvalidAddress{};
+void *dispatchObservedOutput{};
+bool dispatchOutputMapped{};
+kstd::expected<void *, kstd::error_code> DispatchMap(
+    void *address, size_t bytes, kernel::vmm::AddressSpace &) {
+  if (!bytes) ++dispatchEmptyMaps;
+  if (address == dispatchInvalidAddress)
+    return kstd::unexpected(kernel::KernelError::InvalidAddress);
+  if (bytes && address == dispatchObservedOutput) dispatchOutputMapped = true;
+  return address;
+}
+kstd::error_code DispatchUnmap(void *, size_t, kernel::vmm::AddressSpace &) { return {}; }
+kstd::error_code DispatchCopy(kernel::vmm::AddressSpace &, void *to,
+                              const void *from, size_t bytes) {
+  kstd::memcpy(to, from, bytes);
+  return {};
+}
+kstd::error_code DispatchValidate(__KRN_GFX_VALIDATEVIDEOPRESENTTOPOLOGY_V1 &&args) {
+  dispatchInputCount = args.paths.size();
+  dispatchInputLength = args.paths_len;
+  const auto error = handle_ValidateVideoPresentTopology_V1(kstd::move(args));
+  args.paths.release();
+  return error;
+}
+kstd::error_code DispatchCommit(__KRN_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 &&args) {
+  const auto error = handle_CommitVideoPresentTopology_V1(kstd::move(args));
+  args.results.release();
+  return error;
+}
+kstd::error_code DispatchTargets(__KRN_GFX_ENUMVIDEOPRESENTTARGETS_V1 &&args) {
+  const auto error = handle_EnumVideoPresentTargets_V1(kstd::move(args));
+  dispatchOutputMapped = false;
+  args.targets.release();
+  return error;
+}
+kstd::error_code DispatchSources(__KRN_GFX_ENUMVIDEOPRESENTSOURCEMODES_V1 &&args) {
+  const auto error = handle_EnumVideoPresentSourceModes_V1(kstd::move(args));
+  dispatchOutputMapped = false;
+  args.modes.release();
+  return error;
+}
+kstd::error_code DispatchTargetModes(__KRN_GFX_ENUMVIDEOPRESENTTARGETMODES_V1 &&args) {
+  const auto error = handle_EnumVideoPresentTargetModes_V1(kstd::move(args));
+  dispatchOutputMapped = false;
+  args.modes.release();
+  return error;
+}
+kstd::error_code DispatchPaths(__KRN_GFX_ENUMVIDEOPRESENTPATHS_V1 &&args) {
+  const auto error = handle_EnumVideoPresentPaths_V1(kstd::move(args));
+  dispatchOutputMapped = false;
+  args.paths.release();
+  return error;
+}
+#define KE_VMM_MapBorrowed DispatchMap
+#define KE_VMM_UnmapBorrowed DispatchUnmap
+#define KE_VMM_CopyToUserspace DispatchCopy
+#define handle_ValidateVideoPresentTopology_V1 DispatchValidate
+#define handle_CommitVideoPresentTopology_V1 DispatchCommit
+#define handle_EnumVideoPresentTargets_V1 DispatchTargets
+#define handle_EnumVideoPresentSourceModes_V1 DispatchSources
+#define handle_EnumVideoPresentTargetModes_V1 DispatchTargetModes
+#define handle_EnumVideoPresentPaths_V1 DispatchPaths
+#include "generated_validate_dispatch.inc"
+#include "generated_commit_dispatch.inc"
+#include "generated_targets_dispatch.inc"
+#include "generated_EnumVideoPresentSourceModes_dispatch.inc"
+#include "generated_EnumVideoPresentTargetModes_dispatch.inc"
+#include "generated_EnumVideoPresentPaths_dispatch.inc"
+#undef handle_EnumVideoPresentPaths_V1
+#undef handle_EnumVideoPresentTargetModes_V1
+#undef handle_EnumVideoPresentSourceModes_V1
+#undef handle_EnumVideoPresentTargets_V1
+#undef handle_CommitVideoPresentTopology_V1
+#undef handle_ValidateVideoPresentTopology_V1
+#undef KE_VMM_CopyToUserspace
+#undef KE_VMM_UnmapBorrowed
+#undef KE_VMM_MapBorrowed
 
 // Fake KGraphicsAdapter backend: cfunc only stores a raw function pointer,
 // so recording calls needs module-level state rather than a capturing
@@ -32,19 +125,31 @@ struct FakeAdapterState {
   bool configureShouldSucceed = true;
   bool bindGetModeInfo = true;
   bool bindSetMode = true;
+  bool bindValidate = true;
   size_t configureCalls = 0;
   uint32_t lastConfiguredHead = 0xFFFFFFFFu;
 
   // --- SetMode ---
   bool setModeShouldSucceed = true;
   bool enableShouldSucceed = true;
+  bool programFailureChangesMode = false;
+  bool bindRestoreMode = true;
+  bool validateShouldSucceed = true;
+  size_t failEnableCallsRemaining = 0;
+  size_t enableCalls = 0;
+  size_t prepareCalls = 0;
+  size_t finishCalls = 0;
+  size_t preparedBackingSize = 0;
   size_t setModeCalls = 0;
   size_t lastSetModeIndex = 0;
+  size_t presentCalls = 0;
+  size_t removedCallbacks = 0;
+  size_t modeCallsUntilResourceChange = 0;
 
   // Mode list the fake display reports. Mode 0 is the only one the default
   // monitor capabilities accept; mode 1 exercises the runtime switch.
   size_t modeCount = 1;
-  kernel::KDisplayModeInfo modes[2]{
+  kernel::KDisplayModeInfo modes[65]{
       {
           .width = 640,
           .height = 480,
@@ -63,7 +168,8 @@ struct FakeAdapterState {
       },
   };
 
-  // Hook ordering log: 'D' = Disable, 'S' = SetMode, 'E' = Enable.
+  // Hook ordering log: 'P' = prepare, 'D' = disable, 'S' = program,
+  // 'E' = enable, 'F' = finish reservation.
   char callLog[64]{};
   size_t callLogLen = 0;
 
@@ -76,6 +182,7 @@ struct FakeAdapterState {
 };
 
 FakeAdapterState g_fakeAdapterState;
+uint8_t g_fakeFramebuffers[16][800 * 600]{};
 
 void ResetFakeAdapterState() {
   g_fakeAdapterState = FakeAdapterState{};
@@ -85,6 +192,8 @@ void ResetFakeAdapterState() {
 // is not confused by whatever the kernel did while starting the adapter.
 void ResetFakeCalls() {
   g_fakeAdapterState.configureCalls = 0;
+  g_fakeAdapterState.prepareCalls = 0;
+  g_fakeAdapterState.finishCalls = 0;
   g_fakeAdapterState.setModeCalls = 0;
   g_fakeAdapterState.lastSetModeIndex = 0;
   g_fakeAdapterState.callLogLen = 0;
@@ -101,7 +210,13 @@ kstd::string_view CallLog() {
   return {g_fakeAdapterState.callLog, g_fakeAdapterState.callLogLen};
 }
 
-kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> FakeGetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/, size_t modeIndex) {
+kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> FakeGetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t modeIndex) {
+  if (g_fakeAdapterState.modeCallsUntilResourceChange &&
+      --g_fakeAdapterState.modeCallsUntilResourceChange == 0)
+    ++display->adapter->resourceGeneration;
+  if (display->adapter && display->adapter->device &&
+      display->adapter->device->pnpState == kernel::KPnpState::Removed)
+    ++g_fakeAdapterState.removedCallbacks;
   if (modeIndex >= g_fakeAdapterState.modeCount) {
     return kstd::unexpected(kernel::KernelError::OutOfRange);
   }
@@ -110,32 +225,112 @@ kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> FakeGetModeInfo(const
   return info;
 }
 
-kstd::expected<kernel::KDisplaySurfaceBinding, kstd::error_code> FakeSetMode(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
-                                                                              size_t modeIndex) {
+size_t observedModeCallbacks{}, modeCallbacksWithSpinlocks{}, modeCallbacksWithOutputMapping{};
+kstd::expected<kernel::KDisplayModeInfo, kstd::error_code>
+ObserveModeCallback(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t index) {
+  ++observedModeCallbacks;
+  if (test_sync::held_spinlocks()) ++modeCallbacksWithSpinlocks;
+  if (dispatchOutputMapped) ++modeCallbacksWithOutputMapping;
+  return FakeGetModeInfo(display, index);
+}
+
+kstd::error_code FakePrepareMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
+                                 size_t modeIndex,
+                                 kernel::KDisplayModeReservation &reservation) {
+  RecordCall('P');
+  ++g_fakeAdapterState.prepareCalls;
+  const auto mode = FakeGetModeInfo(display, modeIndex);
+  if (!mode) return mode.error();
+  auto backing = KE_VMM_CreateDirectBacking(
+      kernel::VirtualAddress::from_ptr(g_fakeFramebuffers[display->headIndex]),
+      g_fakeAdapterState.preparedBackingSize
+          ? g_fakeAdapterState.preparedBackingSize
+          : sizeof(g_fakeFramebuffers[display->headIndex]));
+  if (!backing) return backing.error();
+  reservation = {};
+  reservation.modeIndex = modeIndex;
+  reservation.mode = *mode;
+  reservation.binding.backing = kstd::move(*backing);
+  reservation.binding.type = kernel::SurfaceType::Framebuffer;
+  reservation.binding.flags = kernel::SurfaceFlags::TopDown;
+  return kernel::KernelError::Success;
+}
+
+kstd::error_code FakeProgramMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
+                                 kernel::KDisplayModeReservation &reservation) {
   RecordCall('S');
   g_fakeAdapterState.setModeCalls++;
-  g_fakeAdapterState.lastSetModeIndex = modeIndex;
+  g_fakeAdapterState.lastSetModeIndex = reservation.modeIndex;
   if (!g_fakeAdapterState.setModeShouldSucceed) {
-    return kstd::unexpected(kernel::KernelError::DeviceError);
+    if (g_fakeAdapterState.programFailureChangesMode)
+      display->currentMode = reservation.mode;
+    return kernel::KernelError::DeviceError;
   }
-  kernel::KDisplaySurfaceBinding binding{};
-  binding.type = kernel::SurfaceType::Framebuffer;
-  binding.flags = kernel::SurfaceFlags::TopDown;
-  return binding;
+  display->currentMode = reservation.mode;
+  if (!display->modeGeneration) display->modeGeneration = 1;
+  return kernel::KernelError::Success;
 }
 
-kstd::error_code FakeEnable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
+void FakeFinishMode(const kernel::KObjectPtr<kernel::KDisplay> &,
+                    kernel::KDisplayModeReservation &, bool) {
+  RecordCall('F');
+  ++g_fakeAdapterState.finishCalls;
+}
+
+kstd::error_code FakeValidate(const kernel::KObjectPtr<kernel::KDisplay> &display) {
+  return display && display->isPresent && g_fakeAdapterState.validateShouldSucceed
+             ? kernel::KernelError::Success
+             : kernel::KernelError::DeviceError;
+}
+
+kstd::error_code FakeRestoreMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
+                                 size_t modeIndex,
+                                 kernel::KDisplayModeReservation &) {
+  const auto mode = FakeGetModeInfo(display, modeIndex);
+  if (!mode) return mode.error();
+  display->currentMode = *mode;
+  return kernel::KernelError::Success;
+}
+
+kstd::expected<kernel::KDisplayActualState, kstd::error_code>
+FakeQueryActualState(const kernel::KObjectPtr<kernel::KDisplay> &display) {
+  return kernel::KDisplayActualState{
+      .known = display->modeGeneration != 0,
+      .enabled = display->isAttachedToDesktop,
+      .modeIndex = display->currentMode.modeIndex};
+}
+
+size_t observedActualCallbacks{}, ungatedActualCallbacks{};
+kstd::expected<kernel::KDisplayActualState, kstd::error_code>
+ObserveActualCallback(const kernel::KObjectPtr<kernel::KDisplay> &display) {
+  ++observedActualCallbacks;
+  if (!kernel::gfx::video_present_test_callback_gate_held()) ++ungatedActualCallbacks;
+  return FakeQueryActualState(display);
+}
+
+kstd::error_code FakeEnable(const kernel::KObjectPtr<kernel::KDisplay> &display) {
   RecordCall('E');
-  return g_fakeAdapterState.enableShouldSucceed ? kernel::KernelError::Success : kernel::KernelError::DeviceError;
+  ++g_fakeAdapterState.enableCalls;
+  if (g_fakeAdapterState.failEnableCallsRemaining) {
+    --g_fakeAdapterState.failEnableCallsRemaining;
+    return kernel::KernelError::DeviceError;
+  }
+  if (!g_fakeAdapterState.enableShouldSucceed) return kernel::KernelError::DeviceError;
+  display->isAttachedToDesktop = true;
+  return kernel::KernelError::Success;
 }
 
-void FakeDisable(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/) {
+kstd::error_code FakeDisable(const kernel::KObjectPtr<kernel::KDisplay> &display) {
   RecordCall('D');
+  display->isAttachedToDesktop = false;
+  return kernel::KernelError::Success;
 }
 
-kstd::error_code FakeProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
+kstd::error_code FakeProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
                                      const kernel::KGraphicsAdapterDisplayEnumInfo &enumInfo,
                                      kernel::KGraphicsAdapterDisplayInfo &outInfo) {
+  if (adapter->device && adapter->device->pnpState == kernel::KPnpState::Removed)
+    ++g_fakeAdapterState.removedCallbacks;
   if (enumInfo.displayIndex >= g_fakeAdapterState.headCount) {
     return kernel::KernelError::OutOfRange;
   }
@@ -161,10 +356,16 @@ kstd::error_code FakeConfigureDisplay(const kernel::KObjectPtr<kernel::KGraphics
     display->GetModeInfo = FakeGetModeInfo;
   }
   if (g_fakeAdapterState.bindSetMode) {
-    display->SetMode = FakeSetMode;
+    display->PrepareMode = FakePrepareMode;
+    display->ProgramMode = FakeProgramMode;
+    display->FinishMode = FakeFinishMode;
+    if (g_fakeAdapterState.bindRestoreMode)
+      display->RestoreMode = FakeRestoreMode;
+    display->QueryActualState = FakeQueryActualState;
   }
   display->Enable = FakeEnable;
   display->Disable = FakeDisable;
+  if (g_fakeAdapterState.bindValidate) display->Validate = FakeValidate;
   return kernel::KernelError::Success;
 }
 
@@ -243,6 +444,54 @@ kstd::vector<kernel::KObjectPtr<kernel::KDisplay>> StartFakeAdapter() {
   return DisplaysOf(adapter);
 }
 
+struct TargetIdIsolation {
+  kernel::KObjectPtr<kernel::KDisplay> priorTargets[64]{};
+  uint32_t priorIds[64]{};
+  size_t priorCount{};
+  kernel::KObjectPtr<kernel::KDisplay> createdTargets[65]{};
+  size_t createdCount{};
+  bool overflow{};
+
+  TargetIdIsolation() {
+    KE_OB_GetGfxDirectory()->Each<kernel::KDisplay>(
+        [&](const kernel::KObjectPtr<kernel::KDisplay> &target) {
+          if (!target->videoPresentTargetId) return;
+          if (priorCount == 64) {
+            overflow = true;
+            return;
+          }
+          priorTargets[priorCount] = target;
+          priorIds[priorCount++] = target->videoPresentTargetId;
+          target->videoPresentTargetId = 0;
+        });
+  }
+
+  void Track(const kstd::vector<kernel::KObjectPtr<kernel::KDisplay>> &targets) {
+    for (const auto &target : targets) {
+      if (createdCount == 65) {
+        overflow = true;
+        return;
+      }
+      createdTargets[createdCount++] = target;
+    }
+  }
+
+  void Track(const kernel::KObjectPtr<kernel::KDisplay> &target) {
+    if (createdCount == 65) {
+      overflow = true;
+      return;
+    }
+    createdTargets[createdCount++] = target;
+  }
+
+  ~TargetIdIsolation() {
+    for (size_t i = 0; i < createdCount; ++i)
+      createdTargets[i]->videoPresentTargetId = 0;
+    for (size_t i = 0; i < priorCount; ++i)
+      priorTargets[i]->videoPresentTargetId = priorIds[i];
+  }
+};
+
 kernel::KObjectPtr<kernel::KDisplay> MakeFakeDisplay() {
   ResetFakeAdapterState();
 
@@ -258,30 +507,127 @@ kernel::KObjectPtr<kernel::KDisplay> MakeFakeDisplay() {
   return displays[0];
 }
 
+kstd::expected<kernel::gfx::VideoPresentSourceModeInfo, kstd::error_code>
+MatchingSourceMode(uint32_t generation, const kernel::KDisplayModeInfo &mode) {
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  if (const auto error = kernel::gfx::get_video_present_topology(topology); error)
+    return kstd::unexpected(error);
+  for (uint32_t index = 0; index < topology.sourceModeCount; ++index) {
+    const auto source = kernel::gfx::video_present_source_mode(
+        generation, kernel::gfx::DesktopSourceId, index);
+    if (!source) return kstd::unexpected(source.error());
+    if (source->width == mode.width && source->height == mode.height &&
+        source->colorDepth == mode.bpp && source->pixelFormat == mode.pixelFormat)
+      return source;
+  }
+  return kstd::unexpected(kernel::KernelError::NotFound);
+}
+
+kstd::expected<kernel::gfx::VideoPresentTargetResult, kstd::error_code>
+SetModeViaTopology(const kernel::KObjectPtr<kernel::KDisplay> &target, uint32_t modeOrdinal) {
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  if (const auto error = kernel::gfx::get_video_present_topology(topology); error)
+    return kstd::unexpected(error);
+  const auto targetMode = kernel::gfx::video_present_target_mode(
+      topology.generation, target->videoPresentTargetId, modeOrdinal);
+  if (!targetMode) return kstd::unexpected(targetMode.error());
+  kernel::gfx::VideoPresentSourceModeInfo sourceMode{};
+  bool found = false;
+  for (uint32_t index = 0; index < topology.sourceModeCount; ++index) {
+    const auto candidate = kernel::gfx::video_present_source_mode(
+        topology.generation, kernel::gfx::DesktopSourceId, index);
+    if (!candidate) return kstd::unexpected(candidate.error());
+    if (candidate->width == targetMode->mode.width &&
+        candidate->height == targetMode->mode.height &&
+        candidate->colorDepth == targetMode->mode.bpp &&
+        candidate->pixelFormat == targetMode->mode.pixelFormat) {
+      sourceMode = *candidate;
+      found = true;
+      break;
+    }
+  }
+  if (!found) return kstd::unexpected(kernel::KernelError::Unsupported);
+  const kernel::gfx::VideoPresentPathInfo path{
+      .sourceId = kernel::gfx::DesktopSourceId,
+      .sourceModeId = sourceMode.modeId,
+      .targetId = targetMode->targetId,
+      .targetModeId = targetMode->modeId,
+      .sourceX = 0,
+      .sourceY = 0,
+      .width = targetMode->mode.width,
+      .height = targetMode->mode.height,
+      .flags = 0};
+  kernel::KObjectPtr<kernel::KDisplay> preparedTarget;
+  size_t modeIndex = 0;
+  kernel::KDisplayModeReservation reservation{};
+  if (const auto error = kernel::gfx::video_present_prepare_path(
+          topology.generation, path, preparedTarget, modeIndex, reservation);
+      error)
+    return kstd::unexpected(error);
+  return kernel::gfx::commit_video_present_path(
+      topology.generation, path, preparedTarget, reservation);
+}
+
 }// namespace
+
+TEST_CASE("Basic VGA exposes only its fixed four-plane mode", "[gfx][vga]") {
+  kernel::KDisplayModeInfo mode{};
+  REQUIRE(kernel::gfx::vga::GetModeInfo(0, mode));
+  REQUIRE(mode.modeIndex == 0);
+  REQUIRE(mode.width == 640);
+  REQUIRE(mode.height == 480);
+  REQUIRE(mode.pitch == 80);
+  REQUIRE(mode.bpp == 4);
+  REQUIRE(mode.numberOfPlanes == 4);
+  REQUIRE(mode.bitsPerPlane == 1);
+  REQUIRE(mode.refreshRate == 60);
+  REQUIRE(mode.pixelFormat == kernel::PixelFormat::INDEX8);
+  REQUIRE(mode.attributeFlags == (kernel::DisplayModeFlags::GraphicsMode |
+                                  kernel::DisplayModeFlags::ColorMode |
+                                  kernel::DisplayModeFlags::PaletteDriven));
+  REQUIRE_FALSE(kernel::gfx::vga::GetModeInfo(1, mode));
+}
 
 TEST_CASE("KE_GFX_CreateSurface populates surface shape from mode info on success", "[gfx]") {
   EnsureObjectManagerInitialized();
 
   const auto display = MakeFakeDisplay();
-  const auto surface = KE_GFX_CreateSurfaceForMode(display, 0).value_or(nullptr);
+  const auto result = SetModeViaTopology(display, 0);
+  const auto surface = display->surface;
 
+  REQUIRE(result);
+  REQUIRE(result->outcome == 0);
   REQUIRE(surface);
   REQUIRE(surface->width == 640);
   REQUIRE(surface->height == 480);
   REQUIRE(surface->pitch == 80);
   REQUIRE(surface->pixelFormat == kernel::PixelFormat::INDEX8);
   REQUIRE(g_fakeAdapterState.lastSetModeIndex == 0);
+  REQUIRE(kernel::gfx::active_video_present_target() == display);
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  REQUIRE(topology.pathCount == 1);
+  const auto activePath = kernel::gfx::video_present_path(topology.generation, 0);
+  REQUIRE(activePath);
+  REQUIRE(activePath->targetId == display->videoPresentTargetId);
+  kernel::KObjectPtr<kernel::gfx::KVideoPresentSource> source;
+  KE_OB_GetGfxDirectory()->Each<kernel::gfx::KVideoPresentSource>(
+      [&](const auto &candidate) { source = candidate; });
+  REQUIRE(source);
+  REQUIRE(source->active);
+  REQUIRE(source->target == display);
+  REQUIRE(source->surface == surface);
+  REQUIRE(source->currentMode.modeIndex == display->currentMode.modeIndex);
 }
 
 TEST_CASE("KE_GFX_CreateSurface rejects an out-of-range modeIndex without calling SetMode", "[gfx]") {
   EnsureObjectManagerInitialized();
 
   const auto display = MakeFakeDisplay();
-  const auto surface = KE_GFX_CreateSurfaceForMode(display, 1);
+  const auto result = SetModeViaTopology(display, 1);
 
-  REQUIRE_FALSE(surface);
-  REQUIRE(surface.error() == kernel::KernelError::OutOfRange);
+  REQUIRE_FALSE(result);
+  REQUIRE(result.error() == kernel::KernelError::NotFound);
   REQUIRE(g_fakeAdapterState.setModeCalls == 0);
 }
 
@@ -289,16 +635,16 @@ TEST_CASE("KE_GFX_CreateSurface returns null instead of crashing when no driver 
   EnsureObjectManagerInitialized();
 
   ResetFakeAdapterState();
-  // ConfigureDisplay deliberately leaves display->SetMode unset (null cfunc).
+  // ConfigureDisplay deliberately leaves the target transaction callbacks unset.
   g_fakeAdapterState.bindSetMode = false;
 
   auto displays = StartFakeAdapter();
   REQUIRE(displays.size() == 1);
-  REQUIRE_FALSE(displays[0]->SetMode);
+  REQUIRE_FALSE(displays[0]->PrepareMode);
 
-  const auto surface = KE_GFX_CreateSurfaceForMode(displays[0], 0);
-  REQUIRE_FALSE(surface);
-  REQUIRE(surface.error() == kernel::KernelError::Unsupported);
+  const auto result = SetModeViaTopology(displays[0], 0);
+  REQUIRE_FALSE(result);
+  REQUIRE(result.error() == kernel::KernelError::NotFound);
 }
 
 TEST_CASE("KE_GFX_CreateSurface returns null when the driver's SetMode fails", "[gfx]") {
@@ -307,9 +653,36 @@ TEST_CASE("KE_GFX_CreateSurface returns null when the driver's SetMode fails", "
   const auto display = MakeFakeDisplay();
   g_fakeAdapterState.setModeShouldSucceed = false;
 
-  const auto surface = KE_GFX_CreateSurfaceForMode(display, 0);
-  REQUIRE_FALSE(surface);
-  REQUIRE(surface.error() == kernel::KernelError::DeviceError);
+  const auto result = SetModeViaTopology(display, 0);
+  REQUIRE(result);
+  REQUIRE(result->outcome == 3);
+  REQUIRE_FALSE(display->surface);
+}
+
+TEST_CASE("Target validation failure stops before resource reservation", "[gfx][topology]") {
+  EnsureObjectManagerInitialized();
+  const auto display = MakeFakeDisplay();
+  g_fakeAdapterState.validateShouldSucceed = false;
+
+  const auto result = SetModeViaTopology(display, 0);
+  REQUIRE_FALSE(result);
+  REQUIRE(result.error() == kernel::KernelError::DeviceError);
+  REQUIRE(g_fakeAdapterState.prepareCalls == 0);
+  REQUIRE(g_fakeAdapterState.setModeCalls == 0);
+}
+
+TEST_CASE("Target reservation rejects an undersized backing before programming", "[gfx][topology]") {
+  EnsureObjectManagerInitialized();
+  const auto display = MakeFakeDisplay();
+  g_fakeAdapterState.preparedBackingSize = 1;
+
+  const auto result = SetModeViaTopology(display, 0);
+  REQUIRE_FALSE(result);
+  REQUIRE(result.error() == kernel::KernelError::InvalidState);
+  REQUIRE(g_fakeAdapterState.prepareCalls == 1);
+  REQUIRE(g_fakeAdapterState.finishCalls == 1);
+  REQUIRE(g_fakeAdapterState.setModeCalls == 0);
+  REQUIRE(CallLog() == "PF");
 }
 
 TEST_CASE("DeviceContextTable Allocate/Resolve/Close round trip", "[gfx][dc_table]") {
@@ -399,7 +772,9 @@ TEST_CASE("KGraphicsAdapter FillRect/DrawLine/BitBlt forward to the fake driver"
   EnsureObjectManagerInitialized();
 
   const auto display = MakeFakeDisplay();
-  const auto surface = KE_GFX_CreateSurfaceForMode(display, 0).value_or(nullptr);
+  const auto modeResult = SetModeViaTopology(display, 0);
+  const auto surface = display->surface;
+  REQUIRE(modeResult);
   REQUIRE(surface);
 
   REQUIRE_FALSE(display->adapter->FillRect(display->adapter, surface, 1, 2, 3, 4, 9));
@@ -490,7 +865,8 @@ TEST_CASE("DeviceContextTable slot fields round-trip through the SpinLock-guarde
 
   slot->lock.lock();
   slot->display = display;
-  slot->target = KE_GFX_CreateSurfaceForMode(display, 0).value_or(nullptr);
+  REQUIRE(SetModeViaTopology(display, 0));
+  slot->target = display->surface;
   slot->penColor = 7;
   slot->currentX = 10;
   slot->currentY = 20;
@@ -637,14 +1013,17 @@ TEST_CASE("StartAdapter creates one display per present head with its head index
     if (display->headIndex == 1) sawHead1 = true;
     // The hooks ConfigureDisplay bound are visible on the created object.
     REQUIRE(display->GetModeInfo);
-    REQUIRE(display->SetMode);
+    REQUIRE(display->PrepareMode);
+    REQUIRE(display->ProgramMode);
+    REQUIRE(display->FinishMode);
+    REQUIRE(display->QueryActualState);
     REQUIRE(display->isPresent);
   }
   REQUIRE(sawHead0);
   REQUIRE(sawHead1);
 
   // Some display has been elected primary by the subsystem.
-  REQUIRE(KE_GFX_GetPrimaryDisplay());
+  REQUIRE(kernel::gfx::has_video_present_targets());
 }
 
 TEST_CASE("StartAdapter discards a head whose ConfigureDisplay fails", "[gfx][mode]") {
@@ -660,7 +1039,7 @@ TEST_CASE("StartAdapter discards a head whose ConfigureDisplay fails", "[gfx][mo
   REQUIRE(DisplaysOf(adapter).empty());
 }
 
-TEST_CASE("StartAdapter skips a head reporting isPresent = false", "[gfx][mode]") {
+TEST_CASE("StartAdapter retains disconnected targets with stable identities", "[gfx][mode]") {
   EnsureObjectManagerInitialized();
 
   ResetFakeAdapterState();
@@ -668,11 +1047,46 @@ TEST_CASE("StartAdapter skips a head reporting isPresent = false", "[gfx][mode]"
   g_fakeAdapterState.firstHeadAbsent = true;
 
   auto displays = StartFakeAdapter();
-  REQUIRE(displays.size() == 1);
-  REQUIRE(displays[0]->headIndex == 1);
-  // ConfigureDisplay is only called for heads that produced a KDisplay.
-  REQUIRE(g_fakeAdapterState.configureCalls == 1);
+  REQUIRE(displays.size() == 2);
+  bool sawDisconnectedHead = false;
+  bool sawConnectedHead = false;
+  for (const auto &display : displays) {
+    REQUIRE(display->videoPresentTargetId != 0);
+    if (display->headIndex == 0) {
+      REQUIRE_FALSE(display->isPresent);
+      sawDisconnectedHead = true;
+    } else if (display->headIndex == 1) {
+      REQUIRE(display->isPresent);
+      sawConnectedHead = true;
+    }
+  }
+  REQUIRE(sawDisconnectedHead);
+  REQUIRE(sawConnectedHead);
+  REQUIRE(g_fakeAdapterState.configureCalls == 2);
   REQUIRE(g_fakeAdapterState.lastConfiguredHead == 1);
+  REQUIRE(kernel::gfx::has_video_present_targets());
+}
+
+TEST_CASE("Disconnected-only topology does not count as a usable display", "[gfx][mode]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  REQUIRE_FALSE(isolation.overflow);
+  ResetFakeAdapterState();
+  g_fakeAdapterState.firstHeadAbsent = true;
+
+  const auto displays = StartFakeAdapter();
+  isolation.Track(displays);
+  REQUIRE_FALSE(isolation.overflow);
+  REQUIRE(displays.size() == 1);
+  REQUIRE_FALSE(displays[0]->isPresent);
+  REQUIRE(SetModeViaTopology(displays[0], 0).error() ==
+          kernel::KernelError::Unsupported);
+  REQUIRE(g_fakeAdapterState.prepareCalls == 0);
+  REQUIRE(g_fakeAdapterState.setModeCalls == 0);
+  REQUIRE_FALSE(kernel::gfx::has_video_present_targets());
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  REQUIRE(topology.targetCount == 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -719,114 +1133,816 @@ TEST_CASE("Mode enumeration preserves driver failures instead of reporting exhau
   REQUIRE(kernel::gfx::enumerate_mode(display, 0).error() == kernel::KernelError::NotFound);
 }
 
-TEST_CASE("Display syscalls query inactive state and keep root surfaces across switches", "[gfx][mode]") {
-  EnsureObjectManagerInitialized();
-  const auto created = MakeFakeDisplay();
-  const auto display = KE_GFX_GetPrimaryDisplay();
-  REQUIRE(display);
-  struct Restore {
-    kernel::KObjectPtr<kernel::KDisplay> display;
-    decltype(display->GetModeInfo) getMode;
-    decltype(display->SetMode) setMode;
-    decltype(display->Enable) enable;
-    decltype(display->Disable) disable;
-    kernel::KObjectPtr<kernel::KSurface> surface;
-    kernel::KDisplayModeInfo mode;
-    kernel::KMonitorCapabilities caps;
-    uint32_t generation;
-    bool attached;
-    ~Restore() {
-      kernel::user::Guard guard;
-      kernel::user::cursor_hide_locked();
-      kernel::user::cursor_reset_locked();
-      display->GetModeInfo = getMode;
-      display->SetMode = setMode;
-      display->Enable = enable;
-      display->Disable = disable;
-      display->surface = surface;
-      display->currentMode = mode;
-      display->monitorCaps = caps;
-      display->modeGeneration = generation;
-      display->isAttachedToDesktop = attached;
-    }
-  } restore{.display = display, .getMode = display->GetModeInfo, .setMode = display->SetMode, .enable = display->Enable, .disable = display->Disable,
-            .surface = display->surface, .mode = display->currentMode, .caps = display->monitorCaps,
-            .generation = display->modeGeneration, .attached = display->isAttachedToDesktop};
-  display->GetModeInfo = created->GetModeInfo;
-  display->SetMode = created->SetMode;
-  display->Enable = created->Enable;
-  display->Disable = created->Disable;
-  display->surface = nullptr;
-  display->currentMode = {};
-  display->monitorCaps = {};
-  display->modeGeneration = 0;
-  display->isAttachedToDesktop = false;
-  g_fakeAdapterState.modeCount = 2;
-
-  __KRN_GFX_GETDISPLAYMODE_V1 query{};
-  REQUIRE_FALSE(handle_GetDisplayMode_V1(kstd::move(query)));
-  REQUIRE(query.state.active == 0);
-  REQUIRE(query.state.generation == 0);
-  REQUIRE(query.state.mode.width == 0);
-  REQUIRE(kernel::user::screen_rect().Empty());
-  REQUIRE_FALSE(display->surface);
-
-  __KRN_GFX_ENUMDISPLAYMODES_V1 enumeration{};
-  enumeration.index = 1;
-  REQUIRE_FALSE(handle_EnumDisplayModes_V1(kstd::move(enumeration)));
-  REQUIRE(enumeration.available == 1);
-  REQUIRE(enumeration.mode.modeId == 1);
-  REQUIRE(enumeration.mode.width == 800);
-  enumeration.index = UINT32_MAX;
-  REQUIRE_FALSE(handle_EnumDisplayModes_V1(kstd::move(enumeration)));
-  REQUIRE(enumeration.available == 0);
-  REQUIRE(enumeration.mode.width == 0);
-  REQUIRE_FALSE(display->surface);
-
-  __KRN_GFX_SETDISPLAYMODE_V1 set{0};
-  REQUIRE_FALSE(handle_SetDisplayMode_V1(kstd::move(set)));
-  const auto surface = display->surface;
-  REQUIRE(surface);
-  REQUIRE(display->isAttachedToDesktop);
-  set.modeId = UINT32_MAX;
-  REQUIRE(handle_SetDisplayMode_V1(kstd::move(set)));
-  REQUIRE(display->modeGeneration == 1);
-  set.modeId = 1;
-  REQUIRE_FALSE(handle_SetDisplayMode_V1(kstd::move(set)));
-  REQUIRE(display->surface == surface);
-  REQUIRE(surface->width == 800);
-  REQUIRE_FALSE(handle_GetDisplayMode_V1(kstd::move(query)));
-  REQUIRE(query.state.active == 1);
-  REQUIRE(query.state.generation == 2);
-  REQUIRE(query.state.mode.modeId == 1);
-  REQUIRE_FALSE(handle_SetDisplayMode_V1(kstd::move(set)));
-  REQUIRE(display->modeGeneration == 2);
-}
-
-TEST_CASE("Output enable failure is explicit and leaves valid programmed state", "[gfx][mode]") {
+TEST_CASE("Topology syscall validation snapshots input and commits one path", "[gfx][topology]") {
   EnsureObjectManagerInitialized();
   const auto display = MakeFakeDisplay();
-  g_fakeAdapterState.enableShouldSucceed = false;
-  REQUIRE(KE_GFX_SetDisplayMode(display, 0) == kernel::KernelError::DeviceError);
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  const auto mode = kernel::gfx::video_present_target_mode(
+      topology.generation, display->videoPresentTargetId, 0);
+  REQUIRE(mode);
+  const auto source = MatchingSourceMode(topology.generation, mode->mode);
+  REQUIRE(source);
+  VideoPresentPath path{
+      .sourceId = kernel::gfx::DesktopSourceId,
+      .sourceModeId = source->modeId,
+      .targetId = display->videoPresentTargetId,
+      .targetModeId = mode->modeId,
+      .sourceX = 0,
+      .sourceY = 0,
+      .width = mode->mode.width,
+      .height = mode->mode.height,
+      .flags = 0};
+  auto process = kernel::CreateKObject<kernel::KProcessObject>("video-present-process").value();
+  auto otherProcess = kernel::CreateKObject<kernel::KProcessObject>("other-video-process").value();
+  auto thread = kernel::CreateKObject<kernel::KThreadObject>("video-present-thread").value();
+  thread->owner_process = process.get();
+  test_sched::SetCurrentThread(thread);
+
+  for (const uint32_t count : {0u, 2u, 64u, 65u}) {
+    __KRN_GFX_VALIDATEVIDEOPRESENTTOPOLOGY_V1 invalid{};
+    invalid.generation = topology.generation;
+    invalid.paths = kernel::borrowed_ptr<VideoPresentPath>(&path, count, {});
+    invalid.paths_len = count;
+    REQUIRE(handle_ValidateVideoPresentTopology_V1(kstd::move(invalid)) ==
+            (count > kernel::gfx::VideoPresentRecordLimit
+                 ? kernel::KernelError::ResourceLimitExceeded
+                 : kernel::KernelError::InvalidSize));
+    invalid.paths.release();
+    REQUIRE(invalid.token == 0);
+    REQUIRE(g_fakeAdapterState.prepareCalls == 0);
+  }
+
+  __SYS_GFX_VALIDATEVIDEOPRESENTTOPOLOGY_V1 validate{};
+  validate.generation = topology.generation;
+  validate.paths = &path;
+  validate.pathsLength = 1;
+  REQUIRE_FALSE(Dispatch_ValidateVideoPresentTopology_V1(&validate, sizeof(validate), 0));
+  REQUIRE(dispatchInputCount == 1);
+  REQUIRE(dispatchInputLength == 1);
+  const auto token = validate.token;
+  REQUIRE(g_fakeAdapterState.prepareCalls == 1);
+  REQUIRE(g_fakeAdapterState.finishCalls == 0);
+  REQUIRE(process->handles.Lookup(static_cast<kernel::KHandle>(token)));
+  path.flags = UINT32_MAX;
+
+  VideoPresentTargetResult result{};
+  __KRN_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 tooSmall{};
+  tooSmall.token = token;
+  tooSmall.results_len = 0;
+  const auto setModeCallsBeforePreflight = g_fakeAdapterState.setModeCalls;
+  REQUIRE(handle_CommitVideoPresentTopology_V1(kstd::move(tooSmall)) ==
+          kernel::KernelError::BufferTooSmall);
+  REQUIRE(g_fakeAdapterState.setModeCalls == setModeCallsBeforePreflight);
+  REQUIRE(g_fakeAdapterState.finishCalls == 0);
+
+  __KRN_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 crossProcess{};
+  crossProcess.token = token;
+  crossProcess.results = kernel::borrowed_ptr<VideoPresentTargetResult>(&result, 1, {});
+  crossProcess.results_len = 1;
+  auto otherThread = kernel::CreateKObject<kernel::KThreadObject>("other-video-thread").value();
+  otherThread->owner_process = otherProcess.get();
+  test_sched::SetCurrentThread(otherThread);
+  REQUIRE(handle_CommitVideoPresentTopology_V1(kstd::move(crossProcess)) ==
+          kernel::KernelError::InvalidHandle);
+  crossProcess.results.release();
+
+  test_sched::SetCurrentThread(thread);
+  __KRN_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 commit{};
+  commit.token = token;
+  commit.results = kernel::borrowed_ptr<VideoPresentTargetResult>(&result, 1, {});
+  commit.results_len = 1;
+  REQUIRE_FALSE(handle_CommitVideoPresentTopology_V1(kstd::move(commit)));
+  commit.results.release();
+  REQUIRE(commit.written == 1);
+  REQUIRE(result.targetId == display->videoPresentTargetId);
+  REQUIRE(result.outcome == VideoPresentOutcome_Success);
+  REQUIRE(result.active == 1);
+  REQUIRE(g_fakeAdapterState.finishCalls == 1);
   REQUIRE(display->surface);
-  REQUIRE(display->currentMode.width == 640);
-  REQUIRE_FALSE(display->isAttachedToDesktop);
-  REQUIRE(display->modeGeneration == 1);
-  g_fakeAdapterState.enableShouldSucceed = true;
-  REQUIRE_FALSE(KE_GFX_SetDisplayMode(display, 0));
-  REQUIRE(display->isAttachedToDesktop);
-  REQUIRE(display->modeGeneration == 2);
+
+  __KRN_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 consumed{};
+  consumed.token = token;
+  consumed.results = kernel::borrowed_ptr<VideoPresentTargetResult>(&result, 1, {});
+  consumed.results_len = 1;
+  REQUIRE(handle_CommitVideoPresentTopology_V1(kstd::move(consumed)) ==
+          kernel::KernelError::InvalidHandle);
+  consumed.results.release();
+  REQUIRE(g_fakeAdapterState.finishCalls == 1);
+  test_sched::SetCurrentThread({});
 }
 
-TEST_CASE("Initial programming failure does not invent an active surface", "[gfx][mode]") {
+TEST_CASE("Generated commit preserves zero-capacity tokens and validates nonempty mappings",
+          "[gfx][topology][dispatch]") {
   EnsureObjectManagerInitialized();
   const auto display = MakeFakeDisplay();
-  g_fakeAdapterState.setModeShouldSucceed = false;
-  REQUIRE(KE_GFX_SetDisplayMode(display, 0) == kernel::KernelError::DeviceError);
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  const auto mode = kernel::gfx::video_present_target_mode(
+      topology.generation, display->videoPresentTargetId, 0);
+  REQUIRE(mode);
+  const auto source = MatchingSourceMode(topology.generation, mode->mode);
+  REQUIRE(source);
+  const VideoPresentPath path{
+      .sourceId = kernel::gfx::DesktopSourceId, .sourceModeId = source->modeId,
+      .targetId = display->videoPresentTargetId, .targetModeId = mode->modeId,
+      .width = mode->mode.width, .height = mode->mode.height};
+  auto process = kernel::CreateAnonymousKObject<kernel::KProcessObject>().value();
+  auto thread = kernel::CreateAnonymousKObject<kernel::KThreadObject>().value();
+  thread->owner_process = process.get();
+  test_sched::SetCurrentThread(thread);
+  __SYS_GFX_VALIDATEVIDEOPRESENTTOPOLOGY_V1 validate{};
+  validate.generation = topology.generation;
+  validate.paths = &path;
+  validate.pathsLength = 1;
+  REQUIRE_FALSE(Dispatch_ValidateVideoPresentTopology_V1(&validate, sizeof(validate), 0));
+  const auto handle = static_cast<kernel::KHandle>(validate.token);
+  bool stale = false;
+  SECTION("Current token") {}
+  SECTION("Stale token takes precedence over insufficient capacity") {
+    REQUIRE_FALSE(KE_GFX_RefreshAdapter(display->adapter));
+    stale = true;
+  }
+  ResetFakeCalls();
+  VideoPresentTargetResult result{};
+  result.targetId = UINT32_MAX;
+  __SYS_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 commit{};
+  commit.token = validate.token;
+  dispatchEmptyMaps = 0;
+  if (stale) {
+    commit.results = &result;
+    commit.resultsLength = 0;
+    REQUIRE(Dispatch_CommitVideoPresentTopology_V1(&commit, sizeof(commit), 0) ==
+            kernel::KernelError::Retry);
+    REQUIRE(commit.required == 1);
+    REQUIRE(commit.written == 0);
+    REQUIRE_FALSE(process->handles.Lookup(handle));
+    REQUIRE(g_fakeAdapterState.setModeCalls == 0);
+    REQUIRE(g_fakeAdapterState.finishCalls == 1);
+    REQUIRE(result.targetId == UINT32_MAX);
+    test_sched::SetCurrentThread({});
+    return;
+  }
+  for (auto *pointer : {static_cast<VideoPresentTargetResult *>(nullptr), &result}) {
+    commit.results = pointer;
+    commit.resultsLength = 0;
+    commit.written = UINT32_MAX;
+    const auto error = Dispatch_CommitVideoPresentTopology_V1(&commit, sizeof(commit), 0);
+    REQUIRE(kernel::KErrorToSysReturnCode(error) == SyscallReturnCode_INVALID_SIZE);
+    REQUIRE(commit.written == 0);
+    REQUIRE(process->handles.Lookup(handle));
+    REQUIRE(result.targetId == UINT32_MAX);
+    REQUIRE(CallLog().empty());
+  }
+  REQUIRE(dispatchEmptyMaps == 0);
+  commit.results = &result;
+  commit.resultsLength = 1;
+  dispatchInvalidAddress = &result;
+  const auto mappingError = Dispatch_CommitVideoPresentTopology_V1(&commit, sizeof(commit), 0);
+  dispatchInvalidAddress = nullptr;
+  REQUIRE(mappingError == kernel::KernelError::InvalidAddress);
+  REQUIRE(process->handles.Lookup(handle));
+  REQUIRE(CallLog().empty());
+  const auto error = Dispatch_CommitVideoPresentTopology_V1(&commit, sizeof(commit), 0);
+  if (stale) {
+    REQUIRE(error == kernel::KernelError::Retry);
+    REQUIRE(commit.written == 0);
+    REQUIRE(g_fakeAdapterState.setModeCalls == 0);
+  } else {
+    REQUIRE_FALSE(error);
+    REQUIRE(commit.written == 1);
+    REQUIRE(result.active == 1);
+    REQUIRE(g_fakeAdapterState.setModeCalls == 1);
+  }
+  REQUIRE(g_fakeAdapterState.finishCalls == 1);
+  REQUIRE_FALSE(process->handles.Lookup(handle));
+  test_sched::SetCurrentThread({});
+}
+
+TEST_CASE("Generated commit serializes stale precedence after snapshot acquisition",
+          "[gfx][topology][dispatch][commit-review]") {
+  EnsureObjectManagerInitialized();
+  auto process = kernel::CreateAnonymousKObject<kernel::KProcessObject>().value();
+  auto thread = kernel::CreateAnonymousKObject<kernel::KThreadObject>().value();
+  thread->owner_process = process.get();
+  test_sched::SetCurrentThread(thread);
+  struct ResetThread {
+    ~ResetThread() {
+      kernel::gfx::video_present_test_before_commit_decision(nullptr);
+      test_sched::SetCurrentThread({});
+    }
+  } resetThread;
+  TargetIdIsolation isolation;
+  static kernel::KObjectPtr<kernel::KDisplay> display;
+  display = MakeFakeDisplay();
+  isolation.Track(display);
+  const auto snapshot = kernel::gfx::acquire_video_present_snapshot();
+  REQUIRE(snapshot);
+  const auto &mode = (*snapshot)->targetModes[0];
+  VideoPresentPath path{
+      .sourceId = kernel::gfx::DesktopSourceId, .sourceModeId = 1,
+      .targetId = mode.targetId, .targetModeId = mode.modeId,
+      .width = mode.mode.width, .height = mode.mode.height};
+  __SYS_GFX_VALIDATEVIDEOPRESENTTOPOLOGY_V1 validate{};
+  validate.generation = (*snapshot)->topology.generation;
+  validate.paths = &path;
+  validate.pathsLength = 1;
+  REQUIRE_FALSE(Dispatch_ValidateVideoPresentTopology_V1(&validate, sizeof(validate), 0));
+  ResetFakeCalls();
+  bool invalidate = false;
+  SECTION("Current capacity decision preserves reservation") {}
+  SECTION("Refresh wins before the serialized capacity decision") { invalidate = true; }
+  SECTION("Removal wins before the serialized capacity decision") {
+    invalidate = true;
+    g_fakeAdapterState.firstHeadAbsent = true;
+  }
+  static bool ran, refreshed;
+  ran = refreshed = false;
+  if (invalidate) {
+    const bool remove = g_fakeAdapterState.firstHeadAbsent;
+    if (remove) {
+      kernel::gfx::video_present_test_before_commit_decision([] {
+        ran = true;
+        KE_GFX_RemoveAdapter(display->adapter);
+        refreshed = true;
+      });
+    } else {
+      kernel::gfx::video_present_test_before_commit_decision([] {
+        ran = true;
+        refreshed = !KE_GFX_RefreshAdapter(display->adapter);
+      });
+    }
+  }
+  VideoPresentTargetResult untouched{};
+  untouched.targetId = UINT32_MAX;
+  __SYS_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 commit{};
+  commit.token = validate.token;
+  commit.results = &untouched;
+  commit.resultsLength = 0;
+  const auto error = Dispatch_CommitVideoPresentTopology_V1(&commit, sizeof(commit), 0);
+  REQUIRE(error == (invalidate ? kernel::KernelError::Retry
+                              : kernel::KernelError::BufferTooSmall));
+  REQUIRE(commit.required == 1);
+  REQUIRE(commit.written == 0);
+  REQUIRE(untouched.targetId == UINT32_MAX);
+  REQUIRE(g_fakeAdapterState.setModeCalls == 0);
+  const auto handle = static_cast<kernel::KHandle>(validate.token);
+  if (invalidate) {
+    REQUIRE(ran);
+    REQUIRE(refreshed);
+    REQUIRE_FALSE(process->handles.Lookup(handle));
+    REQUIRE(g_fakeAdapterState.finishCalls == 1);
+  } else {
+    REQUIRE(process->handles.Lookup(handle));
+    REQUIRE(g_fakeAdapterState.finishCalls == 0);
+    REQUIRE(CallLog().empty());
+    REQUIRE_FALSE(process->handles.Close(handle));
+    REQUIRE(g_fakeAdapterState.finishCalls == 1);
+  }
+  display = nullptr;
+}
+
+TEST_CASE("Commit prior activation and active-state callbacks use the transaction gate",
+          "[gfx][topology][dispatch][commit-review]") {
+  EnsureObjectManagerInitialized();
+  auto process = kernel::CreateAnonymousKObject<kernel::KProcessObject>().value();
+  auto thread = kernel::CreateAnonymousKObject<kernel::KThreadObject>().value();
+  thread->owner_process = process.get();
+  test_sched::SetCurrentThread(thread);
+  struct ResetThread { ~ResetThread() { test_sched::SetCurrentThread({}); } } resetThread;
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  isolation.Track(display);
+  g_fakeAdapterState.modeCount = 2;
+  REQUIRE(SetModeViaTopology(display, 0));
+  display->QueryActualState = ObserveActualCallback;
+  observedActualCallbacks = ungatedActualCallbacks = 0;
+  struct RestoreCallback {
+    kernel::KObjectPtr<kernel::KDisplay> target;
+    ~RestoreCallback() { target->QueryActualState = FakeQueryActualState; }
+  } restore{display};
+  const auto snapshot = kernel::gfx::acquire_video_present_snapshot();
+  REQUIRE(snapshot);
+  const auto mode = kernel::gfx::video_present_target_mode(
+      (*snapshot)->topology.generation, display->videoPresentTargetId, 1);
+  REQUIRE(mode);
+  const auto source = MatchingSourceMode((*snapshot)->topology.generation, mode->mode);
+  REQUIRE(source);
+  VideoPresentPath path{
+      .sourceId = kernel::gfx::DesktopSourceId, .sourceModeId = source->modeId,
+      .targetId = mode->targetId, .targetModeId = mode->modeId,
+      .width = mode->mode.width, .height = mode->mode.height};
+  __SYS_GFX_VALIDATEVIDEOPRESENTTOPOLOGY_V1 validate{};
+  validate.generation = (*snapshot)->topology.generation;
+  validate.paths = &path;
+  validate.pathsLength = 1;
+  REQUIRE_FALSE(Dispatch_ValidateVideoPresentTopology_V1(&validate, sizeof(validate), 0));
+  VideoPresentTargetResult result{};
+  __SYS_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 commit{};
+  commit.token = validate.token;
+  commit.results = &result;
+  commit.resultsLength = 1;
+  REQUIRE_FALSE(Dispatch_CommitVideoPresentTopology_V1(&commit, sizeof(commit), 0));
+  REQUIRE(result.active == 1);
+  REQUIRE(result.outcome == VideoPresentOutcome_Success);
+  REQUIRE(observedActualCallbacks > 0);
+  REQUIRE(ungatedActualCallbacks == 0);
+  REQUIRE(kernel::gfx::active_video_present_target() == display);
+  const auto current = kernel::gfx::acquire_video_present_snapshot();
+  REQUIRE(current);
+  const auto activePath = kernel::gfx::video_present_path((*current)->topology.generation, 0);
+  REQUIRE(activePath);
+  kernel::KDisplayModeReservation reservation{};
+  kernel::KObjectPtr<kernel::KDisplay> reservedTarget;
+  size_t modeIndex{};
+  REQUIRE_FALSE(kernel::gfx::video_present_prepare_path(
+      (*current)->topology.generation, *activePath, reservedTarget, modeIndex, reservation));
+  bool firstActivation = true;
+  REQUIRE(kernel::gfx::commit_video_present_path(
+      (*current)->topology.generation, *activePath, reservedTarget,
+      reservation, 1, &firstActivation));
+  REQUIRE_FALSE(firstActivation);
+  REQUIRE_FALSE(KE_GFX_RefreshAdapter(display->adapter));
+  KE_GFX_RemoveAdapter(display->adapter);
+  REQUIRE_FALSE(kernel::gfx::active_video_present_target());
+  REQUIRE(ungatedActualCallbacks == 0);
+}
+
+TEST_CASE("Closing an unused topology token releases its target reservation", "[gfx][topology]") {
+  EnsureObjectManagerInitialized();
+  const auto display = MakeFakeDisplay();
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  const auto targetMode = kernel::gfx::video_present_target_mode(
+      topology.generation, display->videoPresentTargetId, 0);
+  REQUIRE(targetMode);
+  const auto sourceMode = MatchingSourceMode(topology.generation, targetMode->mode);
+  REQUIRE(sourceMode);
+  VideoPresentPath path{
+      .sourceId = kernel::gfx::DesktopSourceId,
+      .sourceModeId = sourceMode->modeId,
+      .targetId = display->videoPresentTargetId,
+      .targetModeId = targetMode->modeId,
+      .width = targetMode->mode.width,
+      .height = targetMode->mode.height};
+  auto process =
+      kernel::CreateKObject<kernel::KProcessObject>("closed-token-process").value();
+  auto thread =
+      kernel::CreateKObject<kernel::KThreadObject>("closed-token-thread").value();
+  thread->owner_process = process.get();
+  test_sched::SetCurrentThread(thread);
+
+  __KRN_GFX_VALIDATEVIDEOPRESENTTOPOLOGY_V1 validate{};
+  validate.generation = topology.generation;
+  validate.paths = kernel::borrowed_ptr<VideoPresentPath>(&path, 1, {});
+  validate.paths_len = 1;
+  REQUIRE_FALSE(handle_ValidateVideoPresentTopology_V1(kstd::move(validate)));
+  validate.paths.release();
+  REQUIRE(g_fakeAdapterState.prepareCalls == 1);
+  REQUIRE(g_fakeAdapterState.finishCalls == 0);
+
+  SECTION("Closing the handle releases the reservation") {
+    REQUIRE_FALSE(process->handles.Close(
+        static_cast<kernel::KHandle>(validate.token)));
+  }
+  SECTION("Destroying the owning process releases the reservation") {
+    test_sched::SetCurrentThread({});
+    thread->owner_process = nullptr;
+    process = nullptr;
+  }
+  REQUIRE(g_fakeAdapterState.finishCalls == 1);
+  REQUIRE(g_fakeAdapterState.setModeCalls == 0);
+  test_sched::SetCurrentThread({});
+}
+
+TEST_CASE("Stale topology token is consumed without hardware programming", "[gfx][topology]") {
+  EnsureObjectManagerInitialized();
+  const auto display = MakeFakeDisplay();
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  const auto mode = kernel::gfx::video_present_target_mode(
+      topology.generation, display->videoPresentTargetId, 0);
+  REQUIRE(mode);
+  const auto source = MatchingSourceMode(topology.generation, mode->mode);
+  REQUIRE(source);
+  VideoPresentPath path{
+      .sourceId = kernel::gfx::DesktopSourceId, .sourceModeId = source->modeId,
+      .targetId = display->videoPresentTargetId, .targetModeId = mode->modeId,
+      .sourceX = 0, .sourceY = 0, .width = mode->mode.width,
+      .height = mode->mode.height, .flags = 0};
+  auto process = kernel::CreateKObject<kernel::KProcessObject>("stale-video-process").value();
+  auto thread = kernel::CreateKObject<kernel::KThreadObject>("stale-video-thread").value();
+  thread->owner_process = process.get();
+  test_sched::SetCurrentThread(thread);
+  __KRN_GFX_VALIDATEVIDEOPRESENTTOPOLOGY_V1 validate{};
+  validate.generation = topology.generation;
+  validate.paths = kernel::borrowed_ptr<VideoPresentPath>(&path, 1, {});
+  validate.paths_len = 1;
+  REQUIRE_FALSE(handle_ValidateVideoPresentTopology_V1(kstd::move(validate)));
+  const auto token = validate.token;
+  validate.paths.release();
+  REQUIRE(process->handles.Lookup(static_cast<kernel::KHandle>(token)));
+
+  SECTION("Adding a target invalidates the reservation") {
+    REQUIRE(StartFakeAdapter().size() == 1);
+  }
+  SECTION("Resource notification invalidates the reservation") {
+    REQUIRE_FALSE(KE_GFX_RefreshAdapter(display->adapter));
+  }
+  SECTION("Connection notification invalidates the reservation") {
+    g_fakeAdapterState.firstHeadAbsent = true;
+    REQUIRE_FALSE(KE_GFX_RefreshAdapter(display->adapter));
+  }
+  ResetFakeCalls();
+  VideoPresentTargetResult result{};
+  __KRN_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 commit{};
+  commit.token = token;
+  commit.results = kernel::borrowed_ptr<VideoPresentTargetResult>(&result, 1, {});
+  commit.results_len = 1;
+  REQUIRE(handle_CommitVideoPresentTopology_V1(kstd::move(commit)) ==
+          kernel::KernelError::Retry);
+  commit.results.release();
   REQUIRE_FALSE(display->surface);
+  REQUIRE(g_fakeAdapterState.setModeCalls == 0);
+  REQUIRE(g_fakeAdapterState.finishCalls == 1);
+  __KRN_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 consumed{};
+  consumed.token = token;
+  consumed.results = kernel::borrowed_ptr<VideoPresentTargetResult>(&result, 1, {});
+  consumed.results_len = 1;
+  REQUIRE(handle_CommitVideoPresentTopology_V1(kstd::move(consumed)) ==
+          kernel::KernelError::InvalidHandle);
+  consumed.results.release();
+  test_sched::SetCurrentThread({});
+}
+
+TEST_CASE("Topology snapshots report the 64-record limit and stale generations retry", "[gfx][topology]") {
+  EnsureObjectManagerInitialized();
+  ResetFakeAdapterState();
+  REQUIRE(StartFakeAdapter().size() == 1);
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  REQUIRE(topology.targetCount != 0);
+
+  __KRN_GFX_GETVIDEOPRESENTTOPOLOGY_V1 query{};
+  REQUIRE_FALSE(handle_GetVideoPresentTopology_V1(kstd::move(query)));
+  REQUIRE(query.topology.recordLimit == kernel::gfx::VideoPresentRecordLimit);
+
+  ResetFakeAdapterState();
+  g_fakeAdapterState.headCount = 1;
+  REQUIRE(StartFakeAdapter().size() == 1);
+  REQUIRE(kernel::gfx::video_present_target(topology.generation, 0).error() ==
+          kernel::KernelError::Retry);
+}
+
+TEST_CASE("Topology mode arrays accept 64 records and reject 65", "[gfx][topology]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  REQUIRE_FALSE(isolation.overflow);
+  ResetFakeAdapterState();
+  g_fakeAdapterState.modeCount = 64;
+  for (size_t i = 0; i < g_fakeAdapterState.modeCount; ++i) {
+    auto &mode = g_fakeAdapterState.modes[i];
+    mode.width = 640 + static_cast<uint32_t>(i) * 8;
+    mode.height = 480;
+    mode.pitch = mode.width;
+    mode.videoMemoryBitmapWidth = mode.width;
+    mode.videoMemoryBitmapHeight = mode.height;
+    mode.bpp = 8;
+    mode.numberOfPlanes = 1;
+    mode.bitsPerPlane = 8;
+    mode.refreshRate = 60;
+    mode.pixelFormat = kernel::PixelFormat::INDEX8;
+  }
+  auto displays = StartFakeAdapter();
+  isolation.Track(displays);
+  REQUIRE_FALSE(isolation.overflow);
+  REQUIRE(displays.size() == 1);
+  displays[0]->monitorCaps = kernel::KMonitorCapabilities{};
+
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  REQUIRE(topology.targetModeCount == 64);
+  REQUIRE(topology.sourceModeCount == 64);
+  for (const size_t capacity : {size_t{0}, size_t{1}, size_t{63}, size_t{64}, size_t{65}}) {
+    VideoPresentSourceMode sourceBuffer[65]{};
+    sourceBuffer[0].modeId = 0xdeadbeef;
+    sourceBuffer[64].modeId = 0xdeadbeef;
+    __KRN_GFX_ENUMVIDEOPRESENTSOURCEMODES_V1 sourceBoundary{};
+    sourceBoundary.generation = topology.generation;
+    sourceBoundary.sourceId = kernel::gfx::DesktopSourceId;
+    sourceBoundary.modes = kernel::borrowed_ptr<VideoPresentSourceMode>(
+        sourceBuffer, capacity, {});
+    const auto sourceError =
+        handle_EnumVideoPresentSourceModes_V1(kstd::move(sourceBoundary));
+    sourceBoundary.modes.release();
+    VideoPresentTargetMode targetBuffer[65]{};
+    targetBuffer[0].modeId = 0xdeadbeef;
+    targetBuffer[64].modeId = 0xdeadbeef;
+    __KRN_GFX_ENUMVIDEOPRESENTTARGETMODES_V1 targetBoundary{};
+    targetBoundary.generation = topology.generation;
+    targetBoundary.targetId = displays[0]->videoPresentTargetId;
+    targetBoundary.modes = kernel::borrowed_ptr<VideoPresentTargetMode>(
+        targetBuffer, capacity, {});
+    const auto targetError =
+        handle_EnumVideoPresentTargetModes_V1(kstd::move(targetBoundary));
+    targetBoundary.modes.release();
+    REQUIRE(sourceBoundary.required == 64);
+    REQUIRE(targetBoundary.required == 64);
+    if (capacity < 64) {
+      REQUIRE(sourceError == kernel::KernelError::BufferTooSmall);
+      REQUIRE(targetError == kernel::KernelError::BufferTooSmall);
+      REQUIRE(sourceBoundary.written == 0);
+      REQUIRE(targetBoundary.written == 0);
+      REQUIRE(sourceBuffer[0].modeId == 0xdeadbeef);
+      REQUIRE(targetBuffer[0].modeId == 0xdeadbeef);
+    } else {
+      REQUIRE_FALSE(sourceError);
+      REQUIRE_FALSE(targetError);
+      REQUIRE(sourceBoundary.written == 64);
+      REQUIRE(targetBoundary.written == 64);
+    }
+    REQUIRE(sourceBuffer[64].modeId == 0xdeadbeef);
+    REQUIRE(targetBuffer[64].modeId == 0xdeadbeef);
+  }
+  VideoPresentSourceMode sourceRecords[64]{};
+  __KRN_GFX_ENUMVIDEOPRESENTSOURCEMODES_V1 sourceQuery{};
+  sourceQuery.generation = topology.generation;
+  sourceQuery.sourceId = kernel::gfx::DesktopSourceId;
+  sourceQuery.queryOnly = 1;
+  REQUIRE_FALSE(handle_EnumVideoPresentSourceModes_V1(kstd::move(sourceQuery)));
+  REQUIRE(sourceQuery.required == 64);
+  REQUIRE(sourceQuery.written == 0);
+  sourceQuery.queryOnly = 0;
+  sourceQuery.modes = kernel::borrowed_ptr<VideoPresentSourceMode>(sourceRecords, 64, {});
+  REQUIRE_FALSE(handle_EnumVideoPresentSourceModes_V1(kstd::move(sourceQuery)));
+  sourceQuery.modes.release();
+  REQUIRE(sourceQuery.written == 64);
+  VideoPresentTargetMode targetRecords[64]{};
+  __KRN_GFX_ENUMVIDEOPRESENTTARGETMODES_V1 targetQuery{};
+  targetQuery.generation = topology.generation;
+  targetQuery.targetId = displays[0]->videoPresentTargetId;
+  targetQuery.queryOnly = 1;
+  REQUIRE_FALSE(handle_EnumVideoPresentTargetModes_V1(kstd::move(targetQuery)));
+  REQUIRE(targetQuery.required == 64);
+  REQUIRE(targetQuery.written == 0);
+  targetQuery.queryOnly = 0;
+  targetQuery.modes = kernel::borrowed_ptr<VideoPresentTargetMode>(targetRecords, 64, {});
+  REQUIRE_FALSE(handle_EnumVideoPresentTargetModes_V1(kstd::move(targetQuery)));
+  targetQuery.modes.release();
+  REQUIRE(targetQuery.written == 64);
+  const auto lastMode = kernel::gfx::video_present_target_mode(
+      topology.generation, displays[0]->videoPresentTargetId, 63);
+  REQUIRE(lastMode);
+  REQUIRE(lastMode->mode.width == 640 + 63 * 8);
+
+  g_fakeAdapterState.modeCount = 65;
+  auto &extra = g_fakeAdapterState.modes[64];
+  extra.width = 640 + 64 * 8;
+  extra.height = 480;
+  extra.pitch = extra.width;
+  extra.bpp = 8;
+  extra.numberOfPlanes = 1;
+  extra.bitsPerPlane = 8;
+  extra.refreshRate = 60;
+  extra.pixelFormat = kernel::PixelFormat::INDEX8;
+  REQUIRE(kernel::gfx::get_video_present_topology(topology) ==
+          kernel::KernelError::ResourceLimitExceeded);
+}
+
+TEST_CASE("Target record arrays accept 64 records and reject 65", "[gfx][topology]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  REQUIRE_FALSE(isolation.overflow);
+  ResetFakeAdapterState();
+  size_t remaining = 64;
+  while (remaining) {
+    g_fakeAdapterState.headCount =
+        remaining > 16 ? 16 : static_cast<size_t>(remaining);
+    auto displays = StartFakeAdapter();
+    isolation.Track(displays);
+    REQUIRE_FALSE(isolation.overflow);
+    REQUIRE(displays.size() == g_fakeAdapterState.headCount);
+    remaining -= displays.size();
+  }
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  REQUIRE(topology.targetCount == 64);
+  VideoPresentTarget records[64]{};
+  __KRN_GFX_ENUMVIDEOPRESENTTARGETS_V1 query{};
+  query.generation = topology.generation;
+  query.targets = kernel::borrowed_ptr<VideoPresentTarget>(records, 64, {});
+  REQUIRE_FALSE(handle_EnumVideoPresentTargets_V1(kstd::move(query)));
+  query.targets.release();
+  REQUIRE(query.written == 64);
+
+  g_fakeAdapterState.headCount = 1;
+  auto extra = StartFakeAdapter();
+  isolation.Track(extra);
+  REQUIRE_FALSE(isolation.overflow);
+  REQUIRE(extra.size() == 1);
+  REQUIRE(kernel::gfx::get_video_present_topology(topology) ==
+          kernel::KernelError::ResourceLimitExceeded);
+}
+
+TEST_CASE("One adapter is not silently capped at sixteen connectors", "[gfx][topology]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  ResetFakeAdapterState();
+  SECTION("Seventeen connectors") { g_fakeAdapterState.headCount = 17; }
+  SECTION("Sixty-four connectors") { g_fakeAdapterState.headCount = 64; }
+  SECTION("Sixty-five connectors overflow the target record class") {
+    g_fakeAdapterState.headCount = 65;
+  }
+  const auto displays = StartFakeAdapter();
+  isolation.Track(displays);
+  REQUIRE_FALSE(isolation.overflow);
+  REQUIRE(displays.size() == g_fakeAdapterState.headCount);
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  const auto error = kernel::gfx::get_video_present_topology(topology);
+  if (g_fakeAdapterState.headCount > 64) {
+    REQUIRE(error == kernel::KernelError::ResourceLimitExceeded);
+  } else {
+    REQUIRE_FALSE(error);
+    REQUIRE(topology.targetCount == g_fakeAdapterState.headCount);
+    REQUIRE(topology.sourceModeCount == 1);
+    REQUIRE(topology.targetModeCount == g_fakeAdapterState.headCount);
+  }
+}
+
+TEST_CASE("Public enumeration handles empty classes without writes", "[gfx][topology]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  REQUIRE(topology.targetCount == 0);
+  REQUIRE(topology.sourceModeCount == 0);
+  __KRN_GFX_ENUMVIDEOPRESENTTARGETS_V1 targets{};
+  targets.generation = topology.generation;
+  targets.written = UINT32_MAX;
+  REQUIRE_FALSE(handle_EnumVideoPresentTargets_V1(kstd::move(targets)));
+  REQUIRE(targets.written == 0);
+  __KRN_GFX_ENUMVIDEOPRESENTSOURCEMODES_V1 modes{};
+  modes.generation = topology.generation;
+  modes.sourceId = kernel::gfx::DesktopSourceId;
+  modes.written = UINT32_MAX;
+  REQUIRE_FALSE(handle_EnumVideoPresentSourceModes_V1(kstd::move(modes)));
+  REQUIRE(modes.written == 0);
+  __KRN_GFX_ENUMVIDEOPRESENTTARGETMODES_V1 stale{};
+  stale.generation = topology.generation - 1;
+  stale.targetId = UINT32_MAX;
+  stale.written = UINT32_MAX;
+  REQUIRE(handle_EnumVideoPresentTargetModes_V1(kstd::move(stale)) ==
+          kernel::KernelError::Retry);
+  REQUIRE(stale.written == 0);
+}
+
+TEST_CASE("Connection capabilities modes and resources invalidate old snapshot queries",
+          "[gfx][topology][hotplug]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  isolation.Track(display);
+  const auto checkMutation = [&](auto mutate) {
+    kernel::gfx::VideoPresentTopologyInfo before{};
+    REQUIRE_FALSE(kernel::gfx::get_video_present_topology(before));
+    mutate();
+    REQUIRE(kernel::gfx::video_present_target(before.generation, 0).error() ==
+            kernel::KernelError::Retry);
+    __KRN_GFX_ENUMVIDEOPRESENTTARGETS_V1 stale{};
+    stale.generation = before.generation;
+    REQUIRE(handle_EnumVideoPresentTargets_V1(kstd::move(stale)) ==
+            kernel::KernelError::Retry);
+    REQUIRE(stale.written == 0);
+  };
+  checkMutation([&] { display->isPresent = false; });
+  checkMutation([&] { display->isPresent = true; });
+  checkMutation([&] { display->monitorCaps.maxRefreshRate = 70; });
+  checkMutation([&] { g_fakeAdapterState.modes[0].refreshRate = 65; });
+  checkMutation([&] { ++display->adapter->resourceGeneration; });
+}
+
+TEST_CASE("Adapter refresh disconnects reconnects and PnP removal retires targets",
+          "[gfx][topology][hotplug]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  isolation.Track(display);
+  const auto identity = display->videoPresentTargetId;
+  REQUIRE(SetModeViaTopology(display, 0));
+  kernel::gfx::VideoPresentTopologyInfo before{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(before));
+  g_fakeAdapterState.firstHeadAbsent = true;
+  REQUIRE_FALSE(KE_GFX_RefreshAdapter(display->adapter));
+  REQUIRE_FALSE(display->isPresent);
+  REQUIRE(display->videoPresentTargetId == identity);
+  REQUIRE_FALSE(kernel::gfx::active_video_present_target());
+  REQUIRE(kernel::gfx::video_present_target(before.generation, 0).error() ==
+          kernel::KernelError::Retry);
+  g_fakeAdapterState.firstHeadAbsent = false;
+  REQUIRE_FALSE(KE_GFX_RefreshAdapter(display->adapter));
+  REQUIRE(display->isPresent);
+  REQUIRE(display->videoPresentTargetId == identity);
+  REQUIRE(SetModeViaTopology(display, 0));
+  REQUIRE_FALSE(KE_PNP_ReportRemovedDevice(display->adapter->device));
+  while (kernel::event::detail::pump_once()) {}
+  kernel::gfx::VideoPresentTopologyInfo after{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(after));
+  REQUIRE(after.targetCount == 0);
+  REQUIRE(after.pathCount == 0);
+  REQUIRE(display->removed);
+  REQUIRE_FALSE(kernel::gfx::active_video_present_target());
+}
+
+TEST_CASE("PnP removal waits for painting before retiring state or invalidating I/O",
+          "[gfx][topology][hotplug][removal]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  static kernel::KObjectPtr<kernel::KDisplay> painting;
+  painting = MakeFakeDisplay();
+  isolation.Track(painting);
+  REQUIRE(SetModeViaTopology(painting, 0));
+  painting->adapter->Present = [](
+      const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
+      const kernel::KObjectPtr<kernel::KSurface> &, const kernel::KClipRect *, size_t) {
+    ++g_fakeAdapterState.presentCalls;
+    if (adapter->device->pnpState == kernel::KPnpState::Removed)
+      ++g_fakeAdapterState.removedCallbacks;
+  };
+  static bool yielded, remainedActive, deviceStillUsable;
+  yielded = remainedActive = deviceStillUsable = false;
+  kernel::gfx::VideoPresentTopologyInfo before{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(before));
+  REQUIRE_FALSE(kernel::event::broadcast(
+      painting->adapter->device, kernel::event::make_event_code(
+          KE_PNP_EventCategory(), kernel::pnp::DeviceEvent::Started)));
+  kernel::user::lock();
+  kernel::user::begin_scene_draw_locked();
+  kernel::user::present_locked(kernel::user::URect{0, 0, 8, 8});
+  test_sched::SetYieldHook([] {
+    yielded = true;
+    // The removal call is blocked at the scene lock. Run the concurrent query
+    // and finish the in-flight paint before allowing that lock acquisition.
+    kernel::gfx::VideoPresentTopologyInfo during{};
+    remainedActive = !kernel::gfx::get_video_present_topology(during) &&
+                     during.pathCount == 1 &&
+                     kernel::gfx::active_video_present_target() == painting;
+    deviceStillUsable = painting->adapter->device->pnpState != kernel::KPnpState::Removed;
+    kernel::user::end_scene_draw_locked();
+    kernel::user::unlock();
+  });
+  const auto error = KE_PNP_ReportRemovedDevice(painting->adapter->device);
+  test_sched::SetYieldHook(nullptr);
+  // Keep the failure path bounded if removal ever stops acquiring scene lock.
+  if (!yielded) {
+    kernel::user::end_scene_draw_locked();
+    kernel::user::unlock();
+  }
+  REQUIRE_FALSE(error);
+  REQUIRE(yielded);
+  REQUIRE(remainedActive);
+  REQUIRE(deviceStillUsable);
+  REQUIRE(g_fakeAdapterState.presentCalls == 1);
+  REQUIRE(g_fakeAdapterState.removedCallbacks == 0);
+  REQUIRE(painting->removed);
+  REQUIRE(painting->adapter->device->pnpState == kernel::KPnpState::Removed);
+  REQUIRE_FALSE(kernel::gfx::active_video_present_target());
+  kernel::gfx::VideoPresentTopologyInfo after{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(after));
+  REQUIRE(after.pathCount == 0);
+  REQUIRE(after.targetCount == 0);
+  REQUIRE(after.generation != before.generation);
+  {
+    kernel::user::Guard scene;
+    kernel::user::present_locked(kernel::user::URect{0, 0, 8, 8});
+  }
+  while (kernel::event::detail::pump_once()) {}
+  REQUIRE(g_fakeAdapterState.presentCalls == 1);
+  REQUIRE(g_fakeAdapterState.removedCallbacks == 0);
+  painting = nullptr;
+}
+
+TEST_CASE("Adapter refresh discovers new heads and retires an unsupported active mode",
+          "[gfx][topology][hotplug]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  isolation.Track(display);
+  REQUIRE(SetModeViaTopology(display, 0));
+  g_fakeAdapterState.modeCount = 0;
+  REQUIRE_FALSE(KE_GFX_RefreshAdapter(display->adapter));
   REQUIRE_FALSE(display->isAttachedToDesktop);
-  REQUIRE(display->modeGeneration == 0);
-  REQUIRE(CallLog() == "DS");
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  REQUIRE(topology.pathCount == 0);
+  g_fakeAdapterState.modeCount = 1;
+  g_fakeAdapterState.headCount = 2;
+  REQUIRE_FALSE(KE_GFX_RefreshAdapter(display->adapter));
+  const auto heads = DisplaysOf(display->adapter);
+  REQUIRE(heads.size() == 2);
+  for (const auto &head : heads)
+    if (head != display) isolation.Track(head);
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  REQUIRE(topology.targetCount == 2);
 }
 
 TEST_CASE("Display configuration is bounded and rejects approximate input", "[gfx][mode]") {
@@ -851,18 +1967,459 @@ TEST_CASE("Display configuration is bounded and rejects approximate input", "[gf
   REQUIRE_FALSE(init::parse_display_config(embedded, sizeof(embedded) - 1, pref));
 }
 
-TEST_CASE("KE_GFX_SetDisplayMode reuses the same KSurface across a mode switch", "[gfx][mode]") {
+TEST_CASE("Init confirms an existing path instead of trusting the summary count",
+          "[gfx][topology][init]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  isolation.Track(display);
+  const auto activated = SetModeViaTopology(display, 0);
+  REQUIRE(activated);
+  REQUIRE(activated->outcome == 0);
+  bool expected = false, changeGeneration = false;
+  SECTION("Confirmed active path") { expected = true; }
+  SECTION("Unknown actual hardware state") { display->modeGeneration = 0; }
+  SECTION("Disabled actual hardware state") { display->isAttachedToDesktop = false; }
+  SECTION("Degraded topology with an enumerable path") { display->topologyDegraded = true; }
+  SECTION("Generation changes between summary and path query") { changeGeneration = true; }
+  __KRN_GFX_GETVIDEOPRESENTTOPOLOGY_V1 summary{};
+  REQUIRE_FALSE(handle_GetVideoPresentTopology_V1(kstd::move(summary)));
+  REQUIRE(summary.topology.pathCount == 1);
+  bool enumerated = false;
+  uint32_t queryGeneration = 0, queryWritten = 0;
+  kstd::error_code queryError{};
+  const bool confirmed = init::confirm_existing_display_path(summary.topology,
+      [&](uint32_t generation, uint32_t firstIndex, uint32_t queryOnly, VideoPresentPath *path,
+          uint32_t *capacity, uint32_t *required, uint32_t *written) {
+        enumerated = true;
+        queryGeneration = generation;
+        if (changeGeneration) ++display->adapter->resourceGeneration;
+        __KRN_GFX_ENUMVIDEOPRESENTPATHS_V1 query{};
+        query.generation = generation;
+        query.firstIndex = firstIndex;
+        query.queryOnly = queryOnly;
+        query.paths = kernel::borrowed_ptr<VideoPresentPath>(path, *capacity, {});
+        queryError = handle_EnumVideoPresentPaths_V1(kstd::move(query));
+        query.paths.release();
+        *written = queryWritten = query.written;
+        *required = query.required;
+        return kernel::KErrorToSysReturnCode(queryError);
+      });
+  const bool invalidActual = !display->modeGeneration || !display->isAttachedToDesktop;
+  display->modeGeneration = 1;
+  display->isAttachedToDesktop = true;
+  display->topologyDegraded = false;
+  REQUIRE(enumerated);
+  REQUIRE(queryGeneration == summary.topology.generation);
+  REQUIRE(confirmed == expected);
+  if (changeGeneration) {
+    REQUIRE(queryError == kernel::KernelError::Retry);
+    REQUIRE(queryWritten == 0);
+  } else if (invalidActual) {
+    REQUIRE(queryError == kernel::KernelError::InvalidState);
+    REQUIRE(summary.topology.degraded == 1);
+    REQUIRE(queryWritten == 0);
+  } else {
+    REQUIRE_FALSE(queryError);
+    REQUIRE(queryWritten == 1);
+  }
+}
+
+  TEST_CASE("Generated topology enumeration supports query fill and error counts without partial writes",
+            "[gfx][topology][dispatch][snapshot]") {
+    EnsureObjectManagerInitialized();
+    auto process = kernel::CreateAnonymousKObject<kernel::KProcessObject>().value();
+    auto thread = kernel::CreateAnonymousKObject<kernel::KThreadObject>().value();
+    thread->owner_process = process.get();
+    test_sched::SetCurrentThread(thread);
+    struct ResetThread { ~ResetThread() { test_sched::SetCurrentThread({}); } } resetThread;
+    TargetIdIsolation isolation;
+    const auto display = MakeFakeDisplay();
+    isolation.Track(display);
+    kernel::gfx::VideoPresentTopologyInfo topology{};
+    REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+    __SYS_GFX_ENUMVIDEOPRESENTTARGETS_V1 args{};
+    args.generation = topology.generation;
+    args.queryOnly = 1;
+    dispatchEmptyMaps = 0;
+    REQUIRE_FALSE(Dispatch_EnumVideoPresentTargets_V1(&args, sizeof(args), 0));
+    REQUIRE(args.required == 1);
+    REQUIRE(args.written == 0);
+    VideoPresentTarget records[2]{};
+    records[0].targetId = records[1].targetId = UINT32_MAX;
+    for (auto *pointer : {static_cast<VideoPresentTarget *>(nullptr), records}) {
+      args.targets = pointer;
+      args.targetsLength = 0;
+      args.queryOnly = 0;
+      args.required = args.written = UINT32_MAX;
+      REQUIRE(kernel::KErrorToSysReturnCode(
+          Dispatch_EnumVideoPresentTargets_V1(&args, sizeof(args), 0)) ==
+          SyscallReturnCode_INVALID_SIZE);
+      REQUIRE(args.required == 1);
+      REQUIRE(args.written == 0);
+      REQUIRE(records[0].targetId == UINT32_MAX);
+    }
+    REQUIRE(dispatchEmptyMaps == 0);
+    args.targets = records;
+    args.targetsLength = 2;
+    args.queryOnly = 2;
+    REQUIRE(Dispatch_EnumVideoPresentTargets_V1(&args, sizeof(args), 0) ==
+            kernel::KernelError::InvalidArgument);
+    REQUIRE(args.required == 0);
+    REQUIRE(args.written == 0);
+    args.queryOnly = 1;
+    REQUIRE(Dispatch_EnumVideoPresentTargets_V1(&args, sizeof(args), 0) ==
+            kernel::KernelError::InvalidArgument);
+    args.queryOnly = 0;
+    REQUIRE_FALSE(Dispatch_EnumVideoPresentTargets_V1(&args, sizeof(args), 0));
+    REQUIRE(args.required == 1);
+    REQUIRE(args.written == 1);
+    REQUIRE(records[0].targetId == display->videoPresentTargetId);
+    REQUIRE(records[1].targetId == UINT32_MAX);
+    args.firstIndex = 1;
+    args.targets = nullptr;
+    args.targetsLength = 0;
+    REQUIRE_FALSE(Dispatch_EnumVideoPresentTargets_V1(&args, sizeof(args), 0));
+    REQUIRE(args.required == 0);
+    REQUIRE(args.written == 0);
+    args.firstIndex = 2;
+    REQUIRE(Dispatch_EnumVideoPresentTargets_V1(&args, sizeof(args), 0) ==
+            kernel::KernelError::InvalidArgument);
+    args.firstIndex = 0;
+    ++display->adapter->resourceGeneration;
+    REQUIRE(Dispatch_EnumVideoPresentTargets_V1(&args, sizeof(args), 0) ==
+            kernel::KernelError::Retry);
+    REQUIRE(args.required == 0);
+    REQUIRE(args.written == 0);
+  }
+
+TEST_CASE("Generated enumeration preserves null output capacity for every record class",
+          "[gfx][topology][dispatch][snapshot]") {
+  EnsureObjectManagerInitialized();
+  auto process = kernel::CreateAnonymousKObject<kernel::KProcessObject>().value();
+  auto thread = kernel::CreateAnonymousKObject<kernel::KThreadObject>().value();
+  thread->owner_process = process.get();
+  test_sched::SetCurrentThread(thread);
+  struct ResetThread { ~ResetThread() { test_sched::SetCurrentThread({}); } } resetThread;
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  isolation.Track(display);
+  g_fakeAdapterState.modeCount = 2;
+  REQUIRE(SetModeViaTopology(display, 0));
+  const auto snapshot = kernel::gfx::acquire_video_present_snapshot();
+  REQUIRE(snapshot);
+  const auto generation = (*snapshot)->topology.generation;
+  const auto check = []<typename Args, typename Record>(
+      Args args, Record *, auto dispatch, auto setBuffer) {
+    Record records[3];
+    ::memset(records, 0xa5, sizeof(records));
+    args.queryOnly = 1;
+    setBuffer(args, static_cast<Record *>(nullptr), 0);
+    REQUIRE_FALSE(dispatch(&args, sizeof(args), 0));
+    const auto required = args.required;
+    REQUIRE(required > 0);
+    REQUIRE(required < 3);
+    REQUIRE(args.written == 0);
+    for (auto *pointer : {static_cast<Record *>(nullptr), records}) {
+      setBuffer(args, pointer, 1);
+      args.required = args.written = UINT32_MAX;
+      REQUIRE(dispatch(&args, sizeof(args), 0) == kernel::KernelError::InvalidArgument);
+      REQUIRE(args.required == 0);
+      REQUIRE(args.written == 0);
+    }
+    setBuffer(args, records, 0);
+    REQUIRE_FALSE(dispatch(&args, sizeof(args), 0));
+    REQUIRE(args.required == required);
+    REQUIRE(args.written == 0);
+    args.queryOnly = 0;
+    setBuffer(args, records, 3);
+    dispatchInvalidAddress = records;
+    const auto invalidMapping = dispatch(&args, sizeof(args), 0);
+    dispatchInvalidAddress = nullptr;
+    REQUIRE(invalidMapping == kernel::KernelError::InvalidAddress);
+    REQUIRE_FALSE(dispatch(&args, sizeof(args), 0));
+    REQUIRE(args.required == required);
+    REQUIRE(args.written == required);
+    const auto *tail = reinterpret_cast<const uint8_t *>(records + required);
+    for (size_t i = 0; i < (3 - required) * sizeof(Record); ++i)
+      REQUIRE(tail[i] == 0xa5);
+  };
+  __SYS_GFX_ENUMVIDEOPRESENTSOURCEMODES_V1 sources{};
+  sources.generation = generation;
+  sources.sourceId = kernel::gfx::DesktopSourceId;
+  check(sources, static_cast<VideoPresentSourceMode *>(nullptr),
+      Dispatch_EnumVideoPresentSourceModes_V1,
+      [](auto &args, auto *pointer, uint32_t count) { args.modes = pointer; args.modesLength = count; });
+  __SYS_GFX_ENUMVIDEOPRESENTTARGETS_V1 targets{};
+  targets.generation = generation;
+  check(targets, static_cast<VideoPresentTarget *>(nullptr),
+      Dispatch_EnumVideoPresentTargets_V1,
+      [](auto &args, auto *pointer, uint32_t count) { args.targets = pointer; args.targetsLength = count; });
+  __SYS_GFX_ENUMVIDEOPRESENTTARGETMODES_V1 modes{};
+  modes.generation = generation;
+  modes.targetId = display->videoPresentTargetId;
+  check(modes, static_cast<VideoPresentTargetMode *>(nullptr),
+      Dispatch_EnumVideoPresentTargetModes_V1,
+      [](auto &args, auto *pointer, uint32_t count) { args.modes = pointer; args.modesLength = count; });
+  __SYS_GFX_ENUMVIDEOPRESENTPATHS_V1 paths{};
+  paths.generation = generation;
+  check(paths, static_cast<VideoPresentPath *>(nullptr),
+      Dispatch_EnumVideoPresentPaths_V1,
+      [](auto &args, auto *pointer, uint32_t count) { args.paths = pointer; args.pathsLength = count; });
+}
+
+TEST_CASE("Mode observation and refresh run outside real spinlocks",
+          "[gfx][topology][snapshot][hotplug]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  isolation.Track(display);
+  kernel::gfx::video_present_test_set_spinlock_observer(
+      [] { return test_sync::held_spinlocks() != 0; });
+  struct ResetObserver {
+    ~ResetObserver() { kernel::gfx::video_present_test_set_spinlock_observer(nullptr); }
+  } resetObserver;
+  display->GetModeInfo = ObserveModeCallback;
+  observedModeCallbacks = modeCallbacksWithSpinlocks = 0;
+  REQUIRE(test_sync::held_spinlocks() == 0);
+  REQUIRE(kernel::gfx::video_present_test_locked_allocations() == 0);
+  REQUIRE(kernel::gfx::acquire_video_present_snapshot());
+  REQUIRE(SetModeViaTopology(display, 0));
+  REQUIRE_FALSE(KE_GFX_RefreshAdapter(display->adapter));
+  REQUIRE(kernel::gfx::acquire_video_present_snapshot());
+  REQUIRE(observedModeCallbacks > 0);
+  REQUIRE(modeCallbacksWithSpinlocks == 0);
+  REQUIRE(test_sync::held_spinlocks() == 0);
+  REQUIRE(kernel::gfx::video_present_test_locked_allocations() == 0);
+  display->GetModeInfo = FakeGetModeInfo;
+}
+
+TEST_CASE("Mapped enumeration pins published storage or returns retry without rebuilding",
+          "[gfx][topology][dispatch][snapshot]") {
+  EnsureObjectManagerInitialized();
+  auto process = kernel::CreateAnonymousKObject<kernel::KProcessObject>().value();
+  auto thread = kernel::CreateAnonymousKObject<kernel::KThreadObject>().value();
+  thread->owner_process = process.get();
+  test_sched::SetCurrentThread(thread);
+  struct ResetThread { ~ResetThread() { test_sched::SetCurrentThread({}); } } resetThread;
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  isolation.Track(display);
+  const auto old = kernel::gfx::acquire_video_present_snapshot();
+  REQUIRE(old);
+  display->GetModeInfo = ObserveModeCallback;
+  REQUIRE_FALSE(KE_GFX_RefreshAdapter(display->adapter));
+  __SYS_GFX_ENUMVIDEOPRESENTSOURCEMODES_V1 args{};
+  args.generation = kernel::gfx::video_present_test_generation();
+  REQUIRE(args.generation != (*old)->topology.generation);
+  args.sourceId = kernel::gfx::DesktopSourceId;
+  VideoPresentSourceMode output{};
+  output.modeId = UINT32_MAX;
+  args.modes = &output;
+  args.modesLength = 1;
+  dispatchObservedOutput = &output;
+  observedModeCallbacks = modeCallbacksWithOutputMapping = 0;
+  const auto allocations = kernel::gfx::video_present_test_live_allocations();
+  REQUIRE(Dispatch_EnumVideoPresentSourceModes_V1(&args, sizeof(args), 0) ==
+          kernel::KernelError::Retry);
+  REQUIRE(args.required == 0);
+  REQUIRE(args.written == 0);
+  REQUIRE(output.modeId == UINT32_MAX);
+  REQUIRE(observedModeCallbacks == 0);
+  REQUIRE(kernel::gfx::video_present_test_live_allocations() == allocations);
+  // An unmapped size query may build the dirty generation.
+  args.queryOnly = 1;
+  args.modes = nullptr;
+  args.modesLength = 0;
+  REQUIRE_FALSE(Dispatch_EnumVideoPresentSourceModes_V1(&args, sizeof(args), 0));
+  REQUIRE(args.required == 1);
+  REQUIRE(observedModeCallbacks > 0);
+  const auto publishedAllocations = kernel::gfx::video_present_test_live_allocations();
+  observedModeCallbacks = 0;
+  args.queryOnly = 0;
+  args.modes = &output;
+  args.modesLength = 1;
+  REQUIRE_FALSE(Dispatch_EnumVideoPresentSourceModes_V1(&args, sizeof(args), 0));
+  REQUIRE(args.written == 1);
+  REQUIRE(output.modeId != UINT32_MAX);
+  REQUIRE(observedModeCallbacks == 0);
+  REQUIRE(modeCallbacksWithOutputMapping == 0);
+  REQUIRE(kernel::gfx::video_present_test_live_allocations() == publishedAllocations);
+  dispatchObservedOutput = nullptr;
+  display->GetModeInfo = FakeGetModeInfo;
+}
+
+  TEST_CASE("Topology snapshot leases pin immutable records across replacement and removal",
+            "[gfx][topology][snapshot]") {
+    EnsureObjectManagerInitialized();
+    TargetIdIsolation isolation;
+    const auto display = MakeFakeDisplay();
+    isolation.Track(display);
+    const auto old = kernel::gfx::acquire_video_present_snapshot();
+    REQUIRE(old);
+    const auto generation = (*old)->topology.generation;
+    const auto oldWidth = (*old)->targetModes[0].mode.width;
+    const auto id = (*old)->targets[0].targetId;
+    REQUIRE((*old)->targetReferences[0] == display);
+    REQUIRE((*old)->allocatedBytes <= kernel::gfx::VideoPresentSnapshotBudgetBytes);
+    g_fakeAdapterState.modes[0].width += 8;
+    const auto replacement = kernel::gfx::acquire_video_present_snapshot();
+    REQUIRE(replacement);
+    REQUIRE((*replacement)->topology.generation != generation);
+    REQUIRE((*replacement)->targetModes[0].mode.width == oldWidth + 8);
+    REQUIRE((*old)->targetModes[0].mode.width == oldWidth);
+    REQUIRE((*old)->targets[0].targetId == id);
+    REQUIRE(kernel::gfx::acquire_video_present_snapshot(generation).error() ==
+            kernel::KernelError::Retry);
+    KE_GFX_RemoveAdapter(display->adapter);
+    ResetFakeCalls();
+    const auto removed = kernel::gfx::acquire_video_present_snapshot();
+    REQUIRE(removed);
+    REQUIRE((*removed)->topology.targetCount == 0);
+    REQUIRE((*old)->targetReferences[0] == display);
+    REQUIRE((*old)->targetModes[0].mode.width == oldWidth);
+    REQUIRE(g_fakeAdapterState.removedCallbacks == 0);
+  }
+
+  TEST_CASE("Snapshot allocation failures free partial builders without publishing or locked reclamation",
+            "[gfx][topology][snapshot]") {
+    EnsureObjectManagerInitialized();
+    TargetIdIsolation isolation;
+    const auto display = MakeFakeDisplay();
+    isolation.Track(display);
+    const auto old = kernel::gfx::acquire_video_present_snapshot();
+    REQUIRE(old);
+    const auto live = kernel::gfx::video_present_test_live_allocations();
+    const auto generation = (*old)->topology.generation;
+    ++display->adapter->resourceGeneration;
+    for (size_t failure = 0; failure < 7; ++failure) {
+      kernel::gfx::video_present_test_fail_allocation_after(failure);
+      const auto attempt = kernel::gfx::acquire_video_present_snapshot();
+      kernel::gfx::video_present_test_fail_allocation_after(SIZE_MAX);
+      REQUIRE_FALSE(attempt);
+      REQUIRE(attempt.error() == kernel::KernelError::OutOfMemory);
+      REQUIRE(kernel::gfx::video_present_test_live_allocations() == live);
+      REQUIRE((*old)->topology.generation == generation);
+      REQUIRE((*old)->targetReferences[0] == display);
+    }
+    const auto current = kernel::gfx::acquire_video_present_snapshot();
+    REQUIRE(current);
+    REQUIRE((*current)->topology.generation != generation);
+    REQUIRE(kernel::gfx::video_present_test_locked_allocations() == 0);
+  }
+
+  TEST_CASE("Snapshot construction discards resource changes between counting and filling",
+            "[gfx][topology][snapshot]") {
+    EnsureObjectManagerInitialized();
+    TargetIdIsolation isolation;
+    const auto display = MakeFakeDisplay();
+    isolation.Track(display);
+    // One-mode count pass uses three callbacks; change during its fill pass.
+    g_fakeAdapterState.modeCallsUntilResourceChange = 4;
+    const auto changed = kernel::gfx::acquire_video_present_snapshot();
+    REQUIRE_FALSE(changed);
+    REQUIRE(changed.error() == kernel::KernelError::Retry);
+    REQUIRE(kernel::gfx::acquire_video_present_snapshot());
+  }
+
+  TEST_CASE("Commit snapshot allocation failure preserves the token and reservation before hardware",
+            "[gfx][topology][snapshot]") {
+    EnsureObjectManagerInitialized();
+    TargetIdIsolation isolation;
+    const auto display = MakeFakeDisplay();
+    isolation.Track(display);
+    const auto snapshot = kernel::gfx::acquire_video_present_snapshot();
+    REQUIRE(snapshot);
+    const auto &mode = (*snapshot)->targetModes[0];
+    VideoPresentPath path{.sourceId = kernel::gfx::DesktopSourceId, .sourceModeId = 1,
+        .targetId = mode.targetId, .targetModeId = mode.modeId,
+        .width = mode.mode.width, .height = mode.mode.height};
+    auto process = kernel::CreateAnonymousKObject<kernel::KProcessObject>().value();
+    auto thread = kernel::CreateAnonymousKObject<kernel::KThreadObject>().value();
+    thread->owner_process = process.get();
+    test_sched::SetCurrentThread(thread);
+    __KRN_GFX_VALIDATEVIDEOPRESENTTOPOLOGY_V1 validate{};
+    validate.generation = (*snapshot)->topology.generation;
+    validate.paths = kernel::borrowed_ptr<VideoPresentPath>(&path, 1, {});
+    validate.paths_len = 1;
+    const auto validation = handle_ValidateVideoPresentTopology_V1(kstd::move(validate));
+    validate.paths.release();
+    REQUIRE_FALSE(validation);
+    ResetFakeCalls();
+    VideoPresentTargetResult result{};
+    __KRN_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 commit{};
+    commit.token = validate.token;
+    commit.results = kernel::borrowed_ptr<VideoPresentTargetResult>(&result, 1, {});
+    commit.results_len = 1;
+    const auto live = kernel::gfx::video_present_test_live_allocations();
+    for (size_t failure = 0; failure < 8; ++failure) {
+      commit.results = kernel::borrowed_ptr<VideoPresentTargetResult>(&result, 1, {});
+      kernel::gfx::video_present_test_fail_allocation_after(failure);
+      const auto error = handle_CommitVideoPresentTopology_V1(kstd::move(commit));
+      kernel::gfx::video_present_test_fail_allocation_after(SIZE_MAX);
+      commit.results.release();
+      REQUIRE(error == kernel::KernelError::OutOfMemory);
+      REQUIRE(commit.required == 1);
+      REQUIRE(commit.written == 0);
+      REQUIRE(process->handles.Lookup(static_cast<kernel::KHandle>(validate.token)));
+      REQUIRE(g_fakeAdapterState.finishCalls == 0);
+      REQUIRE(CallLog().empty());
+      REQUIRE(kernel::gfx::video_present_test_live_allocations() == live);
+    }
+    REQUIRE_FALSE(process->handles.Close(static_cast<kernel::KHandle>(validate.token)));
+    REQUIRE(g_fakeAdapterState.finishCalls == 1);
+    test_sched::SetCurrentThread({});
+  }
+
+TEST_CASE("Snapshot final release reclaims replaced arrays outside topology serialization",
+          "[gfx][topology][snapshot]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  isolation.Track(display);
+  {
+    const auto initial = kernel::gfx::acquire_video_present_snapshot();
+    REQUIRE(initial);
+  }
+  const auto baseline = kernel::gfx::video_present_test_live_allocations();
+  for (size_t replacement = 0; replacement < 4; ++replacement) {
+    {
+      const auto prior = kernel::gfx::acquire_video_present_snapshot();
+      REQUIRE(prior);
+      ++display->adapter->resourceGeneration;
+      const auto next = kernel::gfx::acquire_video_present_snapshot();
+      REQUIRE(next);
+      REQUIRE((*prior)->topology.generation != (*next)->topology.generation);
+      REQUIRE(kernel::gfx::video_present_test_live_allocations() > baseline);
+    }
+    REQUIRE(kernel::gfx::video_present_test_live_allocations() == baseline);
+  }
+  REQUIRE(kernel::gfx::video_present_test_locked_allocations() == 0);
+}
+
+TEST_CASE("Boot refresh zero does not select an offered non-60-Hz timing", "[gfx][mode]") {
+  init::DisplayPreference preference{640, 480, 8, 0};
+  REQUIRE_FALSE(init::matches_display_preference(preference, 640, 480, 8, 75));
+  REQUIRE(init::matches_display_preference(preference, 640, 480, 8, 60));
+  preference.refreshHz = 75;
+  REQUIRE(init::matches_display_preference(preference, 640, 480, 8, 75));
+  REQUIRE_FALSE(init::matches_display_preference(preference, 640, 480, 8, 60));
+}
+
+TEST_CASE("Topology commit reuses the same KSurface across a mode switch", "[gfx][mode]") {
   EnsureObjectManagerInitialized();
 
   const auto display = MakeFakeDisplay();
   g_fakeAdapterState.modeCount = 2;
 
-  const auto surface = KE_GFX_CreateSurfaceForMode(display, 0).value_or(nullptr);
+  const auto modeResult = SetModeViaTopology(display, 0);
+  const auto surface = display->surface;
+  REQUIRE(modeResult);
   REQUIRE(surface);
   REQUIRE(surface->width == 640);
   REQUIRE(display->currentMode.width == 640);
 
-  REQUIRE_FALSE(KE_GFX_SetDisplayMode(display, 1));
+  REQUIRE(SetModeViaTopology(display, 1));
 
   // Same object: HDCs already holding the surface stay valid.
   REQUIRE(display->surface == surface);
@@ -875,45 +2432,114 @@ TEST_CASE("KE_GFX_SetDisplayMode reuses the same KSurface across a mode switch",
   REQUIRE(display->currentMode.modeIndex == 1);
 }
 
-TEST_CASE("KE_GFX_SetDisplayMode disables before programming and enables after", "[gfx][mode]") {
+TEST_CASE("Topology commit disables before programming and enables after", "[gfx][mode]") {
   EnsureObjectManagerInitialized();
 
   const auto display = MakeFakeDisplay();
   g_fakeAdapterState.modeCount = 2;
   ResetFakeCalls();
 
-  REQUIRE_FALSE(KE_GFX_SetDisplayMode(display, 1));
-  REQUIRE(CallLog() == "DSE");
+  REQUIRE(SetModeViaTopology(display, 1));
+  REQUIRE((CallLog() == "PDSEF" || CallLog() == "PDSEFD"));
 }
 
-TEST_CASE("KE_GFX_SetDisplayMode rejects an out-of-range index without programming", "[gfx][mode]") {
+TEST_CASE("Topology commit rejects an out-of-range mode without programming", "[gfx][mode]") {
   EnsureObjectManagerInitialized();
 
   const auto display = MakeFakeDisplay();
 
-  REQUIRE(KE_GFX_SetDisplayMode(display, 7) == kernel::KernelError::OutOfRange);
+  REQUIRE(SetModeViaTopology(display, 7).error() == kernel::KernelError::NotFound);
   REQUIRE(g_fakeAdapterState.setModeCalls == 0);
 }
 
-TEST_CASE("A failing driver SetMode leaves the previous surface and re-enables the output", "[gfx][mode]") {
+TEST_CASE("A failing driver SetMode reports failure without fabricating a mode", "[gfx][mode]") {
   EnsureObjectManagerInitialized();
 
   const auto display = MakeFakeDisplay();
   g_fakeAdapterState.modeCount = 2;
 
-  const auto surface = KE_GFX_CreateSurfaceForMode(display, 0).value_or(nullptr);
+  REQUIRE(SetModeViaTopology(display, 0));
+  const auto surface = display->surface;
   REQUIRE(surface);
 
   g_fakeAdapterState.setModeShouldSucceed = false;
   ResetFakeCalls();
 
-  REQUIRE(KE_GFX_SetDisplayMode(display, 1));
+  const auto failedMode = SetModeViaTopology(display, 1);
+  REQUIRE(failedMode);
+  REQUIRE(failedMode->outcome == VideoPresentOutcome_ProgrammingFailed);
 
   // Previous mode stays programmed, and the output is brought back up.
   REQUIRE(display->surface == surface);
   REQUIRE(surface->width == 640);
   REQUIRE(display->currentMode.width == 640);
-  REQUIRE(CallLog() == "DSE");
+  REQUIRE(CallLog() == "PDSEF");
+  REQUIRE(kernel::gfx::active_video_present_target() == display);
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  REQUIRE(topology.pathCount == 1);
+  const auto activePath = kernel::gfx::video_present_path(topology.generation, 0);
+  REQUIRE(activePath);
+  REQUIRE(activePath->targetModeId == 1);
+}
+
+TEST_CASE("A failed target enable restores and reports the previous active path", "[gfx][mode]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  g_fakeAdapterState.modeCount = 2;
+  REQUIRE(SetModeViaTopology(display, 0));
+  const auto surface = display->surface;
+  REQUIRE(surface);
+
+  ResetFakeCalls();
+  g_fakeAdapterState.failEnableCallsRemaining = 1;
+  const auto result = SetModeViaTopology(display, 1);
+  REQUIRE(result);
+  REQUIRE(result->outcome == VideoPresentOutcome_EnableFailed);
+  REQUIRE(result->degraded == 0);
+  REQUIRE(result->active == 1);
+  REQUIRE(result->actualModeId == 1);
+  REQUIRE(display->surface == surface);
+  REQUIRE(display->currentMode.modeIndex == 0);
+  REQUIRE(CallLog() == "PDSEEF");
+
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  REQUIRE(topology.pathCount == 1);
+  REQUIRE(topology.degraded == 0);
+  const auto activePath = kernel::gfx::video_present_path(topology.generation, 0);
+  REQUIRE(activePath);
+  REQUIRE(activePath->targetModeId == 1);
+}
+
+TEST_CASE("A target that cannot restore reports its actual degraded state", "[gfx][mode]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  isolation.Track(display);
+  g_fakeAdapterState.modeCount = 2;
+  REQUIRE(SetModeViaTopology(display, 0));
+  const auto oldSurface = display->surface;
+  REQUIRE(oldSurface);
+
+  g_fakeAdapterState.setModeShouldSucceed = false;
+  g_fakeAdapterState.programFailureChangesMode = true;
+  g_fakeAdapterState.bindRestoreMode = false;
+  display->RestoreMode = nullptr;
+  const auto result = SetModeViaTopology(display, 1);
+  REQUIRE(result);
+  REQUIRE(result->outcome == VideoPresentOutcome_StateUnknown);
+  REQUIRE(result->degraded == 1);
+  REQUIRE(result->active == 0);
+  REQUIRE(result->actualModeId == 2);
+  REQUIRE(display->surface == oldSurface);
+  REQUIRE(display->currentMode.modeIndex == 1);
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  REQUIRE_FALSE(kernel::gfx::get_video_present_topology(topology));
+  REQUIRE(topology.pathCount == 0);
+  REQUIRE(topology.degraded == 1);
+  display->topologyDegraded = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1055,9 +2681,9 @@ TEST_CASE("A non-PnP head gets the default monitor capabilities and they refuse 
 
   // ...but the monitor capabilities keep the kernel from programming it.
   ResetFakeCalls();
-  REQUIRE(KE_GFX_SetDisplayMode(display, 1) == kernel::KernelError::Unsupported);
+  REQUIRE(SetModeViaTopology(display, 1).error() == kernel::KernelError::NotFound);
   REQUIRE(g_fakeAdapterState.setModeCalls == 0);
 
   // The mode the default monitor accepts still programs.
-  REQUIRE_FALSE(KE_GFX_SetDisplayMode(display, 0));
+  REQUIRE(SetModeViaTopology(display, 0));
 }

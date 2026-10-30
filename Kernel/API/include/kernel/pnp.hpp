@@ -19,12 +19,23 @@ namespace kernel::pnp {
 enum class DeviceEvent : uint32_t {
   Started = 1,
   Stopped = 2,
+  Changed = 3,
 };
 }// namespace kernel::pnp
 namespace kernel::event {
 template<>
 struct is_code_enum<pnp::DeviceEvent> : kstd::true_type {};
 }
+
+// Report before hardware/resource teardown, in preemptible context outside
+// USER/topology locks. Drains USER drawing and retires graphics targets before
+// marking the retained stack removed, then queues notifications.
+// Pinned device extensions remain alive for cleanup.
+// This does not free device objects or reclaim driver resources.
+UNDOS_KERNEL_PUBLIC_V1API(
+    kstd::error_code,
+    KE_PNP_ReportRemovedDevice,
+    const kernel::KDevicePtr<kernel::KDevice> &device);
 
 UNDOS_KERNEL_PUBLIC_V1API(
     const kernel::event::Category &,

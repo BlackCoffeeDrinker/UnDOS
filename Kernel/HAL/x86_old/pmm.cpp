@@ -56,8 +56,7 @@ uint64_t find_highest_physical_address(const kernel::BootInfoT &boot_info) {
 }// namespace
 
 namespace hal::x86 {
-void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
-  uint64_t max_memory = 0;
+void report_pmm(const kernel::BootInfoT &boot_info) noexcept {
   KE_Print("Parsing system memory layout with page size {}...", boot_info.page_size);
 
   for (size_t i = 0; i < boot_info.memory_regions.size(); ++i) {
@@ -66,10 +65,19 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
     KE_Print(" * Memory map region {} type: {}, base: 0x{:lx}, length: 0x{:lx}", i, map_type_to_string(map.type), static_cast<uintptr_t>(map.base), map.length);
   }
 
-  // 1. Find the highest physical address to calculate total required frames
-  max_memory = find_highest_physical_address(boot_info);
-
+  const auto max_memory = find_highest_physical_address(boot_info);
   KE_Print("Total available memory: 0x{:lx}", max_memory);
+  if ((max_memory / PAGE_SIZE + BITMAP_WORD_SIZE - 1) / BITMAP_WORD_SIZE > BITMAP_MAX_SIZE)
+    KE_Print("PMM: RAM exceeds bitmap capacity! Truncating to 512MB.");
+  for (const auto &region: boot_info.mapped_memory) {
+    if (region.type != kernel::MappedMemoryRegionType::None)
+      KE_Print("Reserving region at 0x{:x} for 0x{:x} bytes",
+               static_cast<uintptr_t>(region.physical_base), region.length);
+  }
+}
+
+void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
+  const auto max_memory = find_highest_physical_address(boot_info);
 
   // Explicitly cast the division result to size_t.
   total_frames = static_cast<size_t>(max_memory / PAGE_SIZE);
@@ -77,7 +85,6 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   if (total_frames % BITMAP_WORD_SIZE != 0) bitmap_size_words++;
 
   if (bitmap_size_words > BITMAP_MAX_SIZE) {
-    KE_Print("PMM: RAM exceeds bitmap capacity! Truncating to 512MB.");
     bitmap_size_words = BITMAP_MAX_SIZE;
     total_frames = PAGE_SIZE * BITMAP_WORD_SIZE;
   }
@@ -103,7 +110,9 @@ void init_pmm(const kernel::BootInfoT &boot_info) noexcept {
   // 4. Protect the kernel memory space and the bitmap itself
   for (const auto &region: boot_info.mapped_memory) {
     if (region.type != kernel::MappedMemoryRegionType::None) {
-      HAL_PMM_ReserveRegion(region.physical_base, region.length);
+      const auto start = static_cast<uintptr_t>(region.physical_base) / PAGE_SIZE;
+      const auto count = region.length / PAGE_SIZE + (region.length % PAGE_SIZE != 0);
+      for (size_t i = 0; i < count; ++i) set_bit(start + i);
     }
   }
 }

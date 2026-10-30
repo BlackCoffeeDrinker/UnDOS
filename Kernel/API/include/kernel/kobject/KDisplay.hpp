@@ -29,27 +29,43 @@ enum class DisplayOrientation : uint8_t {
   Rotate270 = 3 // 270 degrees clockwise
 };
 
-// Where the pixels of a newly programmed mode live. Filled in by the driver's
-// KDisplay::SetMode; the GFX subsystem copies it onto the display's KSurface.
+// Where the pixels of a prepared target mode live. The backing is reserved
+// before hardware programming begins.
 struct KDisplaySurfaceBinding {
   KObjectPtr<KMemoryBackingObject> backing{nullptr};// Memory holding the pixel data
   SurfaceType type{SurfaceType::Framebuffer};       // VRAM scanout vs shadow in RAM
   uint32_t flags{0};                                // Bitfield of SurfaceFlags
 };
 
-// Display object representing a mode/connector/framebuffer
-struct KDisplay : KObjectT<KDisplay, 1, TYPE_DISPLAY> {
+struct KDisplayModeReservation {
+  size_t modeIndex{};
+  KDisplayModeInfo mode{};
+  KDisplaySurfaceBinding binding{};
+  void *driverData{};
+};
+
+struct KDisplayActualState {
+  bool known{false};
+  bool enabled{false};
+  size_t modeIndex{};
+};
+
+// Physical video-present target and its current scanout surface.
+struct KVideoPresentTarget : KObjectT<KVideoPresentTarget, 1, TYPE_VIDEO_PRESENT_TARGET> {
   using KObjectT::KObjectT;
 
   // Parent Adapter & Hardware Head Mapping
   KObjectPtr<KGraphicsAdapter> adapter{nullptr};
   uint32_t headIndex{0};// Controller head / DAC index on adapter
+  uint32_t videoPresentTargetId{0};
 
   // Hardware Identification & Hotplug Status
   bool isPresent{false};          // Connector attached physically
   bool isMonitor{false};          // Valid monitor/sink detected (DDC or load check)
   bool isPrimary{false};          // Designated primary display output
   bool isAttachedToDesktop{false};// Currently active in global virtual desktop
+  bool topologyDegraded{false};
+  bool removed{false};
 
   Edid edid{};
 
@@ -69,15 +85,29 @@ struct KDisplay : KObjectT<KDisplay, 1, TYPE_DISPLAY> {
   uint32_t modeGeneration{0};
   DisplayPowerState powerState{DisplayPowerState::PowerOn};
 
-  // Driver Execution Entry Points
-  // Probes mode info; modeIndex++ until this fails with KernelError::OutOfRange.
+  // Target-mode enumeration and transaction callbacks. Validate checks that
+  // the target is still usable; PrepareMode reserves resources without
+  // changing hardware. FinishMode releases a failed or abandoned reservation
+  // or transfers its ownership after a successful program.
+  // Probe mode ordinals until OutOfRange. IDs exposed to callers are manager-owned.
   cfunc<kstd::expected<KDisplayModeInfo, kstd::error_code>(const KObjectPtr<KDisplay> &display, size_t modeIndex)> GetModeInfo;
 
-  // Programs `modeIndex` in hardware and reports where the pixels live. The
-  // driver does not touch KSurface; the kernel owns that.
-  cfunc<kstd::expected<KDisplaySurfaceBinding, kstd::error_code>(const KObjectPtr<KDisplay> &display, size_t modeIndex)> SetMode;
+  // Prepare allocates every driver-owned resource needed by ProgramMode
+  // without changing hardware. FinishMode releases a failed reservation or
+  // transfers successful driverData ownership to the target context.
+  cfunc<kstd::error_code(const KObjectPtr<KDisplay> &display, size_t modeIndex,
+                         KDisplayModeReservation &reservation)> PrepareMode;
+  cfunc<kstd::error_code(const KObjectPtr<KDisplay> &display,
+                         KDisplayModeReservation &reservation)> ProgramMode;
+  cfunc<void(const KObjectPtr<KDisplay> &display,
+             KDisplayModeReservation &reservation, bool committed)> FinishMode;
+
+  // RestoreMode is optional; QueryActualState must describe only known state.
+  cfunc<kstd::error_code(const KObjectPtr<KDisplay> &display, size_t modeIndex,
+                         KDisplayModeReservation &reservation)> RestoreMode;
+  cfunc<kstd::expected<KDisplayActualState, kstd::error_code>(const KObjectPtr<KDisplay> &display)> QueryActualState;
   cfunc<kstd::error_code(const KObjectPtr<KDisplay> &display)> Enable;  // Enable output timings & DAC
-  cfunc<void(const KObjectPtr<KDisplay> &display)> Disable;        // Blank CRTC and disable signal output
+  cfunc<kstd::error_code(const KObjectPtr<KDisplay> &display)> Disable;// Blank CRTC and disable signal output
   cfunc<kstd::error_code(const KObjectPtr<KDisplay> &display)> Validate;// Re-verify DDC link and connection status
 
   // Power & DPMS Control Hooks
@@ -85,7 +115,7 @@ struct KDisplay : KObjectT<KDisplay, 1, TYPE_DISPLAY> {
 };
 
 template<>
-struct ObjectTypeOf<TYPE_DISPLAY> {
-  using type = KDisplay;
+struct ObjectTypeOf<TYPE_VIDEO_PRESENT_TARGET> {
+  using type = KVideoPresentTarget;
 };
 }// namespace kernel

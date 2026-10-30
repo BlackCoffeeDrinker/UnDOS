@@ -68,9 +68,11 @@ def generate_kernel_types(module: IDLModule, out_h_dir: str, out_h_syscall_dir: 
                 elif isinstance(field.ftype, ArrayType):
                     template.write_kernel_array(c_type_for(field.ftype.elem_type), field.name, str(field.ftype.size))
                 elif isinstance(field.ftype, DynArrayType):
-                    template.write_kernel_borrowed_ptr(c_type_for(field.ftype.elem_type), field.name)
+                    template.write_kernel_mapped_array_type(c_type_for(field.ftype.elem_type), field.name)
                 elif isinstance(field.ftype, BufferType):
                     template.write_kernel_mapped_array_type(c_type_for(field.ftype.elem_type), field.name)
+                    if field.direction == "OUT":
+                        template.write_kernel_field("size_t", f"{field.name}_capacity")
             template.end_syscall_struct()
 
 
@@ -229,9 +231,16 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
                         field.mode == "COPY" and field.direction == "IN"
                         else "UNDOS_MAX_MAPPED_BUFFER_SIZE"
                     )
+                    if isinstance(field.ftype, (DynArrayType, BufferType)):
+                        size_limit += f" / sizeof({c_type_for(field.ftype.elem_type)})"
                     f.write(f"  if (headerCopy.{field.name} != nullptr) {{\n")
                     f.write(f"    if (headerCopy.{field.name}Length > {size_limit}) return kernel::KernelError::InvalidSize;\n")
-                    if not (isinstance(field.ftype, StringType) and field.mode == "COPY" and field.direction == "IN"):
+                    permits_empty = (
+                        isinstance(field.ftype, StringType) and field.mode == "COPY" and field.direction == "IN"
+                    ) or (
+                        isinstance(field.ftype, BufferType) and field.direction == "OUT"
+                    )
+                    if not permits_empty:
                         f.write(f"    if (headerCopy.{field.name}Length == 0) return kernel::KernelError::InvalidArgument;\n")
                     f.write(f"  }}\n\n")
 
@@ -268,6 +277,7 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
                 if field.direction == "OUT":
                     continue
                 if isinstance(field.ftype, DynArrayType) or isinstance(field.ftype, BufferType):
+                    f.write(f"  args.{field.name}_len = headerCopy.{field.name}Length;\n")
                     f.write(f"  if (headerCopy.{field.name} != nullptr) {{\n")
                     f.write(f"    if (const auto mapped = KE_VMM_MapBorrowed(const_cast<{c_type_for(field.ftype.elem_type)} *>(headerCopy.{field.name}), headerCopy.{field.name}Length * sizeof({c_type_for(field.ftype.elem_type)}), address_space)) {{\n")
                     f.write(f"      args.{field.name} = kernel::borrowed_ptr<{c_type_for(field.ftype.elem_type)}>(static_cast<{c_type_for(field.ftype.elem_type)} *>(*mapped), headerCopy.{field.name}Length, address_space);\n")
@@ -286,7 +296,12 @@ def generate_kernel(module: IDLModule, out_h_dir: str, out_h_syscall_dir: str):
             for field in sc.fields:
                 if field.direction != "OUT" or not isinstance(field.ftype, BufferType):
                     continue
-                f.write(f"  if (headerCopy.{field.name} != nullptr) {{\n")
+                # Empty output capacity belongs to the handler's query/error
+                # contract, not to the mapper (which requires nonempty ranges).
+                # Preserve raw capacity separately from the mapped/returned length
+                # so null optional buffers keep existing handler semantics.
+                f.write(f"  args.{field.name}_capacity = headerCopy.{field.name}Length;\n")
+                f.write(f"  if (headerCopy.{field.name} != nullptr && headerCopy.{field.name}Length > 0) {{\n")
                 f.write(
                     f"    const auto mapped = KE_VMM_MapBorrowed(headerCopy.{field.name}, headerCopy.{field.name}Length * sizeof({c_type_for(field.ftype.elem_type)}), address_space);\n")
                 f.write("    if (!mapped) return mapped.error();\n")

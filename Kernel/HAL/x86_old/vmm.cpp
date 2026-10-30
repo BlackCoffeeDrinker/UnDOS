@@ -337,7 +337,7 @@ void ensure_page_user_writable(kernel::VirtualAddress virtual_addr, kernel::Phys
       page_table[i].clear();
     }
     HAL_VMM_Flush(virtual_addr);
-  } else if (!has_flag(PageFlags(directory[pd_index].value), PageFlags::USER)) {
+  } else if (!has_flag(static_cast<PageFlags>(directory[pd_index].value), PageFlags::USER)) {
     // Upgrade a pre-existing supervisor-only page table (e.g. a transitional
     // identity map left behind by the Stage 1.5 boot loader) so pages within
     // it *can* be marked user-accessible; individual page table entries below
@@ -346,10 +346,9 @@ void ensure_page_user_writable(kernel::VirtualAddress virtual_addr, kernel::Phys
     HAL_VMM_Flush(VirtualAddress(RECURSIVE_PT_WINDOW + (pd_index * 4096)));
   }
 
-  auto *page_table = get_page_table(virtual_addr);
-  if (!page_table[pt_index].is_present() ||
-      !has_flag(PageFlags(page_table[pt_index].value), PageFlags::USER) ||
-      !has_flag(PageFlags(page_table[pt_index].value), PageFlags::WRITABLE)) {
+  if (auto *page_table = get_page_table(virtual_addr); !page_table[pt_index].is_present() ||
+      !has_flag(static_cast<PageFlags>(page_table[pt_index].value), PageFlags::USER) ||
+      !has_flag(static_cast<PageFlags>(page_table[pt_index].value), PageFlags::WRITABLE)) {
     page_table[pt_index].set_frame(static_cast<uintptr_t>(physical_addr), user_writable);
     HAL_VMM_Flush(virtual_addr);
   }

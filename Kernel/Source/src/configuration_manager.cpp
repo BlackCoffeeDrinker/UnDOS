@@ -41,6 +41,7 @@ bool IsRootReady(const kernel::KConfigurationRoot &root) { return root.file != n
 kstd::error_code EnsureRootIsOpened(const kernel::KObjectPtr<kernel::KConfigurationRoot> &configRoot) {
   if (!configRoot) {
     // Key was misconfigured, or the hive is not registered
+    KE_Print("ERROR: Configuration root not found");
     return kernel::KernelError::NotFound;
   }
 
@@ -138,14 +139,22 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_CM_DecrementConfigRootReferenceCount(co
 
 UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_code> KE_CM_OpenRoot(const kstd::string_view &rootName) noexcept {
   const auto hiveRoot = KE_OB_FindDirectChildOfType<kernel::KConfigurationRoot>(KE_OB_GetConfigDirectory(), rootName);
-  if (!hiveRoot) return kstd::unexpected(kernel::KernelError::NotFound);
+  if (!hiveRoot) {
+    KE_Print("Hive root {} not found", rootName);
+    return kstd::unexpected(kernel::KernelError::NotFound);
+  }
 
   if (const auto status = EnsureRootIsOpened(hiveRoot); status) {
+    KE_Print("Hive {} is not opened", rootName);
     return kstd::unexpected(status);
   }
 
   auto created = KE_CreateKPtrObject<kernel::KConfigurationKey>();
-  if (!created) return kstd::unexpected(created.error());
+  if (!created) {
+    KE_Print("Failed to create KConfigurationKey for hive {}", rootName);
+    return kstd::unexpected(created.error());
+  }
+
   auto obj = kstd::move(*created);
 
   // configRoot must be assigned before bumping the reference count: the
@@ -181,6 +190,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
 
   if (const auto status = EnsureRootIsOpened(root); status) {
     // Cannot open root
+    KE_Print("Hive root {} is not opened for {}", root->name, subKeyName);
     return kstd::unexpected(status);
   }
 

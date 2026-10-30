@@ -6,4 +6,5 @@
 
 namespace hal::x86 {
 void init_pmm(const kernel::BootInfoT &boot_info) noexcept;
+void report_pmm(const kernel::BootInfoT &boot_info) noexcept;
 }

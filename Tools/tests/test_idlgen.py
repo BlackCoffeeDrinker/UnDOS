@@ -18,6 +18,48 @@ from idlgen.resolver import ResolverError, resolve_aliases
 
 
 class ScalarAliasTests(unittest.TestCase):
+    def test_empty_output_buffers_reach_handler_without_empty_mapping(self):
+        module = parse_idl("""
+            syscall V1 TEST Output [1] { values: OUT buffer<c<uint32_t>>; };
+            syscall V1 TEST Input [2] { values: IN buffer<c<uint32_t>>; };
+            syscall V1 TEST Text [3] { value: OUT string; };
+        """)
+        with tempfile.TemporaryDirectory(prefix="undos-idl-") as directory:
+            generate_kernel(module, directory, "undos/syscalls")
+            dispatch = (Path(directory) / "handler_syscall.cpp").read_text()
+            output = dispatch.split("static kstd::error_code Dispatch_Output_V1(")[1].split(
+                "static kstd::error_code Dispatch_Input_V1(")[0]
+            self.assertNotIn("valuesLength == 0", output)
+            self.assertIn("headerCopy.values != nullptr && headerCopy.valuesLength > 0", output)
+            self.assertIn("valuesLength > UNDOS_MAX_MAPPED_BUFFER_SIZE / sizeof(uint32_t)", output)
+            self.assertIn("if (!mapped) return mapped.error();", output)
+            mapping = output.index("if (headerCopy.values != nullptr && headerCopy.valuesLength > 0)")
+            self.assertLess(output.index("args.values_capacity = headerCopy.valuesLength;"), mapping)
+            self.assertGreater(output.index("args.values_len = headerCopy.valuesLength;"), mapping)
+            self.assertIn("size_t values_capacity", (Path(directory) / "__kernel_types.h").read_text())
+            self.assertIn("if (headerCopy.valuesLength == 0) return kernel::KernelError::InvalidArgument;",
+                          dispatch.split("static kstd::error_code Dispatch_Input_V1(")[1])
+            self.assertIn("if (headerCopy.valueLength == 0) return kernel::KernelError::InvalidArgument;",
+                          dispatch.split("static kstd::error_code Dispatch_Text_V1(")[1])
+
+    def test_input_buffers_forward_element_counts_to_handlers(self):
+        module = parse_idl("""
+            syscall V1 TEST Input [1] {
+                values: IN buffer<c<uint32_t>>;
+            };
+        """)
+        with tempfile.TemporaryDirectory(prefix="undos-idl-") as directory:
+            root = Path(directory)
+            generate_kernel(module, str(root), "undos/syscalls")
+            dispatch = (root / "handler_syscall.cpp").read_text()
+            assignment = "args.values_len = headerCopy.valuesLength;"
+            self.assertIn(assignment, dispatch)
+            self.assertIn("headerCopy.valuesLength > UNDOS_MAX_MAPPED_BUFFER_SIZE / sizeof(uint32_t)",
+                          dispatch)
+            self.assertLess(dispatch.index(assignment),
+                            dispatch.index("handle_Input_V1(kstd::move(args))"))
+            self.assertIn("size_t values_len", (root / "__kernel_types.h").read_text())
+
     def test_cli_lists_complete_outputs_and_creates_build_directories(self):
         script = Path(__file__).resolve().parents[1] / "create-syscalls.py"
         with tempfile.TemporaryDirectory(prefix="undos-idl-") as directory:

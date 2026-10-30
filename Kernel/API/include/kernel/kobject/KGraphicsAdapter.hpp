@@ -15,7 +15,6 @@
 
 namespace kernel {
 struct KDriverObject;
-struct KDisplay;
 struct KClipRect;
 
 // What the adapter can do in hardware; drives how the kernel presents to it.
@@ -82,7 +81,8 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
    * is inserted into the object namespace.
    *
    * The driver binds its per-head entry points on the passed display here:
-   * GetModeInfo / SetMode / Enable / Disable / Validate / SetPowerState.
+   * GetModeInfo and transactional PrepareMode / ProgramMode / FinishMode,
+   * with actual-state query and Enable / Disable hooks.
    *
    * Returning an error discards the head.
    */
@@ -124,6 +124,7 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
       Present;
 
   KGfxCaps caps = KGfxCaps::None;
+  uint32_t resourceGeneration{0};
 
   // Interest in the backing device's state changes, registered by
   // KE_GFX_RegisterGraphicsAdapter. Held here so the registration lives exactly

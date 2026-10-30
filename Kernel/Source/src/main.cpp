@@ -338,7 +338,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   // the last-resort pass can tell whether its job is still vacant. Today the
   // only such job is the console: load the fallback display driver (gfx_vga)
   // only when no accelerated driver registered a display.
-  if (kernel::gfx::wait_for_drivers(); KE_GFX_GetPrimaryDisplay()) {
+  if (kernel::gfx::wait_for_drivers(); kernel::gfx::has_video_present_targets()) {
     KE_Print("Last-resort drivers: a display is already registered, skipping");
   } else {
     KE_Print("Last-resort drivers: no display registered, loading fallbacks");

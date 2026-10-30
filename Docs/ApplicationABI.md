@@ -193,6 +193,20 @@ creates independent child handles without inheriting unrelated handles.
 `CreateProcessV1` keeps its existing inheritance behavior. TTY stdin waits for
 committed input or EOF rather than treating an empty input queue as EOF.
 
+### Graphics and text rendering
+
+Default-font publication retains printable ASCII and the Terminal replacement
+masks for that publication. `UiGlyphs` pins these masks so USER chrome can draw
+them without VM execution, rasterization, or mask allocation under the USER
+scene lock. Prepare other glyphs before acquiring the scene lock.
+
+On `main`, every `Realization::glyph()` call takes the realization mutex and
+loads and rasterizes a new mask. Hinted realizations execute eligible glyph
+programs; unhinted realizations do not execute glyph programs. `main` has no
+shared glyph cache. The shared-cache implementation is preserved on the
+`glyph-cache` branch. These rendering details do not change the ABI wire
+contracts.
+
 ### ABI conformance workflow
 
 Build the image with `python3 Scripts/build.py image --docker`. Then run the

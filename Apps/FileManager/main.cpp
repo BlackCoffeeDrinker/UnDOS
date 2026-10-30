@@ -7,8 +7,6 @@ using namespace filemanager;
 constexpr int ToolbarTop = 4;
 constexpr int CompactToolbarWidth = 4 + 9 * 72;
 constexpr int TreeWidth = 208;
-constexpr int MinimumDisplayWidth = 520;
-constexpr uint32_t MinimumDisplayHeight = 240;
 
 enum Command {
   Open, Up, Location, Refresh, Copy, Move, Rename, Delete, NewFolder,
@@ -636,21 +634,7 @@ void procedure(const Msg &msg) {
 extern "C" int main(int argc, char **argv) {
   gui::TextMetrics font{};
   if (!gui::system_font().metrics(font) || !font.lineHeight) return 1;
-  DisplayState display{};
-  const auto displayStatus = UD_SYS_GetDisplayModeV1(&display);
-  if (displayStatus != SyscallReturnCode_OKAY) {
-    (void)gui::check(displayStatus, "GetDisplayMode");
-    (void)UD_SYS_PrintV1("filemanager: cannot query active display");
-    return 1;
-  }
-  if (!display.active || display.mode.width < MinimumDisplayWidth ||
-      display.mode.height < MinimumDisplayHeight) {
-    (void)UD_SYS_PrintV1("filemanager: active display is unavailable or too small");
-    return 1;
-  }
-  const int windowWidth = display.mode.width - 60 < 680
-                              ? static_cast<int>(display.mode.width - 60)
-                              : 680;
+  const int windowWidth = 680;
   const int initialRows = 12;
   int buttonHeight = 0;
   for (const char *label : Toolbar) {
@@ -662,11 +646,9 @@ extern "C" int main(int argc, char **argv) {
     const int height = gui::button_height(label);
     if (height > buttonHeight) buttonHeight = height;
   }
-  // The list pages and clips to the client area, so the frame only needs to fit the display.
   const int64_t wantedHeight = 4 + 2 * (buttonHeight + 4) +
                                static_cast<int64_t>(initialRows + 4) * (font.lineHeight + 4) + 48;
-  const int64_t availableHeight = static_cast<int64_t>(display.mode.height) - 60;
-  const int initialHeight = static_cast<int>(wantedHeight < availableHeight ? wantedHeight : availableHeight);
+  const int initialHeight = static_cast<int>(wantedHeight);
   if (!gui::register_class("FileManager", procedure)) return 1;
   app.hwnd = gui::window("FileManager", "File Manager", 30, 30, windowWidth, initialHeight);
   if (!app.hwnd) return 1;

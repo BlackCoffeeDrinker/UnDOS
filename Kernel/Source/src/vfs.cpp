@@ -57,9 +57,9 @@ bool mountPointIsSpecial(const kstd::string_view &mount_point) {
 }// namespace
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_Mount(const kernel::KDevicePtr<kernel::KDevice> &volume,
-                                       const kstd::string_view &filesystem,
-                                       const kstd::string_view &mountPoint,
-                                       const kstd::string_view &options) noexcept {
+                                                   const kstd::string_view &filesystem,
+                                                   const kstd::string_view &mountPoint,
+                                                   const kstd::string_view &options) noexcept {
   // Can we mount at `mountPoint`?
   const auto existing = findMountPoint(mountPoint);
 
@@ -161,7 +161,9 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_UnregisterFilesystemDriver(kernel::
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd::error_code> KE_VFS_OpenFile(const kstd::string_view &path, kernel::KIOObject::OpenMode mode) noexcept {
-  if (path.size() > 255) return kstd::unexpected(kernel::KernelError::NameTooLong);
+  if (path.size() > 255) {// TODO: Unhardcode this
+    return kstd::unexpected(kernel::KernelError::NameTooLong);
+  }
   // Create a uniquely-named file object. Name is const on KObject, so it must
   // be chosen before construction: allocate, format the storage address as
   // hex (the previous intent of the unused fileObjectName local), then
@@ -186,8 +188,11 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd:
     KE_Print("KE_VFS_OpenFile: Failed to find mount point for file: {}", path);
     return kstd::unexpected(kernel::KernelError::NotFound);
   }
+  
   kstd::unique_lock volumeLock(file->mountPoint->fileMutex);
-  if (!file->mountPoint->isMounted) return kstd::unexpected(kernel::KernelError::DeviceNotReady);
+  if (!file->mountPoint->isMounted) {
+    return kstd::unexpected(kernel::KernelError::DeviceNotReady);
+  }
 
   // Strip mount point prefix
   auto rel = path.substr(file->mountPoint->name.size());
@@ -210,7 +215,10 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd:
 
   // Allocate owned node for the file; populate with root node
   file->vfsNode = kstd::make_unique<kernel::KVFSNode>();
-  if (!file->vfsNode) return kstd::unexpected(kernel::KernelError::OutOfMemory);
+  if (!file->vfsNode) {
+    return kstd::unexpected(kernel::KernelError::OutOfMemory);
+  }
+
   if (const auto status = file->FileSystem()->GetRootNode(file->mountPoint, *file->vfsNode); status) {
     KE_Print("KE_VFS_OpenFile: Failed to get root node for mount {}", file->mountPoint->name);
     return kstd::unexpected(status);
@@ -265,7 +273,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd:
     // file->vfsNode is the output storage for the child
     if (const auto status = fsObj->Lookup(file->mountPoint, *tmpnode, name, *file->vfsNode); status) {
       KE_Print("KE_VFS_OpenFile: Lookup failed for '{}' in '{}'",
-                      name, rel);
+               name, rel);
       return kstd::unexpected(status);
     }
 
@@ -286,7 +294,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KIOObject>, kstd:
     const auto isLast = pos >= rel.size();
     if (!isLast && file->vfsNode->type != kernel::VFSNodeType::Directory) {
       KE_Print("KE_VFS_OpenFile: '{}' is not a directory in path '{}'",
-                      name, path);
+               name, path);
       return kstd::unexpected(kernel::KernelError::NotDirectory);
     }
 
@@ -334,7 +342,8 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_CloseFile(const kernel::KObjectPtr<
   if (file->vfsOpenCounted) {
     --file->mountPoint->openFileCount;
     if (file->vfsPrevious) file->vfsPrevious->vfsNext = file->vfsNext;
-    else file->mountPoint->openFiles = file->vfsNext;
+    else
+      file->mountPoint->openFiles = file->vfsNext;
     if (file->vfsNext) file->vfsNext->vfsPrevious = file->vfsPrevious;
   }
   file->vfsOpenCounted = false;
@@ -361,7 +370,7 @@ UNDOS_KERNEL_API_DEF kernel::KBoolResult KE_VFS_ReadDirectory(
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_OperateFile(kernel::VFSFileOperation operation,
-    const kstd::string_view &source, const kstd::string_view &destination) noexcept {
+                                                         const kstd::string_view &source, const kstd::string_view &destination) noexcept {
   using kernel::KernelError;
   using kernel::VFSFileOperation;
   if (operation > VFSFileOperation::CreateDirectory) return KernelError::InvalidArgument;
@@ -374,7 +383,8 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_OperateFile(kernel::VFSFileOperatio
       if (end == kstd::string_view::npos) end = path.size();
       const auto part = path.substr(start, end - start);
       if (part.empty() || part == "." || part == "..") return false;
-      for (char c : part) if (static_cast<uint8_t>(c) < 32 || c == '\\') return false;
+      for (char c: part)
+        if (static_cast<uint8_t>(c) < 32 || c == '\\') return false;
       start = end + 1;
     }
     return true;
@@ -404,25 +414,36 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_OperateFile(kernel::VFSFileOperatio
     bool busy = false;
     for (auto *file = parent->mountPoint->openFiles; file; file = file->vfsNext) {
       if (file == parent.get() || file == target.get()) continue;
-      if (file->vfsNode->type == kernel::VFSNodeType::Directory) { busy = true; break; }
+      if (file->vfsNode->type == kernel::VFSNodeType::Directory) {
+        busy = true;
+        break;
+      }
       const kstd::string_view actual = file->actualPath;
       size_t i = 0;
       for (; i < actual.size() && i < relativeSource.size(); ++i) {
         const auto upper = [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c; };
         if (upper(actual[i]) != upper(relativeSource[i])) break;
       }
-      if (i == relativeSource.size() && (i == actual.size() || actual[i] == '/')) { busy = true; break; }
+      if (i == relativeSource.size() && (i == actual.size() || actual[i] == '/')) {
+        busy = true;
+        break;
+      }
     }
     if (findMountPoint(source) != parent->mountPoint ||
         (target && findMountPoint(destination) != target->mountPoint)) status = KernelError::Unsupported;
     else if (parent->vfsNode->type != kernel::VFSNodeType::Directory ||
-        (target && target->vfsNode->type != kernel::VFSNodeType::Directory)) status = KernelError::NotDirectory;
-    else if (target && target->mountPoint != parent->mountPoint) status = KernelError::Unsupported;
-    else if (busy) status = KernelError::ResourceConflict;
-    else if (!parent->FileSystem()->OperateFile) status = KernelError::Unsupported;
-    else status = parent->FileSystem()->OperateFile(parent->mountPoint, operation, *parent->vfsNode,
-        source.substr(sourceCut + 1), target ? target->vfsNode.get() : nullptr,
-        target ? destination.substr(destination.rfind('/') + 1) : kstd::string_view{});
+             (target && target->vfsNode->type != kernel::VFSNodeType::Directory))
+      status = KernelError::NotDirectory;
+    else if (target && target->mountPoint != parent->mountPoint)
+      status = KernelError::Unsupported;
+    else if (busy)
+      status = KernelError::ResourceConflict;
+    else if (!parent->FileSystem()->OperateFile)
+      status = KernelError::Unsupported;
+    else
+      status = parent->FileSystem()->OperateFile(parent->mountPoint, operation, *parent->vfsNode,
+                                                 source.substr(sourceCut + 1), target ? target->vfsNode.get() : nullptr,
+                                                 target ? destination.substr(destination.rfind('/') + 1) : kstd::string_view{});
   }
   if (target) {
     const auto closed = KE_VFS_CloseFile(target);
@@ -507,9 +528,9 @@ kstd::error_code FileWrite(KIOObject &io, kstd::span<const uint8_t> buffer, size
 kstd::error_code FileClose(KIOObject &io) {
   return KE_VFS_CloseFile(&io);
 }
-} // namespace
+}// namespace
 
 namespace io {
 const KIOOps FileOps{.Read = FileRead, .Write = FileWrite, .Control = {}, .Close = FileClose};
-} // namespace io
-} // namespace kernel
+}// namespace io
+}// namespace kernel

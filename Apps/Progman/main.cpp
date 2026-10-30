@@ -17,7 +17,6 @@ struct Shell {
   char configuration[12289]{};
   GroupView views[MaxGroups];
   uint32_t frame{0};
-  uint32_t frameState{0};
   uint32_t workspace{0};
   uint32_t menu{0};
   int active{-1};
@@ -422,20 +421,13 @@ void group_proc(const Msg &msg) {
 }
 
 void frame_proc(const Msg &msg) {
-  if (msg.message == WindowMessage_DisplayChange) {
-    DisplayState state{};
-    if (gui::check(UD_SYS_GetDisplayModeV1(&state), "Query changed display") &&
-        state.active && shell.frameState == 0)
-      gui::move(msg.hwnd, 4, 4, static_cast<int>(state.mode.width) - 8,
-                static_cast<int>(state.mode.height) - 12);
-  } else if (msg.message == WindowMessage_Paint) {
+  if (msg.message == WindowMessage_Paint) {
     gui::Paint paint(msg.hwnd);
   } else if (msg.message == WindowMessage_FontChanged) shell.reflowGeneration = msg.wParam;
   else if (msg.message == WindowMessage_Command) execute(static_cast<int>(msg.wParam));
   else if (msg.message == WindowMessage_Close) execute(Exit);
   else if (msg.message == WindowMessage_KeyDown) keyboard(msg, false);
   else if (msg.message == WindowMessage_Size) {
-    shell.frameState = msg.wParam;
     if (shell.workspace) {
       const Rect area = gui::client(msg.hwnd);
       if (area.right > 0 && area.bottom > 0)
@@ -484,20 +476,10 @@ bool load_configuration() {
 extern "C" int main(int, char **) {
   gui::TextMetrics font{};
   if (!gui::system_font().metrics(font)) return 1;
-  uint32_t display = 0;
-  DeviceCaps caps{};
-  if (!gui::check(UD_SYS_CreateDCV1("", "", DCInitFlags_Primary, &display), "Open session display")) return 1;
-  const bool queried = gui::check(UD_SYS_GetDeviceCapsV1(display, &caps), "Query session display");
-  gui::check(UD_SYS_DeleteDCV1(display), "Close session display");
-  if (!queried || caps.width < 640 || caps.height < 480) {
-    crt_puts("progman: a display of at least 640x480 is required\n");
-    return 1;
-  }
   if (!gui::register_class("ProgramManager", frame_proc, 8) ||
       !gui::register_class("ProgramWorkspace", workspace_proc, 8) ||
       !gui::register_class("ProgramGroup", group_proc, gui::Paper)) return 1;
-  shell.frame = gui::window("ProgramManager", "Program Manager", 4, 4,
-                            static_cast<int>(caps.width) - 8, static_cast<int>(caps.height) - 12);
+  shell.frame = gui::window("ProgramManager", "Program Manager", 30, 30, 600, 400);
   if (!shell.frame) return 1;
   if (!load_configuration()) {
     gui::message("Configuration error", "Cannot load PROGMAN.INI. Recovery session is empty.");
@@ -509,6 +491,7 @@ extern "C" int main(int, char **) {
                                       static_cast<WindowStyle>(WindowStyle_Visible | WindowStyle_Child),
                                       0, 0, area.right, area.bottom,
                                       shell.frame, 0, &shell.workspace), "Create workspace")) return 1;
+  if (!gui::show(shell.frame, ShowCommand_Maximize)) return 1;
   int first = -1;
   for (unsigned i = 0; i < MaxGroups; ++i) {
     if (!shell.model.groups[i].id) continue;

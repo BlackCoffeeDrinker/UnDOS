@@ -1,5 +1,4 @@
 #include "gfx/font/font_system.hpp"
-#include "gfx/font/font_object.hpp"
 #include "gfx/font/text.hpp"
 #include "gfx/gfx.hpp"
 #include "stdkrn.hpp"
@@ -9,6 +8,8 @@
 
 #include <kernel/gfx/raster_helpers.hpp>
 #include <expected.hpp>
+#include <kernel/kobject/FontObject.hpp>
+#include <kernel/kobject/KVideoPresentValidationToken.hpp>
 #include <undos/font/resource.hpp>
 
 // GFX (GDI-style) syscall handlers (300-399), generated from
@@ -721,7 +722,7 @@ kstd::error_code handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   kernel::user::Guard scene;
 
-  const auto display = KE_GFX_GetPrimaryDisplay();
+  const auto display = kernel::gfx::active_video_present_target();
   if (!memory && (!display || !display->surface || !display->isAttachedToDesktop))
     return kernel::KernelError::Unsupported;
 
@@ -741,53 +742,238 @@ kstd::error_code handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
 }
 
 namespace {
-DisplayMode PublicMode(const kernel::KDisplayModeInfo &mode) {
-  return {.modeId = static_cast<uint32_t>(mode.modeIndex), .width = mode.width, .height = mode.height, .colorDepth = mode.bpp, .refreshHz = mode.refreshRate};
+kernel::gfx::VideoPresentPathInfo InternalPath(const VideoPresentPath &path) {
+  return {
+      .sourceId = path.sourceId,
+      .sourceModeId = path.sourceModeId,
+      .targetId = path.targetId,
+      .targetModeId = path.targetModeId,
+      .sourceX = path.sourceX,
+      .sourceY = path.sourceY,
+      .width = path.width,
+      .height = path.height,
+      .flags = path.flags};
+}
+
+VideoPresentPath PublicPath(const kernel::gfx::VideoPresentPathInfo &path) {
+  return {
+      .sourceId = path.sourceId,
+      .sourceModeId = path.sourceModeId,
+      .targetId = path.targetId,
+      .targetModeId = path.targetModeId,
+      .sourceX = path.sourceX,
+      .sourceY = path.sourceY,
+      .width = path.width,
+      .height = path.height,
+      .flags = path.flags};
+}
+
+template<typename T, typename GetRecord, typename Convert>
+kstd::error_code EnumerateVideoRecords(uint32_t firstIndex, uint32_t queryOnly,
+                                       kernel::borrowed_ptr<T> &output,
+                                       size_t suppliedCapacity,
+                                       uint32_t total, uint32_t &required, uint32_t &written,
+                                       GetRecord &&getRecord, Convert &&convert) {
+  written = 0;
+  required = 0;
+  if (queryOnly > 1 || (queryOnly && (suppliedCapacity || output.size())))
+    return kernel::KernelError::InvalidArgument;
+  if (total > kernel::gfx::VideoPresentRecordLimit)
+    return kernel::KernelError::ResourceLimitExceeded;
+  if (firstIndex > total) return kernel::KernelError::InvalidArgument;
+  required = total - firstIndex;
+  if (queryOnly) return {};
+  if (output.size() < required) return kernel::KernelError::BufferTooSmall;
+  if (required && !output) return kernel::KernelError::InvalidAddress;
+  for (size_t index = 0; index < required; ++index) {
+    const auto record = getRecord(firstIndex + static_cast<uint32_t>(index));
+    convert(record, output.get()[index]);
+  }
+  written = static_cast<uint32_t>(required);
+  return {};
 }
 }// namespace
 
-kstd::error_code handle_EnumDisplayModes_V1(__KRN_GFX_ENUMDISPLAYMODES_V1 &&args) {
-  args.mode = {};
-  args.available = 0;
-  kernel::user::Guard scene;
-  const auto display = KE_GFX_GetPrimaryDisplay();
-  if (!display || !display->GetModeInfo || !display->SetMode) return kernel::KernelError::Unsupported;
-  const auto mode = kernel::gfx::enumerate_mode(display, args.index);
-  if (!mode) return mode.error() == kernel::KernelError::NotFound ? kernel::KernelError::Success : mode.error();
-  args.mode = PublicMode(*mode);
-  args.available = 1;
+kstd::error_code handle_GetVideoPresentTopology_V1(__KRN_GFX_GETVIDEOPRESENTTOPOLOGY_V1 &&args) {
+  args.topology = {};
+  kernel::gfx::VideoPresentTopologyInfo topology{};
+  if (const auto error = kernel::gfx::get_video_present_topology(topology); error) return error;
+  args.topology.generation = topology.generation;
+  args.topology.sourceCount = topology.sourceCount;
+  args.topology.sourceModeCount = topology.sourceModeCount;
+  args.topology.targetCount = topology.targetCount;
+  args.topology.targetModeCount = topology.targetModeCount;
+  args.topology.pathCount = topology.pathCount;
+  args.topology.recordLimit = kernel::gfx::VideoPresentRecordLimit;
+  args.topology.degraded = topology.degraded;
   return {};
 }
 
-kstd::error_code handle_GetDisplayMode_V1(__KRN_GFX_GETDISPLAYMODE_V1 &&args) {
-  args.state = {};
-  kernel::user::Guard scene;
-  const auto display = KE_GFX_GetPrimaryDisplay();
-  if (!display) return kernel::KernelError::Unsupported;
-  args.state.active = display->isAttachedToDesktop ? 1 : 0;
-  args.state.generation = display->modeGeneration;
-  args.state.mode = PublicMode(display->currentMode);
-  return {};
+kstd::error_code handle_EnumVideoPresentSourceModes_V1(__KRN_GFX_ENUMVIDEOPRESENTSOURCEMODES_V1 &&args) {
+  args.required = args.written = 0;
+  if (!args.generation) return kernel::KernelError::Retry;
+  const auto snapshot = args.modes
+      ? kernel::gfx::acquire_published_video_present_snapshot(args.generation)
+      : kernel::gfx::acquire_video_present_snapshot(args.generation);
+  if (!snapshot) return snapshot.error();
+  if (args.sourceId != kernel::gfx::DesktopSourceId) return kernel::KernelError::NotFound;
+  return EnumerateVideoRecords(args.firstIndex, args.queryOnly, args.modes, args.modes_capacity,
+      (*snapshot)->topology.sourceModeCount, args.required, args.written,
+      [&](uint32_t index) {
+        return (*snapshot)->sourceModes[index];
+      },
+      [](const kernel::gfx::VideoPresentSourceModeInfo &mode, VideoPresentSourceMode &out) {
+        out = {.sourceId = kernel::gfx::DesktopSourceId, .modeId = mode.modeId,
+               .width = mode.width, .height = mode.height, .colorDepth = mode.colorDepth,
+               .pixelFormat = static_cast<uint32_t>(mode.pixelFormat)};
+      });
 }
 
-kstd::error_code handle_SetDisplayMode_V1(__KRN_GFX_SETDISPLAYMODE_V1 &&args) {
-  kernel::user::Guard scene;
-  const auto display = KE_GFX_GetPrimaryDisplay();
-  if (!display || !display->GetModeInfo || !display->SetMode) return kernel::KernelError::Unsupported;
-  const auto mode = display->GetModeInfo(display, args.modeId);
-  if (!mode) return mode.error();
-  if (!kernel::gfx::usable_mode(display, *mode)) return kernel::KernelError::InvalidArgument;
-  if (display->isAttachedToDesktop && display->currentMode.modeIndex == args.modeId)
-    return {};
-  kernel::user::SceneDrawGuard drawing;
-  const auto generation = display->modeGeneration;
-  const auto result = KE_GFX_SetDisplayMode(display, args.modeId);
-  if (generation != display->modeGeneration) {
-    kernel::user::cursor_reset_locked();
-    kernel::user::display_input_changed_locked(generation == 0);
-    kernel::user::display_changed_locked(display->isAttachedToDesktop ? mode->bpp : 0);
+kstd::error_code handle_EnumVideoPresentTargets_V1(__KRN_GFX_ENUMVIDEOPRESENTTARGETS_V1 &&args) {
+  args.required = args.written = 0;
+  if (!args.generation) return kernel::KernelError::Retry;
+  const auto snapshot = args.targets
+      ? kernel::gfx::acquire_published_video_present_snapshot(args.generation)
+      : kernel::gfx::acquire_video_present_snapshot(args.generation);
+  if (!snapshot) return snapshot.error();
+  return EnumerateVideoRecords(args.firstIndex, args.queryOnly, args.targets, args.targets_capacity,
+      (*snapshot)->topology.targetCount, args.required, args.written,
+      [&](uint32_t index) {
+        return (*snapshot)->targets[index];
+      },
+      [](const kernel::gfx::VideoPresentTargetInfo &target, VideoPresentTarget &out) {
+        out = {.targetId = target.targetId, .connected = target.connected ? 1u : 0u,
+               .modeCount = target.modeCount, .maxWidth = target.maxWidth,
+               .maxHeight = target.maxHeight, .maxRefreshHz = target.maxRefreshHz,
+               .adaptiveSyncSupported = 0, .adaptiveSyncMinMilliHz = 0,
+               .adaptiveSyncMaxMilliHz = 0};
+      });
+}
+
+kstd::error_code handle_EnumVideoPresentTargetModes_V1(__KRN_GFX_ENUMVIDEOPRESENTTARGETMODES_V1 &&args) {
+  args.required = args.written = 0;
+  if (!args.generation) return kernel::KernelError::Retry;
+  const auto snapshot = args.modes
+      ? kernel::gfx::acquire_published_video_present_snapshot(args.generation)
+      : kernel::gfx::acquire_video_present_snapshot(args.generation);
+  if (!snapshot) return snapshot.error();
+  uint32_t total = 0;
+  uint32_t offset = 0;
+  bool found = false;
+  for (uint32_t index = 0; index < (*snapshot)->topology.targetCount; ++index) {
+    const auto &target = (*snapshot)->targets[index];
+    if (target.targetId == args.targetId) {
+      total = target.modeCount;
+      found = true;
+      break;
+    }
+    offset += target.modeCount;
   }
-  return result;
+  if (!found) return kernel::KernelError::NotFound;
+  return EnumerateVideoRecords(args.firstIndex, args.queryOnly, args.modes, args.modes_capacity,
+      total, args.required, args.written,
+      [&](uint32_t index) {
+        return (*snapshot)->targetModes[offset + index];
+      },
+      [](const kernel::gfx::VideoPresentTargetModeInfo &mode, VideoPresentTargetMode &out) {
+        out = {.targetId = mode.targetId, .modeId = mode.modeId,
+               .width = mode.mode.width, .height = mode.mode.height,
+               .colorDepth = mode.mode.bpp,
+               .pixelFormat = static_cast<uint32_t>(mode.mode.pixelFormat),
+               .refreshHz = mode.mode.refreshRate};
+      });
+}
+
+kstd::error_code handle_EnumVideoPresentPaths_V1(__KRN_GFX_ENUMVIDEOPRESENTPATHS_V1 &&args) {
+  args.required = args.written = 0;
+  if (!args.generation) return kernel::KernelError::Retry;
+  const auto snapshot = args.paths
+      ? kernel::gfx::acquire_published_video_present_snapshot(args.generation)
+      : kernel::gfx::acquire_video_present_snapshot(args.generation);
+  if (!snapshot) return snapshot.error();
+  if ((*snapshot)->topology.pathCount && !(*snapshot)->pathsValid)
+    return kernel::KernelError::InvalidState;
+  return EnumerateVideoRecords(args.firstIndex, args.queryOnly, args.paths, args.paths_capacity,
+      (*snapshot)->topology.pathCount, args.required, args.written,
+      [&](uint32_t index) {
+        return (*snapshot)->paths[index];
+      },
+      [](const kernel::gfx::VideoPresentPathInfo &path, VideoPresentPath &out) {
+        out = PublicPath(path);
+      });
+}
+
+kstd::error_code handle_ValidateVideoPresentTopology_V1(__KRN_GFX_VALIDATEVIDEOPRESENTTOPOLOGY_V1 &&args) {
+  args.token = 0;
+  auto *process = CurrentProcess();
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  if (args.paths_len > kernel::gfx::VideoPresentRecordLimit)
+    return kernel::KernelError::ResourceLimitExceeded;
+  if (args.paths_len != 1 || !args.paths) return kernel::KernelError::InvalidSize;
+
+  const VideoPresentPath snapshot = args.paths.get()[0];
+  const auto path = InternalPath(snapshot);
+  auto created = kernel::CreateKObject<kernel::KVideoPresentValidationToken>("VideoPresentToken");
+  if (!created) return created.error();
+  const auto &token = *created;
+  token->generation = args.generation;
+  token->path = path;
+  size_t driverModeIndex = 0;
+  if (const auto error = kernel::gfx::video_present_prepare_path(
+          args.generation, path, token->target, driverModeIndex,
+          token->reservation, &token->snapshot);
+      error)
+    return error;
+  const auto handle = process->handles.Allocate(
+      token,
+      kernel::ProcessHandleTable::HandleAccess::Read |
+          kernel::ProcessHandleTable::HandleAccess::Write |
+          kernel::ProcessHandleTable::HandleAccess::Close,
+      kernel::ProcessHandleTable::HandleFlags::None);
+  if (!handle) return handle.error();
+  args.token = static_cast<uint32_t>(*handle);
+  return {};
+}
+
+kstd::error_code handle_CommitVideoPresentTopology_V1(__KRN_GFX_COMMITVIDEOPRESENTTOPOLOGY_V1 &&args) {
+  args.required = 1;
+  args.written = 0;
+  auto *process = CurrentProcess();
+  if (!process) return kernel::KernelError::NoCurrentProcess;
+  const auto handle = static_cast<kernel::KHandle>(args.token);
+  auto *entry = process->handles.Lookup(handle);
+  if (!entry || !entry->object) return kernel::KernelError::InvalidHandle;
+  if (!process->handles.HasAccess(handle, kernel::ProcessHandleTable::HandleAccess::Read))
+    return kernel::KernelError::AccessDenied;
+  const auto token = entry->object.As<kernel::KVideoPresentValidationToken>();
+  if (!token) return kernel::KernelError::WrongObjectType;
+  bool firstActivation = false;
+  const auto committed = kernel::gfx::commit_video_present_path(
+      token->generation, token->path, token->target, token->reservation,
+      args.results ? args.results.size() : 0, &firstActivation);
+  if (!committed) {
+    if (committed.error() != kernel::KernelError::OutOfMemory &&
+        committed.error() != kernel::KernelError::BufferTooSmall)
+      (void) process->handles.Close(handle);
+    return committed.error();
+  }
+  (void) process->handles.Close(handle);
+  auto &out = args.results.get()[0];
+  out.targetId = committed->targetId;
+  out.requestedModeId = committed->requestedModeId;
+  out.actualModeId = committed->actualModeId;
+  out.active = committed->active;
+  out.outcome = static_cast<VideoPresentOutcome>(committed->outcome);
+  out.degraded = committed->degraded;
+  args.written = 1;
+
+  kernel::user::Guard scene;
+  kernel::user::SceneDrawGuard drawing;
+  kernel::user::cursor_reset_locked();
+  kernel::user::display_input_changed_locked(firstActivation);
+  const auto active = kernel::gfx::active_video_present_target();
+  kernel::user::display_changed_locked(active ? active->currentMode.bpp : 0);
+  return {};
 }
 
 kstd::error_code handle_DeleteDC_V1(__KRN_GFX_DELETEDC_V1 &&args) {

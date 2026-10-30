@@ -35,6 +35,7 @@ constexpr uint8_t kSr01ScreenOff = 0x20;          // SR01 bit 5: blank the displ
 constexpr uint8_t kSrExtendedSequencerMode = 0x07;// SVGA enable + colour depth
 constexpr uint8_t kSrVclk0Numerator = 0x0E;
 constexpr uint8_t kSrVclk0Denominator = 0x1E;
+constexpr uint8_t kSrMemoryConfiguration = 0x0F;
 // endregion
 
 // region CRTC extension registers
@@ -154,29 +155,16 @@ struct CirrusModeTiming {
   uint32_t width;
   uint32_t height;
   uint32_t refreshRate;
+  uint32_t pixelClockHz;
   uint8_t crtc[25];    // CR00..CR18
   uint8_t crtcExtended;// CR1B, without the pitch overflow bit
   uint8_t vclkNumerator;
   uint8_t vclkDenominator;
 };
 
-// Standard VGA/SVGA CRTC dumps at 60 Hz. QEMU derives the visible geometry
-// from CR01 and CR12 (plus the CR07 overflow bits) and ignores the rest of
-// the timing, but the full table is programmed so real hardware syncs.
-// CR13 (pitch) is overwritten per mode from the computed pitch.
-constexpr CirrusModeTiming kModeTimings[] = {
-    {.width = 640, .height = 480, .refreshRate = 60, .crtc = {0x5F, 0x4F, 0x50, 0x82, 0x54, 0x80, 0x0B, 0x3E, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xEA, 0x8C, 0xDF, 0x50, 0x40, 0xE7, 0x04, 0xC3, 0xFF}, .crtcExtended = 0x22, .vclkNumerator = 0x4A, .vclkDenominator = 0x2B},
-    {.width = 800, .height = 600, .refreshRate = 60, .crtc = {0x7F, 0x63, 0x64, 0x82, 0x6B, 0x1B, 0x72, 0xF0, 0x00, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x59, 0x8D, 0x57, 0x64, 0x40, 0x58, 0x72, 0xE3, 0xFF}, .crtcExtended = 0x22, .vclkNumerator = 0x5B, .vclkDenominator = 0x2F},
-    {.width = 1024, .height = 768, .refreshRate = 60, .crtc = {0xA3, 0x7F, 0x80, 0x86, 0x85, 0x96, 0x24, 0xFD, 0x00, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x8A, 0xFF, 0x80, 0x40, 0x02, 0x22, 0xE3, 0xFF}, .crtcExtended = 0x22, .vclkNumerator = 0x42, .vclkDenominator = 0x1F},
-};
-
 // CR1B bit 4 carries bit 8 of the CR13 pitch value.
 constexpr uint8_t kCrExtendedOffsetBit8 = 0x10;
 
-// The fallback every failure path ends at: the smallest supported mode.
-constexpr uint32_t kFallbackWidth = 640;
-constexpr uint32_t kFallbackHeight = 480;
-constexpr uint32_t kFallbackBpp = 8;
 constexpr uint32_t kFallbackRefreshRate = 60;
 // endregion
 

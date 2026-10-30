@@ -1,12 +1,12 @@
 #pragma once
 
 #include <kernel/__core.hpp>
+#include <kernel/fwd/KDisplay.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/ObjectType.hpp>
 
 namespace kernel {
-struct KDisplay;
 struct KMemoryBackingObject;
 
 // 1. Enums declared first
@@ -39,6 +39,7 @@ constexpr uint32_t Banked = (1 << 7);             // Banked/segmented framebuffe
 }// namespace DisplayModeFlags
 
 struct KDisplayModeInfo {
+  bool operator==(const KDisplayModeInfo &) const = default;
   // Mode Identification & Target Geometry
   size_t modeIndex{0};// Driver mode ID (Win2k ModeIndex)
   uint32_t width{0};    // Active horizontal pixels (Win2k VisScreenWidth)

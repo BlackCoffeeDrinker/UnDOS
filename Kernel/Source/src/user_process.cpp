@@ -3,8 +3,8 @@
 #include "stdkrn.hpp"
 #include "vmm.hpp"
 #include <kernel/kobject/KIOObject.hpp>
-#include <kernel/tty/tty_device.hpp>
 #include <kernel/process_startup.hpp>
+#include <kernel/tty/tty_device.hpp>
 
 #include <Kernel.hpp>
 
@@ -52,18 +52,17 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> cre
   // Inherit inheritable handles (e.g. standard streams) from parent process if present
   if (streams) {
     auto status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stdin, streams->input,
-            kernel::ProcessHandleTable::HandleAccess::Read);
+                                                                  kernel::ProcessHandleTable::HandleAccess::Read);
     if (status) return kstd::unexpected(status);
     status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stdout, streams->output,
-            kernel::ProcessHandleTable::HandleAccess::Write);
+                                                             kernel::ProcessHandleTable::HandleAccess::Write);
     if (status) return kstd::unexpected(status);
     status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stderr, streams->error,
-            kernel::ProcessHandleTable::HandleAccess::Write);
+                                                             kernel::ProcessHandleTable::HandleAccess::Write);
     if (status) return kstd::unexpected(status);
   } else if (const auto currentThread = KE_SCHED_GetCurrentThread()) {
     if (currentThread->owner_process) {
-      const auto status = process.value()->InheritHandlesFrom(currentThread->owner_process->handles);
-      if (status) {
+      if (const auto status = process.value()->InheritHandlesFrom(currentThread->owner_process->handles)) {
         KE_Print("KE_USER_CreateProcess: failed to inherit handles");
         return kstd::unexpected(status);
       }
@@ -93,8 +92,7 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> cre
   if (!startup_handle) return kstd::unexpected(startup_handle.error());
   if (!process.value()->handles.Lookup(*startup_handle)) return kstd::unexpected(kernel::KernelError::OutOfMemory);
 
-  const auto as_status = kernel::vmm::create_user_address_space(process.value()->address_space);
-  if (as_status) {
+  if (const auto as_status = kernel::vmm::create_user_address_space(process.value()->address_space)) {
     KE_Print("KE_USER_CreateProcess: failed to create address space for {}", exec_path);
     return kstd::unexpected(as_status);
   }
@@ -158,8 +156,7 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> cre
 
   // Step 4 — Register the process under \Processes before the thread can
   // run. This entry owns the process once the creator closes its handle.
-  const auto insert_status = KE_OB_InsertObject(KE_OB_GetProcessDirectory(), kernel::KObjectPtr<kernel::KObject>(process.value().get()));
-  if (insert_status) {
+  if (const auto insert_status = KE_OB_InsertObject(KE_OB_GetProcessDirectory(), kernel::KObjectPtr<kernel::KObject>(process.value().get()))) {
     kernel::vmm::destroy_user_address_space(process.value()->address_space);
     return kstd::unexpected(insert_status);
   }

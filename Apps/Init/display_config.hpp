@@ -8,6 +8,14 @@ struct DisplayPreference {
   uint32_t width{}, height{}, bpp{}, refreshHz{};
 };
 
+inline bool matches_display_preference(const DisplayPreference &preference,
+                                      uint32_t width, uint32_t height,
+                                      uint32_t bpp, uint32_t refreshHz) {
+  const uint32_t requestedRefresh = preference.refreshHz ? preference.refreshHz : 60;
+  return width == preference.width && height == preference.height &&
+         bpp == preference.bpp && refreshHz == requestedRefresh;
+}
+
 inline bool parse_display_config(const char *text, size_t length, DisplayPreference &out) {
   const auto space = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
   uint32_t values[4]{};

@@ -5,7 +5,43 @@ add_test(NAME libc_streams
 add_test(NAME syscall_idl
         COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../../Tools/tests/test_idlgen.py)
 
+set(_validate_dispatch "${CMAKE_CURRENT_BINARY_DIR}/generated_validate_dispatch.inc")
+set(_commit_dispatch "${CMAKE_CURRENT_BINARY_DIR}/generated_commit_dispatch.inc")
+set(_targets_dispatch "${CMAKE_CURRENT_BINARY_DIR}/generated_targets_dispatch.inc")
+set(_enumeration_dispatches)
+foreach(_name EnumVideoPresentSourceModes EnumVideoPresentTargetModes EnumVideoPresentPaths)
+    set(_output "${CMAKE_CURRENT_BINARY_DIR}/generated_${_name}_dispatch.inc")
+    add_custom_command(OUTPUT "${_output}"
+            COMMAND ${PYTHON3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py"
+                "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp" "${_name}_V1" "${_output}"
+            DEPENDS undos-syscalls-gen "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py")
+    list(APPEND _enumeration_dispatches "${_output}")
+endforeach()
+add_custom_command(OUTPUT "${_targets_dispatch}"
+        COMMAND ${PYTHON3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py"
+            "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
+            EnumVideoPresentTargets_V1 "${_targets_dispatch}"
+        DEPENDS undos-syscalls-gen "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py")
+add_custom_command(OUTPUT "${_commit_dispatch}"
+        COMMAND ${PYTHON3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py"
+            "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
+            CommitVideoPresentTopology_V1 "${_commit_dispatch}"
+        DEPENDS undos-syscalls-gen "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py")
+add_custom_command(OUTPUT "${_validate_dispatch}"
+        COMMAND ${PYTHON3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py"
+            "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
+            ValidateVideoPresentTopology_V1 "${_validate_dispatch}"
+        DEPENDS undos-syscalls-gen "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py")
+
 add_executable(KernelTests
+        ${_enumeration_dispatches}
+        "${_targets_dispatch}"
+        "${_validate_dispatch}"
+        "${_commit_dispatch}"
         str_test.cpp
         array_test.cpp
         vector_test.cpp
@@ -83,6 +119,7 @@ add_executable(KernelTests
         ../../../Kernel/Source/src/configuration_manager.cpp
         ../../../Kernel/Source/src/configuration_manager_io.cpp
         ../../../Kernel/Source/src/event_broadcaster.cpp
+        ../../../Kernel/Source/src/pnp_device_state.cpp
         ../../../Kernel/Source/src/gfx/gfx_management.cpp
         ../../../Kernel/Source/src/gfx/gfx_software_fallback.cpp
         ../../../Kernel/Source/src/gfx/gfx_dc_table.cpp
@@ -104,6 +141,9 @@ add_executable(KernelTests
         object_creation_leak_test.cpp
         configuration_manager_test.cpp
         gfx_test.cpp
+        cirrus_timing_test.cpp
+        cirrus_backend_test.cpp
+        vga_backend_test.cpp
         gfx_bitmap_test.cpp
         tty_test.cpp
         io_object_test.cpp
@@ -118,6 +158,7 @@ add_executable(KernelTests
 )
 
 target_include_directories(KernelTests PRIVATE ../../../Kernel/Source/src ../../../Kernel/Drivers/disk_fake
+        "${CMAKE_CURRENT_BINARY_DIR}"
         "${UNDOS_SYSCALL_GENERATED_DIR}/kernel" "${UNDOS_SYSCALL_KERNEL_DIR}"
         ../../../Apps/Fontloader
         ../../../Kernel/Drivers/input_hid ../../../Kernel/Drivers/input_i8042 ../../../Kernel/Drivers/input_gameport)
@@ -170,6 +211,7 @@ target_compile_options(fake_volmgr_driver PRIVATE -include new)
 set_target_properties(fake_volmgr_driver PROPERTIES CXX_VISIBILITY_PRESET default)
 
 target_compile_definitions(KernelTests PRIVATE
+        UNDOS_TOPOLOGY_TEST_HOOKS
         FS_FAT_DRIVER_PATH="$<TARGET_FILE:fake_fs_fat_driver>"
         VOLMGR_DRIVER_PATH="$<TARGET_FILE:fake_volmgr_driver>")
 target_link_libraries(KernelTests PRIVATE ${CMAKE_DL_LIBS})
@@ -181,6 +223,12 @@ add_executable(KernelPrintTests konsole_test.cpp)
 target_compile_options(KernelPrintTests PRIVATE -include new)
 target_link_libraries(KernelPrintTests PRIVATE libkcpp KernelHeaders undos_warnings Catch2::Catch2WithMain)
 catch_discover_tests(KernelPrintTests)
+
+
+add_executable(SerialUartTests serial_uart_test.cpp ../../../Kernel/Source/src/kerror.cpp)
+target_compile_options(SerialUartTests PRIVATE -include new)
+target_link_libraries(SerialUartTests PRIVATE libkcpp KernelHeaders undos_warnings Catch2::Catch2WithMain)
+catch_discover_tests(SerialUartTests)
 
 add_executable(GrubDirectTests
         grub_direct_loader_test.cpp

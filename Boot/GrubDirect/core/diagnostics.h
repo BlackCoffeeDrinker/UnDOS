@@ -1,0 +1,44 @@
+#ifndef UNDOS_GRUB_DIRECT_DIAGNOSTICS_H
+#define UNDOS_GRUB_DIRECT_DIAGNOSTICS_H
+
+#include "types.h"
+
+enum {
+  UDL_DIAG_STOP_INVALID = 0,
+  UDL_DIAG_STOP_COMMAND = 1,
+  UDL_DIAG_STOP_LOADED = 2,
+  UDL_DIAG_STOP_CALLBACK = 3,
+  UDL_DIAG_STOP_PROFILE = 4,
+  UDL_DIAG_STOP_PREPARED = 5,
+  UDL_DIAG_STOP_COPIED = 6,
+  UDL_DIAG_STOP_PARAMETERS = 7,
+  UDL_DIAG_STOP_SEGMENTS = 8,
+  UDL_DIAG_STOP_CLEANUP = 9,
+  UDL_DIAG_STOP_PAGING = 10,
+  UDL_DIAG_STOP_FRAME = 11,
+  UDL_DIAG_STOP_JUMP = 12,
+  UDL_DIAG_STOP_KERNEL = 13,
+  UDL_DIAG_STOP_COUNT = 12
+};
+
+enum {
+  UDL_DIAG_STAGE_COMMAND = 0,
+  UDL_DIAG_STAGE_LOADED = 1,
+  UDL_DIAG_STAGE_CALLBACK = 2,
+  UDL_DIAG_STAGE_PROFILE = 3,
+  UDL_DIAG_STAGE_PREPARED = 4,
+  UDL_DIAG_STAGE_COPIED = 5,
+  UDL_DIAG_STAGE_PARAMETERS = 6,
+  UDL_DIAG_STAGE_SEGMENTS = 7,
+  UDL_DIAG_STAGE_CLEANUP = 8,
+  UDL_DIAG_STAGE_PAGING = 9,
+  UDL_DIAG_STAGE_FRAME = 10,
+  UDL_DIAG_STAGE_JUMP = 11
+};
+
+udl_u32 udl_diag_stop_from_name(const char *name);
+int udl_diag_video_profile_supported(udl_u8 mode, udl_u16 columns,
+                                     udl_u8 active_page);
+extern const char udl_diag_names[UDL_DIAG_STOP_COUNT][16];
+
+#endif

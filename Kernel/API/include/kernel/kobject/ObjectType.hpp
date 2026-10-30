@@ -33,7 +33,8 @@ constexpr auto TYPE_MEMORY_SECTION = "memory_section"_type;
 constexpr auto TYPE_MAPPED_REGION = "mapped_region"_type;
 constexpr auto TYPE_CONFIGROOT_SECTION = "configroot"_type;
 constexpr auto TYPE_GRAPHICS_ADAPTER = "graphics_adapter"_type;
-constexpr auto TYPE_DISPLAY = "display"_type;
+constexpr auto TYPE_VIDEO_PRESENT_TARGET = "video_present_target"_type;
+constexpr auto TYPE_DISPLAY = TYPE_VIDEO_PRESENT_TARGET;
 constexpr auto TYPE_SURFACE = "surface"_type;
 constexpr auto TYPE_TTY_SOURCE = "tty_source"_type;
 constexpr auto TYPE_TTY_SINK = "tty_sink"_type;
@@ -41,6 +42,8 @@ constexpr auto TYPE_IO = "io"_type;
 constexpr auto TYPE_EVENT = "event"_type;
 constexpr auto TYPE_WINDOW = "window"_type;
 constexpr auto TYPE_FONT = "font"_type;
+constexpr auto TYPE_VIDEO_PRESENT_TOKEN = "video_present_token"_type;
+constexpr auto TYPE_VIDEO_PRESENT_SOURCE = "video_present_source"_type;
 
 template<ObjectType T>
 struct ObjectTypeOf {};

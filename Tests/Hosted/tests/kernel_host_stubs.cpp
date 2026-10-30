@@ -18,6 +18,8 @@ UNDOS_KERNEL_API_DEF bool KE_INPUT_DequeueEvent(kernel::input::AnyInputEvent &) 
 
 kernel::KDevicePtr<kernel::KDevice> g_lastReportedPdo;
 
+void KE_ConsoleBeginPanic() noexcept {}
+
 UNDOS_KERNEL_API_DEF void KE_PrintBuffer(const char *str, size_t n) noexcept {
   fwrite(str, 1, n, stdout);
   fputc('\n', stdout);
@@ -65,10 +67,15 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_PNP_RegisterDeviceInterest(kernel::Devi
 // sched_test_hooks.hpp; it is null otherwise.
 namespace {
 kernel::KObjectPtr<kernel::KThreadObject> g_hostCurrentThread;
+void (*g_hostYieldHook)(){};
 }
 
 void test_sched::SetCurrentThread(kernel::KObjectPtr<kernel::KThreadObject> thread) noexcept {
   g_hostCurrentThread = thread;
+}
+
+void test_sched::SetYieldHook(void (*hook)()) noexcept {
+  g_hostYieldHook = hook;
 }
 
 UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KThreadObject> KE_SCHED_GetCurrentThread() noexcept {
@@ -76,11 +83,15 @@ UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KThreadObject> KE_SCHED_GetCurre
 }
 
 // Hosted tests run single-threaded (there is no real scheduler/HAL backing
-// kernel::Mutex), so KE_SCHED_Yield is a no-op and the atomics below are
+// kernel::Mutex), so KE_SCHED_Yield only runs an optional cooperative hook and the atomics below are
 // implemented with plain (non-atomic) loads/stores/compare-exchange. This is
 // sufficient for the single-threaded test harness while still satisfying the
 // symbols kernel::Mutex (mutex.hpp) needs to link.
 UNDOS_KERNEL_API_DEF void KE_SCHED_Yield() noexcept {
+  if (const auto hook = g_hostYieldHook) {
+    g_hostYieldHook = nullptr;
+    hook();
+  }
 }
 
 // event_broadcaster.cpp / pnp_manager.cpp create their pump threads in init(),
@@ -119,8 +130,16 @@ UNDOS_KERNEL_API_DEF kstd::chrono::nanoseconds KE_TIME_GetSystemTime() noexcept 
   return g_hostSystemTime;
 }
 
+namespace test_sync {
+namespace {
+size_t spinlocksHeld{};
+}
+size_t held_spinlocks() noexcept { return spinlocksHeld; }
+}
+
 UNDOS_HAL_API_DEF void HAL_ATOMIC_Store32(kernel::VirtualAddress addr, uint32_t value, PlatformMemoryOrder order) noexcept {
   (void) order;
+  if (*addr.as_ptr<uint32_t>() == 1 && value == 0) --test_sync::spinlocksHeld;
   *addr.as_ptr<uint32_t>() = value;
 }
 
@@ -128,6 +147,7 @@ UNDOS_HAL_API_DEF bool HAL_ATOMIC_CompareExchange32(kernel::VirtualAddress addr,
   (void) order;
   auto *ptr = addr.as_ptr<uint32_t>();
   if (*ptr == expected_out) {
+    if (*ptr == 0 && desired == 1) ++test_sync::spinlocksHeld;
     *ptr = desired;
     return true;
   }

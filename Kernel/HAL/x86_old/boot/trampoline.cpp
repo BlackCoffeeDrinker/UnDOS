@@ -43,6 +43,7 @@ struct module_got_t {
 };
 
 enum Port : uint16_t { COM1 = 0x3F8 };
+bool serial_ready = false;
 
 void outb(uint16_t port, uint8_t val) { asm volatile("outb %0, %1" : : "a"(val), "Nd"(port)); }
 uint8_t inb(uint16_t port) {
@@ -52,18 +53,39 @@ uint8_t inb(uint16_t port) {
 }
 
 void init_serial() {
+  serial_ready = false;
+  if (inb(COM1 + 5) == 0xFF) return;
   outb(COM1 + 1, 0x00);// Disable all interrupts
   outb(COM1 + 3, 0x80);// Enable DLAB (set baud rate divisor)
-  outb(COM1 + 0, 0x03);// Set divisor to 3 (38400 baud)
+  outb(COM1 + 0, 0x01);// Set divisor to 1 (115200 baud)
   outb(COM1 + 1, 0x00);// (hi byte)
+  if (inb(COM1 + 0) != 0x01 || inb(COM1 + 1) != 0x00) {
+    outb(COM1 + 3, 0x03);
+    return;
+  }
   outb(COM1 + 3, 0x03);// 8 bits, no parity, one stop bit
   outb(COM1 + 2, 0xC7);// Enable FIFO, clear them, with 14-byte threshold
+  outb(COM1 + 4, 0x03);// Assert DTR and RTS
+  serial_ready = inb(COM1 + 1) == 0x00 &&
+                 inb(COM1 + 3) == 0x03 &&
+                 inb(COM1 + 4) == 0x03 &&
+                 inb(COM1 + 5) != 0xFF;
 }
 
 void write_char(char c) {
-  // Wait for transmit buffer empty
-  while ((inb(COM1 + 5) & 0x20) == 0) {}
-  outb(COM1, static_cast<uint8_t>(c));
+  if (!serial_ready) return;
+  for (size_t reads = 0; reads < 65536; ++reads) {
+    const uint8_t status = inb(COM1 + 5);
+    if (status == 0xFF) {
+      serial_ready = false;
+      return;
+    }
+    if (status & 0x20) {
+      outb(COM1, static_cast<uint8_t>(c));
+      return;
+    }
+  }
+  serial_ready = false;
 }
 
 template<typename... Args>

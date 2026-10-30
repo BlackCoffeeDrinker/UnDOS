@@ -229,7 +229,7 @@ TEST_CASE("direct-loader diagnostic STOP names and VGA profile are exact",
   CHECK(udl_diag_stop_from_name("") == UDL_DIAG_STOP_INVALID);
   CHECK(udl_diag_stop_from_name("Command") == UDL_DIAG_STOP_INVALID);
   CHECK(udl_diag_stop_from_name("command-extra") == UDL_DIAG_STOP_INVALID);
-  CHECK(udl_diag_stop_from_name("kernel") == UDL_DIAG_STOP_INVALID);
+  CHECK(udl_diag_stop_from_name("kernel") == UDL_DIAG_STOP_KERNEL);
 
   CHECK(udl_diag_video_profile_supported(3, 80, 0));
   CHECK_FALSE(udl_diag_video_profile_supported(7, 80, 0));

@@ -25,47 +25,20 @@ UNDOS_KERNEL_PUBLIC_V1API(
     const kernel::KDevicePtr<kernel::KDevice> &backingDevice,
     const kstd::string_view &name);
 
-/**
- * @ingroup GFX
- * @brief Method KE_GFX_CreateSurface
- *
- * Programs `mode` (see KE_GFX_SetDisplayMode) and returns the display surface.
- */
-UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KSurfaceResult,
-    KE_GFX_CreateSurfaceForMode,
-    const kernel::KObjectPtr<kernel::KDisplay> &display, size_t mode);
-
-/**
- * @ingroup GFX
- * @brief Programs `modeIndex` on `display`, rebinding display->surface in
- * place so existing device contexts stay valid.
- *
- * The subsystem orchestrates the switch as display->Disable, display->SetMode,
- * surface rebind, then display->Enable. Callers serialize against USER drawing.
- * Validation/allocation failure leaves the previous mode intact. Enable failure
- * returns the driver's error with isAttachedToDesktop cleared; the programmed
- * surface remains valid and modeGeneration records the change.
- *
- * Errors: InvalidArgument (null display), Unsupported (no mode hooks, or the
- * monitor/USER cannot use the mode), OutOfRange (no such mode), OutOfMemory
- * (surface object), or the driver's SetMode/Enable error.
- */
+// Call outside driver programming and USER/topology locks, in preemptible
+// context, after connector/capability/mode/resource changes. Re-probes known
+// connectors while preserving their identities and invalidates old snapshots.
 UNDOS_KERNEL_PUBLIC_V1API(
     kstd::error_code,
-    KE_GFX_SetDisplayMode,
-    const kernel::KObjectPtr<kernel::KDisplay> &display, size_t modeIndex);
+    KE_GFX_RefreshAdapter,
+    const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter);
 
-/**
- * @ingroup GFX
- * @brief Returns the first KDisplay the graphics subsystem created while
- * probing adapters (module-level singleton), i.e. the display GDI-style
- * syscalls (CreateDC et al.) target when no specific device is requested.
- * Returns null if no display has been created yet.
- */
+// PnP stop/removal retires targets; outstanding tokens keep objects alive but
+// become stale. A subsequent adapter start creates new target identities.
 UNDOS_KERNEL_PUBLIC_V1API(
-    kernel::KObjectPtr<kernel::KDisplay>,
-    KE_GFX_GetPrimaryDisplay);
+    void,
+    KE_GFX_RemoveAdapter,
+    const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter);
 
 /**
  * @ingroup GFX

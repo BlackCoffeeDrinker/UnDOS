@@ -15,7 +15,7 @@ bool IsLineBreak(char c) noexcept {
 size_t FormatTimestamp(char (&out)[24]) noexcept {
   const auto ns = static_cast<uint64_t>(KE_TIME_GetSystemTime().count());
   uint64_t seconds = ns / 1000000000ull;
-  uint32_t micros = static_cast<uint32_t>((ns / 1000ull) % 1000000ull);
+  auto micros = static_cast<uint32_t>((ns / 1000ull) % 1000000ull);
 
   char digits[20];
   size_t n = 0;

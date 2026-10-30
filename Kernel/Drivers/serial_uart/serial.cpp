@@ -4,30 +4,33 @@
 #include <kernel/hal_interface.hpp>
 #include <kernel/resource.hpp>
 #include <kernel/tty/tty_device.hpp>
+#include "uart_io.hpp"
 
 namespace {
+uint8_t ReadPort(void *, uint16_t port) noexcept {
+  return HAL_IO_In8(port);
+}
 
-constexpr uint16_t UART_DATA = 0;
-constexpr uint16_t UART_IER = 1;
-constexpr uint16_t UART_FCR = 2;
-constexpr uint16_t UART_LCR = 3;
-constexpr uint16_t UART_MCR = 4;
-constexpr uint16_t UART_LSR = 5;
+void WritePort(void *, uint16_t port, uint8_t value) noexcept {
+  HAL_IO_Out8(port, value);
+}
+
+uintptr_t SaveAndDisable(void *) noexcept {
+  return HAL_CPU_SaveAndDisableInterrupts();
+}
+
+void RestoreInterrupts(void *, uintptr_t state) noexcept {
+  HAL_CPU_RestoreInterrupts(state);
+}
+
+serial_uart::detail::Uart uart(
+    {nullptr, ReadPort, WritePort},
+    {nullptr, SaveAndDisable, RestoreInterrupts});
 
 struct SerialDeviceExtension {
   uint16_t ioBase{0x3F8};
   uint32_t irq{4};
 };
-
-void InitUart(uint16_t base) {
-  HAL_IO_Out8(base + UART_IER, 0x00); // Disable interrupts (polled I/O)
-  HAL_IO_Out8(base + UART_LCR, 0x80); // Enable DLAB
-  HAL_IO_Out8(base + UART_DATA, 0x03);// Divisor 3 (38400 baud)
-  HAL_IO_Out8(base + UART_IER, 0x00);
-  HAL_IO_Out8(base + UART_LCR, 0x03);// 8 bits, no parity, 1 stop bit
-  HAL_IO_Out8(base + UART_FCR, 0xC7);// Enable FIFO, clear RX/TX FIFOs, 14-byte threshold
-  HAL_IO_Out8(base + UART_MCR, 0x03);// RTS, DTR
-}
 
 kstd::error_code Serial_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto fdo = KE_IO_CreateDeviceWithContext<SerialDeviceExtension>(
@@ -58,7 +61,10 @@ void Serial_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   const auto *irqRes = KE_RES_FindAssigned(pdo, kernel::ResourceType::Interrupt, 0);
   ext->irq = irqRes ? irqRes->start : 4;
 
-  InitUart(ext->ioBase);
+  if (!uart.Start(ext->ioBase)) {
+    KE_Print("serial_uart: UART at I/O 0x{:x} is unavailable", ext->ioBase);
+    return;
+  }
 
   KE_Print("serial_uart: Serial device started at I/O 0x{:x}, IRQ {} -> linked to VTTY",
            ext->ioBase, ext->irq);
@@ -74,15 +80,7 @@ kstd::error_code Serial_Read(const kernel::KDevicePtr<kernel::KDevice> &device,
   const auto *ext = device->deviceExtension.as<SerialDeviceExtension>();
   if (!ext) return kernel::KernelError::DeviceError;
 
-  const uint16_t base = ext->ioBase;
-  while (transferred < buffer.size()) {
-    if ((HAL_IO_In8(base + UART_LSR) & 0x01) == 0) {
-      break;
-    }
-    buffer[transferred++] = HAL_IO_In8(base + UART_DATA);
-  }
-
-  return kernel::KernelError::Success;
+  return uart.Read(ext->ioBase, buffer.data(), buffer.size(), transferred);
 }
 
 kstd::error_code Serial_Write(const kernel::KDevicePtr<kernel::KDevice> &device,
@@ -95,15 +93,7 @@ kstd::error_code Serial_Write(const kernel::KDevicePtr<kernel::KDevice> &device,
   const auto *ext = device->deviceExtension.as<SerialDeviceExtension>();
   if (!ext) return kernel::KernelError::DeviceError;
 
-  const uint16_t base = ext->ioBase;
-  while (transferred < buffer.size()) {
-    if ((HAL_IO_In8(base + UART_LSR) & 0x20) == 0) {
-      break;
-    }
-    HAL_IO_Out8(base + UART_DATA, buffer[transferred++]);
-  }
-
-  return kernel::KernelError::Success;
+  return uart.Write(ext->ioBase, buffer.data(), buffer.size(), transferred);
 }
 
 }// namespace
