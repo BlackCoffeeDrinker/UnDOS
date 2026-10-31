@@ -62,7 +62,6 @@ struct DriverLock {
 struct AdapterHeadScratch {
   kernel::KGraphicsAdapterDisplayInfo info{};
   kernel::Edid edid{};
-  kernel::KMonitorCapabilities savedCapabilities{};
   void Reset() {
     info.~KGraphicsAdapterDisplayInfo();
     new (&info) kernel::KGraphicsAdapterDisplayInfo{};
@@ -311,11 +310,16 @@ void OnBackingDeviceEvent(const kernel::event::Source &source,
 }// namespace
 
 namespace kernel::gfx {
-bool usable_mode(const KObjectPtr<KDisplay> &display, const KDisplayModeInfo &mode) noexcept {
+bool usable_mode(const KObjectPtr<KDisplay> &display, const KDisplayModeInfo &mode,
+                 const KMonitorCapabilities &capabilities) noexcept {
   return display && mode.width && mode.height && mode.width <= 32767 && mode.height <= 32767 &&
          mode.pitch && mode.pitch <= INT32_MAX &&
          static_cast<uint64_t>(mode.pitch) * mode.height <= SIZE_MAX &&
-         display->monitorCaps.Supports(mode);
+         capabilities.Supports(mode);
+}
+
+bool usable_mode(const KObjectPtr<KDisplay> &display, const KDisplayModeInfo &mode) noexcept {
+  return display && usable_mode(display, mode, display->monitorCaps);
 }
 
 kstd::expected<KDisplayModeInfo, kstd::error_code> enumerate_mode(const KObjectPtr<KDisplay> &display, uint32_t ordinal) noexcept {
@@ -1123,16 +1127,17 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_RefreshAdapter(
       record.capabilities = record.edid.IsValid()
           ? kernel::gfx::capabilities_from_edid(record.edid)
           : kernel::gfx::default_monitor_capabilities();
-      if (target->isAttachedToDesktop && target->GetModeInfo) {
-        // Mode ordinals may depend on monitor timings. Stage the proposed
-        // capabilities only inside callback serialization, then restore them.
-        (*scratch)->savedCapabilities = target->monitorCaps;
-        target->monitorCaps = record.capabilities;
-        auto mode = target->GetModeInfo(target, target->currentMode.modeIndex);
-        if (mode) mode->modeIndex = target->currentMode.modeIndex;
-        record.currentModeSupported = mode && *mode == target->currentMode &&
-                                       kernel::gfx::usable_mode(target, *mode);
-        target->monitorCaps = (*scratch)->savedCapabilities;
+      if (target->isAttachedToDesktop) {
+        bool driverModeSupported = false;
+        if (target->GetModeInfo) {
+          auto mode = target->GetModeInfo(target, target->currentMode.modeIndex);
+          if (mode) mode->modeIndex = target->currentMode.modeIndex;
+          driverModeSupported = mode && *mode == target->currentMode &&
+                                kernel::gfx::usable_mode(target, *mode);
+        }
+        record.currentModeSupported =
+            driverModeSupported &&
+            kernel::gfx::usable_mode(target, target->currentMode, record.capabilities);
       }
     }
   }

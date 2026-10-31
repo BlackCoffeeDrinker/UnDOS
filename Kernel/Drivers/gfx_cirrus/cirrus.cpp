@@ -13,12 +13,37 @@ namespace {
 
 constexpr size_t kPageSize = 4096;
 
+struct CirrusModeCatalogEntry;
+
+struct CirrusModeCatalogKey {
+  uint8_t chipId{};
+  cirrus_timing::Chip chip{cirrus_timing::Chip::Unknown};
+  uint32_t vramBytes{};
+  uint32_t resourceGeneration{};
+  kernel::KMonitorCapabilities monitorCaps{};
+};
+
+#ifdef UNDOS_CIRRUS_TEST_HOOKS
+struct CirrusTestCounters {
+  size_t computeGtfCalls{};
+  size_t choosePllCalls{};
+  size_t catalogBuilds{};
+  size_t contextDestructions{};
+  size_t catalogDestructions{};
+  bool failNextCatalogAllocation{};
+};
+
+CirrusTestCounters &Cirrus_TestCounters() {
+  static CirrusTestCounters counters{};
+  return counters;
+}
+#endif
+
 // Per-instance state, held in the function device object's extension (see
 // Cirrus_AddDevice). Everything below `shadow` is only valid once a mode has
 // actually been programmed; before the first mode transaction the shadow is null.
 // No dirty-rectangle state: the USER layer tells Present what to transfer.
 struct CirrusContext {
-  kernel::KObjectPtr<kernel::KGraphicsAdapter> adapter;
   kernel::VirtualAddress window;// mapped 0xA0000 bank window
   kernel::VirtualAddress shadow;// flat system-RAM primary surface
   uint32_t pitch{};
@@ -33,6 +58,18 @@ struct CirrusContext {
   bool modeKnown{false};
   bool enabled{false};
   size_t modeIndex{};
+  CirrusModeCatalogEntry *modeCatalog{};
+  size_t modeCatalogCount{};
+  CirrusModeCatalogKey modeCatalogKey{};
+  bool modeCatalogKeyValid{};
+
+  ~CirrusContext() {
+#ifdef UNDOS_CIRRUS_TEST_HOOKS
+    ++Cirrus_TestCounters().contextDestructions;
+    if (modeCatalog) ++Cirrus_TestCounters().catalogDestructions;
+#endif
+    KE_Free(modeCatalog);
+  }
 };
 
 struct CirrusReservationData {
@@ -616,16 +653,170 @@ struct CirrusModeCandidate {
   kernel::KDisplayModeInfo info{};
 };
 
-bool Cirrus_BuildMode(const kernel::KDisplay &display, const CirrusContext &ctx,
+struct CirrusModeCatalogEntry {
+  bool exposed{};
+  CirrusModeCandidate candidate{};
+};
+
+struct CirrusPllSeed {
+  cirrus_timing::Chip chip;
+  uint32_t width;
+  uint32_t height;
+  uint32_t bpp;
+  uint32_t memoryClockFactor;
+  int8_t vramProfile;
+  uint8_t numerator;
+  uint8_t rawDivider;
+  uint8_t postDivider;
+};
+
+#define CIRRUS_PLL_SEED(chip_, width_, height_, bpp_, factor_, profile_, n_, d_, p_) \
+  {chip_, width_, height_, bpp_, factor_, profile_, n_, d_, p_}
+
+constexpr cirrus_timing::GtfMode kCommonGtfSeeds[] = {
+    {640, 480, 60, 656, 720, 800, 481, 484, 497, 23855673},
+    {800, 600, 60, 832, 912, 1024, 601, 604, 622, 38216085},
+    {1024, 768, 60, 1080, 1184, 1344, 769, 772, 795, 64109903},
+};
+
+constexpr CirrusPllSeed kCommonPllSeeds[] = {
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5430, 640, 480, 8, 1, -1, 40, 12, 1),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5430, 640, 480, 15, 1, -1, 40, 12, 1),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5430, 640, 480, 16, 1, -1, 40, 12, 1),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5430, 640, 480, 24, 3, -1, 50, 10, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5430, 800, 600, 8, 1, -1, 32, 12, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5430, 800, 600, 15, 1, -1, 32, 12, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5430, 800, 600, 16, 1, -1, 32, 12, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5430, 1024, 768, 8, 1, -1, 103, 23, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 640, 480, 8, 1, -1, 35, 21, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 640, 480, 15, 1, 1, 35, 21, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 640, 480, 16, 1, 1, 35, 21, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 640, 480, 15, 2, 0, 40, 12, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 640, 480, 16, 2, 0, 40, 12, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 640, 480, 24, 3, -1, 35, 7, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 640, 480, 32, 4, -1, 60, 9, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 800, 600, 8, 1, -1, 32, 12, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 800, 600, 15, 1, 1, 32, 12, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 800, 600, 16, 1, 1, 32, 12, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 800, 600, 15, 2, 0, 48, 9, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 800, 600, 16, 2, 0, 48, 9, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 800, 600, 24, 3, -1, 56, 7, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 1024, 768, 8, 1, -1, 103, 23, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 1024, 768, 15, 1, -1, 103, 23, 0),
+    CIRRUS_PLL_SEED(cirrus_timing::Chip::Gd5434, 1024, 768, 16, 1, -1, 103, 23, 0),
+};
+
+#undef CIRRUS_PLL_SEED
+
+const cirrus_timing::GtfMode *Cirrus_FindGtfSeed(
+    uint32_t width, uint32_t height, uint32_t refresh) {
+  if (refresh != 60) return nullptr;
+  for (const auto &seed: kCommonGtfSeeds)
+    if (seed.width == width && seed.height == height) return &seed;
+  return nullptr;
+}
+
+const CirrusPllSeed *Cirrus_FindPllSeed(
+    const CirrusContext &ctx, uint32_t width, uint32_t height, uint32_t bpp,
+    uint32_t memoryClockFactor) {
+  const int8_t profile =
+      ctx.chip == cirrus_timing::Chip::Gd5434 &&
+              (width == 640 || width == 800) &&
+              (bpp == 15 || bpp == 16)
+          ? (ctx.vramBytes <= 1024 * 1024 ? 0 : 1)
+          : -1;
+  for (const auto &seed: kCommonPllSeeds)
+    if (seed.chip == ctx.chip && seed.width == width &&
+        seed.height == height && seed.bpp == bpp &&
+        seed.memoryClockFactor == memoryClockFactor &&
+        seed.vramProfile == profile)
+      return &seed;
+  return nullptr;
+}
+
+bool Cirrus_ValidatePllSeed(const CirrusPllSeed &seed, uint64_t targetClockHz,
+                            uint32_t maximumClockHz,
+                            cirrus_timing::PllCandidate &out) {
+  const bool alpine = seed.chip == cirrus_timing::Chip::Gd5430;
+  if ((!alpine && seed.chip != cirrus_timing::Chip::Gd5434) ||
+      seed.numerator < (alpine ? 16 : 32) ||
+      seed.numerator > (alpine ? 126 : 127) ||
+      seed.rawDivider < (alpine ? 10 : 7) || seed.rawDivider > 31 ||
+      seed.postDivider > 1 ||
+      (!alpine && seed.postDivider && seed.rawDivider < 16) ||
+      !targetClockHz || targetClockHz > UINT32_MAX ||
+      targetClockHz > maximumClockHz)
+    return false;
+
+  const uint32_t denominator =
+      static_cast<uint32_t>(seed.rawDivider) * (1 + seed.postDivider);
+  if (!denominator || denominator > UINT8_MAX) return false;
+
+  const uint64_t outputNumerator =
+      uint64_t{cirrus_timing::kReferenceClockHz} * seed.numerator;
+  if (alpine &&
+      (outputNumerator < uint64_t{28636000} * seed.rawDivider ||
+       outputNumerator > uint64_t{111000000} * seed.rawDivider))
+    return false;
+  if (outputNumerator > uint64_t{maximumClockHz} * denominator)
+    return false;
+
+  if (targetClockHz > UINT64_MAX / denominator) return false;
+  const uint64_t requestedNumerator = targetClockHz * denominator;
+  const uint64_t error = outputNumerator > requestedNumerator
+                             ? outputNumerator - requestedNumerator
+                             : requestedNumerator - outputNumerator;
+  if (error >
+      (UINT64_MAX - requestedNumerator / 2) / uint64_t{1000000})
+    return false;
+  const uint64_t errorPpm =
+      (error * 1000000 + requestedNumerator / 2) / requestedNumerator;
+  if (errorPpm > cirrus_timing::kMaximumPllErrorPpm) return false;
+
+  out = cirrus_timing::PllCandidate{
+      .numerator = seed.numerator,
+      .denominator = static_cast<uint8_t>(denominator),
+      .denominatorRegister = static_cast<uint8_t>(
+          (alpine ? 0 : 0x80) | (seed.rawDivider << 1) | seed.postDivider),
+      .errorPpm = static_cast<uint32_t>(errorPpm)};
+  return true;
+}
+
+bool Cirrus_ComputeGtf(uint32_t width, uint32_t height, uint32_t refresh,
+                       cirrus_timing::GtfMode &out) {
+#ifdef UNDOS_CIRRUS_TEST_HOOKS
+  ++Cirrus_TestCounters().computeGtfCalls;
+#endif
+  return cirrus_timing::ComputeGtf(width, height, refresh, out);
+}
+
+bool Cirrus_ChoosePll(uint32_t targetClockHz, uint32_t maximumErrorPpm,
+                      cirrus_timing::PllCandidate &out, uint32_t maximumClockHz,
+                      cirrus_timing::Chip chip) {
+#ifdef UNDOS_CIRRUS_TEST_HOOKS
+  ++Cirrus_TestCounters().choosePllCalls;
+#endif
+  return cirrus_timing::ChoosePll(targetClockHz, maximumErrorPpm, out,
+                                  maximumClockHz, chip);
+}
+
+bool Cirrus_BuildMode(const CirrusContext &ctx,
                       uint32_t width, uint32_t height, uint32_t refresh,
                       const cirrus_regs::CirrusDepth &depth,
+                      const kernel::KMonitorCapabilities &monitorCaps,
                       CirrusModeCandidate &out) {
   if (ctx.chip == cirrus_timing::Chip::Unknown || !ctx.vramBytes ||
       !width || !height || !refresh)
     return false;
   cirrus_timing::GtfMode gtf{};
-  if (!cirrus_timing::ComputeGtf(width, height, refresh, gtf) ||
-      gtf.pixelClockHz > cirrus_timing::MaximumPixelClock(ctx.chip, depth.bpp))
+  const auto *timingSeed = Cirrus_FindGtfSeed(width, height, refresh);
+  if (timingSeed) {
+    gtf = *timingSeed;
+  } else if (!Cirrus_ComputeGtf(width, height, refresh, gtf)) {
+    return false;
+  }
+  if (gtf.pixelClockHz >
+      cirrus_timing::MaximumPixelClock(ctx.chip, depth.bpp))
     return false;
 
   cirrus_timing::ScanoutLayout layout{};
@@ -638,12 +829,20 @@ bool Cirrus_BuildMode(const kernel::KDisplay &display, const CirrusContext &ctx,
   const uint32_t pixelLimit = cirrus_timing::MaximumPixelClock(ctx.chip, depth.bpp) * factor;
   const uint32_t hardwareLimit = cirrus_timing::MaximumHardwareClock(ctx.chip);
   const uint32_t pllLimit = ctx.chip == cirrus_timing::Chip::Gd5430 &&
-                                   pixelLimit < hardwareLimit
-                               ? pixelLimit : hardwareLimit;
-  if (!cirrus_timing::ChoosePll(static_cast<uint32_t>(layout.memoryClockHz),
-                                cirrus_timing::kMaximumPllErrorPpm, pll, pllLimit,
-                                ctx.chip))
+                                    pixelLimit < hardwareLimit
+                                ? pixelLimit
+                                : hardwareLimit;
+  const auto *pllSeed = timingSeed
+                            ? Cirrus_FindPllSeed(ctx, width, height, depth.bpp, factor)
+                            : nullptr;
+  if (pllSeed) {
+    if (!Cirrus_ValidatePllSeed(*pllSeed, layout.memoryClockHz, pllLimit, pll))
+      return false;
+  } else if (!Cirrus_ChoosePll(static_cast<uint32_t>(layout.memoryClockHz),
+                               cirrus_timing::kMaximumPllErrorPpm, pll, pllLimit,
+                               ctx.chip)) {
     return false;
+  }
 
   out = {};
   out.timing.width = width;
@@ -659,10 +858,22 @@ bool Cirrus_BuildMode(const kernel::KDisplay &display, const CirrusContext &ctx,
   if (ctx.chip == cirrus_timing::Chip::Gd5430) {
     // Banked Alpine modes: no GD5434 low-memory double-VCLK mode or 32 bpp.
     switch (depth.bpp) {
-      case 8: out.depth.sr07 = 0x01; out.depth.hiddenDac = 0; break;
-      case 15: out.depth.sr07 = 0x07; out.depth.hiddenDac = 0xc0; break;
-      case 16: out.depth.sr07 = 0x07; out.depth.hiddenDac = 0xc1; break;
-      case 24: out.depth.sr07 = 0x05; out.depth.hiddenDac = 0xc5; break;
+      case 8:
+        out.depth.sr07 = 0x01;
+        out.depth.hiddenDac = 0;
+        break;
+      case 15:
+        out.depth.sr07 = 0x07;
+        out.depth.hiddenDac = 0xc0;
+        break;
+      case 16:
+        out.depth.sr07 = 0x07;
+        out.depth.hiddenDac = 0xc1;
+        break;
+      case 24:
+        out.depth.sr07 = 0x05;
+        out.depth.hiddenDac = 0xc5;
+        break;
       default: return false;
     }
   }
@@ -683,53 +894,143 @@ bool Cirrus_BuildMode(const kernel::KDisplay &display, const CirrusContext &ctx,
                             kernel::DisplayModeFlags::Banked;
   if (depth.pixelFormat == kernel::PixelFormat::INDEX8)
     out.info.attributeFlags |= kernel::DisplayModeFlags::PaletteDriven;
-  return display.monitorCaps.Supports(out.info);
+  return monitorCaps.Supports(out.info);
 }
 
-bool Cirrus_ModeAt(const kernel::KDisplay &display, const CirrusContext &ctx,
-                   size_t requestedIndex, CirrusModeCandidate &out) {
-  size_t index = 0;
-  for (size_t timingIndex = 0; timingIndex < display.monitorCaps.count;
+bool Cirrus_SameCatalogKey(const CirrusModeCatalogKey &left,
+                           const CirrusModeCatalogKey &right) {
+  if (left.chipId != right.chipId || left.chip != right.chip ||
+      left.vramBytes != right.vramBytes ||
+      left.resourceGeneration != right.resourceGeneration ||
+      left.monitorCaps.count != right.monitorCaps.count ||
+      left.monitorCaps.maxWidth != right.monitorCaps.maxWidth ||
+      left.monitorCaps.maxHeight != right.monitorCaps.maxHeight ||
+      left.monitorCaps.maxRefreshRate != right.monitorCaps.maxRefreshRate ||
+      left.monitorCaps.isDefault != right.monitorCaps.isDefault)
+    return false;
+  for (size_t i = 0; i < kernel::KMonitorCapabilities::MaxTimings; ++i) {
+    const auto &a = left.monitorCaps.timings[i];
+    const auto &b = right.monitorCaps.timings[i];
+    if (a.width != b.width || a.height != b.height ||
+        a.refreshRate != b.refreshRate)
+      return false;
+  }
+  return true;
+}
+
+CirrusModeCatalogKey Cirrus_CurrentCatalogKey(
+    const kernel::KDisplay &display, const CirrusContext &ctx) {
+  return CirrusModeCatalogKey{
+      .chipId = ctx.chipId,
+      .chip = ctx.chip,
+      .vramBytes = ctx.vramBytes,
+      .resourceGeneration = display.adapter->resourceGeneration,
+      .monitorCaps = display.monitorCaps};
+}
+
+void *Cirrus_AllocateCatalog(size_t bytes) {
+#ifdef UNDOS_CIRRUS_TEST_HOOKS
+  if (Cirrus_TestCounters().failNextCatalogAllocation) {
+    Cirrus_TestCounters().failNextCatalogAllocation = false;
+    return nullptr;
+  }
+#endif
+  return KE_Malloc(bytes);
+}
+
+kstd::error_code Cirrus_EnsureModeCatalog(const kernel::KDisplay &display,
+                                          CirrusContext &ctx) {
+  const auto key = Cirrus_CurrentCatalogKey(display, ctx);
+  if (ctx.modeCatalogKeyValid &&
+      Cirrus_SameCatalogKey(ctx.modeCatalogKey, key))
+    return kernel::KernelError::Success;
+  if (key.monitorCaps.count > kernel::KMonitorCapabilities::MaxTimings)
+    return kernel::KernelError::InvalidArgument;
+
+  constexpr size_t depthCount = sizeof(cirrus_regs::kDepths) /
+                                sizeof(cirrus_regs::kDepths[0]);
+  if (kernel::KMonitorCapabilities::MaxTimings > SIZE_MAX / depthCount)
+    return kernel::KernelError::OutOfMemory;
+  constexpr size_t maxEntries =
+      kernel::KMonitorCapabilities::MaxTimings * depthCount;
+  if (maxEntries > SIZE_MAX / sizeof(CirrusModeCatalogEntry))
+    return kernel::KernelError::OutOfMemory;
+  const size_t bytes = maxEntries * sizeof(CirrusModeCatalogEntry);
+  auto *staging =
+      static_cast<CirrusModeCatalogEntry *>(Cirrus_AllocateCatalog(bytes));
+  if (!staging) return kernel::KernelError::OutOfMemory;
+
+  size_t count = 0;
+  for (size_t timingIndex = 0; timingIndex < key.monitorCaps.count;
        ++timingIndex) {
-    const auto &monitorTiming = display.monitorCaps.timings[timingIndex];
+    const auto &monitorTiming = key.monitorCaps.timings[timingIndex];
     const uint32_t refresh = monitorTiming.refreshRate
                                  ? monitorTiming.refreshRate
                                  : cirrus_regs::kFallbackRefreshRate;
     bool duplicate = false;
     for (size_t prior = 0; prior < timingIndex; ++prior) {
-      const auto &earlier = display.monitorCaps.timings[prior];
+      const auto &earlier = key.monitorCaps.timings[prior];
       if (earlier.width == monitorTiming.width &&
           earlier.height == monitorTiming.height &&
           (earlier.refreshRate ? earlier.refreshRate
-                              : cirrus_regs::kFallbackRefreshRate) == refresh) {
+                               : cirrus_regs::kFallbackRefreshRate) == refresh) {
         duplicate = true;
         break;
       }
     }
     if (duplicate) continue;
-    for (const auto &depth : cirrus_regs::kDepths) {
-      if (!Cirrus_BuildMode(display, ctx, monitorTiming.width,
-                            monitorTiming.height, refresh, depth, out))
-        continue;
-      if (index++ == requestedIndex) {
-        out.info.modeIndex = index - 1;
-        return true;
-      }
+    for (const auto &depth: cirrus_regs::kDepths) {
+      auto &entry = staging[count++];
+      entry = {};
+      entry.exposed = Cirrus_BuildMode(
+          ctx, monitorTiming.width, monitorTiming.height, refresh,
+          depth, key.monitorCaps, entry.candidate);
     }
   }
-  return false;
+
+  if (!Cirrus_SameCatalogKey(key, Cirrus_CurrentCatalogKey(display, ctx))) {
+    KE_Free(staging);
+    return kernel::KernelError::Retry;
+  }
+  auto *retired = ctx.modeCatalog;
+  ctx.modeCatalog = staging;
+  ctx.modeCatalogCount = count;
+  ctx.modeCatalogKey = key;
+  ctx.modeCatalogKeyValid = true;
+#ifdef UNDOS_CIRRUS_TEST_HOOKS
+  ++Cirrus_TestCounters().catalogBuilds;
+#endif
+  KE_Free(retired);
+  return kernel::KernelError::Success;
+}
+
+kstd::expected<CirrusModeCandidate, kstd::error_code> Cirrus_ModeAt(
+    const kernel::KDisplay &display, CirrusContext &ctx, size_t requestedIndex) {
+  if (const auto error = Cirrus_EnsureModeCatalog(display, ctx); error)
+    return kstd::unexpected(error);
+  size_t index = 0;
+  for (size_t i = 0; i < ctx.modeCatalogCount; ++i) {
+    const auto &entry = ctx.modeCatalog[i];
+    if (!entry.exposed) continue;
+    if (index++ == requestedIndex) {
+      auto candidate = entry.candidate;
+      candidate.info.modeIndex = index - 1;
+      return candidate;
+    }
+  }
+  return kstd::unexpected(kernel::KernelError::OutOfRange);
 }
 
 kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> Cirrus_GetModeInfo(
     const kernel::KObjectPtr<kernel::KDisplay> &display, size_t modeIndex) {
   if (!display || !display->adapter)
     return kstd::unexpected(kernel::KernelError::InvalidArgument);
-  const auto *ctx = display->adapter->GetDeviceExtensionAs<CirrusContext>();
-  CirrusModeCandidate candidate{};
-  if (!ctx || !Cirrus_ModeAt(*display, *ctx, modeIndex, candidate))
-    return kstd::unexpected(kernel::KernelError::OutOfRange);
-  candidate.info.modeIndex = modeIndex;
-  return candidate.info;
+  auto *ctx = display->adapter->GetDeviceExtensionAs<CirrusContext>();
+  if (!ctx) return kstd::unexpected(kernel::KernelError::DeviceNotReady);
+  auto candidate = Cirrus_ModeAt(*display, *ctx, modeIndex);
+  if (!candidate) return kstd::unexpected(candidate.error());
+  candidate->info.modeIndex = modeIndex;
+  return candidate->info;
 }
 
 kstd::error_code Cirrus_Probe(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) {
@@ -770,12 +1071,12 @@ kstd::error_code Cirrus_PrepareMode(
     const kernel::KObjectPtr<kernel::KDisplay> &display, size_t modeIndex,
     kernel::KDisplayModeReservation &reservation) {
   if (!display || !display->adapter) return kernel::KernelError::InvalidArgument;
-  const auto ctx_cirrus = display->adapter->GetDeviceExtensionAs<CirrusContext>();
+  auto *ctx_cirrus = display->adapter->GetDeviceExtensionAs<CirrusContext>();
   if (!ctx_cirrus || !ctx_cirrus->window) return kernel::KernelError::DeviceNotReady;
 
-  CirrusModeCandidate candidate{};
-  if (!Cirrus_ModeAt(*display, *ctx_cirrus, modeIndex, candidate))
-    return kernel::KernelError::OutOfRange;
+  auto result = Cirrus_ModeAt(*display, *ctx_cirrus, modeIndex);
+  if (!result) return result.error();
+  const auto &candidate = *result;
   const uint32_t pitch = candidate.info.pitch;
   const size_t size = static_cast<size_t>(pitch) * candidate.info.height;
   void *buffer = KE_Malloc(size);
@@ -986,6 +1287,9 @@ kstd::error_code Cirrus_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject
     KE_Print("gfx_cirrus: Failed to create Cirrus device: {}", fdo.error().message());
     return fdo.error();
   }
+  (*fdo)->deviceExtension.destroy = [](void *ptr) {
+    static_cast<CirrusContext *>(ptr)->~CirrusContext();
+  };
 
   if (const auto attached = KE_IO_AttachFilterDevice(*fdo, pdo); !attached) {
     KE_Print("gfx_cirrus: Failed to attach Cirrus device: {}", attached.error().message());
@@ -1085,18 +1389,18 @@ void Cirrus_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
     KE_Print("gfx_cirrus: Failed to register graphics adapter: {}", adapter.error().message());
     return;
   }
-  ctx_cirrus->adapter = kstd::move(*adapter);
+  const auto graphicsAdapter = kstd::move(*adapter);
 
   // Mode buffers are reserved only after the topology manager validates a
   // path and begins its target transaction.
-  ctx_cirrus->adapter->Probe = Cirrus_Probe;
-  ctx_cirrus->adapter->ProbeDisplay = Cirrus_ProbeDisplay;
-  ctx_cirrus->adapter->ConfigureDisplay = Cirrus_ConfigureDisplay;
-  ctx_cirrus->adapter->FillRect = Cirrus_FillRect;
-  ctx_cirrus->adapter->DrawLine = Cirrus_DrawLine;
-  ctx_cirrus->adapter->BitBlt = Cirrus_BitBlt;
-  ctx_cirrus->adapter->Present = Cirrus_Present;
-  ctx_cirrus->adapter->caps = kernel::KGfxCaps::HwFill | kernel::KGfxCaps::HwBlt | kernel::KGfxCaps::VisibleFill;
+  graphicsAdapter->Probe = Cirrus_Probe;
+  graphicsAdapter->ProbeDisplay = Cirrus_ProbeDisplay;
+  graphicsAdapter->ConfigureDisplay = Cirrus_ConfigureDisplay;
+  graphicsAdapter->FillRect = Cirrus_FillRect;
+  graphicsAdapter->DrawLine = Cirrus_DrawLine;
+  graphicsAdapter->BitBlt = Cirrus_BitBlt;
+  graphicsAdapter->Present = Cirrus_Present;
+  graphicsAdapter->caps = kernel::KGfxCaps::HwFill | kernel::KGfxCaps::HwBlt | kernel::KGfxCaps::VisibleFill;
 }
 }// namespace
 

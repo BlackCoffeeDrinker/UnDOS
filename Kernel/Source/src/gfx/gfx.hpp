@@ -38,6 +38,8 @@ KMonitorCapabilities capabilities_from_edid(const Edid &edid);
 
 // Monitor-approved modes whose geometry USER can represent.
 bool usable_mode(const KObjectPtr<KDisplay> &display, const KDisplayModeInfo &mode) noexcept;
+bool usable_mode(const KObjectPtr<KDisplay> &display, const KDisplayModeInfo &mode,
+                 const KMonitorCapabilities &capabilities) noexcept;
 // Returns the `ordinal`th usable mode (modeIndex filled in). Errors:
 // InvalidArgument (null display), Unsupported (no GetModeInfo hook),
 // OutOfRange (fewer usable modes).

@@ -225,6 +225,13 @@ kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> FakeGetModeInfo(const
   return info;
 }
 
+size_t refreshModeCallbackCalls{};
+kstd::expected<kernel::KDisplayModeInfo, kstd::error_code>
+CountRefreshModeCallback(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t index) {
+  ++refreshModeCallbackCalls;
+  return FakeGetModeInfo(display, index);
+}
+
 size_t observedModeCallbacks{}, modeCallbacksWithSpinlocks{}, modeCallbacksWithOutputMapping{};
 kstd::expected<kernel::KDisplayModeInfo, kstd::error_code>
 ObserveModeCallback(const kernel::KObjectPtr<kernel::KDisplay> &display, size_t index) {
@@ -1851,6 +1858,24 @@ TEST_CASE("Adapter refresh disconnects reconnects and PnP removal retires target
   REQUIRE(after.pathCount == 0);
   REQUIRE(display->removed);
   REQUIRE_FALSE(kernel::gfx::active_video_present_target());
+}
+
+TEST_CASE("Adapter refresh validates the current mode without staging capabilities for enumeration",
+          "[gfx][topology][hotplug][mode]") {
+  EnsureObjectManagerInitialized();
+  TargetIdIsolation isolation;
+  const auto display = MakeFakeDisplay();
+  isolation.Track(display);
+  REQUIRE(SetModeViaTopology(display, 0));
+  refreshModeCallbackCalls = 0;
+  display->GetModeInfo = CountRefreshModeCallback;
+
+  REQUIRE_FALSE(KE_GFX_RefreshAdapter(display->adapter));
+  REQUIRE(refreshModeCallbackCalls == 1);
+  REQUIRE(display->isAttachedToDesktop);
+  REQUIRE(display->currentMode.width == 640);
+
+  display->GetModeInfo = FakeGetModeInfo;
 }
 
 TEST_CASE("PnP removal waits for painting before retiring state or invalidating I/O",

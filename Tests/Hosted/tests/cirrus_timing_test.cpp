@@ -31,6 +31,32 @@ TEST_CASE("Cirrus GTF calculations match reference modelines", "[gfx][cirrus][ti
     REQUIRE(((mode.pixelClockHz + 5000) / 10000) * 10000 ==
             expected.pixelClockHz);
   }
+
+  const struct {
+    uint32_t width, height;
+  } lineCompareGeometries[] = {{800, 600}, {1024, 768}};
+  cirrus_timing::GtfMode mode{};
+  uint8_t crtc[25]{};
+  uint8_t extended{};
+  for (const auto &geometry : lineCompareGeometries) {
+    REQUIRE(cirrus_timing::ComputeGtf(geometry.width, geometry.height, 60, mode));
+    REQUIRE(cirrus_timing::PackCrtc(mode, 2048, crtc, extended));
+    const uint32_t lineCompare =
+        crtc[0x18] | ((static_cast<uint32_t>(crtc[0x07]) & 0x10) << 4) |
+        ((static_cast<uint32_t>(crtc[0x09]) & 0x40) << 3);
+    REQUIRE(lineCompare == 0x3FF);
+    const uint32_t expectedOverflow =
+        (((mode.verticalTotal - 2) >> 8) & 0x01) |
+        ((((mode.height - 1) >> 8) & 0x01) << 1) |
+        (((mode.verticalSyncStart >> 8) & 0x01) << 2) |
+        (((mode.height >> 8) & 0x01) << 3) |
+        (((mode.verticalTotal - 2) >> 9) & 0x01) << 5 |
+        (((mode.height - 1) >> 9) & 0x01) << 6 |
+        (((mode.verticalSyncStart >> 9) & 0x01) << 7);
+    REQUIRE((crtc[0x07] & ~0x10u) == expectedOverflow);
+    REQUIRE((crtc[0x09] & ~0x40u) ==
+            (((mode.height >> 9) & 0x01) << 5));
+  }
 }
 
 TEST_CASE("Cirrus GTF and PLL reject invalid inputs and choose bounded candidates", "[gfx][cirrus][timing]") {

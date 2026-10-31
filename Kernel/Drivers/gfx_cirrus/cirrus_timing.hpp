@@ -304,10 +304,12 @@ inline bool PackCrtc(const GtfMode &mode, uint32_t pitch, uint8_t (&crtc)[25],
       (((vDisplayEnd >> 8) & 0x01) << 1) |
       (((mode.verticalSyncStart >> 8) & 0x01) << 2) |
       (((vBlankStart >> 8) & 0x01) << 3) |
+      0x10 |
       (((vTotalReg >> 9) & 0x01) << 5) |
       (((vDisplayEnd >> 9) & 0x01) << 6) |
       (((mode.verticalSyncStart >> 9) & 0x01) << 7));
-  crtc[0x09] = static_cast<uint8_t>(((vBlankStart >> 9) & 0x01) << 5);
+  crtc[0x09] = static_cast<uint8_t>(
+      (((vBlankStart >> 9) & 0x01) << 5) | 0x40);
   crtc[0x10] = static_cast<uint8_t>(mode.verticalSyncStart);
   crtc[0x11] = static_cast<uint8_t>(mode.verticalSyncEnd & 0x0F);
   crtc[0x12] = static_cast<uint8_t>(vDisplayEnd);

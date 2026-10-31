@@ -241,8 +241,10 @@ kstd::error_code LoadConfigurationIndex(const KObjectPtr<KIOObject> &file, kstd:
   kstd::list<KConfigurationRoot::Root> loaded;
   size_t populatedCount = 0;
   uint64_t indexBlockOffset = header.offsetToFirstIndexBlock;
-
+  
+  KE_Print("HIVE Loading configuration index");
   while (true) {
+    KE_Print("HIVE Loading at index {}", indexBlockOffset);
     for (size_t slot = 0; slot < ENTRIES_PER_INDEX_BLOCK; slot++) {
       ConfigurationIndexEntry entry{};
       const uint64_t entryOffset = indexBlockOffset + offsetof(ConfigurationIndexBlock, entries) + slot * sizeof(ConfigurationIndexEntry);
@@ -285,6 +287,8 @@ kstd::error_code LoadConfigurationIndex(const KObjectPtr<KIOObject> &file, kstd:
 
     indexBlockOffset = nextBlockOffset;
   }
+  
+  KE_Print("HIVE Loaded {} root keys", populatedCount);
 
   outRoots = kstd::move(loaded);
   outNumRoots = populatedCount;

@@ -10,10 +10,15 @@ namespace kernel {
  * @brief Wrapper for a raw data buffer (pointer + size).
  */
 struct DataBuffer {
+  using Destructor = void (*)(void *);
+
   VirtualAddress ptr{0};
   size_t size = 0;
+  Destructor destroy{};
 
-  static DataBuffer Alloc(size_t size) { return {VirtualAddress::from_ptr(KE_Malloc(size)), size}; }
+  static DataBuffer Alloc(size_t size) {
+    return {VirtualAddress::from_ptr(KE_Malloc(size)), size, nullptr};
+  }
 
   template<typename T, typename... Args>
   static DataBuffer Create(Args &&...args) {
@@ -24,12 +29,15 @@ struct DataBuffer {
 
   constexpr DataBuffer() = default;
   DataBuffer(const DataBuffer &) = delete;
-  constexpr DataBuffer(DataBuffer &&rhs) noexcept : ptr(rhs.ptr), size(rhs.size) {
+  constexpr DataBuffer(DataBuffer &&rhs) noexcept
+      : ptr(rhs.ptr), size(rhs.size), destroy(rhs.destroy) {
     rhs.ptr = nullptr;
     rhs.size = 0;
+    rhs.destroy = nullptr;
   }
 
-  constexpr DataBuffer(VirtualAddress p, size_t s) : ptr(p), size(s) {}
+  constexpr DataBuffer(VirtualAddress p, size_t s, Destructor destructor = nullptr)
+      : ptr(p), size(s), destroy(destructor) {}
   ~DataBuffer() { *this = nullptr; }
 
   DataBuffer &operator=(const DataBuffer &) = delete;
@@ -38,17 +46,21 @@ struct DataBuffer {
 
     this->ptr = rhs.ptr;
     this->size = rhs.size;
+    this->destroy = rhs.destroy;
 
     rhs.ptr = nullptr;
     rhs.size = 0;
+    rhs.destroy = nullptr;
 
     return *this;
   }
 
   DataBuffer &operator=(nullptr_t) {
+    if (ptr && destroy) destroy(ptr.as_ptr<void>());
     KE_Free(ptr.as_ptr<>());
     ptr = nullptr;
     size = 0;
+    destroy = nullptr;
     return *this;
   }
 

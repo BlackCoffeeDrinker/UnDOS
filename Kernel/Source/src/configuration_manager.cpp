@@ -51,6 +51,7 @@ kstd::error_code EnsureRootIsOpened(const kernel::KObjectPtr<kernel::KConfigurat
     return {};
   }
 
+  KE_Print("HIVE Root {} is not opened...", configRoot->name);
   auto opened = KE_VFS_OpenFile(configRoot->filePath, kernel::KIOObject::OpenMode::ReadWrite);
   if (!opened) {
     // Unable to open file

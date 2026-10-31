@@ -30,13 +30,18 @@ hosted C++, or Windows binary compatibility.
 | Topic | Documentation |
 |---|---|
 | Build, run, and develop | [Build commands, repository layout, CLion/Docker setup, and bounded GUI workflow](Docs/Development.md) |
-| Architecture | [Kernel, HAL, boot pipeline, memory layout, and handover](Docs/Architecture.md) |
+| System overview | [System overview](Docs/Overview.md) |
+| Architecture | [Current GRUB direct boot, kernel/HAL boundaries, and startup order](Docs/Architecture.md) |
+| Storage | [Storage and root mounts](Docs/Storage.md) |
+| Plug and Play | [Device discovery and driver binding](Docs/PnP.md) |
+| Process startup | [From process creation to `main()`](Docs/ProcessStartup.md) |
+| Kernel drivers | [Write a kernel driver](Docs/WritingADriver.md) |
 | Desktop | [Program Manager, terminal, display configuration, and font infrastructure](Docs/Desktop.md) |
 | Application development | [SDK, Docker image, CMake package, and compiler drivers](Docs/SDK.md) |
 | Application contract | [Application ABI v1](Docs/ApplicationABI.md) |
 | C library | [Supported functions, limits, streams, and lifecycle](Docs/Libc.md) |
 | Kernel subsystems | [Subsystem overview](SUBSYSTEMS.md) and [loadable subsystem design](DYNAMIC_SUBSYSTEM.md) |
 | System calls | [Syscall IDL and generation](SYSCALLS_IDL.md) |
-| Plans | [SDK roadmap](SDK_ROADMAP.md), [kernel roadmap](Docs/KernelRoadmap.md), [Program Manager plan](TO_PROGRMAN.md), and [font plan](TTF_SPLIT_USER_KERNEL.md) |
-| Known issues | [Bug tracker](BUGS.md) |
+| Plans | [SDK roadmap](SDK_ROADMAP.md), [kernel roadmap](Docs/KernelRoadmap.md), and [font plan](TTF_SPLIT_USER_KERNEL.md) |
+| Known issues | No in-repository bug tracker is currently listed. |
 | Contribution constraints | [Development rules](Docs/Development.md#code-generation-invariant-rules), [application ABI](Docs/ApplicationABI.md), and [SDK contracts](Docs/SDK.md) |
