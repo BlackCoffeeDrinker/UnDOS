@@ -1,0 +1,9 @@
+.git
+.idea
+.copilot
+build
+build-*
+cmake-build-*
+bin
+**/__pycache__
+**/*.pyc

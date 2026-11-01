@@ -26,3 +26,4 @@ bin/fat32.img
 .copilot-artifacts
 AGENTS.md
 CLAUDE.md
+.ai-local
