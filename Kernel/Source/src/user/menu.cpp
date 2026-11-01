@@ -416,7 +416,8 @@ bool menu_mouse_locked(int32_t x, int32_t y, bool down) noexcept {
                                y >= candidate.y && y < candidate.viewBottom;
       if (!insidePopup) continue;
 
-      if (level != static_cast<int32_t>(g_menuDepth)) {
+      const bool popupLevelChanged = level != static_cast<int32_t>(g_menuDepth);
+      if (popupLevelChanged) {
         const OpenMenu old = g_openMenu;
         g_openMenu = candidate;
         g_menuDepth = static_cast<uint32_t>(level);
@@ -429,8 +430,25 @@ bool menu_mouse_locked(int32_t x, int32_t y, bool down) noexcept {
       const bool validRow = row >= 0 && static_cast<uint32_t>(row) < menu->count;
       const int32_t selected = validRow && menu_item_enabled(menu->entries[row]) ? row : -1;
       if (g_openMenu.selected != selected) {
+        const OpenMenu previous = g_openMenu;
         g_openMenu.selected = selected;
-        expose_locked(popup_visible_bounds(g_openMenu));
+        if (popupLevelChanged || previous.firstRow != g_openMenu.firstRow) {
+          expose_locked(popup_visible_bounds(g_openMenu));
+        } else {
+          URect changedRows{};
+          if (previous.selected >= 0) {
+            changedRows = {g_openMenu.x, popup_row_top(previous, previous.selected),
+                           g_openMenu.x + g_openMenu.width,
+                           popup_row_top(previous, previous.selected) + menu_row_height()};
+          }
+          if (selected >= 0) {
+            const URect newRow{g_openMenu.x, popup_row_top(g_openMenu, selected),
+                               g_openMenu.x + g_openMenu.width,
+                               popup_row_top(g_openMenu, selected) + menu_row_height()};
+            changedRows = changedRows.Union(newRow);
+          }
+          if (!changedRows.Empty()) expose_locked(changedRows);
+        }
       }
       if (down) {
         g_menuMouseCapture = true;

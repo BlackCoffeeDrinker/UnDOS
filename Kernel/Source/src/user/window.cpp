@@ -264,6 +264,7 @@ kstd::error_code set_focus_locked(uint32_t hwnd) noexcept {
 void set_active_window_locked(uint32_t hwnd) noexcept {
   auto *next = lookup_locked(hwnd);
   if (hwnd && (!next || !effectively_visible_locked(*next))) return;
+  const bool targetIsRoot = next && !next->parent;
 
   URect targetRect{};
   const uint32_t oldTopRoot = g_top ? root(*g_top)->hwnd : 0;
@@ -276,7 +277,7 @@ void set_active_window_locked(uint32_t hwnd) noexcept {
   const bool topRootChanged = g_top && root(*g_top)->hwnd != oldTopRoot;
 
   if (hwnd == g_activeHwnd) {
-    if (!targetRect.Empty()) expose_locked(targetRect);
+    if (!targetRect.Empty() && (!targetIsRoot || topRootChanged)) expose_locked(targetRect);
     return;
   }
 

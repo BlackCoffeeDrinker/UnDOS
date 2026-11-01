@@ -593,6 +593,82 @@ TEST_CASE("USER menus enforce ownership, attach to windows, and destroy submenu 
   REQUIRE(kernel::user::destroy_menu(*scene.process, processMenu) == KernelError::InvalidHandle);
 }
 
+TEST_CASE("USER menu focus and mouse selection expose only affected regions", "[user][menu]") {
+  Scene scene;
+  KWindowObject *root = nullptr;
+  KWindowObject *child = nullptr;
+  {
+    kernel::user::Guard guard;
+    root = &scene.add({20, 20, 300, 240}, 0,
+                      kernel::user::kStyleVisible | kernel::user::kStyleBorder |
+                          kernel::user::kStyleCaption);
+    child = &scene.add({40, 60, 140, 120}, root->hwnd);
+  }
+
+  const uint32_t menu = TakeExpected(kernel::user::create_menu(*scene.process, false));
+  const uint32_t popup = TakeExpected(kernel::user::create_menu(*scene.process, true));
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, popup, 0, 17, "One"));
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, popup, 0, 18, "Two"));
+  REQUIRE_FALSE(kernel::user::append_menu(*scene.process, menu, kernel::user::kMenuItemPopup,
+                                           popup, "File"));
+  REQUIRE_FALSE(kernel::user::set_menu(*scene.process, root->hwnd, menu));
+
+  {
+    kernel::user::Guard guard;
+    REQUIRE_FALSE(kernel::user::set_focus_locked(child->hwnd));
+    REQUIRE(kernel::user::active_window_locked() == root);
+    const URect clientRect = kernel::user::client_rect_locked(*root);
+
+    (void)scene.add({400, 20, 600, 220});
+    REQUIRE(kernel::user::active_window_locked() == root);
+    REQUIRE(kernel::user::topmost_locked() != child);
+    root->invalid = {};
+    kernel::user::set_active_window_locked(root->hwnd);
+    REQUIRE(kernel::user::topmost_locked() == child);
+    REQUIRE(root->invalid == clientRect);
+
+    root->invalid = {};
+    REQUIRE_FALSE(kernel::user::set_focus_locked(root->hwnd));
+    root->invalid = {};
+    REQUIRE_FALSE(kernel::user::set_focus_locked(child->hwnd));
+    const URect childDamage =
+        screen_to_client_locked(*root, child->rect).Intersect(clientRect);
+    REQUIRE(root->invalid == childDamage);
+
+    root->invalid = {};
+
+    const int32_t menuTop = root->rect.top + kernel::user::kBorderWidth +
+                            kernel::user::caption_height_locked();
+    const int32_t rowHeight = kernel::user::menu_row_height_locked();
+    const UiText popupText = UiText::current();
+    int32_t popupWidth = 48;
+    for (const char *text : {"One", "Two"}) {
+      const int32_t itemWidth = popupText.width(text, strlen(text), false) + 24;
+      if (itemWidth > popupWidth) popupWidth = itemWidth;
+    }
+    const int32_t popupTop = menuTop + rowHeight;
+    const URect expectedPopup = screen_to_client_locked(
+        *root, {root->rect.left + kernel::user::kBorderWidth, popupTop,
+                root->rect.left + kernel::user::kBorderWidth + popupWidth,
+                popupTop + 2 * rowHeight + 4});
+
+    REQUIRE(kernel::user::menu_mouse_locked(root->rect.left + 10, menuTop + rowHeight / 2, true));
+    REQUIRE(kernel::user::menu_mouse_locked(root->rect.left + 10, menuTop + rowHeight / 2, false));
+    REQUIRE(kernel::user::focused_window_locked() == root);
+    REQUIRE(kernel::user::active_window_locked() == root);
+    REQUIRE(root->invalid == expectedPopup);
+
+    root->invalid = {};
+    REQUIRE(kernel::user::menu_mouse_locked(root->rect.left + kernel::user::kBorderWidth + 4,
+                                             popupTop + 2 + rowHeight + rowHeight / 2, false));
+    const URect selectedRows = root->invalid;
+    REQUIRE(selectedRows == URect{expectedPopup.left, expectedPopup.top + 2,
+                                  expectedPopup.right, expectedPopup.top + 2 + 2 * rowHeight});
+    REQUIRE(kernel::user::menu_key_locked(27, false));
+    REQUIRE_FALSE(kernel::user::menu_key_locked(27, false));
+  }
+}
+
 
 TEST_CASE("USER menu font publication reflows geometry atomically and clips oversized popups",
           "[user][menu][font]") {
