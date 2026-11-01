@@ -3,6 +3,7 @@
 
 #include <kernel/__core.hpp>
 #include <kernel/configuration_manager/configuration_value_type.hpp>
+#include <kernel/fwd/KDevicePtr.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/mutex.hpp>
 
@@ -47,12 +48,14 @@ struct KConfigurationRoot : KObjectT<KConfigurationRoot, 1, TYPE_CONFIGROOT_SECT
   };
 
   kstd::static_string<255> filePath;//< The path to the configroot file
-  KObjectPtr<KIOObject> file;     //< If the configroot is currently open, this is its backing file (only valid if references != 0)
-  uint32_t configptr_references = 0;//< Number of KConfigurationKey opened, once it's 0, the configroot is closed
+  KObjectPtr<KIOObject> file;
+  uint32_t configptr_references = 0;
+  KDevicePtr<KDevice> loadedVolume;
+  bool indexLoaded{false};
 
-  Mutex mtx;             //< Lock for reading and writing to the configroot
-  kstd::list<Root> roots;//< List of folders in this configroot, if references != 0, empty otherwise
-  size_t numRoots;
+  Mutex mtx;
+  kstd::list<Root> roots;
+  size_t numRoots{0};
 };
 
 template<>

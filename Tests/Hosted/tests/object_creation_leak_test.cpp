@@ -3,11 +3,17 @@
 #include "stdkrn.hpp"
 
 #include <kernel/configuration_manager.hpp>
+#include <kernel/data_buffer.hpp>
 #include <kernel/kobject/KDirectoryObject.hpp>
 #include <kernel/object_manager.hpp>
+#include <vector.hpp>
 
 #include "object_manager.hpp"
 #include "vmm.hpp"
+
+namespace test_host_vmm {
+void FailNextMalloc() noexcept;
+}
 
 #include "ob_test_support.hpp"
 
@@ -29,6 +35,19 @@ namespace {
 
 struct LeakTestPod {
   uint32_t value{0};
+};
+
+struct DataBufferLifetime {
+  static inline size_t constructors = 0;
+  static inline size_t destructors = 0;
+  static inline size_t liveBytesAtDestruction = 0;
+  kstd::vector<int> values;
+
+  DataBufferLifetime() { ++constructors; values.push_back(17); }
+  ~DataBufferLifetime() {
+    ++destructors;
+    liveBytesAtDestruction = kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(DataBufferLifetime));
+  }
 };
 
 }// namespace
@@ -55,6 +74,45 @@ TEST_CASE("KE_CreateObject frees its memory back to the allocator", "[leak]") {
     REQUIRE(obj);
   }
   REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(LeakTestPod)) == baseline);
+}
+
+TEST_CASE("DataBuffer Create handles allocation failure and destroys moved objects", "[leak][vmm]") {
+  EnsureObjectManagerInitialized();
+  DataBufferLifetime::constructors = 0;
+  DataBufferLifetime::destructors = 0;
+  DataBufferLifetime::liveBytesAtDestruction = 0;
+  const size_t baseline = kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(DataBufferLifetime));
+
+  test_host_vmm::FailNextMalloc();
+  auto failed = kernel::DataBuffer::Create<DataBufferLifetime>();
+  REQUIRE_FALSE(failed);
+  REQUIRE(DataBufferLifetime::constructors == 0);
+  REQUIRE(DataBufferLifetime::destructors == 0);
+
+  {
+    auto first = kernel::DataBuffer::Create<DataBufferLifetime>();
+    REQUIRE(first);
+    auto moved = kstd::move(first);
+    REQUIRE_FALSE(first);
+    moved = nullptr;
+    REQUIRE(DataBufferLifetime::destructors == 1);
+    REQUIRE(DataBufferLifetime::liveBytesAtDestruction > baseline);
+
+    auto replaced = kernel::DataBuffer::Create<DataBufferLifetime>();
+    auto replacement = kernel::DataBuffer::Create<DataBufferLifetime>();
+    REQUIRE(replaced);
+    REQUIRE(replacement);
+    replaced = kstd::move(replacement);
+    REQUIRE_FALSE(replacement);
+    REQUIRE(DataBufferLifetime::destructors == 2);
+    REQUIRE(DataBufferLifetime::liveBytesAtDestruction > baseline);
+    replaced = nullptr;
+    REQUIRE(DataBufferLifetime::destructors == 3);
+  }
+
+  REQUIRE(DataBufferLifetime::constructors == 3);
+  REQUIRE(DataBufferLifetime::destructors == 3);
+  REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(sizeof(DataBufferLifetime)) == baseline);
 }
 
 TEST_CASE("KE_CreateKPtrObject (KObject-derived) frees its memory back to the allocator", "[leak]") {

@@ -25,76 +25,75 @@ struct ConfigurationKeyTag {
 // Used for Key hashing
 using ConfigurationKey = kernel::StaticIdentifier<ConfigurationKeyTag>;
 
-// True once `root` is ready for use: either it already has an open backing
-// file, or it is a volatile (file-less) hive, which is always considered
-// "open" (its `roots` list simply lives in memory for as long as the root
-// object itself does).
-bool IsRootReady(const kernel::KConfigurationRoot &root) { return root.file != nullptr; }
+bool IsRootReady(const kernel::KConfigurationRoot &root) { return root.file != nullptr && root.indexLoaded; }
 
-// Opens `configRoot`'s backing file (unless another key sharing the same
-// root already has) and loads its on-disk index into memory via
-// configuration_manager_io::LoadConfigurationIndex(). The file must already
-// exist and contain a valid hive (correct magic/header and a readable
-// INDEX BLOCK chain): tooling/tests that need a fresh, empty
-// hive to register must build one first with
-// configuration_manager_io::FormatEmptyConfigurationFile().
-kstd::error_code EnsureRootIsOpened(const kernel::KObjectPtr<kernel::KConfigurationRoot> &configRoot) {
+// Caller holds configRoot->mtx.
+kstd::error_code EnsureRootIsOpenedLocked(const kernel::KObjectPtr<kernel::KConfigurationRoot> &configRoot) {
   if (!configRoot) {
     // Key was misconfigured, or the hive is not registered
     KE_Print("ERROR: Configuration root not found");
     return kernel::KernelError::NotFound;
   }
 
-  kstd::unique_lock lock(configRoot->mtx);
-  if (configRoot->file) {
-    // Already opened and indexed by another key sharing the same root
-    return {};
+  if (!configRoot->file) {
+    KE_Print("HIVE Root {} is not opened...", configRoot->name);
+    auto opened = KE_VFS_OpenFile(configRoot->filePath, kernel::KIOObject::OpenMode::ReadWrite);
+    if (!opened) {
+      KE_Print("ERROR: Unable to open configuration {}", configRoot->filePath);
+      return opened.error();
+    }
+    configRoot->file = kstd::move(*opened);
   }
 
-  KE_Print("HIVE Root {} is not opened...", configRoot->name);
-  auto opened = KE_VFS_OpenFile(configRoot->filePath, kernel::KIOObject::OpenMode::ReadWrite);
-  if (!opened) {
-    // Unable to open file
-    KE_Print("ERROR: Unable to open configuration {}", configRoot->filePath);
-    return opened.error();
+  if (!configRoot->file->mountPoint || !configRoot->file->mountPoint->volume) {
+    KE_VFS_CloseFile(kstd::move(configRoot->file));
+    configRoot->file = nullptr;
+    return kernel::KernelError::InvalidState;
   }
-  configRoot->file = kstd::move(*opened);
+  const auto currentVolume = configRoot->file->mountPoint->volume;
+  if (configRoot->indexLoaded && configRoot->loadedVolume.get() == currentVolume.get()) return {};
 
-  if (const auto status = LoadConfigurationIndex(configRoot->file, configRoot->roots, configRoot->numRoots); status) {
-    // Missing/invalid header, or the INDEX BLOCK chain couldn't be read:
-    // the file must exist and already be a valid hive.
+  kstd::list<kernel::KConfigurationRoot::Root> loadedRoots;
+  size_t loadedCount = 0;
+  if (const auto status = LoadConfigurationIndex(configRoot->file, loadedRoots, loadedCount); status) {
     KE_Print("ERROR: Unable to read configuration header {}", configRoot->filePath);
     KE_VFS_CloseFile(kstd::move(configRoot->file));
     configRoot->file = nullptr;
+    configRoot->roots.clear();
+    configRoot->numRoots = 0;
+    configRoot->loadedVolume = nullptr;
+    configRoot->indexLoaded = false;
     return status;
   }
 
+  configRoot->roots = kstd::move(loadedRoots);
+  configRoot->numRoots = loadedCount;
+  configRoot->loadedVolume = currentVolume;
+  configRoot->indexLoaded = true;
   return {};
 }
 
-// Drops one reference on `root`, closing the backing file and releasing the
-// in-memory index once the last reference goes away. Shared by
-// KE_CM_DecrementConfigRootReferenceCount() (releasing a KConfigurationKey's
-// reference) and by KE_CM_OpenKey() (releasing the temporary reference it
-// holds while searching, on a miss).
+ kstd::error_code IncrementConfigRootReferenceLocked(kernel::KConfigurationRoot &root) {
+  if (root.configptr_references == UINT32_MAX) return kernel::KernelError::ResourceLimitExceeded;
+  ++root.configptr_references;
+  return {};
+}
+
+void ReleaseConfigRootReferenceLocked(kernel::KConfigurationRoot &root) {
+  if (root.configptr_references > 1) --root.configptr_references;
+}
+
+kstd::error_code OpenAndReferenceConfigRoot(const kernel::KObjectPtr<kernel::KConfigurationRoot> &root) {
+  if (!root) return kernel::KernelError::NotFound;
+  kstd::unique_lock lock(root->mtx);
+  if (const auto status = EnsureRootIsOpenedLocked(root); status) return status;
+  return IncrementConfigRootReferenceLocked(*root);
+}
+
 void ReleaseConfigRootReference(const kernel::KObjectPtr<kernel::KConfigurationRoot> &root) {
   if (!root) return;
-
-  if (root->configptr_references > 0) {
-    root->configptr_references--;
-  }
-
-  if (root->configptr_references == 0) {
-    // TODO: Save any non commited keys
-
-    if (root->file) {
-      KE_VFS_CloseFile(kstd::move(root->file));
-      root->file = nullptr;
-    }
-
-    root->roots.clear();
-    root->numRoots = 0;
-  }
+  kstd::unique_lock lock(root->mtx);
+  ReleaseConfigRootReferenceLocked(*root);
 }
 
 template<typename T>
@@ -125,10 +124,8 @@ kstd::error_code SetFixedValue(const kernel::KConfigurationKeyPtr &key, kernel::
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_CM_IncrementConfigRootReferenceCount(const kernel::KConfigurationKey *key) noexcept {
   if (!key || !key->configRoot) return kernel::KernelError::InvalidHandle;
-
-  // Increment references on the underlying root object
-  key->configRoot->configptr_references++;
-  return {};
+  kstd::unique_lock lock(key->configRoot->mtx);
+  return IncrementConfigRootReferenceLocked(*key->configRoot);
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_CM_DecrementConfigRootReferenceCount(const kernel::KConfigurationKey *key) noexcept {
@@ -145,7 +142,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
     return kstd::unexpected(kernel::KernelError::NotFound);
   }
 
-  if (const auto status = EnsureRootIsOpened(hiveRoot); status) {
+  if (const auto status = OpenAndReferenceConfigRoot(hiveRoot); status) {
     KE_Print("Hive {} is not opened", rootName);
     return kstd::unexpected(status);
   }
@@ -153,6 +150,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
   auto created = KE_CreateKPtrObject<kernel::KConfigurationKey>();
   if (!created) {
     KE_Print("Failed to create KConfigurationKey for hive {}", rootName);
+    ReleaseConfigRootReference(hiveRoot);
     return kstd::unexpected(created.error());
   }
 
@@ -165,7 +163,12 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
   obj->keyHash = 0;   // The root itself has no path component to hash
   obj->parentHash = 0;// The root itself has no parent
   obj->access = kernel::KConfigurationKeyAccess::Key;
-  KE_CM_IncrementConfigRootReferenceCount(obj.get());
+  if (const auto status = KE_CM_IncrementConfigRootReferenceCount(obj.get()); status) {
+    obj->configRoot = nullptr;
+    ReleaseConfigRootReference(hiveRoot);
+    return kstd::unexpected(status);
+  }
+  ReleaseConfigRootReference(hiveRoot);
   return obj;
 }
 
@@ -189,37 +192,36 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
     root = KE_OB_FindDirectChildOfType<kernel::KConfigurationRoot>(KE_OB_GetConfigDirectory(), subKeyName.substr(0, firstSlash));
   }
 
-  if (const auto status = EnsureRootIsOpened(root); status) {
+  if (const auto status = OpenAndReferenceConfigRoot(root); status) {
     // Cannot open root
-    KE_Print("Hive root {} is not opened for {}", root->name, subKeyName);
+    if (root) KE_Print("Hive root {} is not opened for {}", root->name, subKeyName);
     return kstd::unexpected(status);
   }
-
-  // EnsureRootIsOpened() may have just performed the lazy open above: hold a
-  // temporary reference for the duration of the search so a miss below
-  // releases it again instead of leaking an open file with nothing
-  // referencing it.
-  root->configptr_references++;
 
   kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_code> found = kstd::unexpected(kernel::KernelError::NotFound);
   const uint64_t expectedParentHash = parentKey ? parentKey->keyHash : 0;
 
-  for (const auto &child: root->roots) {
-    if (child.keyHash == realKeyHash && child.parentHash == expectedParentHash) {
-      if (auto created = KE_CreateKPtrObject<kernel::KConfigurationKey>(); created) {
-        // Same ordering requirement as KE_CM_OpenRoot: assign configRoot
-        // first so the reference-count bump below can find it.
-        auto obj = kstd::move(*created);
-        obj->configRoot = root;
-        obj->keyHash = child.keyHash;
-        obj->parentHash = child.parentHash;
-        obj->access = desiredAccess;
-        KE_CM_IncrementConfigRootReferenceCount(obj.get());
-        found = kstd::move(obj);
-      } else {
-        found = kstd::unexpected(created.error());
+  {
+    kstd::unique_lock lock(root->mtx);
+    for (const auto &child: root->roots) {
+      if (child.keyHash == realKeyHash && child.parentHash == expectedParentHash) {
+        if (auto created = KE_CreateKPtrObject<kernel::KConfigurationKey>(); created) {
+          auto obj = kstd::move(*created);
+          obj->configRoot = root;
+          obj->keyHash = child.keyHash;
+          obj->parentHash = child.parentHash;
+          obj->access = desiredAccess;
+          if (const auto status = IncrementConfigRootReferenceLocked(*root); status) {
+            obj->configRoot = nullptr;
+            found = kstd::unexpected(status);
+          } else {
+            found = kstd::move(obj);
+          }
+        } else {
+          found = kstd::unexpected(created.error());
+        }
+        break;
       }
-      break;
     }
   }
 
@@ -250,16 +252,10 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
     root = KE_OB_FindDirectChildOfType<kernel::KConfigurationRoot>(KE_OB_GetConfigDirectory(), subKeyName.substr(0, firstSlash));
   }
 
-  if (const auto status = EnsureRootIsOpened(root); status) {
+  if (const auto status = OpenAndReferenceConfigRoot(root); status) {
     // Cannot open root
     return kstd::unexpected(status);
   }
-
-  // Hold a temporary reference for the duration of this call, mirroring
-  // KE_CM_OpenKey(): EnsureRootIsOpened() may have just performed the lazy
-  // open above, and every path below needs to release this again before
-  // returning.
-  root->configptr_references++;
 
   // Every path below either overwrites this or leaves the explicit failure.
   kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_code> result = kstd::unexpected(kernel::KernelError::Unknown);
@@ -291,8 +287,12 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
         obj->keyHash = realKeyHash;
         obj->parentHash = expectedParentHash;
         obj->access = desiredAccess;
-        KE_CM_IncrementConfigRootReferenceCount(obj.get());
-        result = kstd::move(obj);
+        if (const auto status = IncrementConfigRootReferenceLocked(*root); status) {
+          obj->configRoot = nullptr;
+          result = kstd::unexpected(status);
+        } else {
+          result = kstd::move(obj);
+        }
       } else {
         result = kstd::unexpected(created.error());
       }
@@ -334,8 +334,12 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KConfigurationKeyPtr, kstd::error_co
             obj->keyHash = newEntry.keyHash;
             obj->parentHash = newEntry.parentHash;
             obj->access = desiredAccess;
-            KE_CM_IncrementConfigRootReferenceCount(obj.get());
-            result = kstd::move(obj);
+            if (const auto status = IncrementConfigRootReferenceLocked(*root); status) {
+              obj->configRoot = nullptr;
+              result = kstd::unexpected(status);
+            } else {
+              result = kstd::move(obj);
+            }
           } else {
             result = kstd::unexpected(created.error());
           }
@@ -373,16 +377,10 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_CM_DeleteKey(const kernel::KConfigurati
     root = KE_OB_FindDirectChildOfType<kernel::KConfigurationRoot>(KE_OB_GetConfigDirectory(), subKeyName.substr(0, firstSlash));
   }
 
-  if (const auto status = EnsureRootIsOpened(root); status) {
+  if (const auto status = OpenAndReferenceConfigRoot(root); status) {
     // Cannot open root
     return status;
   }
-
-  // Hold a temporary reference for the duration of this call, mirroring
-  // KE_CM_OpenKey()/KE_CM_CreateKey(): EnsureRootIsOpened() may have just
-  // performed the lazy open above, and every path below needs to release
-  // this again before returning.
-  root->configptr_references++;
 
   kstd::error_code deleteStatus = kernel::KernelError::NotFound;
 
@@ -662,6 +660,7 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KConfigurationRoo
   }
   auto hive = kstd::move(*created);
   hive->filePath = filePath;
+  hive->configptr_references = 1;
 
   if (const auto status = KE_OB_InsertObject(KE_OB_GetConfigDirectory(), hive); status) {
     return kstd::unexpected(status);
@@ -677,55 +676,63 @@ void init() {
   }
 }
 
-kstd::error_code RebindHiveFile(const kstd::string_view &hiveName, const kstd::string_view &newFilePath) {
-  const auto configRoot = KE_OB_FindDirectChildOfType<KConfigurationRoot>(KE_OB_GetConfigDirectory(), hiveName);
-  if (!configRoot) {
-    KE_Print("RebindHiveFile: hive '{}' is not registered", hiveName);
-    return KernelError::NotFound;
-  }
+kstd::error_code PrepareRootVolumeSwitch() {
+  const auto configRoot = KE_OB_FindDirectChildOfType<KConfigurationRoot>(KE_OB_GetConfigDirectory(), "LocalMachine");
+  if (!configRoot) return KernelError::NotFound;
 
   kstd::unique_lock lock(configRoot->mtx);
-
-  // Track whether we already held an open, indexed handle against the old
-  // path. If we did, the in-memory `roots` index is valid for the same
-  // on-disk bytes and must be preserved across the handle swap. If we did
-  // not, leave the file closed after updating `filePath` so the next
-  // EnsureRootIsOpened() performs a normal open+parse (or format) against
-  // the new path - reopening here without parsing would leave `roots` empty
-  // while marking the hive "ready", permanently skipping whatever is already
-  // on disk at `newFilePath`.
-  const bool hadOpenFile = configRoot->file != nullptr;
-
-  if (configRoot->file) {
-    KE_VFS_CloseFile(kstd::move(configRoot->file));
-    configRoot->file = nullptr;
-  }
-
-  configRoot->filePath = newFilePath;
-
-  if (!hadOpenFile) {
-    // Path updated; lazy open+parse on next use.
-    return {};
-  }
-
-  // Same underlying bytes as before, just reached through a different VFS
-  // mount: reopen without re-parsing so `roots` stays intact.
-  auto reopened = KE_VFS_OpenFile(configRoot->filePath,
-                                  KIOObject::OpenMode::ReadWrite |
-                                      KIOObject::OpenMode::Create);
-  if (!reopened) {
-    KE_Print("RebindHiveFile: failed to reopen hive '{}' at '{}'",
-             hiveName, newFilePath);
-    return reopened.error();
-  }
-  configRoot->file = kstd::move(*reopened);
-
+  if (configRoot->configptr_references > 1) return KernelError::ResourceConflict;
+  if (!configRoot->file) return {};
+  if (const auto status = KE_VFS_CloseFile(configRoot->file); status) return status;
+  configRoot->file = nullptr;
   return {};
 }
 
-void PromoteBootHive() {
-  if (RebindHiveFile("LocalMachine", kConfigurationLocalMachine)) {
-    KE_Print("PromoteBootHive: failed to rebind LocalMachine onto the root mount");
+kstd::error_code PromoteBootHive(const KDevicePtr<KDevice> &selectedVolume) {
+  if (!selectedVolume) return KernelError::InvalidArgument;
+  const auto configRoot = KE_OB_FindDirectChildOfType<KConfigurationRoot>(KE_OB_GetConfigDirectory(), "LocalMachine");
+  if (!configRoot) return KernelError::NotFound;
+
+  kstd::unique_lock lock(configRoot->mtx);
+  if (configRoot->configptr_references > 1) return KernelError::ResourceConflict;
+
+  auto opened = KE_VFS_OpenFile(configRoot->filePath, KIOObject::OpenMode::ReadWrite);
+  if (!opened) {
+    if (!configRoot->indexLoaded || configRoot->loadedVolume.get() != selectedVolume.get()) {
+      configRoot->roots.clear();
+      configRoot->numRoots = 0;
+      configRoot->loadedVolume = nullptr;
+      configRoot->indexLoaded = false;
+    }
+    return opened.error();
   }
+  if (!(*opened)->mountPoint || (*opened)->mountPoint->volume.get() != selectedVolume.get()) {
+    KE_VFS_CloseFile(*opened);
+    return KernelError::InvalidState;
+  }
+
+  if (configRoot->indexLoaded && configRoot->loadedVolume.get() == selectedVolume.get()) {
+    configRoot->file = kstd::move(*opened);
+    return {};
+  }
+
+  kstd::list<KConfigurationRoot::Root> loadedRoots;
+  size_t loadedCount = 0;
+  if (const auto status = LoadConfigurationIndex(*opened, loadedRoots, loadedCount); status) {
+    KE_VFS_CloseFile(*opened);
+    configRoot->file = nullptr;
+    configRoot->roots.clear();
+    configRoot->numRoots = 0;
+    configRoot->loadedVolume = nullptr;
+    configRoot->indexLoaded = false;
+    return status;
+  }
+
+  configRoot->file = kstd::move(*opened);
+  configRoot->roots = kstd::move(loadedRoots);
+  configRoot->numRoots = loadedCount;
+  configRoot->loadedVolume = selectedVolume;
+  configRoot->indexLoaded = true;
+  return {};
 }
 }// namespace kernel::configuration_manager

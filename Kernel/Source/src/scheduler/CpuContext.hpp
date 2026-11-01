@@ -1,7 +1,7 @@
 #pragma once
 
 #include <kernel/kobject/KThreadObject.hpp>
-#include <kernel/percpu.hpp>
+#include <percpu.hpp>
 #include <kernel/spinlock.hpp>
 
 #include "ReadyQueue.hpp"

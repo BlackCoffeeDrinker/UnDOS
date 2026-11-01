@@ -1,3 +1,4 @@
+#include "font_storage_test_support.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 // HAL-free window manager helpers from the kernel source tree.
@@ -20,7 +21,7 @@
 #include <kernel/object_manager.hpp>
 #include <undos/syscalls/__enum_WindowLongIndex.h>
 #include <kernel/kobject/KThreadObject.hpp>
-#include <kernel/kobject/FontObject.hpp>
+#include <gfx/font/FontObject.hpp>
 #include "sched_test_hooks.hpp"
 #include "syscalls/syscalls.hpp"
 
@@ -604,10 +605,10 @@ TEST_CASE("USER menu font publication reflows geometry atomically and clips over
   auto &registry = system.faces;
   auto &defaults = system.defaults;
   uint32_t validation = 0;
-  const auto regular = registry.publish(
+  const auto regular = publish_font_resource(registry,
       decode_fixture(font_fixture::SourceSans3_Regular, sizeof(font_fixture::SourceSans3_Regular)),
       validation);
-  const auto bold = registry.publish(
+  const auto bold = publish_font_resource(registry,
       decode_fixture(font_fixture::SourceSans3_Bold, sizeof(font_fixture::SourceSans3_Bold)),
       validation);
   REQUIRE(regular);
@@ -905,10 +906,10 @@ TEST_CASE("USER font publication reflows minimized icons to measured label width
   auto &system = *kernel::font::font_system();
   RestoreDefaultFont restoreDefault{system};
   uint32_t validation = 0;
-  const auto regular = system.faces.publish(
+  const auto regular = publish_font_resource(system.faces,
       decode_fixture(font_fixture::SourceSans3_Regular, sizeof(font_fixture::SourceSans3_Regular)),
       validation);
-  const auto bold = system.faces.publish(
+  const auto bold = publish_font_resource(system.faces,
       decode_fixture(font_fixture::SourceSans3_Bold, sizeof(font_fixture::SourceSans3_Bold)),
       validation);
   PublishedFaces published{system.faces, regular ? *regular : 0, bold ? *bold : 0};
@@ -1924,10 +1925,10 @@ uint32_t ink_in(const uint8_t *pixels, URect area, uint8_t background) {
 
 PublishedFaces publish_source_sans(kernel::font::FontSystem &system) {
   uint32_t validation = 0;
-  const auto regular = system.faces.publish(
+  const auto regular = publish_font_resource(system.faces,
       decode_fixture(font_fixture::SourceSans3_Regular, sizeof(font_fixture::SourceSans3_Regular)),
       validation);
-  const auto bold = system.faces.publish(
+  const auto bold = publish_font_resource(system.faces,
       decode_fixture(font_fixture::SourceSans3_Bold, sizeof(font_fixture::SourceSans3_Bold)),
       validation);
   REQUIRE(regular);

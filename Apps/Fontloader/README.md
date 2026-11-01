@@ -29,6 +29,16 @@ at fixed 96 DPI and invokes Fontloader; the shipped 11-point setting maps to
 Missing, unreadable, or invalid configuration and failed publication stop
 desktop startup with a serial diagnostic.
 
+If a configured regular or bold font file is absent (`NOT_FOUND`), or a kernel
+Begin/Append/Commit upload returns `OUT_OF_MEMORY`, Fontloader closes partial
+uploads and registered faces before reporting its classified exit code. Init
+logs the reason, publishes the existing fixed bitmap default, and continues
+only after publication succeeds. Malformed fonts, other open/read/upload
+errors, failed cleanup, and userland allocation failures remain fatal. Exit
+codes are 0 (success), 1 (fatal), 2 (configured file absent), and 3 (kernel
+upload OOM). This safe fallback does not guarantee desktop readiness at 8 MiB;
+other memory limits remain independent.
+
 `FONTS.INI` uses one `[Fonts]` section and a required `Backend` key. The value
 is `bitmap` or `truetype`. The bitmap backend accepts no face paths or point
 size. The TrueType backend requires one `Regular`, `Bold`, and `SizePt` key.
@@ -96,3 +106,23 @@ fonts in `Tests/Hosted/fixtures/fonts/`. The corpus tests check decoding,
 independent UFT1 validation, glyph counts, weights, and program lengths.
 No third-party font engine is used. Decoder validation alone does not execute
 instructions or render glyphs; separate hosted font tests cover those paths.
+
+### Bounded startup checks
+
+Use the Release image workflow and QEMU wrappers in `Docs/Development.md`.
+Run `Tools/progman-smoke.py` scenarios sequentially because they use writable
+image state. Set `UNDOS_IMAGE_DIR` to each prepared image and use `--vga cirrus`.
+
+- `font-config-bitmap`: image configuration selects the bitmap backend.
+- `font-config-missing-face`: the configured regular path names an absent file.
+- `font-config-missing-bold`: regular names a valid font and bold names an
+  absent file; the check requires regular-face closure before bitmap fallback.
+- `font-config-malformed`: the configured regular file contains invalid font
+  data; the check requires fatal startup and no bitmap fallback.
+- `font-upload-oom-safe`: use the normal TrueType image with
+  `UNDOS_QEMU_MEMORY=8`; the check requires upload OOM, logged bitmap selection,
+  and no null-write panic during the bounded observation. It does not verify
+  the full 8 MiB desktop workload.
+
+Use `UNDOS_QEMU_MEMORY=32` for the other scenarios. A scenario requires its
+stated image input; it does not rewrite the configuration or font files.

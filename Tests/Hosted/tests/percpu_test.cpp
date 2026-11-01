@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include <kernel/percpu.hpp>
+#include <percpu.hpp>
 #include <kernel/spinlock.hpp>
 
 TEST_CASE("SpinLock lock/unlock round-trip", "[spinlock]") {

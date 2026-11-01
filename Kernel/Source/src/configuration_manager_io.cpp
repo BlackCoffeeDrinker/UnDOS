@@ -245,13 +245,20 @@ kstd::error_code LoadConfigurationIndex(const KObjectPtr<KIOObject> &file, kstd:
   KE_Print("HIVE Loading configuration index");
   while (true) {
     KE_Print("HIVE Loading at index {}", indexBlockOffset);
+    ConfigurationIndexBlock indexBlock{};
+    ConfigurationNameBlock nameBlock{};
+    if (const auto status = ReadRawAt(file, indexBlockOffset,
+          kstd::span(reinterpret_cast<uint8_t *>(&indexBlock), sizeof(indexBlock))); status) {
+      return status;
+    }
+    if (const auto status = ReadRawAt(file, PairedNameBlockOffset(static_cast<uint32_t>(indexBlockOffset)),
+          kstd::span(reinterpret_cast<uint8_t *>(&nameBlock), sizeof(nameBlock))); status) {
+      return status;
+    }
+
     for (size_t slot = 0; slot < ENTRIES_PER_INDEX_BLOCK; slot++) {
-      ConfigurationIndexEntry entry{};
+      const auto &entry = indexBlock.entries[slot];
       const uint64_t entryOffset = indexBlockOffset + offsetof(ConfigurationIndexBlock, entries) + slot * sizeof(ConfigurationIndexEntry);
-      const kstd::span entryData(reinterpret_cast<uint8_t *>(&entry), sizeof(ConfigurationIndexEntry));
-      if (const auto status = ReadRawAt(file, entryOffset, entryData); status) {
-        return status;
-      }
 
       if (entry.keyHash == 0) {
         // Empty slot: reserved space not currently in use.
@@ -268,18 +275,17 @@ kstd::error_code LoadConfigurationIndex(const KObjectPtr<KIOObject> &file, kstd:
           .indexEntryOffset = static_cast<uint32_t>(entryOffset),
           .indexBlockOffset = static_cast<uint32_t>(indexBlockOffset),
           .nameEntryIndex = entry.nameEntryIndex};
-      ReadNameEntry(file, static_cast<uint32_t>(indexBlockOffset), entry.nameEntryIndex, entry.keyHash, loadedEntry.name);
+      if (entry.nameEntryIndex != NO_NAME_ENTRY && entry.nameEntryIndex < ENTRIES_PER_NAME_BLOCK) {
+        const auto &nameEntry = nameBlock.entries[entry.nameEntryIndex];
+        if (nameEntry.keyHash == entry.keyHash) {
+          loadedEntry.name = kstd::string_view(nameEntry.name, kstd::char_traits<char>::length(nameEntry.name));
+        }
+      }
       loaded.emplace_back(loadedEntry);
       populatedCount++;
     }
 
-    uint32_t nextBlockOffset = 0;
-    const kstd::span nextBlockOffsetData(reinterpret_cast<uint8_t *>(&nextBlockOffset), sizeof(nextBlockOffset));
-    if (const auto status = ReadRawAt(file, indexBlockOffset + offsetof(ConfigurationIndexBlock, nextBlockOffset), nextBlockOffsetData);
-        status) {
-      return status;
-    }
-
+    const uint32_t nextBlockOffset = indexBlock.nextBlockOffset;
     if (nextBlockOffset == 0) {
       // Last block in the chain.
       break;

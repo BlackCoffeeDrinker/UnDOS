@@ -7,6 +7,7 @@
 #include "display_config.hpp"
 #include "display_probe.hpp"
 #include "font_config.hpp"
+#include "../Fontloader/font_load_result.hpp"
 
 extern "C" const char *init_shared_message();
 
@@ -98,7 +99,12 @@ bool init_fonts() {
   uint32_t exitCode = 0;
   const auto waited = UD_SYS_WaitProcessV1(loader, WaitTimeout_Infinite, &exitCode);
   const auto closed = UD_SYS_CloseV1(loader);
-  if (waited != SyscallReturnCode_OKAY || closed != SyscallReturnCode_OKAY || exitCode) {
+  if (waited != SyscallReturnCode_OKAY || closed != SyscallReturnCode_OKAY ||
+      !fontloader::finish_startup(exitCode, [] {
+        uint32_t generation = 0;
+        return UD_SYS_SetSystemFontV1(FontBackend_BackendBuiltinBitmap, 0, 0, 0,
+                                      &generation) == SyscallReturnCode_OKAY;
+      }, [](const char *message) { (void)UD_SYS_PrintV1(message); })) {
     (void)UD_SYS_PrintV1("init: default font loading failed; desktop not started");
     return false;
   }

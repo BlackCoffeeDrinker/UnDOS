@@ -3,11 +3,47 @@
 #include <expected.hpp>
 #include <kernel/kerror.hpp>
 #include <kernel/mutex.hpp>
-#include <vector.hpp>
+#include <kernel/virtual_memory.hpp>
 
 namespace kernel::font {
 
 class FaceRegistry;
+
+// Contiguous UFT1 storage. Allocation failure leaves an empty owner; moves
+// transfer the exact byte allocation without allocating or copying.
+class FontResourceStorage {
+public:
+  FontResourceStorage() = default;
+  ~FontResourceStorage() { KE_Free(data_); }
+  FontResourceStorage(const FontResourceStorage &) = delete;
+  FontResourceStorage &operator=(const FontResourceStorage &) = delete;
+  FontResourceStorage(FontResourceStorage &&other) noexcept
+      : data_(other.data_), size_(other.size_) {
+    other.data_ = nullptr;
+    other.size_ = 0;
+  }
+  FontResourceStorage &operator=(FontResourceStorage &&other) noexcept {
+    if (this == &other) return *this;
+    KE_Free(data_);
+    data_ = other.data_;
+    size_ = other.size_;
+    other.data_ = nullptr;
+    other.size_ = 0;
+    return *this;
+  }
+  static FontResourceStorage allocate(size_t size) noexcept {
+    FontResourceStorage storage;
+    storage.data_ = static_cast<uint8_t *>(KE_Malloc(size));
+    if (storage.data_) storage.size_ = size;
+    return storage;
+  }
+  uint8_t *data() const noexcept { return data_; }
+  size_t size() const noexcept { return size_; }
+  explicit operator bool() const noexcept { return data_ != nullptr; }
+private:
+  uint8_t *data_{nullptr};
+  size_t size_{0};
+};
 
 constexpr uint32_t MaxRegisteredBytes = 8 * 1024 * 1024;
 constexpr uint32_t MaxProcessBytes = 8 * 1024 * 1024;
@@ -69,7 +105,7 @@ private:
     uint32_t reserved{0};
     bool used{false};
     bool committed{false};
-    kstd::vector<uint8_t> data;
+    FontResourceStorage data;
     ResourceBudget *budget{nullptr};
     FaceRegistry *registry{nullptr};
     uint32_t faceHandle{0};

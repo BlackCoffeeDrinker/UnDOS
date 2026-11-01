@@ -3,6 +3,9 @@
 // The ready-queue policy is HAL-free and lives in the kernel source tree; pull
 // it in directly so it can be exercised in the hosted harness.
 #include "../../../Kernel/Source/src/scheduler/ReadyQueue.hpp"
+#include "../../../Kernel/Source/src/scheduler/KernelStackCleanup.hpp"
+
+#include <vector>
 
 using kernel::KThreadObject;
 using kernel::sched::ReadyQueue;
@@ -165,4 +168,59 @@ TEST_CASE("ReadyQueue blocked thread is not returned once removed", "[scheduler]
 
   REQUIRE(q.pop_next() == &a);
   REQUIRE(q.pop_next() == nullptr);
+}
+
+TEST_CASE("Thread stack cleanup unmaps every page and frees only translated frames", "[scheduler]") {
+  std::vector<uintptr_t> unmapped;
+  std::vector<uintptr_t> freed;
+  void *releasedRegion = nullptr;
+  const auto base = kernel::VirtualAddress(0x4000);
+
+  const auto status = kernel::sched::detail::cleanup_kernel_stack(
+      base, 3, 0x1000,
+      [](kernel::VirtualAddress page) { return page.value == 0x5000 ? kernel::PhysicalAddress(0) : kernel::PhysicalAddress(page.value + 0x100000); },
+      [&](kernel::VirtualAddress page) { unmapped.push_back(page.value); },
+      [&](kernel::PhysicalAddress phys, size_t count) { REQUIRE(count == 1); freed.push_back(phys.value); },
+      [&](void *address) { releasedRegion = address; return kernel::KernelError::Success; });
+
+  REQUIRE(status == kernel::KernelError::Success);
+  REQUIRE((unmapped == std::vector<uintptr_t>{0x4000, 0x5000, 0x6000}));
+  REQUIRE((freed == std::vector<uintptr_t>{0x104000, 0x106000}));
+  REQUIRE(releasedRegion == base.as_ptr());
+}
+
+TEST_CASE("Thread stack cleanup still reports region-release failure after page cleanup", "[scheduler]") {
+  std::vector<uintptr_t> unmapped;
+  std::vector<uintptr_t> freed;
+  const auto status = kernel::sched::detail::cleanup_kernel_stack(
+      kernel::VirtualAddress(0x8000), 2, 0x1000,
+      [](kernel::VirtualAddress page) { return kernel::PhysicalAddress(page.value + 0x200000); },
+      [&](kernel::VirtualAddress page) { unmapped.push_back(page.value); },
+      [&](kernel::PhysicalAddress phys, size_t count) { REQUIRE(count == 1); freed.push_back(phys.value); },
+      [](void *) { return kernel::KernelError::DeviceError; });
+
+  REQUIRE(status == kernel::make_error_code(kernel::KernelError::DeviceError));
+  REQUIRE((unmapped == std::vector<uintptr_t>{0x8000, 0x9000}));
+  REQUIRE((freed == std::vector<uintptr_t>{0x208000, 0x209000}));
+}
+
+TEST_CASE("Thread insertion failure triggers stack cleanup and preserves the insertion error", "[scheduler]") {
+  bool cleaned = false;
+  kstd::error_code cleanupStatus;
+  const auto failure = kernel::sched::detail::insert_or_cleanup(
+      [] { return kernel::make_error_code(kernel::KernelError::ResourceConflict); },
+      [&] {
+        cleaned = true;
+        cleanupStatus = kernel::KernelError::DeviceError;
+      });
+  REQUIRE(failure == kernel::make_error_code(kernel::KernelError::ResourceConflict));
+  REQUIRE(cleaned);
+  REQUIRE(cleanupStatus == kernel::make_error_code(kernel::KernelError::DeviceError));
+
+  cleaned = false;
+  const auto success = kernel::sched::detail::insert_or_cleanup(
+      [] { return kernel::make_error_code(kernel::KernelError::Success); },
+      [&] { cleaned = true; });
+  REQUIRE(success == kernel::make_error_code(kernel::KernelError::Success));
+  REQUIRE_FALSE(cleaned);
 }

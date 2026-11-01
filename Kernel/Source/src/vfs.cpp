@@ -493,7 +493,9 @@ UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kstd::error_code> KE_VFS_SeekFile(
   if (file->ops == &kernel::io::FileOps && file->mountPoint) {
     kstd::unique_lock volumeLock(file->mountPoint->fileMutex);
     if (file->isClosed) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidState); }
-    return file->offset = absolute_offset;
+    file->offset = absolute_offset;
+    if (file->FileSystem()->SeekHandle) file->FileSystem()->SeekHandle(file);
+    return file->offset;
   }
   if (file->isClosed) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidState); }
 

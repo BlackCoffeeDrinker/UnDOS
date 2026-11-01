@@ -1,3 +1,4 @@
+#include "font_storage_test_support.hpp"
 #include "../../../Apps/Fontloader/decoder.hpp"
 #include "font_corpus.hpp"
 #include "gfx/font/face.hpp"
@@ -399,7 +400,7 @@ TEST_CASE("realization preserves fpgm prep and reruns hinted state transitions o
 
   FaceRegistry registry;
   uint32_t validation = 0;
-  auto handle = registry.publish(build({writer, reader, secondWriter, composite},
+  auto handle = publish_font_resource(registry, build({writer, reader, secondWriter, composite},
                                        stateful_font_program(), stateful_prep_program(), {0}, 3, 1, 1),
                                  validation);
   REQUIRE(handle.has_value());
@@ -502,7 +503,7 @@ TEST_CASE("realization shares state across ordered composite components", "[font
 
   FaceRegistry registry;
   uint32_t validation = 0;
-  auto handle = registry.publish(build({writer, reader, composite}, stateful_font_program(),
+  auto handle = publish_font_resource(registry, build({writer, reader, composite}, stateful_font_program(),
                                        stateful_prep_program(), {0}, 3, 1, 1), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
@@ -538,7 +539,7 @@ TEST_CASE("component failures retain per-program fallback and dirty rebuild boun
 
   FaceRegistry registry;
   uint32_t validation = 0;
-  auto handle = registry.publish(build({writer, failing, lastWriter, composite}, stateful_font_program(),
+  auto handle = publish_font_resource(registry, build({writer, failing, lastWriter, composite}, stateful_font_program(),
                                        stateful_prep_program(), {0}, 3, 1, 1), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
@@ -642,7 +643,7 @@ TEST_CASE("simple glyph failure rebuilds before a later realization program", "[
 
   FaceRegistry registry;
   uint32_t validation = 0;
-  auto handle = registry.publish(build({writer, failing, writer}, stateful_font_program(),
+  auto handle = publish_font_resource(registry, build({writer, failing, writer}, stateful_font_program(),
                                        stateful_prep_program(), {0}, 3, 1, 1), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
@@ -688,7 +689,7 @@ TEST_CASE("parent failure restores assembled child output and rebuilds before th
 
   FaceRegistry registry;
   uint32_t validation = 0;
-  auto handle = registry.publish(build({child, failingParent, successfulParent}, stateful_font_program(),
+  auto handle = publish_font_resource(registry, build({child, failingParent, successfulParent}, stateful_font_program(),
                                        stateful_prep_program(), {0}, 3, 1, 1), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
@@ -751,7 +752,7 @@ TEST_CASE("font and prep bytecode errors disable hinting without loader fallback
     FaceRegistry registry;
     uint32_t validation = 0;
     const auto prepProgram = fontProgram.empty() ? prepWriteThenFail : bytecode({0xb1, 1, 77, 0x42});
-    auto handle = registry.publish(build({glyphDef}, fontProgram, prepProgram, {}, 3, 1), validation);
+    auto handle = publish_font_resource(registry, build({glyphDef}, fontProgram, prepProgram, {}, 3, 1), validation);
     REQUIRE(handle.has_value());
     auto face = registry.acquire(*handle);
     REQUIRE(Realization::create(face, 0, HintPolicy::Hinted).error() == kernel::KernelError::InvalidArgument);
@@ -780,7 +781,7 @@ TEST_CASE("raster errors retain completed hinted state without publishing a mask
   large.program = state_writer_program();
   FaceRegistry registry;
   uint32_t validation = 0;
-  auto handle = registry.publish(build({large}, stateful_font_program(),
+  auto handle = publish_font_resource(registry, build({large}, stateful_font_program(),
                                        stateful_prep_program(), {0}, 3, 1, 1), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);

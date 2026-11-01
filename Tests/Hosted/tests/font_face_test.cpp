@@ -1,3 +1,4 @@
+#include "font_storage_test_support.hpp"
 #include "../../../Apps/Fontloader/decoder.hpp"
 #include "font_corpus.hpp"
 #include "gfx/font/default_font.hpp"
@@ -46,7 +47,7 @@ TEST_CASE("intrusive reference releases on last drop", "[font][face]") {
 TEST_CASE("face registry publishes, resolves and closes", "[font][face]") {
   FaceRegistry registry;
   uint32_t validation = 0;
-  auto handle = registry.publish(regular(), validation);
+  auto handle = publish_font_resource(registry, regular(), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
   REQUIRE(face);
@@ -60,13 +61,13 @@ TEST_CASE("face registry publishes, resolves and closes", "[font][face]") {
 
   kstd::vector<uint8_t> junk;
   junk.resize(64);
-  REQUIRE_FALSE(registry.publish(static_cast<kstd::vector<uint8_t> &&>(junk), validation).has_value());
+  REQUIRE_FALSE(publish_font_resource(registry, static_cast<kstd::vector<uint8_t> &&>(junk), validation).has_value());
 }
 
 TEST_CASE("hinted realizations render in forward and reverse order", "[font][face]") {
   FaceRegistry registry;
   uint32_t validation = 0;
-  auto handle = registry.publish(regular(), validation);
+  auto handle = publish_font_resource(registry, regular(), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
   REQUIRE(face);
@@ -108,7 +109,7 @@ TEST_CASE("hinted realizations render in forward and reverse order", "[font][fac
 TEST_CASE("unhinted realizations rerender and returned masks stay alive", "[font][face]") {
   FaceRegistry registry;
   uint32_t validation = 0;
-  auto handle = registry.publish(regular(), validation);
+  auto handle = publish_font_resource(registry, regular(), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
   auto realization = Realization::create(face, 16, HintPolicy::Unhinted);
@@ -143,8 +144,8 @@ TEST_CASE("default font publication is atomic", "[font][face]") {
   FaceRegistry registry;
   DefaultFont defaults(registry);
   uint32_t validation = 0;
-  auto r = registry.publish(regular(), validation);
-  auto b = registry.publish(bold(), validation);
+  auto r = publish_font_resource(registry, regular(), validation);
+  auto b = publish_font_resource(registry, bold(), validation);
   REQUIRE(r.has_value());
   REQUIRE(b.has_value());
 
@@ -176,7 +177,7 @@ TEST_CASE("default font publication is atomic", "[font][face]") {
 TEST_CASE("text layout maps UTF-8 through the cmap and sums advances", "[font][face]") {
   FaceRegistry registry;
   uint32_t validation = 0;
-  auto handle = registry.publish(regular(), validation);
+  auto handle = publish_font_resource(registry, regular(), validation);
   REQUIRE(handle.has_value());
   auto face = registry.acquire(*handle);
   auto realization = Realization::create(face, 16, HintPolicy::Hinted);
@@ -254,8 +255,8 @@ TEST_CASE("chrome text uses pinned masks and falls back to the bitmap font", "[f
   FaceRegistry registry;
   DefaultFont defaults(registry);
   uint32_t validation = 0;
-  auto r = registry.publish(regular(), validation);
-  auto b = registry.publish(bold(), validation);
+  auto r = publish_font_resource(registry, regular(), validation);
+  auto b = publish_font_resource(registry, bold(), validation);
   REQUIRE(r.has_value());
   REQUIRE(b.has_value());
 
@@ -303,8 +304,8 @@ TEST_CASE("menu text derives rows from regular mask ink and paints pinned pixels
   FaceRegistry registry;
   DefaultFont defaults(registry);
   uint32_t validation = 0;
-  const auto regularFace = registry.publish(regular(), validation);
-  const auto boldFace = registry.publish(bold(), validation);
+  const auto regularFace = publish_font_resource(registry, regular(), validation);
+  const auto boldFace = publish_font_resource(registry, bold(), validation);
   REQUIRE(regularFace);
   REQUIRE(boldFace);
 

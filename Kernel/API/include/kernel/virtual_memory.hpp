@@ -110,6 +110,8 @@ UNDOS_KERNEL_PUBLIC_V1API(
 /**
  * @ingroup VMM
  * @brief Method KE_VMM_MapPhysical
+ * @note This implementation supports only the currently active address space;
+ *       other address spaces return Unsupported without mapping.
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(

@@ -6,9 +6,9 @@
 #include "user/bitmap_font.hpp"
 #include "user/user.hpp"
 
-#include <kernel/gfx/raster_helpers.hpp>
+#include <gfx/detail/raster_helpers.hpp>
 #include <expected.hpp>
-#include <kernel/kobject/FontObject.hpp>
+#include <gfx/font/FontObject.hpp>
 #include <kernel/kobject/KVideoPresentValidationToken.hpp>
 #include <undos/font/resource.hpp>
 

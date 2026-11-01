@@ -1,7 +1,7 @@
 #include "../../../Kernel/Drivers/gfx_vga/vga_palette.hpp"
 #include <../../../Kernel/Source/src/user/bitmap_font.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <kernel/gfx/raster_helpers.hpp>
+#include <gfx/detail/raster_helpers.hpp>
 
 namespace {
 struct TextCanvas {

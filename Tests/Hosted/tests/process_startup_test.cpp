@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include <kernel/process_startup.hpp>
+#include <process_startup.hpp>
 
 namespace {
 using namespace kernel::process_startup;

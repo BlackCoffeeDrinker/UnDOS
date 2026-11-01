@@ -1,5 +1,6 @@
+#include "../../../Apps/Fontloader/font_load_result.hpp"
 #include <catch2/catch_test_macros.hpp>
-#include <kernel/process_startup.hpp>
+#include <process_startup.hpp>
 
 #include "../../../Apps/Init/font_config.hpp"
 
@@ -235,4 +236,135 @@ TEST_CASE("Font configuration accepts only positive integer point sizes in range
     INFO(size);
     REQUIRE(rejected_without_mutation(text));
   }
+}
+
+TEST_CASE("Font fallback classifies only file absence and kernel upload OOM", "[font-config][fallback]") {
+  using namespace fontloader;
+  REQUIRE(open_result(SyscallReturnCode_NOT_FOUND) == LoadResult::ConfiguredFontNotFound);
+  REQUIRE(open_result(SyscallReturnCode_OUT_OF_MEMORY) == LoadResult::Fatal);
+  REQUIRE(open_result(SyscallReturnCode_UNKNOWN) == LoadResult::Fatal);
+  REQUIRE(open_result(SyscallReturnCode_INVALID_ARGUMENT) == LoadResult::Fatal);
+  REQUIRE(upload_result(SyscallReturnCode_OUT_OF_MEMORY) == LoadResult::UploadOutOfMemory);
+  REQUIRE(upload_result(SyscallReturnCode_NOT_FOUND) == LoadResult::Fatal);
+  REQUIRE(upload_result(SyscallReturnCode_INVALID_ARGUMENT) == LoadResult::Fatal);
+  REQUIRE(upload_result(SyscallReturnCode_UNKNOWN) == LoadResult::Fatal);
+  REQUIRE_FALSE(fallback_eligible(uint32_t(LoadResult::Fatal)));
+  REQUIRE_FALSE(fallback_eligible(99));
+}
+
+TEST_CASE("Font pair fallback closes regular ownership before bitmap publication", "[font-config][fallback]") {
+  using namespace fontloader;
+  for (auto failure : {LoadResult::ConfiguredFontNotFound, LoadResult::UploadOutOfMemory, LoadResult::Fatal}) {
+    uint32_t regular = 0, bold = 0;
+    std::vector<std::string> events;
+    auto result = load_pair("regular", "bold", regular, bold,
+        [&](const char *path, uint32_t &handle) {
+          events.emplace_back(path);
+          if (std::strcmp(path, "regular") == 0) { handle = 7; return LoadResult::Success; }
+          return failure;
+        }, [&](uint32_t handle) { REQUIRE(handle == 7); events.emplace_back("close regular"); return true; });
+    REQUIRE(result == failure);
+    REQUIRE(events == std::vector<std::string>{"regular", "bold", "close regular"});
+    bool published = false;
+    const bool ready = finish_startup(uint32_t(result), [&] {
+      published = true;
+      events.emplace_back("publish bitmap");
+      return true;
+    }, [&](const char *message) { events.emplace_back(message); });
+    REQUIRE(ready == (failure != LoadResult::Fatal));
+    REQUIRE(published == ready);
+    if (ready) REQUIRE(events.back() == "init: bitmap fallback selected");
+  }
+  uint32_t regular = 0, bold = 0;
+  const auto rollbackFailed = load_pair("regular", "bold", regular, bold,
+      [&](const char *path, uint32_t &handle) {
+        if (std::strcmp(path, "regular") == 0) { handle = 7; return LoadResult::Success; }
+        return LoadResult::ConfiguredFontNotFound;
+      }, [](uint32_t) { return false; });
+  REQUIRE(rollbackFailed == LoadResult::Fatal);
+}
+
+TEST_CASE("Bitmap fallback publication failure blocks startup and never logs success", "[font-config][fallback]") {
+  using namespace fontloader;
+  for (auto result : {LoadResult::ConfiguredFontNotFound, LoadResult::UploadOutOfMemory}) {
+    std::vector<std::string> log;
+    REQUIRE_FALSE(finish_startup(uint32_t(result), [] { return false; },
+        [&](const char *message) { log.emplace_back(message); }));
+    REQUIRE(log.size() == 2);
+    REQUIRE(log.back() == "init: cannot publish fallback bitmap font; desktop not started");
+  }
+  bool published = false;
+  REQUIRE(finish_startup(uint32_t(LoadResult::Success), [&] { published = true; return false; },
+      [](const char *) { FAIL("Successful scalable startup must not log fallback"); }));
+  REQUIRE_FALSE(published);
+}
+
+TEST_CASE("Upload failure cleanup preserves eligible outcomes only after successful rollback", "[font-config][fallback]") {
+  using namespace fontloader;
+  uint8_t bytes[5000]{};
+  for (unsigned failedStage = 0; failedStage < 3; ++failedStage) {
+    for (const auto failure : {SyscallReturnCode_OUT_OF_MEMORY, SyscallReturnCode_UNKNOWN,
+                               SyscallReturnCode_INVALID_ARGUMENT}) {
+      uint32_t face = 0;
+      unsigned closes = 0, appended = 0;
+      const auto result = upload_resource(bytes, sizeof(bytes), face,
+          [&](uint32_t size, uint32_t &upload) {
+            REQUIRE(size == sizeof(bytes)); upload = 5;
+            return failedStage == 0 ? failure : SyscallReturnCode_OKAY;
+          },
+          [&](uint32_t handle, uint32_t offset, const uint8_t *data, uint32_t size) {
+            REQUIRE(handle == 5); REQUIRE(data == bytes + offset);
+            REQUIRE(size <= 4096); ++appended;
+            return failedStage == 1 ? failure : SyscallReturnCode_OKAY;
+          },
+          [&](uint32_t handle, uint32_t &, uint32_t &) {
+            REQUIRE(handle == 5); REQUIRE(appended == 2);
+            return failure;
+          },
+          [&](uint32_t handle) { REQUIRE(handle == 5); ++closes; return SyscallReturnCode_OKAY; },
+          [](const char *, SyscallReturnCode) {});
+      REQUIRE(result == (failure == SyscallReturnCode_OUT_OF_MEMORY ? LoadResult::UploadOutOfMemory : LoadResult::Fatal));
+      REQUIRE(closes == (failedStage == 0 ? 0 : 1));
+    }
+  }
+  for (bool commitFailure : {false, true}) {
+    uint32_t face = 0;
+    const auto result = upload_resource(bytes, sizeof(bytes), face,
+        [](uint32_t, uint32_t &upload) { upload = 5; return SyscallReturnCode_OKAY; },
+        [&](uint32_t, uint32_t, const uint8_t *, uint32_t) {
+          return commitFailure ? SyscallReturnCode_OKAY : SyscallReturnCode_OUT_OF_MEMORY;
+        },
+        [](uint32_t, uint32_t &, uint32_t &) { return SyscallReturnCode_OUT_OF_MEMORY; },
+        [](uint32_t) { return SyscallReturnCode_UNKNOWN; },
+        [](const char *, SyscallReturnCode) {});
+    REQUIRE(result == LoadResult::Fatal);
+  }
+}
+
+TEST_CASE("Upload success transfers its capability and failed commit may already have released it", "[font-config][fallback]") {
+  using namespace fontloader;
+  uint8_t bytes[8]{};
+  for (bool failedCommit : {false, true}) {
+    uint32_t face = 0;
+    unsigned closes = 0;
+    const auto result = upload_resource(bytes, sizeof(bytes), face,
+        [](uint32_t, uint32_t &upload) { upload = 5; return SyscallReturnCode_OKAY; },
+        [](uint32_t, uint32_t, const uint8_t *, uint32_t) { return SyscallReturnCode_OKAY; },
+        [&](uint32_t, uint32_t &output, uint32_t &) {
+          if (failedCommit) return SyscallReturnCode_OUT_OF_MEMORY;
+          output = 6; return SyscallReturnCode_OKAY;
+        },
+        [&](uint32_t handle) { REQUIRE(handle == 5); ++closes; return SyscallReturnCode_INVALID_ARGUMENT; },
+        [](const char *, uint32_t) {});
+    REQUIRE(result == (failedCommit ? LoadResult::UploadOutOfMemory : LoadResult::Success));
+    REQUIRE(closes == (failedCommit ? 1 : 0));
+    REQUIRE(face == (failedCommit ? 0 : 6));
+  }
+  uint32_t regular = 0, bold = 0;
+  unsigned loads = 0;
+  const auto absent = load_pair("regular", "bold", regular, bold,
+      [&](const char *, uint32_t &) { ++loads; return LoadResult::ConfiguredFontNotFound; },
+      [](uint32_t) { FAIL("Missing first font has no registered face to close"); return false; });
+  REQUIRE(absent == LoadResult::ConfiguredFontNotFound);
+  REQUIRE(loads == 1);
 }

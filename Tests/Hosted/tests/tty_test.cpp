@@ -444,6 +444,8 @@ struct MockDeviceExtension {
   size_t rxLen{0};
   char txBuffer[64]{};
   size_t txLen{0};
+  size_t writeLimit{SIZE_MAX};
+  bool writeError{false};
 };
 
 static kstd::error_code MockRead(const kernel::KDevicePtr<kernel::KDevice> &device,
@@ -468,9 +470,11 @@ static kstd::error_code MockWrite(const kernel::KDevicePtr<kernel::KDevice> &dev
   transferred = 0;
   auto *ext = device->deviceExtension.as<MockDeviceExtension>();
   if (!ext) return kernel::KernelError::DeviceError;
+  if (ext->writeError) return kernel::KernelError::DeviceError;
 
   const size_t space = sizeof(ext->txBuffer) - ext->txLen;
-  const size_t toCopy = buffer.size() < space ? buffer.size() : space;
+  size_t toCopy = buffer.size() < space ? buffer.size() : space;
+  if (toCopy > ext->writeLimit) toCopy = ext->writeLimit;
   memcpy(ext->txBuffer + ext->txLen, buffer.data(), toCopy);
   ext->txLen += toCopy;
   transferred = toCopy;
@@ -535,4 +539,75 @@ TEST_CASE("Generic I/O device linking and pumping with KVtty", "[tty][device]") 
   // Detach device
   KE_TTY_DetachDevice(vtty);
   REQUIRE(KE_TTY_GetAttachedDevice(vtty) == nullptr);
+}
+
+TEST_CASE("TTY drain accounts for failed, zero, and partial writes at both pump sites", "[tty][device]") {
+  EnsureObjectManagerInitialized();
+  static uint32_t s_mockDevCounter = 1000;
+  char driverName[32];
+  char devName[32];
+  snprintf(driverName, sizeof(driverName), "MockDrainDriver%u", ++s_mockDevCounter);
+  snprintf(devName, sizeof(devName), "MockDrainDevice%u", s_mockDevCounter);
+  auto driver = kernel::CreateKObject<kernel::KDriverObject>(driverName).value_or(nullptr);
+  REQUIRE(driver);
+  driver->Read = MockRead;
+  driver->Write = MockWrite;
+  auto device = KE_IO_CreateDeviceWithContext<MockDeviceExtension>(
+      driver, devName, kernel::device_type::Serial, CreateDeviceFlags::None).value_or(nullptr);
+  REQUIRE(device);
+  auto *ext = device->deviceExtension.as<MockDeviceExtension>();
+  kernel::tty::VttyPtr vtty(new kernel::tty::KVtty());
+  REQUIRE(vtty);
+  REQUIRE_FALSE(KE_TTY_AttachDevice(vtty, device));
+
+  const auto queueOutput = [&](const char *text, size_t size) {
+    vtty->set_flags(kernel::tty::TTY_CANONICAL);
+    REQUIRE(vtty->sink_write(reinterpret_cast<const uint8_t *>(text), size).value() == size);
+  };
+  const auto queueInput = [&](const char *text, size_t size) {
+    memcpy(ext->rxBuffer, text, size);
+    ext->rxLen = size;
+  };
+  const auto resetWrites = [&] {
+    ext->txLen = 0;
+    ext->writeLimit = SIZE_MAX;
+    ext->writeError = false;
+  };
+
+  queueOutput("E", 1);
+  ext->writeError = true;
+  REQUIRE(KE_TTY_PumpDevice(vtty) == 0);
+  REQUIRE(ext->txLen == 0);
+  REQUIRE_FALSE(vtty->source_has_data());
+
+  queueOutput("Z", 1);
+  resetWrites();
+  ext->writeLimit = 0;
+  REQUIRE(KE_TTY_PumpDevice(vtty) == 0);
+  REQUIRE(ext->txLen == 0);
+
+  queueOutput("PART", 4);
+  resetWrites();
+  ext->writeLimit = 2;
+  REQUIRE(KE_TTY_PumpDevice(vtty) == 2);
+  REQUIRE(ext->txLen == 2);
+  REQUIRE(memcmp(ext->txBuffer, "PA", 2) == 0);
+
+  const auto verifyEchoWrite = [&](bool fail, size_t limit, size_t expectedActivity,
+                                   const char *expectedOutput, size_t expectedLength) {
+    resetWrites();
+    vtty->set_flags(kernel::tty::TTY_ECHO | kernel::tty::TTY_CANONICAL |
+        kernel::tty::TTY_CR_TO_NL | kernel::tty::TTY_NL_TO_CRNL);
+    ext->writeError = fail;
+    ext->writeLimit = limit;
+    queueInput("x\n", 2);
+    REQUIRE(KE_TTY_PumpDevice(vtty) == expectedActivity);
+    REQUIRE(ext->txLen == expectedLength);
+    if (expectedLength) REQUIRE(memcmp(ext->txBuffer, expectedOutput, expectedLength) == 0);
+  };
+  verifyEchoWrite(true, SIZE_MAX, 2, "", 0);
+  verifyEchoWrite(false, 0, 2, "", 0);
+  verifyEchoWrite(false, 1, 3, "x", 1);
+
+  KE_TTY_DetachDevice(vtty);
 }

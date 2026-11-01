@@ -64,7 +64,9 @@ Slab *Allocator::allocate_slab(Cache &cache) noexcept {
 }
 
 void *allocate_large(size_t size) noexcept {
+  if (size > SIZE_MAX - sizeof(LargeAllocHeader)) return nullptr;
   const size_t total = size + sizeof(LargeAllocHeader);
+  const size_t page_count = total / g_page_size + (total % g_page_size != 0);
 
   g_large_alloc_lock.lock();
 
@@ -81,7 +83,7 @@ void *allocate_large(size_t size) noexcept {
 
   auto *header = static_cast<LargeAllocHeader *>(virt_ptr);
   header->magic = kLargeAllocMagic;
-  header->pages = (total + g_page_size - 1) / g_page_size;
+  header->pages = page_count;
 
   g_large_alloc_lock.unlock();
 

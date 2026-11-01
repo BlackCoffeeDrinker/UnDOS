@@ -328,6 +328,12 @@ struct FAT_VFSNode {
   uint32_t startCluster = 0;// 0 => fixed-size FAT12/16 root directory area
   bool isFixedRoot = false;
   FAT_ChainCheckpoint fileChain{};
+  kernel::DataBuffer clusterData;
+  bool clusterCacheValid{false};
+  uint64_t cachedGeneration{0};
+  uint32_t cachedStartCluster{0};
+  uint64_t cachedClusterIndex{0};
+  uint32_t cachedCluster{0};
   FAT_ChainCheckpoint directoryChain{};
   FAT_OrdinalCheckpoint directoryOrdinal{};
   bool directoryEofKnown{false};
@@ -465,6 +471,11 @@ kstd::error_code FAT_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMountO
   return kernel::KernelError::Success;
 }
 
+void FAT_InvalidateClusterCache(const kernel::KObjectPtr<kernel::KIOObject> &file) {
+  if (!file || !file->vfsNode) return;
+  if (auto *node = file->vfsNode->fsPrivate.as<FAT_VFSNode>()) node->clusterCacheValid = false;
+}
+
 kstd::expected<uint64_t, kstd::error_code> FAT_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint, const kernel::KVFSNode &node, uint64_t offset, const kstd::span<uint8_t> &destination) {
   uint64_t actually_read = 0;
 
@@ -502,8 +513,10 @@ kstd::expected<uint64_t, kstd::error_code> FAT_ReadHandle(const kernel::KObjectP
     ++currentIndex;
   }
 
-  const auto clusterBuf = kernel::DataBuffer::Alloc(clusterSize);
-  if (!clusterBuf) return kstd::unexpected(kernel::KernelError::OutOfMemory);
+  if (!fatNode->clusterData) {
+    fatNode->clusterData = kernel::DataBuffer::Alloc(clusterSize);
+    if (!fatNode->clusterData) return kstd::unexpected(kernel::KernelError::OutOfMemory);
+  }
   uint64_t offsetInCluster = offsetInFirstCluster;
   uint32_t lastReadCluster = cluster;
   uint64_t lastReadIndex = currentIndex;
@@ -511,13 +524,27 @@ kstd::expected<uint64_t, kstd::error_code> FAT_ReadHandle(const kernel::KObjectP
   while (actually_read < read_size) {
     if (FAT_IsEndOfChain(vol, cluster)) break;
 
-    size_t transferred = 0;
-    const uint32_t sector = FAT_ClusterToSector(vol, cluster);
-    if (const auto status = KE_IO_ReadDevice(mountPoint->volume, static_cast<uint64_t>(sector) * vol->bytesPerSector,
-                                             kstd::span(clusterBuf.as<uint8_t>(), clusterSize), transferred);
-        status) {
-      if (actually_read == 0) return kstd::unexpected(status);
-      break;// short read; the error resurfaces on the next call
+    const bool cached = fatNode->clusterCacheValid &&
+        fatNode->cachedGeneration == vol->traversalGeneration &&
+        fatNode->cachedStartCluster == fatNode->startCluster &&
+        fatNode->cachedClusterIndex == currentIndex && fatNode->cachedCluster == cluster;
+    size_t transferred = clusterSize;
+    if (!cached) {
+      fatNode->clusterCacheValid = false;
+      const uint32_t sector = FAT_ClusterToSector(vol, cluster);
+      if (const auto status = KE_IO_ReadDevice(mountPoint->volume, static_cast<uint64_t>(sector) * vol->bytesPerSector,
+                                               kstd::span(fatNode->clusterData.as<uint8_t>(), clusterSize), transferred);
+          status) {
+        if (actually_read == 0) return kstd::unexpected(status);
+        break;
+      }
+      if (transferred == clusterSize) {
+        fatNode->clusterCacheValid = true;
+        fatNode->cachedGeneration = vol->traversalGeneration;
+        fatNode->cachedStartCluster = fatNode->startCluster;
+        fatNode->cachedClusterIndex = currentIndex;
+        fatNode->cachedCluster = cluster;
+      }
     }
 
     uint64_t chunk = clusterSize - offsetInCluster;
@@ -529,7 +556,7 @@ kstd::expected<uint64_t, kstd::error_code> FAT_ReadHandle(const kernel::KObjectP
     if (chunk > transferred - offsetInCluster) chunk = transferred - offsetInCluster;
 
     for (uint64_t i = 0; i < chunk; i++) {
-      destination[static_cast<size_t>(actually_read + i)] = clusterBuf.as<uint8_t>()[offsetInCluster + i];
+      destination[static_cast<size_t>(actually_read + i)] = fatNode->clusterData.as<uint8_t>()[offsetInCluster + i];
     }
 
     actually_read += chunk;
@@ -563,6 +590,17 @@ kstd::expected<uint64_t, kstd::error_code> FAT_ReadHandle(const kernel::KObjectP
     fatNode->fileChain.valid = false;
   }
   return actually_read;
+}
+
+void FAT_SeekHandle(const kernel::KObjectPtr<kernel::KIOObject> &file) {
+  FAT_InvalidateClusterCache(file);
+}
+
+void FAT_CloseHandle(const kernel::KObjectPtr<kernel::KIOObject> &file) {
+  FAT_InvalidateClusterCache(file);
+  if (file && file->vfsNode) {
+    if (auto *node = file->vfsNode->fsPrivate.as<FAT_VFSNode>()) node->clusterData = nullptr;
+  }
 }
 
 kstd::error_code FAT_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mountPoint,
@@ -654,6 +692,8 @@ UNDOS_DRIVER_ENTRY {
     (*fs)->Lookup = FAT_Lookup;
     (*fs)->GetRootNode = FAT_GetRootNode;
     (*fs)->CreateHandle = FAT_CreateHandle;
+    (*fs)->CloseHandle = FAT_CloseHandle;
+    (*fs)->SeekHandle = FAT_SeekHandle;
     (*fs)->ReadHandle = FAT_ReadHandle;
     (*fs)->ReadDirectory = FAT_ReadDirectory;
     (*fs)->OperateFile = FAT_OperateFile;

@@ -105,6 +105,25 @@ UNDOS_KERNEL_API_DEF kernel::tty::VttyPtr KE_TTY_GetDeviceVtty(const kernel::KDe
   return nullptr;
 }
 
+namespace {
+size_t DrainSourceToDevice(const kernel::tty::VttyPtr &vtty, const kernel::KDevicePtr<kernel::KDevice> &device) {
+  uint8_t txBuf[128];
+  size_t total = 0;
+  while (vtty->source_has_data()) {
+    const size_t nRead = vtty->source_read(txBuf, sizeof(txBuf));
+    if (nRead == 0) break;
+
+    size_t written = 0;
+    if (const auto status = KE_IO_WriteDevice(device, 0, kstd::span<const uint8_t>(txBuf, nRead), written);
+        status || written == 0) {
+      break;
+    }
+    total += written;
+  }
+  return total;
+}
+}// namespace
+
 UNDOS_KERNEL_API_DEF size_t KE_TTY_PumpDevice(const kernel::tty::VttyPtr &vtty) noexcept {
   if (!vtty) return 0;
   const auto device = KE_TTY_GetAttachedDevice(vtty);
@@ -112,20 +131,7 @@ UNDOS_KERNEL_API_DEF size_t KE_TTY_PumpDevice(const kernel::tty::VttyPtr &vtty) 
 
   size_t totalActivity = 0;
 
-  // 1. Drain source output ring to the device
-  uint8_t txBuf[128];
-  while (vtty->source_has_data()) {
-    constexpr size_t toRead = sizeof(txBuf);
-    const size_t nRead = vtty->source_read(txBuf, toRead);
-    if (nRead == 0) break;
-
-    size_t written = 0;
-    if (const auto status = KE_IO_WriteDevice(device, 0, kstd::span<const uint8_t>(txBuf, nRead), written);
-      status || written == 0) {
-      break;
-    }
-    totalActivity += written;
-  }
+  totalActivity += DrainSourceToDevice(vtty, device);
 
   // 2. Poll device input into source
   uint8_t rxBuf[128];
@@ -136,19 +142,7 @@ UNDOS_KERNEL_API_DEF size_t KE_TTY_PumpDevice(const kernel::tty::VttyPtr &vtty) 
     (void) vtty->source_write(rxBuf, readBytes);
     totalActivity += readBytes;
 
-    // Immediately drain any echo produced by source_write back to the device
-    while (vtty->source_has_data()) {
-      constexpr size_t toRead = sizeof(txBuf);
-      const size_t nRead = vtty->source_read(txBuf, toRead);
-      if (nRead == 0) break;
-
-      size_t written = 0;
-      if (const auto st = KE_IO_WriteDevice(device, 0, kstd::span<const uint8_t>(txBuf, nRead), written);
-          st || written == 0) {
-        break;
-      }
-      totalActivity += written;
-    }
+    totalActivity += DrainSourceToDevice(vtty, device);
   }
 
   return totalActivity;

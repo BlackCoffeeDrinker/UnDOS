@@ -25,10 +25,10 @@ public:
   // Validates the exact bytes that the face then retains. Errors: InvalidResource
   // (validationError receives the undos::font::Error detail), ResourceLimitExceeded
   // (budget) and OutOfMemory.
-  static kstd::expected<Ref<Face>, kstd::error_code> create(kstd::vector<uint8_t> &&bytes, ResourceBudget &budget,
+  static kstd::expected<Ref<Face>, kstd::error_code> create(FontResourceStorage &&bytes, ResourceBudget &budget,
                                                             uint32_t &validationError);
 
-  Face(kstd::vector<uint8_t> &&bytes, ResourceBudget &budget, uint32_t reserved);
+  Face(FontResourceStorage &&bytes, ResourceBudget &budget, uint32_t reserved);
   ~Face();
 
   undos::font::ResourceView view() const { return undos::font::ResourceView({.data = bytes_.data(), .size = bytes_.size()}); }
@@ -43,7 +43,7 @@ public:
 
 private:
   friend class FaceRegistry;
-  kstd::vector<uint8_t> bytes_;
+  FontResourceStorage bytes_;
   ResourceBudget &budget_;
   uint32_t reserved_;
   FaceLimits limits_{};
@@ -67,7 +67,7 @@ public:
 
   // Takes ownership of normalized bytes. Errors are those of Face::create,
   // plus ResourceLimitExceeded when no slot is free.
-  kstd::expected<uint32_t, kstd::error_code> publish(kstd::vector<uint8_t> &&bytes, uint32_t &validationError);
+  kstd::expected<uint32_t, kstd::error_code> publish(FontResourceStorage &&bytes, uint32_t &validationError);
   // Returns an empty reference for a stale, closed or unknown handle.
   Ref<Face> acquire(uint32_t handle);
   // Drops the registry's reference. Holders of other references keep the face.

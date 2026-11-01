@@ -20,10 +20,17 @@ struct DataBuffer {
     return {VirtualAddress::from_ptr(KE_Malloc(size)), size, nullptr};
   }
 
+  template<typename T>
+  static void Destroy(void *ptr) {
+    static_cast<T *>(ptr)->~T();
+  }
+
   template<typename T, typename... Args>
   static DataBuffer Create(Args &&...args) {
     auto ret = Alloc(sizeof(T));
+    if (!ret) return {};
     new (ret.ptr.as_ptr<T>()) T(kstd::forward<Args>(args)...);
+    ret.destroy = Destroy<T>;
     return ret;
   }
 

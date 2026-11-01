@@ -22,6 +22,10 @@
 #include <algorithm>
 #include <vector>
 
+namespace test_host_vmm {
+void FailNextMalloc() noexcept;
+}
+
 namespace {
 
 using DriverEntryFn = void (*)(kernel::KObjectPtr<kernel::KDriverObject> &, const kernel::KConfigurationKeyPtr &);
@@ -734,6 +738,19 @@ TEST_CASE("End-to-end disk_fake -> volmgr -> fs_fat -> VFS mount", "[vfs][fat][i
     REQUIRE((*first)->offset == 1);
     REQUIRE((*second)->offset == 1);
 
+    counted.ResetCounts();
+    REQUIRE(KE_VFS_SeekFile(*first, 0).value() == 0);
+    REQUIRE(*KE_VFS_ReadFile(*first, kstd::span<uint8_t>(&byte, 1)) == 1);
+    REQUIRE(counted.fileReadCalls == 1);
+    REQUIRE(*KE_VFS_ReadFile(*first, kstd::span<uint8_t>(&byte, 1)) == 1);
+    REQUIRE(counted.fileReadCalls == 1);
+    REQUIRE(KE_VFS_SeekFile(*second, 0).value() == 0);
+    REQUIRE(*KE_VFS_ReadFile(*second, kstd::span<uint8_t>(&byte, 1)) == 1);
+    REQUIRE(counted.fileReadCalls == 2);
+    REQUIRE(KE_VFS_SeekFile(*first, 0).value() == 0);
+    REQUIRE(*KE_VFS_ReadFile(*first, kstd::span<uint8_t>(&byte, 1)) == 1);
+    REQUIRE(counted.fileReadCalls == 3);
+
     const uint64_t forwardOffset = clusterBytes * 11 + 19;
     counted.ResetCounts();
     REQUIRE(KE_VFS_SeekFile(*first, forwardOffset).value() == forwardOffset);
@@ -771,6 +788,19 @@ TEST_CASE("End-to-end disk_fake -> volmgr -> fs_fat -> VFS mount", "[vfs][fat][i
     shared = nullptr;
     REQUIRE_FALSE(KE_VFS_CloseFile(*first));
     REQUIRE_FALSE(KE_VFS_CloseFile(*second));
+
+    const auto generationLayout = prepare(TestFatType::Fat16, 1);
+    auto generationFile = KE_VFS_OpenFile("/DATA.BIN", kernel::KIOObject::OpenMode::Read);
+    REQUIRE(generationFile);
+    REQUIRE(*KE_VFS_ReadFile(*generationFile, kstd::span<uint8_t>(&byte, 1)) == 1);
+    REQUIRE(byte == generationLayout.expectedFile[0]);
+    const auto generationMutation = KE_VFS_OperateFile(kernel::VFSFileOperation::CreateDirectory, "/GEN", "");
+    REQUIRE_FALSE(generationMutation);
+    counted.ResetCounts();
+    REQUIRE(*KE_VFS_ReadFile(*generationFile, kstd::span<uint8_t>(&byte, 1)) == 1);
+    REQUIRE(byte == generationLayout.expectedFile[1]);
+    REQUIRE(counted.fileReadCalls == 1);
+    REQUIRE_FALSE(KE_VFS_CloseFile(*generationFile));
 
     const auto retainedCheckpointLayout = prepare(TestFatType::Fat16, 1, false, false);
     auto retainedCheckpointFile = KE_VFS_OpenFile("/DATA.BIN", kernel::KIOObject::OpenMode::Read);
@@ -1243,6 +1273,17 @@ TEST_CASE("End-to-end disk_fake -> volmgr -> fs_fat -> VFS mount", "[vfs][fat][i
     REQUIRE((*file)->offset == dataClusterSize);
     for (size_t i = 0; i < initialData.size(); ++i) REQUIRE(initialData[i] == readFaultLayout.expectedFile[i]);
     REQUIRE_FALSE(KE_VFS_CloseFile(*file));
+
+    auto cacheAllocationFile = KE_VFS_OpenFile("/DATA.BIN", kernel::KIOObject::OpenMode::Read);
+    REQUIRE(cacheAllocationFile);
+    test_host_vmm::FailNextMalloc();
+    auto cacheAllocationFailure = KE_VFS_ReadFile(*cacheAllocationFile, kstd::span<uint8_t>(&byte, 1));
+    REQUIRE_FALSE(cacheAllocationFailure);
+    REQUIRE(cacheAllocationFailure.error() == KernelError::OutOfMemory);
+    REQUIRE((*cacheAllocationFile)->offset == 0);
+    REQUIRE(*KE_VFS_ReadFile(*cacheAllocationFile, kstd::span<uint8_t>(&byte, 1)) == 1);
+    REQUIRE(byte == readFaultLayout.expectedFile[0]);
+    REQUIRE_FALSE(KE_VFS_CloseFile(*cacheAllocationFile));
 
     auto zeroShortFile = KE_VFS_OpenFile("/DATA.BIN", kernel::KIOObject::OpenMode::Read);
     REQUIRE(zeroShortFile);

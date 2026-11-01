@@ -47,6 +47,8 @@ SyscallReturnCode KErrorToSysReturnCode(const kstd::error_code &error) {
 
     case KernelError::Timeout:
       return SyscallReturnCode_TIMEOUT;
+    case KernelError::NotFound:
+      return SyscallReturnCode_NOT_FOUND;
     case KernelError::Retry:
       return SyscallReturnCode_RETRY;
 
@@ -55,7 +57,6 @@ SyscallReturnCode KErrorToSysReturnCode(const kstd::error_code &error) {
     case KernelError::ResourceLimitExceeded:
     case KernelError::QueueFull:
     case KernelError::ResourceConflict:
-    case KernelError::NotFound:
     case KernelError::AlreadyExists:
     case KernelError::AccessDenied:
     case KernelError::NotInitialized:

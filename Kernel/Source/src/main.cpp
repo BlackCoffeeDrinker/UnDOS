@@ -294,6 +294,10 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
 
   if (rootDeviceObject) {
     // Keep the early-boot source mounted until root selection has succeeded.
+    if (const auto status = kernel::configuration_manager::PrepareRootVolumeSwitch(); status) {
+      KE_Print("Failed to prepare configuration hive for root switch: {}", status.message());
+      HAL_PLATFORM_Panic("Cannot switch root while configuration hive is in use\r\n", __FILE__, __LINE__);
+    }
     if (KE_VFS_Unmount("/")) {
       HAL_PLATFORM_Panic("Failed to unmount BootDeviceVolume from root\r\n", __FILE__, __LINE__);
     }
@@ -307,10 +311,14 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
     }
   }
 
-  // The root filesystem is mounted now: rebind LocalMachine from the
-  // early-boot BootDeviceVolume path onto the writable root-mount path so
-  // subsequent registry writes persist through the real disk stack.
-  kernel::configuration_manager::PromoteBootHive();
+  // The root filesystem is mounted now: retain the existing index for the
+  // same device, or load the selected volume's hive before normal startup.
+  if (rootDeviceObject) {
+    if (const auto status = kernel::configuration_manager::PromoteBootHive(rootDeviceObject->device); status) {
+      KE_Print("Failed to promote LocalMachine hive: {}", status.message());
+      HAL_PLATFORM_Panic("Failed to promote configuration hive\r\n", __FILE__, __LINE__);
+    }
+  }
 
   // Now that LocalMachine is rebound onto the writable root mount, load
   // drivers that don't need to be present to mount the root fs (e.g. the

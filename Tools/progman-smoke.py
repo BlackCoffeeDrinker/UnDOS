@@ -14,13 +14,13 @@ import uuid
 
 
 class Monitor:
-    def __init__(self, path, mouse_x=320, mouse_y=240):
+    def __init__(self, path):
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.socket.settimeout(3)
         self.socket.connect(str(path))
         self.stream = self.socket.makefile("rwb")
-        self.mouse_x = mouse_x
-        self.mouse_y = mouse_y
+        self.mouse_x = None
+        self.mouse_y = None
         self.read()
         self.command("qmp_capabilities")
 
@@ -64,7 +64,26 @@ class Monitor:
     def capture(self, path):
         self.command("screendump", {"filename": str(path)})
 
+    def calibrate_mouse(self, screenshot):
+        # The guest initializes its pointer at the active display center.
+        # QMP's PPM geometry reflects that display, not the VGA adapter's maximum.
+        with screenshot.open("rb") as image:
+            tokens = []
+            while len(tokens) < 3:
+                line = image.readline()
+                if not line:
+                    raise RuntimeError("Incomplete QMP screenshot header")
+                tokens.extend(line.split(b"#", 1)[0].split())
+        if tokens[0] != b"P6":
+            raise RuntimeError("QMP screenshot is not a binary PPM")
+        width, height = int(tokens[1]), int(tokens[2])
+        if width <= 0 or height <= 0:
+            raise RuntimeError("Invalid QMP screenshot geometry")
+        self.mouse_x, self.mouse_y = width // 2, height // 2
+
     def move_mouse(self, x, y):
+        if self.mouse_x is None or self.mouse_y is None:
+            raise RuntimeError("Pointer must be calibrated before mouse input")
         self.command("input-send-event", {"events": [
             {"type": "rel", "data": {"axis": "x", "value": x - self.mouse_x}},
             {"type": "rel", "data": {"axis": "y", "value": y - self.mouse_y}},
@@ -120,14 +139,16 @@ def main():
         "launch", "editing", "failure", "windows", "terminal", "terminal-stdio",
         "terminal-close", "multiple", "font", "font-default", "font-text",
         "font-desktop", "menu-font", "font-config", "font-config-missing",
-        "font-config-invalid", "font-config-missing-face", "abi", "sdk", "display"),
+        "font-config-invalid", "font-config-missing-face", "font-config-missing-bold",
+        "font-config-bitmap", "font-config-malformed", "font-upload-oom-safe", "abi", "sdk", "display"),
         default="launch")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     config_scenarios = {
         "font-config", "font-config-missing", "font-config-invalid",
-        "font-config-missing-face",
+        "font-config-missing-face", "font-config-missing-bold", "font-config-bitmap",
+        "font-config-malformed", "font-upload-oom-safe",
     }
     if args.scenario in config_scenarios and not os.environ.get("UNDOS_IMAGE_DIR"):
         parser.error(f"--scenario {args.scenario} requires UNDOS_IMAGE_DIR for an isolated test image")
@@ -158,7 +179,7 @@ def main():
                     raise RuntimeError("QEMU wrapper exited before opening QMP; inspect serial.log")
                 if address.exists():
                     try:
-                        monitor = Monitor(address, 512, 384) if args.vga == "cirrus" else Monitor(address)
+                        monitor = Monitor(address)
                         break
                     except (ConnectionRefusedError, FileNotFoundError):
                         pass
@@ -170,7 +191,8 @@ def main():
             startup_failure_markers = {
                 "font-config-missing": "init: cannot open /System/FONTS.INI",
                 "font-config-invalid": "init: invalid /System/FONTS.INI",
-                "font-config-missing-face": "init: default font loading failed; desktop not started",
+                "font-config-malformed": "init: default font loading failed; desktop not started",
+                "font-upload-oom-safe": "init: bitmap fallback selected",
             }
             startup_failure = args.scenario in startup_failure_markers
             if startup_failure:
@@ -180,21 +202,50 @@ def main():
                     if process.poll() is not None or time.monotonic() >= deadline:
                         raise RuntimeError(f"Expected startup failure was not reported: {marker}")
                     time.sleep(0.02)
-                if args.scenario == "font-config-missing-face":
+                if args.scenario == "font-upload-oom-safe":
+                    if not any("init: bitmap fallback: kernel font upload out of memory" in line for line in lines):
+                        raise RuntimeError("Font upload did not report classified kernel OOM")
+                    if any("PAGE FAULT" in line.upper() or "PANIC" in line.upper() for line in lines):
+                        raise RuntimeError("Kernel panicked during the safe-OOM check")
+                elif args.scenario == "font-config-malformed":
                     if not any("fontloader: start" in line for line in lines):
-                        raise RuntimeError("Font Loader did not start for the valid missing-face configuration")
+                        raise RuntimeError("Font Loader did not start for the malformed-font configuration")
                     if any("fontload: default font set" in line for line in lines):
-                        raise RuntimeError("Font Loader reported success for the missing configured face")
+                        raise RuntimeError("Font Loader reported success for the malformed font")
                 elif any("fontloader: start" in line for line in lines):
                     raise RuntimeError("Font Loader started despite a missing or invalid configuration")
-                if any("progman: session ready" in line for line in lines):
+                if args.scenario != "font-upload-oom-safe" and any("progman: session ready" in line for line in lines):
                     raise RuntimeError("Program Manager started after a font configuration failure")
-                monitor.capture(output / "01-font-config-error.ppm")
+                if args.scenario == "font-upload-oom-safe":
+                    # Readiness is optional: capture any desktop that appears,
+                    # without turning safe OOM into full 8 MiB acceptance.
+                    ready.wait(1)
+                    time.sleep(0.1)
+                    monitor.capture(output / "01-font-upload-oom-safe.ppm")
+                else:
+                    monitor.capture(output / "01-font-config-error.ppm")
             else:
                 if not ready.wait(9):
                     raise RuntimeError("Program Manager did not become ready within 9 seconds")
                 if not any("init: default font ready" in line for line in lines):
                     raise RuntimeError("Desktop started without successful default-font loading")
+                if args.scenario in ("font-config-missing-face", "font-config-missing-bold"):
+                    if not any("init: bitmap fallback: configured font file not found" in line for line in lines):
+                        raise RuntimeError("Missing configured font did not report fallback reason")
+                    if not any("init: bitmap fallback selected" in line for line in lines):
+                        raise RuntimeError("Bitmap fallback was not successfully published")
+                    if any("fontload: default font set" in line for line in lines):
+                        raise RuntimeError("A partial scalable default was published")
+                    if args.scenario == "font-config-missing-bold":
+                        if not any("fontload: regular face registered" in line for line in lines):
+                            raise RuntimeError("Regular face was not uploaded before bold absence")
+                        if not any("fontloader: face closed" in line for line in lines):
+                            raise RuntimeError("Regular face rollback did not complete")
+                if args.scenario == "font-config-bitmap":
+                    if not any("init: default font config backend=bitmap" in line for line in lines):
+                        raise RuntimeError("Explicit bitmap configuration was not selected")
+                    if any("fontloader: start" in line for line in lines):
+                        raise RuntimeError("Bitmap configuration unexpectedly invoked Fontloader")
                 if args.scenario == "font-config":
                     expected = (
                         'init: default font config backend=truetype regular="/System/Fonts/SSB.TTF" '
@@ -207,9 +258,11 @@ def main():
                     monitor.capture(output / "01-font-config-override.ppm")
                 time.sleep(0.2)
                 monitor.capture(output / "01-shell.ppm")
+                monitor.calibrate_mouse(output / "01-shell.ppm")
             if startup_failure:
                 pass
-            elif args.scenario == "font-config":
+            elif args.scenario in ("font-config", "font-config-missing-face",
+                                    "font-config-missing-bold", "font-config-bitmap"):
                 pass
             elif args.scenario == "font-desktop":
                 if not any(
@@ -628,6 +681,12 @@ def main():
             (output / "serial.log").write_text("".join(lines))
         if any("PANIC" in line for line in lines):
             raise RuntimeError("Kernel panic during the bounded run; inspect serial.log")
+        if args.scenario == "font-upload-oom-safe" and any(
+                "PAGE FAULT" in line.upper() or "EXCEPTION" in line.upper() for line in lines):
+            raise RuntimeError("Kernel fault during the bounded safe-OOM run; inspect serial.log")
+        if args.scenario in ("font-config-missing", "font-config-invalid", "font-config-malformed"):
+            if any("progman: session ready" in line or "init: bitmap fallback" in line for line in lines):
+                raise RuntimeError("Fatal font failure started desktop or selected bitmap fallback")
         if any("GUI: GetWndProc failed" in line or "GUI: GetMessage failed" in line for line in lines):
             raise RuntimeError("GUI dispatch failed during the bounded run; inspect serial.log")
         print(f"{args.scenario} checkpoints captured for {args.vga}: {output}")

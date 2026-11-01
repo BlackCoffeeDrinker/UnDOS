@@ -53,6 +53,7 @@ static_assert(sizeof(FatDirEntry) == 32);
 
 struct Volume {
   uint32_t partitionLba = 0;
+  uint64_t partitionSectors = 0;
   uint16_t bytesPerSector = kSectorSize;
   uint8_t sectorsPerCluster = 0;
   uint16_t reservedSectors = 0;
@@ -66,7 +67,7 @@ struct Volume {
 };
 
 inline uint16_t read_le16(const uint8_t *p) {
-  return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+  return static_cast<uint16_t>(static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8));
 }
 
 kstd::error_code read_abs_sectors(uint32_t lba, uint32_t count, kstd::span<uint8_t> buffer) {
@@ -74,8 +75,16 @@ kstd::error_code read_abs_sectors(uint32_t lba, uint32_t count, kstd::span<uint8
 }
 
 kstd::error_code read_part_sectors(const Volume &vol, uint32_t rel_lba, uint32_t count, kstd::span<uint8_t> buffer) {
-  if (rel_lba > UINT32_MAX - vol.partitionLba) return KernelError::ArithmeticOverflow;
-  return read_abs_sectors(vol.partitionLba + rel_lba, count, buffer);
+  if (rel_lba > vol.partitionSectors || count > vol.partitionSectors - rel_lba) return KernelError::OutOfRange;
+  const uint64_t absoluteLba = static_cast<uint64_t>(vol.partitionLba) + rel_lba;
+  if (absoluteLba > UINT32_MAX || (count && static_cast<uint64_t>(count - 1) > UINT32_MAX - absoluteLba)) {
+    return KernelError::ArithmeticOverflow;
+  }
+  return read_abs_sectors(static_cast<uint32_t>(absoluteLba), count, buffer);
+}
+
+char to_upper_ascii(char c) {
+  return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c;
 }
 
 kstd::error_code to_short_name(kstd::string_view name, char out[11]) {
@@ -114,18 +123,10 @@ kstd::error_code to_short_name(kstd::string_view name, char out[11]) {
   const size_t ext_len = ext.size() > 3 ? 3 : ext.size();
 
   for (size_t i = 0; i < base_len; ++i) {
-    char c = base[i];
-    if (c >= 'a' && c <= 'z') {
-      c = static_cast<char>(c - 'a' + 'A');
-    }
-    out[i] = c;
+    out[i] = to_upper_ascii(base[i]);
   }
   for (size_t i = 0; i < ext_len; ++i) {
-    char c = ext[i];
-    if (c >= 'a' && c <= 'z') {
-      c = static_cast<char>(c - 'a' + 'A');
-    }
-    out[8 + i] = c;
+    out[8 + i] = to_upper_ascii(ext[i]);
   }
   return {};
 }
@@ -170,7 +171,10 @@ kstd::error_code open_volume(Volume &vol) {
   if ((parts[0].baseOffsetBytes % kSectorSize) != 0) {
     return KernelError::InvalidAlignment;
   }
-  vol.partitionLba = static_cast<uint32_t>(parts[0].baseOffsetBytes / kSectorSize);
+  const uint64_t partitionLba = parts[0].baseOffsetBytes / kSectorSize;
+  if (partitionLba > UINT32_MAX || parts[0].lengthBytes % kSectorSize != 0) return KernelError::InvalidAlignment;
+  vol.partitionLba = static_cast<uint32_t>(partitionLba);
+  vol.partitionSectors = parts[0].lengthBytes / kSectorSize;
 
   uint8_t bpb_sector[kSectorSize];
   if (const auto error = read_part_sectors(vol, 0, 1, kstd::span<uint8_t>(bpb_sector, kSectorSize));

@@ -44,6 +44,7 @@ struct KFilesystemObject : KObjectT<KFilesystemObject, 1, TYPE_FILE_SYSTEM> {
   // Create a handle for a vnode
   cfunc<kstd::error_code(const KObjectPtr<KVolumeMountObject> &, const KVFSNode &, KIOObject::OpenMode)> CreateHandle;
   cfunc<void(const KObjectPtr<KIOObject> &)> CloseHandle;//< Can be null, in that case the kernel will use the default implementation
+  cfunc<void(const KObjectPtr<KIOObject> &)> SeekHandle;
   // VFS calls this with the mount's fileMutex held. Read out.size bytes at offset into out.
   // Success with 0 bytes means end of file.
   cfunc<kstd::expected<uint64_t, kstd::error_code>(const KObjectPtr<KVolumeMountObject> &, const KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &out)> ReadHandle;

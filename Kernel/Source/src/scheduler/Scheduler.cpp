@@ -4,7 +4,9 @@
 
 #include "../stdkrn.hpp"
 #include "CpuContext.hpp"
+#include "KernelStackCleanup.hpp"
 #include "ReadyQueue.hpp"
+#include <percpu.hpp>
 
 // Page size published by the boot path (see kernel/src/main.cpp).
 extern uint32_t g_page_size;
@@ -19,6 +21,16 @@ void log_cleanup_failure(const char *operation, kstd::error_code status) noexcep
   if (status) {
     KE_Print("{} cleanup failed: {}", operation, status.message());
   }
+}
+
+void free_kernel_stack(VirtualAddress base, const char *operation) noexcept {
+  const auto status = detail::cleanup_kernel_stack(
+      base, sched::KERNEL_STACK_SIZE / g_page_size, g_page_size,
+      [](VirtualAddress page) { return HAL_VMM_GetPhysicalAddress(page); },
+      [](VirtualAddress page) { HAL_VMM_UnmapPage(page); },
+      [](PhysicalAddress phys, size_t count) { HAL_PMM_FreeFrames(phys, count); },
+      [](void *address) { return KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), address); });
+  log_cleanup_failure(operation, status);
 }
 
 // Thread naming counter. Shared by every CPU, so bumped atomically.
@@ -361,16 +373,9 @@ KE_SCHED_CreateThread(cfunc<void(void *)> entry, void *arg, uint8_t priority) no
   t.value()->kernel_stack_esp0 = top;
   t.value()->kernel_stack_top = HAL_CPU_InitThreadContext(top, cfunc<void()>(&sched::thread_trampoline));
 
-  if (const auto status = KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t->get()))) {
-    for (size_t i = 0; i < sched::KERNEL_STACK_SIZE / g_page_size; ++i) {
-      const auto page = base + i * g_page_size;
-      const auto phys = HAL_VMM_GetPhysicalAddress(page);
-      HAL_VMM_UnmapPage(page);
-      if (phys) HAL_PMM_FreeFrames(phys, 1);
-    }
-    sched::log_cleanup_failure("thread stack region release",
-                               KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), base.as_ptr()));
-
+  if (const auto status = sched::detail::insert_or_cleanup(
+          [&] { return KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t->get())); },
+          [&] { sched::free_kernel_stack(base, "thread stack region release"); })) {
     KE_Print("Failed to insert thread object: {}", status.message());
     return kstd::unexpected(status);
   }
@@ -403,16 +408,10 @@ KE_SCHED_CreateUserThread(const vmm::AddressSpace &as, VirtualAddress user_entry
   t.value()->kernel_stack_esp0 = top;
   t.value()->kernel_stack_top = HAL_CPU_InitUserThreadContext(top, user_entry, user_stack_top);
 
-  const auto status = KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t->get()));
+  const auto status = sched::detail::insert_or_cleanup(
+      [&] { return KE_OB_InsertObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t->get())); },
+      [&] { sched::free_kernel_stack(base, "user thread stack region release"); });
   if (status) {
-    for (size_t i = 0; i < sched::KERNEL_STACK_SIZE / g_page_size; ++i) {
-      const auto page = base + i * g_page_size;
-      const auto phys = HAL_VMM_GetPhysicalAddress(page);
-      HAL_VMM_UnmapPage(page);
-      if (phys) HAL_PMM_FreeFrames(phys, 1);
-    }
-    sched::log_cleanup_failure("user thread stack region release",
-                               KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), base.as_ptr()));
     return kstd::unexpected(status);
   }
 

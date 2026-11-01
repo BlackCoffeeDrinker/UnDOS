@@ -1,4 +1,6 @@
 
+#include <atomic>
+
 #include <Kernel.hpp>
 
 #include "pnp_test_hooks.hpp"
@@ -132,27 +134,41 @@ UNDOS_KERNEL_API_DEF kstd::chrono::nanoseconds KE_TIME_GetSystemTime() noexcept 
 
 namespace test_sync {
 namespace {
-size_t spinlocksHeld{};
+std::atomic_size_t spinlocksHeld{};
 }
-size_t held_spinlocks() noexcept { return spinlocksHeld; }
+size_t held_spinlocks() noexcept { return spinlocksHeld.load(std::memory_order_relaxed); }
+}
+
+namespace {
+int to_builtin_memory_order(PlatformMemoryOrder order) noexcept {
+  switch (order) {
+    case PlatformMemoryOrder::Relaxed: return __ATOMIC_RELAXED;
+    case PlatformMemoryOrder::Consume: return __ATOMIC_CONSUME;
+    case PlatformMemoryOrder::Acquire: return __ATOMIC_ACQUIRE;
+    case PlatformMemoryOrder::Release: return __ATOMIC_RELEASE;
+    case PlatformMemoryOrder::AcquireRelease: return __ATOMIC_ACQ_REL;
+    case PlatformMemoryOrder::SequentiallyConsistent: return __ATOMIC_SEQ_CST;
+  }
+  return __ATOMIC_SEQ_CST;
+}
 }
 
 UNDOS_HAL_API_DEF void HAL_ATOMIC_Store32(kernel::VirtualAddress addr, uint32_t value, PlatformMemoryOrder order) noexcept {
-  (void) order;
-  if (*addr.as_ptr<uint32_t>() == 1 && value == 0) --test_sync::spinlocksHeld;
-  *addr.as_ptr<uint32_t>() = value;
+  auto *ptr = addr.as_ptr<uint32_t>();
+  const uint32_t previous = __atomic_load_n(ptr, __ATOMIC_RELAXED);
+  __atomic_store_n(ptr, value, to_builtin_memory_order(order));
+  if (previous == 1 && value == 0) --test_sync::spinlocksHeld;
 }
 
 UNDOS_HAL_API_DEF bool HAL_ATOMIC_CompareExchange32(kernel::VirtualAddress addr, uint32_t &expected_out, uint32_t desired, PlatformMemoryOrder order) noexcept {
-  (void) order;
   auto *ptr = addr.as_ptr<uint32_t>();
-  if (*ptr == expected_out) {
-    if (*ptr == 0 && desired == 1) ++test_sync::spinlocksHeld;
-    *ptr = desired;
-    return true;
-  }
-  expected_out = *ptr;
-  return false;
+  const int successOrder = to_builtin_memory_order(order);
+  const int failureOrder = order == PlatformMemoryOrder::Release || order == PlatformMemoryOrder::AcquireRelease
+      ? __ATOMIC_ACQUIRE : successOrder;
+  const uint32_t previous = expected_out;
+  const bool exchanged = __atomic_compare_exchange_n(ptr, &expected_out, desired, false, successOrder, failureOrder);
+  if (exchanged && previous == 0 && desired == 1) ++test_sync::spinlocksHeld;
+  return exchanged;
 }
 
 // Real hardware IRQ lines/PIC (intr.cpp) are out of scope for hosted tests;

@@ -3,7 +3,7 @@
 #include "stdkrn.hpp"
 #include "vmm.hpp"
 #include <kernel/kobject/KIOObject.hpp>
-#include <kernel/process_startup.hpp>
+#include <process_startup.hpp>
 #include <kernel/tty/tty_device.hpp>
 
 #include <Kernel.hpp>

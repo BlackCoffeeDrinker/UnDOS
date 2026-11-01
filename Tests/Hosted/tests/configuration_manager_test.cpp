@@ -3,10 +3,12 @@
 #include <kernel/vfs.hpp>
 
 #include <kernel/configuration_manager.hpp>
+#include <kernel/kobject/KConfigurationRoot.hpp>
 #include <kernel/io.hpp>
 #include <kernel/object_manager.hpp>
 
 #include "configuration_manager_io.hpp"
+#include "configuration_manager.hpp"
 
 #include "ob_test_support.hpp"
 #include "stdkrn.hpp"
@@ -17,6 +19,9 @@
 #include <static_string.hpp>
 #include <strfmt.hpp>
 #include <cstdio>
+#include <atomic>
+#include <thread>
+#include <vector>
 
 TEST_CASE("CM invalid handles are errors, not enumeration exhaustion", "[cm][kernel-error]") {
   auto key = KE_CM_EnumKey(nullptr, 0);
@@ -38,13 +43,21 @@ TEST_CASE("CM invalid handles are errors, not enumeration exhaustion", "[cm][ker
 //    file (built here through FormatEmptyHiveFile(), which goes through the
 //    same configuration_manager_io::FormatEmptyConfigurationFile() used by
 //    real tooling - it never fails silently by formatting on the fly).
-//  - The KConfigurationRoot::configptr_references bookkeeping that keeps the
-//    backing file open while at least one KConfigurationKeyPtr referencing
-//    the hive is alive, and closes/clears the in-memory index once the last
-//    one goes away.
+//  - The KConfigurationRoot::configptr_references bookkeeping that retains a
+//    permanent hive reference after external key handles are closed.
 //  - KE_CM_OpenKey correctly reporting a miss on a hive with no keys yet.
 
 namespace {
+
+size_t g_testFsReadCalls = 0;
+struct ConfigurationReadFault {
+  bool enabled{false};
+  uint64_t offset{0};
+  size_t requestSize{0};
+  size_t reportedBytes{0};
+  bool failWithError{false};
+};
+ConfigurationReadFault g_configurationReadFault;
 
 kstd::static_string<128> MakeTempImagePath(const char *name) {
   kstd::static_string<128> path;
@@ -66,8 +79,8 @@ kstd::error_code TestFs_GetRootNode(const kernel::KObjectPtr<kernel::KVolumeMoun
   return kernel::KernelError::Success;
 }
 
-kstd::error_code TestFs_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kstd::string_view, kernel::KVFSNode &out) {
-  out.type = kernel::VFSNodeType::File;
+kstd::error_code TestFs_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject> &, const kernel::KVFSNode &, kstd::string_view name, kernel::KVFSNode &out) {
+  out.type = name == "System" || name == "Config" ? kernel::VFSNodeType::Directory : kernel::VFSNodeType::File;
   out.size = 0;
   return kernel::KernelError::Success;
 }
@@ -77,9 +90,18 @@ kstd::error_code TestFs_CreateHandle(const kernel::KObjectPtr<kernel::KVolumeMou
 }
 
 kstd::expected<uint64_t, kstd::error_code> TestFs_ReadHandle(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &, uint64_t offset, const kstd::span<uint8_t> &buffer) {
+  ++g_testFsReadCalls;
+  if (g_configurationReadFault.enabled && offset == g_configurationReadFault.offset &&
+      buffer.size() == g_configurationReadFault.requestSize &&
+      g_configurationReadFault.failWithError)
+    return kstd::unexpected(kernel::KernelError::DeviceError);
   size_t transferred = 0;
   const auto status = KE_IO_ReadDevice(mount->volume, offset, buffer, transferred);
   if (status) return kstd::unexpected(status);
+  if (g_configurationReadFault.enabled && offset == g_configurationReadFault.offset &&
+      buffer.size() == g_configurationReadFault.requestSize &&
+      g_configurationReadFault.reportedBytes < transferred)
+    transferred = g_configurationReadFault.reportedBytes;
   return transferred;
 }
 
@@ -126,6 +148,10 @@ struct TestFsFixture {
   ~TestFsFixture() {
     if (mounted) {
       if (const auto mount = KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(KE_OB_GetVFSDirectory(), "/")) {
+        while (mount->openFiles) {
+          kernel::KObjectPtr<kernel::KIOObject> file(mount->openFiles);
+          if (KE_VFS_CloseFile(file)) break;
+        }
         KE_OB_RemoveObject(KE_OB_GetVFSDirectory(), mount);
       }
     }
@@ -245,7 +271,7 @@ TEST_CASE("KE_CM_RegisterHive registers a new hive under the Hive directory", "[
   REQUIRE(hive != nullptr);
   REQUIRE(KE_OB_FindDirectChildOfType<kernel::KConfigurationRoot>(KE_OB_GetConfigDirectory(), "ConfigTest_Basic").get() == hive.get());
   REQUIRE(kstd::string_view(hive->filePath) == "/ConfigTest_Basic.reg");
-  REQUIRE(hive->configptr_references == 0);
+  REQUIRE(hive->configptr_references == 1);
   REQUIRE(hive->file == nullptr);
 
   REQUIRE_FALSE(KE_OB_RemoveObject(KE_OB_GetConfigDirectory(), hive));
@@ -263,6 +289,45 @@ TEST_CASE("KE_CM_RegisterHive rejects a duplicate hive name", "[cm]") {
   REQUIRE_FALSE(KE_OB_RemoveObject(KE_OB_GetConfigDirectory(), hive));
 }
 
+TEST_CASE("Configuration index failures leave caller outputs unchanged", "[cm][io]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("index_read_failures");
+  REQUIRE(fixture.mounted);
+  const auto hive = KE_CM_RegisterHive("ConfigTest_IndexFailures", "/index-failures.reg").value_or(nullptr);
+  REQUIRE(hive);
+  REQUIRE(FormatEmptyHiveFile(hive));
+  auto file = KE_VFS_OpenFile(hive->filePath, kernel::KIOObject::OpenMode::Read).value_or(nullptr);
+  REQUIRE(file);
+
+  const auto checkFailure = [&](bool failWithError) {
+    kstd::list<kernel::KConfigurationRoot::Root> roots;
+    roots.emplace_back(kernel::KConfigurationRoot::Root{.keyHash = 0xfeed});
+    size_t count = 71;
+    const auto status = kernel::configuration_manager_io::LoadConfigurationIndex(file, roots, count);
+    REQUIRE(status == (failWithError ? kernel::KernelError::DeviceError
+                                     : kernel::KernelError::UnexpectedEndOfFile));
+    REQUIRE(g_testFsReadCalls >= 2);
+    REQUIRE(count == 71);
+    REQUIRE(roots.size() == 1);
+    REQUIRE(roots.front().keyHash == 0xfeed);
+    g_configurationReadFault = {};
+  };
+
+  for (const uint64_t blockOffset : {static_cast<uint64_t>(HEADER_BYTES),
+                                     static_cast<uint64_t>(HEADER_BYTES + INDEX_BLOCK_BYTES)}) {
+    const size_t requestSize = blockOffset == HEADER_BYTES
+        ? INDEX_BLOCK_BYTES : BLOCK_PAIR_BYTES - INDEX_BLOCK_BYTES;
+    g_configurationReadFault = {.enabled = true, .offset = blockOffset,
+        .requestSize = requestSize, .reportedBytes = 1};
+    checkFailure(false);
+    g_configurationReadFault = {.enabled = true, .offset = blockOffset,
+        .requestSize = requestSize, .failWithError = true};
+    checkFailure(true);
+  }
+  REQUIRE_FALSE(KE_VFS_CloseFile(file));
+  REQUIRE_FALSE(KE_OB_RemoveObject(KE_OB_GetConfigDirectory(), hive));
+}
+
 TEST_CASE("KE_CM_OpenRoot opens a hive whose backing file was already formatted empty", "[cm]") {
   EnsureObjectManagerInitialized();
   TestFsFixture fixture("open_root_new");
@@ -272,11 +337,13 @@ TEST_CASE("KE_CM_OpenRoot opens a hive whose backing file was already formatted 
   REQUIRE(hive != nullptr);
   REQUIRE(FormatEmptyHiveFile(hive));
 
+  g_testFsReadCalls = 0;
   const auto key = KE_CM_OpenRoot("ConfigTest_NewHive").value_or(nullptr);
   REQUIRE(key != nullptr);
   REQUIRE(hive->file != nullptr);
   REQUIRE(hive->numRoots == 0);
-  REQUIRE(hive->configptr_references == 1);
+  REQUIRE(hive->configptr_references == 2);
+  REQUIRE(g_testFsReadCalls == 3);
 
   REQUIRE_FALSE(KE_OB_RemoveObject(KE_OB_GetConfigDirectory(), hive));
 }
@@ -318,24 +385,139 @@ TEST_CASE("KConfigurationRoot reference counting keeps the hive open while handl
   {
     const auto key1 = KE_CM_OpenRoot("ConfigTest_RefCount").value_or(nullptr);
     REQUIRE(key1 != nullptr);
-    REQUIRE(hive->configptr_references == 1);
+    REQUIRE(hive->configptr_references == 2);
     REQUIRE(hive->file != nullptr);
 
     {
       const auto key2 = KE_CM_OpenRoot("ConfigTest_RefCount").value_or(nullptr);
       REQUIRE(key2 != nullptr);
-      REQUIRE(hive->configptr_references == 2);
+      REQUIRE(hive->configptr_references == 3);
     }
 
     // key2 went out of scope: only key1's reference remains, file stays open.
-    REQUIRE(hive->configptr_references == 1);
+    REQUIRE(hive->configptr_references == 2);
     REQUIRE(hive->file != nullptr);
   }
 
-  // key1 went out of scope too: the last reference is gone, so the backing
-  // file must be closed and the in-memory index released.
-  REQUIRE(hive->configptr_references == 0);
+  // Key handles have released their references; the permanent hive reference
+  // keeps the loaded index resident until an explicit root-volume switch.
+  REQUIRE(hive->configptr_references == 1);
+  REQUIRE(hive->file != nullptr);
+  REQUIRE(hive->indexLoaded);
+
+  REQUIRE_FALSE(KE_OB_RemoveObject(KE_OB_GetConfigDirectory(), hive));
+}
+
+TEST_CASE("Configuration root reference increments and decrements serialize concurrent callers", "[cm][concurrency]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture fixture("concurrent_references");
+  REQUIRE(fixture.mounted);
+  const auto hive = KE_CM_RegisterHive("ConfigTest_ConcurrentReferences", "/concurrent.reg").value_or(nullptr);
+  REQUIRE(hive);
+  REQUIRE(FormatEmptyHiveFile(hive));
+  auto root = KE_CM_OpenRoot("ConfigTest_ConcurrentReferences").value_or(nullptr);
+  REQUIRE(root);
+  REQUIRE(hive->configptr_references == 2);
+
+  std::atomic<bool> failed{false};
+  std::vector<std::thread> workers;
+  for (size_t worker = 0; worker < 4; ++worker) {
+    workers.emplace_back([&] {
+      for (size_t i = 0; i < 250; ++i) {
+        if (KE_CM_IncrementConfigRootReferenceCount(root.get())) {
+          failed.store(true, std::memory_order_relaxed);
+          return;
+        }
+        if (KE_CM_DecrementConfigRootReferenceCount(root.get())) {
+          failed.store(true, std::memory_order_relaxed);
+          return;
+        }
+      }
+    });
+  }
+  for (auto &worker: workers) worker.join();
+  REQUIRE_FALSE(failed.load(std::memory_order_relaxed));
+  REQUIRE(hive->configptr_references == 2);
+  root = nullptr;
+  REQUIRE(hive->configptr_references == 1);
+  REQUIRE(hive->indexLoaded);
+  REQUIRE_FALSE(KE_OB_RemoveObject(KE_OB_GetConfigDirectory(), hive));
+}
+
+TEST_CASE("LocalMachine retains its index for the same volume and reloads after a volume switch", "[cm]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture early("cm_switch_early");
+  REQUIRE(early.mounted);
+
+  const auto hive = KE_CM_RegisterHive("LocalMachine", "/System/Config/MACHI").value_or(nullptr);
+  REQUIRE(hive);
+  REQUIRE(FormatEmptyHiveFile(hive));
+  {
+    const auto key = KE_CM_OpenRoot("LocalMachine").value_or(nullptr);
+    REQUIRE(key);
+    REQUIRE(hive->loadedVolume.get() == early.volume.get());
+    REQUIRE(kernel::configuration_manager::PrepareRootVolumeSwitch() == kernel::KernelError::ResourceConflict);
+  }
+
+  REQUIRE(hive->configptr_references == 1);
+  REQUIRE_FALSE(kernel::configuration_manager::PrepareRootVolumeSwitch());
+  g_testFsReadCalls = 0;
+  REQUIRE_FALSE(kernel::configuration_manager::PromoteBootHive(early.volume));
+  REQUIRE(g_testFsReadCalls == 0);
+  REQUIRE(hive->indexLoaded);
+
+  REQUIRE_FALSE(kernel::configuration_manager::PrepareRootVolumeSwitch());
+  REQUIRE_FALSE(KE_VFS_Unmount("/"));
+  early.mounted = false;
+
+  TestFsFixture selected("cm_switch_selected");
+  REQUIRE(selected.mounted);
+  REQUIRE(FormatEmptyHiveFile(hive));
+  g_testFsReadCalls = 0;
+  REQUIRE_FALSE(kernel::configuration_manager::PromoteBootHive(selected.volume));
+  REQUIRE(g_testFsReadCalls == 3);
+  REQUIRE(hive->loadedVolume.get() == selected.volume.get());
+  REQUIRE(hive->indexLoaded);
+  REQUIRE(hive->configptr_references == 1);
+
+  REQUIRE_FALSE(KE_VFS_CloseFile(hive->file));
+  hive->file = nullptr;
+  REQUIRE_FALSE(KE_OB_RemoveObject(KE_OB_GetConfigDirectory(), hive));
+}
+
+TEST_CASE("Failed hive reload clears stale entries and leaves the hive unavailable", "[cm][volume-switch]") {
+  EnsureObjectManagerInitialized();
+  TestFsFixture early("cm_failed_switch_early");
+  REQUIRE(early.mounted);
+  const auto hive = KE_CM_RegisterHive("LocalMachine", "/System/Config/MACHI").value_or(nullptr);
+  REQUIRE(hive);
+  REQUIRE(FormatEmptyHiveFile(hive));
+  REQUIRE(KE_CM_OpenRoot("LocalMachine"));
+  const uint8_t staleValue = 0x5a;
+  SeedRootValueEntry(hive, kernel::ConfigurationValueType::Boolean,
+                     kstd::span<const uint8_t>(&staleValue, 1));
+  REQUIRE(hive->roots.size() == 1);
+
+  REQUIRE_FALSE(kernel::configuration_manager::PrepareRootVolumeSwitch());
+  REQUIRE_FALSE(KE_VFS_Unmount("/"));
+  early.mounted = false;
+  TestFsFixture selected("cm_failed_switch_selected");
+  REQUIRE(selected.mounted);
+  auto corrupt = KE_VFS_OpenFile(hive->filePath, kernel::KIOObject::OpenMode::ReadWrite).value_or(nullptr);
+  REQUIRE(corrupt);
+  const uint8_t badHeader[4] = {'N', 'O', 'P', 'E'};
+  REQUIRE(KE_VFS_SeekFile(corrupt, 0));
+  REQUIRE(KE_VFS_WriteFile(corrupt, kstd::span<const uint8_t>(badHeader, sizeof(badHeader))));
+  REQUIRE_FALSE(KE_VFS_CloseFile(corrupt));
+
+  REQUIRE(kernel::configuration_manager::PromoteBootHive(selected.volume) == kernel::KernelError::InvalidFormat);
+  REQUIRE_FALSE(hive->indexLoaded);
   REQUIRE(hive->file == nullptr);
+  REQUIRE(hive->roots.empty());
+  REQUIRE(hive->numRoots == 0);
+  REQUIRE(KE_CM_OpenRoot("LocalMachine").error() == kernel::KernelError::InvalidFormat);
+  REQUIRE_FALSE(hive->indexLoaded);
+  REQUIRE(hive->roots.empty());
 
   REQUIRE_FALSE(KE_OB_RemoveObject(KE_OB_GetConfigDirectory(), hive));
 }
@@ -814,9 +996,9 @@ TEST_CASE("KE_CM_DeleteKey persists the deletion across a hive reopen", "[cm]") 
     REQUIRE_FALSE(KE_CM_DeleteKey(root, "DeleteMe"));
     REQUIRE(hive->numRoots == 1);
   }
-  // Last reference dropped: the hive's in-memory index is cleared and its
-  // file closed, forcing the next open to re-parse from disk.
-  REQUIRE(hive->numRoots == 0);
+  // The permanent hive reference keeps the loaded index resident between
+  // external key handles.
+  REQUIRE(hive->numRoots == 1);
 
   const auto reopenedRoot = KE_CM_OpenRoot("ConfigTest_DeleteKeyReopen").value_or(nullptr);
   REQUIRE(reopenedRoot != nullptr);

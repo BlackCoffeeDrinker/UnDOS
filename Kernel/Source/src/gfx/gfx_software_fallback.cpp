@@ -1,7 +1,7 @@
 
 #include "stdkrn.hpp"
 #include "../user/bitmap_font.hpp"
-#include <kernel/gfx/raster_helpers.hpp>
+#include <gfx/detail/raster_helpers.hpp>
 
 namespace {
 size_t BytesPerPixel(kernel::PixelFormat format) {

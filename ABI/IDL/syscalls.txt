@@ -22,6 +22,8 @@ enum SyscallReturnCode {
     UNSUPPORTED = 0xFFFFFFFA,
     TIMEOUT = 0xFFFFFFF9,
     RETRY = 0xFFFFFFF8,
+    /** The requested object or file does not exist. */
+    NOT_FOUND = 0xFFFFFFF7,
 
 };
 

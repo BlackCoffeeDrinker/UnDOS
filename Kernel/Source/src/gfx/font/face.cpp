@@ -13,7 +13,7 @@ constexpr uint32_t GlyphProgramSizeAt = 56;
 constexpr uint32_t LimitWords = sizeof(FaceLimits) / sizeof(uint32_t);
 } // namespace
 
-kstd::expected<Ref<Face>, kstd::error_code> Face::create(kstd::vector<uint8_t> &&bytes, ResourceBudget &budget,
+kstd::expected<Ref<Face>, kstd::error_code> Face::create(FontResourceStorage &&bytes, ResourceBudget &budget,
                                                          uint32_t &validationError) {
   validationError = static_cast<uint32_t>(undos::font::Error::None);
   const auto size = to_u32(bytes.size());
@@ -21,7 +21,7 @@ kstd::expected<Ref<Face>, kstd::error_code> Face::create(kstd::vector<uint8_t> &
   validationError = static_cast<uint32_t>(error);
   if (error != undos::font::Error::None) return kstd::unexpected(KernelError::InvalidResource);
   if (const kstd::error_code reserved = budget.reserve(size); reserved) return kstd::unexpected(reserved);
-  auto face = make_ref<Face>(static_cast<kstd::vector<uint8_t> &&>(bytes), budget, size);
+  auto face = make_ref<Face>(static_cast<FontResourceStorage &&>(bytes), budget, size);
   if (!face) {
     budget.release(size);
     return kstd::unexpected(KernelError::OutOfMemory);
@@ -29,8 +29,8 @@ kstd::expected<Ref<Face>, kstd::error_code> Face::create(kstd::vector<uint8_t> &
   return face;
 }
 
-Face::Face(kstd::vector<uint8_t> &&bytes, ResourceBudget &budget, uint32_t reserved)
-    : bytes_(static_cast<kstd::vector<uint8_t> &&>(bytes)), budget_(budget), reserved_(reserved) {
+Face::Face(FontResourceStorage &&bytes, ResourceBudget &budget, uint32_t reserved)
+    : bytes_(static_cast<FontResourceStorage &&>(bytes)), budget_(budget), reserved_(reserved) {
   const auto resource = view();
   glyphCount_ = read_u32(resource.bytes().data + GlyphCountAt);
   unitsPerEm_ = read_u32(resource.bytes().data + UnitsPerEmAt);
@@ -77,9 +77,9 @@ FaceRegistry::Slot *FaceRegistry::lookup(uint32_t handle) {
   return slot.face && slot.generation == generation ? &slot : nullptr;
 }
 
-kstd::expected<uint32_t, kstd::error_code> FaceRegistry::publish(kstd::vector<uint8_t> &&bytes,
+kstd::expected<uint32_t, kstd::error_code> FaceRegistry::publish(FontResourceStorage &&bytes,
                                                                  uint32_t &validationError) {
-  auto face = Face::create(static_cast<kstd::vector<uint8_t> &&>(bytes), budget_, validationError);
+  auto face = Face::create(static_cast<FontResourceStorage &&>(bytes), budget_, validationError);
   if (!face) return kstd::unexpected(face.error());
   kstd::unique_lock lock(mutex_);
   for (uint32_t index = 0; index < Slots; ++index) {

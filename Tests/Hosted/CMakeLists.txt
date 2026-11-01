@@ -11,6 +11,7 @@ if (NOT TARGET Catch2::Catch2WithMain)
     CPMAddPackage("gh:catchorg/Catch2@3.15.1")
 endif ()
 enable_testing()
+find_package(Threads REQUIRED)
 
 include(${Catch2_SOURCE_DIR}/extras/Catch.cmake)
 

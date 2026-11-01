@@ -41,12 +41,12 @@ kstd::expected<uint32_t, kstd::error_code> ResourceTable::begin(ResourceBudget &
     if (slot.used || !slot.generation) continue;
     if (const kstd::error_code reserved = budget.reserve(size); reserved)
       return kstd::unexpected(reserved);
-    slot.data.resize(size);
-    if (slot.data.size() != size || !slot.data.data()) {
-      slot.data = kstd::vector<uint8_t>();
+    auto storage = FontResourceStorage::allocate(size);
+    if (!storage) {
       budget.release(size);
       return kstd::unexpected(KernelError::OutOfMemory);
     }
+    slot.data = static_cast<FontResourceStorage &&>(storage);
     slot.used = true;
     slot.committed = false;
     slot.written = 0;
@@ -65,7 +65,7 @@ kstd::error_code ResourceTable::append(uint32_t handle, uint32_t offset, const u
   if (!slot) return KernelError::InvalidHandle;
   if (slot->committed) return KernelError::InvalidState;
   if (offset != slot->written || size > slot->data.size() - slot->written) return KernelError::InvalidOffset;
-  for (size_t i = 0; i < size; ++i) slot->data[offset + i] = data[i];
+  for (size_t i = 0; i < size; ++i) slot->data.data()[offset + i] = data[i];
   slot->written += static_cast<uint32_t>(size);
   return {};
 }
@@ -82,7 +82,7 @@ kstd::expected<uint32_t, kstd::error_code> ResourceTable::commit(uint32_t handle
     release(*slot);
     return kstd::unexpected(KernelError::ResourceLimitExceeded);
   }
-  const auto published = registry.publish(static_cast<kstd::vector<uint8_t> &&>(slot->data), validationError);
+  const auto published = registry.publish(static_cast<FontResourceStorage &&>(slot->data), validationError);
   if (!published) {
     release(*slot);
     return kstd::unexpected(published.error());
@@ -105,7 +105,7 @@ uint32_t ResourceTable::registry_handle(uint32_t handle) {
 
 void ResourceTable::release(Slot &slot) {
   const uint32_t size = slot.reserved;
-  slot.data = kstd::vector<uint8_t>();
+  slot.data = FontResourceStorage();
   if (slot.budget) slot.budget->release(size);
   slot.budget = nullptr;
   if (slot.registry) (void) slot.registry->close(slot.faceHandle);

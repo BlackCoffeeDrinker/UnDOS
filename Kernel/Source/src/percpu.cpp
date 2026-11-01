@@ -1,5 +1,5 @@
 #include <kernel/hal_interface.hpp>
-#include <kernel/percpu.hpp>
+#include <percpu.hpp>
 
 namespace kernel::cpu {
 

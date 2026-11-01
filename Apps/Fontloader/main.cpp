@@ -1,4 +1,5 @@
 #include "decoder.hpp"
+#include "font_load_result.hpp"
 #include <undoscrt/heap.h>
 #include <undoscrt/process.h>
 #include <undoscrt/stdio.h>
@@ -14,7 +15,7 @@ void lifecycle(const char *message) {
 
 [[noreturn]] void allocation_failure() {
   lifecycle("fontloader: allocation failed\n");
-  crt_exit(1);
+  crt_exit(static_cast<int>(fontloader::LoadResult::Fatal));
 }
 }
 
@@ -31,14 +32,16 @@ void operator delete(void *p, size_t) noexcept { crt_free(p); }
 void operator delete[](void *p, size_t) noexcept { crt_free(p); }
 
 namespace {
-bool load_face(const char *path, uint32_t &face) {
+fontloader::LoadResult load_face(const char *path, uint32_t &face) {
+  using fontloader::LoadResult;
   using namespace undos::font;
   HANDLE fileHandle = 0;
   const auto opened = UD_SYS_OpenV1(path, FileOpenMode_Read, &fileHandle);
   if (opened != SyscallReturnCode_OKAY) {
-    crt_printf("fontloader: open failed, status %u\n", opened);
+    crt_printf("fontloader: open %s failed, status %u\n", path, opened);
+    (void)UD_SYS_PrintV1(path);
     lifecycle("fontloader: file open failed\n");
-    return false;
+    return fontloader::open_result(opened);
   }
   kstd::vector<uint8_t> file;
   uint8_t chunk[4096];
@@ -47,15 +50,21 @@ bool load_face(const char *path, uint32_t &face) {
     const auto status = UD_SYS_ReadV1(fileHandle, chunk, &count);
     if (status != SyscallReturnCode_OKAY || count > sizeof(chunk) ||
         count > MaxFileBytes - file.size()) {
-      (void)UD_SYS_CloseV1(fileHandle);
+      const auto closed = UD_SYS_CloseV1(fileHandle);
+      if (closed != SyscallReturnCode_OKAY) lifecycle("fontloader: source file close failed\n");
       crt_printf("fontloader: read failed or file exceeds 4 MiB, status %u\n", status);
       lifecycle("fontloader: read/size rejected\n");
-      return false;
+      return LoadResult::Fatal;
     }
     if (!count) break;
     for (uint32_t i = 0; i < count; ++i) file.push_back(chunk[i]);
   }
-  (void)UD_SYS_CloseV1(fileHandle);
+  const auto sourceClosed = UD_SYS_CloseV1(fileHandle);
+  if (sourceClosed != SyscallReturnCode_OKAY) {
+    crt_printf("fontloader: source file close failed, status %u\n", sourceClosed);
+    lifecycle("fontloader: source file close failed\n");
+    return LoadResult::Fatal;
+  }
   lifecycle("fontloader: file read\n");
   kstd::vector<uint8_t> resource;
   const auto decoded = loader::decode({.data = file.data(), .size = file.size()}, resource);
@@ -63,45 +72,40 @@ bool load_face(const char *path, uint32_t &face) {
     crt_printf("fontloader: decode failed: %s\n", loader::error_message(decoded));
     (void)UD_SYS_PrintV1(loader::error_message(decoded));
     lifecycle("fontloader: decode rejected\n");
-    return false;
+    return LoadResult::Fatal;
   }
   const auto validation = validate({.data = resource.data(), .size = resource.size()});
   if (validation != Error::None) {
     crt_printf("fontloader: normalized validation failed: %s\n", error_message(validation));
     lifecycle("fontloader: normalized resource rejected\n");
-    return false;
+    return LoadResult::Fatal;
   }
   lifecycle("fontloader: decoded and structurally validated (no execution)\n");
-  uint32_t upload = 0;
-  auto status = UD_SYS_BeginFontUploadV1(uint32_t(resource.size()), &upload);
-  if (status != SyscallReturnCode_OKAY) {
-    crt_printf("fontloader: begin upload failed, status %u\n", status);
-    lifecycle("fontloader: begin upload failed\n");
-    return false;
-  }
-  lifecycle("fontloader: upload begun\n");
-  for (uint32_t offset = 0; offset < resource.size();) {
-    const uint32_t remaining = uint32_t(resource.size()) - offset;
-    const uint32_t size = remaining > sizeof(chunk) ? sizeof(chunk) : remaining;
-    status = UD_SYS_AppendFontUploadV1(upload, offset, resource.data() + offset, size);
-    if (status != SyscallReturnCode_OKAY) {
-      (void)UD_SYS_CloseFontResourceV1(upload);
-      crt_printf("fontloader: append at %u failed, status %u\n", offset, status);
-      lifecycle("fontloader: upload aborted\n");
-      return false;
-    }
-    offset += size;
-  }
-  uint32_t validationError = 0;
-  status = UD_SYS_CommitFontUploadV1(upload, &face, &validationError);
-  if (status != SyscallReturnCode_OKAY) {
-    // Failed structural commits may already have destroyed the staging handle.
-    (void)UD_SYS_CloseFontResourceV1(upload);
-    crt_printf("fontloader: commit failed, status %u, validation %u\n", status, validationError);
-    lifecycle("fontloader: commit rejected\n");
-    return false;
-  }
-  return true;
+  const auto uploaded = fontloader::upload_resource(resource.data(), uint32_t(resource.size()), face,
+      [](uint32_t size, uint32_t &upload) {
+        const auto status = UD_SYS_BeginFontUploadV1(size, &upload);
+        if (status == SyscallReturnCode_OKAY) lifecycle("fontloader: upload begun\n");
+        return status;
+      },
+      [](uint32_t upload, uint32_t offset, const uint8_t *data, uint32_t size) {
+        const auto status = UD_SYS_AppendFontUploadV1(upload, offset, data, size);
+        if (status != SyscallReturnCode_OKAY)
+          crt_printf("fontloader: append at %u failed, status %u\n", offset, status);
+        return status;
+      },
+      [](uint32_t upload, uint32_t &result, uint32_t &validationError) {
+        const auto status = UD_SYS_CommitFontUploadV1(upload, &result, &validationError);
+        if (status != SyscallReturnCode_OKAY)
+          crt_printf("fontloader: commit failed, status %u, validation %u\n", status, validationError);
+        return status;
+      },
+      [](uint32_t upload) { return UD_SYS_CloseFontResourceV1(upload); },
+      [](const char *message, uint32_t status) {
+        crt_printf("%s, status %u\n", message, status);
+        lifecycle(message);
+      });
+  if (uploaded == LoadResult::Success) lifecycle("fontload: face committed\n");
+  return uploaded;
 }
 
 bool parse_ppem(const char *text, uint32_t &ppem) {
@@ -116,7 +120,10 @@ bool parse_ppem(const char *text, uint32_t &ppem) {
 
 bool close_face(uint32_t face) {
   const auto status = UD_SYS_CloseFontResourceV1(face);
-  if (status == SyscallReturnCode_OKAY) return true;
+  if (status == SyscallReturnCode_OKAY) {
+    lifecycle("fontloader: face closed\n");
+    return true;
+  }
   crt_printf("fontloader: face close failed, status %u\n", status);
   lifecycle("fontloader: face close failed\n");
   return false;
@@ -297,19 +304,23 @@ extern "C" int main(int argc, char **argv) {
       return 1;
     }
   }
-  uint32_t face = 0;
-  if (!load_face(regularPath, face)) return 1;
+  uint32_t face = 0, bold = 0;
+  const auto loaded = setDefault
+      ? fontloader::load_pair(regularPath, boldPath, face, bold,
+          [&](const char *path, uint32_t &result) {
+            const auto loadedFace = load_face(path, result);
+            if (loadedFace == fontloader::LoadResult::Success)
+              lifecycle(path == regularPath ? "fontload: regular face registered\n"
+                                            : "fontload: bold face registered\n");
+            return loadedFace;
+          }, close_face)
+      : load_face(regularPath, face);
+  if (loaded != fontloader::LoadResult::Success) return static_cast<int>(loaded);
   if (!setDefault) {
     lifecycle("fontload: registered (rendering unavailable)\n");
     if (!close_face(face)) return 1;
     lifecycle("fontload: private face closed\n");
     return 0;
-  }
-  lifecycle("fontload: regular face registered\n");
-  uint32_t bold = 0;
-  if (!load_face(boldPath, bold)) {
-    (void)close_face(face);
-    return 1;
   }
   uint32_t generation = 0;
   const auto status = UD_SYS_SetSystemFontV1(FontBackend_BackendTrueType, face, bold,

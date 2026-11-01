@@ -47,7 +47,8 @@ provides implicitly convertible values for the kernel error category.
 Normal EOF, optional absence,
 and predicates are not failures. Domain validation belongs in the subsystem;
 the dispatcher owns user-memory and wire-format validation. The public syscall
-enum and wire layouts remain unchanged.
+enum includes `NOT_FOUND` (`0xFFFFFFF7`) for `KernelError::NotFound`.
+Other enum values and syscall wire layouts remain unchanged.
 
 ## Module-provided syscalls
 

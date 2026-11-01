@@ -20,9 +20,12 @@ Normal startup uses `init.elf` as a small supervisor for
 `/System/FONTS.INI` and publishes the selected system-font backend. The shipped
 file selects `/System/Fonts/SSR.TTF` and `/System/Fonts/SSB.TTF` at 11 pt,
 which converts to 15 ppem at 96 DPI. A `Backend=bitmap` setting selects the
-built-in bitmap face without loading external files. Missing, unreadable, or
-invalid configuration and failed publication stop desktop startup with an
-explicit serial diagnostic. The shell loads
+built-in bitmap face without loading external files. If a configured regular
+or bold font file is absent, or a kernel font upload runs out of memory, init
+logs the reason and explicitly publishes the built-in bitmap default. Startup
+continues only after bitmap publication succeeds. Malformed fonts, missing or
+invalid configuration, I/O errors, failed cleanup, and failed publication remain
+fatal and stop desktop startup with a serial diagnostic. The shell loads
 `/System/PROGMAN.INI` and opens native program-group windows. This is a native
 ELF shell, not Windows binary compatibility. The `demo.elf` notes/argument
 exerciser and windowed `term.elf` are included in the initial disk image.
@@ -264,10 +267,23 @@ as `SSR.TTF`, `SSB.TTF` and `OFLSS.TXT` under `/System/Fonts`.
 
 Use `python3 Tools/progman-smoke.py --output build/font-default --scenario
 font-desktop` to capture the default 11-pt startup with Program Manager and
-File Manager. The `font-config`, `font-config-missing`,
-`font-config-invalid`, and `font-config-missing-face` scenarios require a
-separate test image selected with `UNDOS_IMAGE_DIR`; they verify the effective
-configuration and fail-fast startup paths.
+File Manager. The following configuration scenarios require a separate test
+image selected with `UNDOS_IMAGE_DIR` and prepared for the stated condition:
+
+- `font-config` verifies an overridden TrueType configuration;
+  `font-config-bitmap` verifies explicit bitmap startup.
+- `font-config-missing-face` and `font-config-missing-bold` verify logged bitmap
+  fallback for an absent regular or bold file. Missing bold also requires
+  closure of the already uploaded regular face.
+- `font-upload-oom-safe` uses the normal TrueType image with
+  `UNDOS_QEMU_MEMORY=8` to verify safe kernel upload OOM and logged bitmap
+  selection. It does not establish full 8 MiB desktop workload readiness.
+- `font-config-missing` and `font-config-invalid` verify fatal configuration
+  failures. `font-config-malformed` verifies that malformed font data remains
+  fatal rather than selecting bitmap fallback.
+
+Use `UNDOS_QEMU_MEMORY=32` for the other scenarios. Run scenarios sequentially;
+they share writable image state.
 
 Menu bars, popup rows, captions, and minimized-window labels use the published
 font's measured ink and metrics. Font publication prepares geometry before

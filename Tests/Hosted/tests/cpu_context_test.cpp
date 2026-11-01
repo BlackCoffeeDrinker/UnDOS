@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <percpu.hpp>
 
 // CpuContext is kernel-private (it embeds the ready queue), so pull it in
 // directly the way scheduler_test.cpp pulls in ReadyQueue.

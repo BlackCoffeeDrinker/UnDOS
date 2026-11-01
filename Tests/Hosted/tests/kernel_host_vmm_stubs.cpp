@@ -22,6 +22,8 @@ constexpr size_t kFakeRamSize = 32u * 1024 * 1024;// 32MB fake RAM
 uint8_t *g_fake_ram = nullptr;
 uintptr_t g_next_physical = 0x1000;// arbitrary, never dereferenced
 std::unordered_map<uintptr_t, kernel::PhysicalAddress> g_page_table;
+size_t g_map_calls = 0;
+bool g_fail_next_map = false;
 
 uint8_t *FakeRamBase() {
   if (!g_fake_ram) {
@@ -48,6 +50,12 @@ kernel::VirtualAddress HAL_TEST_GetFakeRamBase() noexcept {
 
 size_t HAL_TEST_GetFakeRamSize() noexcept {
   return kFakeRamSize;
+}
+
+namespace test_host_vmm {
+void ResetMapCalls() noexcept { g_map_calls = 0; }
+size_t MapCalls() noexcept { return g_map_calls; }
+void FailNextMap() noexcept { g_fail_next_map = true; }
 }
 
 UNDOS_HAL_API_DEF void HAL_VMM_FinalizeInit() noexcept {}
@@ -77,7 +85,9 @@ UNDOS_HAL_API_DEF void HAL_PMM_ReserveRegion(kernel::PhysicalAddress base, size_
 }
 
 UNDOS_HAL_API_DEF bool HAL_VMM_MapPage(kernel::VirtualAddress virt, kernel::PhysicalAddress phys, kernel::vmm::ProtectFlags flags) noexcept {
+  ++g_map_calls;
   (void) flags;
+  if (g_fail_next_map) { g_fail_next_map = false; return false; }
   g_page_table[virt.value] = phys;
   return true;
 }

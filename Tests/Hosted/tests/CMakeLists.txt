@@ -60,6 +60,7 @@ add_executable(KernelTests
         volume_manager_test.cpp
         root_volume_selector_test.cpp
         fat_short_name_test.cpp
+        mini_fat16_test.cpp
         scheduler_test.cpp
         cpu_context_test.cpp
         wait_test.cpp
@@ -104,6 +105,7 @@ add_executable(KernelTests
         kernel_host_vmm_stubs.cpp
         ../../../Kernel/Source/src/object_manager.cpp
         ../../../Kernel/Source/src/initial/root_volume_selector.cpp
+        ../../../Kernel/Source/src/initial/mini_fat16.cpp
         ../../../Kernel/Source/src/kerror.cpp
         ../../../Kernel/Source/src/syscalls/KErrorToSysReturnCode.cpp
         ../../../Kernel/Source/src/io.cpp
@@ -158,6 +160,7 @@ add_executable(KernelTests
 )
 
 target_include_directories(KernelTests PRIVATE ../../../Kernel/Source/src ../../../Kernel/Drivers/disk_fake
+        ../../../Kernel/Drivers/volmgr
         "${CMAKE_CURRENT_BINARY_DIR}"
         "${UNDOS_SYSCALL_GENERATED_DIR}/kernel" "${UNDOS_SYSCALL_KERNEL_DIR}"
         ../../../Apps/Fontloader
@@ -212,9 +215,10 @@ set_target_properties(fake_volmgr_driver PROPERTIES CXX_VISIBILITY_PRESET defaul
 
 target_compile_definitions(KernelTests PRIVATE
         UNDOS_TOPOLOGY_TEST_HOOKS
+        UNDOS_KE_MALLOC_TEST_HOOKS
         FS_FAT_DRIVER_PATH="$<TARGET_FILE:fake_fs_fat_driver>"
         VOLMGR_DRIVER_PATH="$<TARGET_FILE:fake_volmgr_driver>")
-target_link_libraries(KernelTests PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(KernelTests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
 add_dependencies(KernelTests fake_fs_fat_driver fake_volmgr_driver)
 
 catch_discover_tests(KernelTests)

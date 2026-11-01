@@ -15,6 +15,13 @@ constexpr size_t g_cache_sizes[] = {16, 32, 64, 128, 256, 512, 1024, 2048};
 
 kernel::vmm::AddressSpace g_kernel_address_space{};
 kstd::array<kernel::memory::Cache, 8> g_malloc_caches;
+#if defined(UNDOS_KE_MALLOC_TEST_HOOKS)
+bool g_fail_next_malloc_for_test = false;
+bool g_fail_next_backing_remove_for_test = false;
+#endif
+kstd::expected<void *, kstd::error_code> allocate_user_backed_region(
+    kernel::vmm::AddressSpace &as, size_t size, const char *name,
+    kernel::vmm::ProtectFlags flags, const char *operation) noexcept;
 }// namespace
 
 namespace kernel::vmm {
@@ -236,6 +243,12 @@ UNDOS_KERNEL_API_DEF void *KE_Malloc(size_t size) noexcept {
   if (size == 0) [[unlikely]] {
     return nullptr;
   }
+#if defined(UNDOS_KE_MALLOC_TEST_HOOKS)
+  if (g_fail_next_malloc_for_test) {
+    g_fail_next_malloc_for_test = false;
+    return nullptr;
+  }
+#endif
 
   for (auto &g_malloc_cache: g_malloc_caches) {
     if (size <= g_malloc_cache.object_size()) {
@@ -259,6 +272,13 @@ UNDOS_KERNEL_API_DEF void *KE_Malloc(size_t size) noexcept {
   KE_Print("ALLOC FAILED: {}", size);
   return nullptr;
 }
+
+#if defined(UNDOS_KE_MALLOC_TEST_HOOKS)
+namespace test_host_vmm {
+void FailNextMalloc() noexcept { g_fail_next_malloc_for_test = true; }
+void FailNextBackingRemoval() noexcept { g_fail_next_backing_remove_for_test = true; }
+}
+#endif
 
 namespace kernel::vmm {
 size_t debug_slab_cache_allocated_bytes(size_t size) noexcept {
@@ -370,6 +390,33 @@ create_anonymous_backing(size_t size, const char *prefix) noexcept {
   if (status) return kstd::unexpected(status);
   return *backing;
 }
+
+kstd::expected<void *, kstd::error_code> allocate_user_backed_region(
+    kernel::vmm::AddressSpace &as, size_t size, const char *name,
+    kernel::vmm::ProtectFlags flags, const char *operation) noexcept {
+  const auto backing = create_anonymous_backing(size, name);
+  if (!backing) return kstd::unexpected(backing.error());
+
+  auto vad = KE_VMM_MapBackingObject(as, *backing, size, flags);
+  if (!vad) {
+#if defined(UNDOS_KE_MALLOC_TEST_HOOKS)
+    kstd::error_code cleanupStatus;
+    if (g_fail_next_backing_remove_for_test) {
+      g_fail_next_backing_remove_for_test = false;
+      cleanupStatus = kernel::KernelError::IoError;
+    } else {
+      cleanupStatus = KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing);
+    }
+#else
+    const auto cleanupStatus = KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing);
+#endif
+    if (cleanupStatus) {
+      KE_Print("{}: failed to remove backing object: {}", operation, cleanupStatus.message());
+    }
+    return kstd::unexpected(vad.error());
+  }
+  return (*vad)->start.as_ptr();
+}
 }// namespace
 
 UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KMemoryBackingObject>, kstd::error_code>
@@ -390,41 +437,15 @@ KE_VMM_CreateDirectBacking(kernel::VirtualAddress directAddress, size_t size) no
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<void *, kstd::error_code> KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept {
-  // Demand-paged: reserve the VAD (backed by a fresh Anonymous
-  // BackingObject) without eagerly allocating/mapping any physical frames.
-  // The pages are populated lazily by KE_VMM_HandlePagefault on first touch.
-  const auto backing = create_anonymous_backing(size, "UserData");
-  if (!backing) return kstd::unexpected(backing.error());
-
-  auto vad = KE_VMM_MapBackingObject(as, *backing, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE | kernel::vmm::ProtectFlags::USER);
-  if (!vad) {
-    const auto cleanupStatus = KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing);
-    if (cleanupStatus) {
-      KE_Print("KE_VMM_AllocateUserData: failed to remove backing object: {}",
-               cleanupStatus.message());
-    }
-    return kstd::unexpected(vad.error());
-  }
-  return (*vad)->start.as_ptr();
+  return allocate_user_backed_region(as, size, "UserData",
+      kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE | kernel::vmm::ProtectFlags::USER,
+      "KE_VMM_AllocateUserData");
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<void *, kstd::error_code> KE_VMM_AllocateUserProcess(kernel::vmm::AddressSpace &as, size_t size) noexcept {
-  // Demand-paged: reserve the VAD (backed by a fresh Anonymous
-  // BackingObject) without eagerly allocating/mapping any physical frames.
-  // The pages are populated lazily by KE_VMM_HandlePagefault on first touch.
-  const auto backing = create_anonymous_backing(size, "UserProcess");
-  if (!backing) return kstd::unexpected(backing.error());
-
-  auto vad = KE_VMM_MapBackingObject(as, *backing, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE | kernel::vmm::ProtectFlags::USER);
-  if (!vad) {
-    const auto cleanupStatus = KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing);
-    if (cleanupStatus) {
-      KE_Print("KE_VMM_AllocateUserProcess: failed to remove backing object: {}",
-               cleanupStatus.message());
-    }
-    return kstd::unexpected(vad.error());
-  }
-  return (*vad)->start.as_ptr();
+  return allocate_user_backed_region(as, size, "UserProcess",
+      kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE | kernel::vmm::ProtectFlags::USER,
+      "KE_VMM_AllocateUserProcess");
 }
 
 UNDOS_KERNEL_API_DEF kernel::vmm::AddressSpace &KE_VMM_GetKernelAddressSpace() noexcept {
@@ -432,8 +453,8 @@ UNDOS_KERNEL_API_DEF kernel::vmm::AddressSpace &KE_VMM_GetKernelAddressSpace() n
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_VMM_MapPhysical(kernel::vmm::AddressSpace &as, kernel::VirtualAddress virt, kernel::PhysicalAddress phys, kernel::vmm::ProtectFlags flags) noexcept {
-  (void) as;// TODO: Use the address space's translation root if not current
   if (!virt || !phys) return kernel::KernelError::InvalidAddress;
+  if (as.translation_root != HAL_VMM_GetCurrentTranslationRoot()) return kernel::KernelError::Unsupported;
   return HAL_VMM_MapPage(virt, phys, flags) ? kernel::KernelError::Success : kernel::KernelError::DeviceError;
 }
 

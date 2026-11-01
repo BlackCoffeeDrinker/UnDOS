@@ -1,3 +1,8 @@
+#include "../../../Apps/Fontloader/font_load_result.hpp"
+#include "gfx/font/default_font.hpp"
+#include "syscalls/KErrorToSysReturnCode.hpp"
+#include "ob_test_support.hpp"
+#include "vmm.hpp"
 #include "gfx/font/face.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <kernel/gfx/KFontResourceTable.hpp>
@@ -177,6 +182,7 @@ namespace {
 // Adapts the expected-returning upload API to the status/out-parameter shape
 // these tests assert on; failed calls report handle 0.
 kstd::error_code BeginUpload(kernel::font::ResourceTable &table, kernel::font::ResourceBudget &budget, uint32_t size, uint32_t &handle) {
+  EnsureObjectManagerInitialized();
   const auto result = table.begin(budget, size);
   handle = result ? *result : 0;
   return result ? kernel::KernelError::Success : result.error();
@@ -246,6 +252,7 @@ TEST_CASE("Invalid font commits discard staging without publishing", "[font][upl
   REQUIRE(CommitUpload(table, upload, face, error) == kernel::KernelError::InvalidResource);
   REQUIRE(face == 0);
   REQUIRE(error == static_cast<uint32_t>(Error::InvalidHeader));
+  REQUIRE(table.bytes() == 0);
   REQUIRE(table.close(upload) == kernel::KernelError::InvalidHandle);
   REQUIRE(budget.used() == 0);
 }
@@ -303,4 +310,165 @@ TEST_CASE("Font uploads enforce the syscall boundary without partial writes", "[
   REQUIRE(table.bytes() == 0);
   REQUIRE(budget.used() == 0);
   REQUIRE(table.close(face) == kernel::KernelError::InvalidHandle);
+}
+
+namespace test_host_vmm {
+void FailNextMalloc() noexcept;
+}
+
+TEST_CASE("Font staging OOM rolls back without publishing or advancing a slot", "[font][upload][oom]") {
+  EnsureObjectManagerInitialized();
+  using namespace kernel::font;
+  ResourceBudget budget;
+  ResourceTable table;
+  constexpr uint32_t largeSize = 708992;
+  const auto retained = table.begin(budget, PayloadStart);
+  REQUIRE(retained);
+  const auto before = budget.used();
+  test_host_vmm::FailNextMalloc();
+  const auto failed = table.begin(budget, largeSize);
+  REQUIRE_FALSE(failed);
+  REQUIRE(failed.error() == kernel::KernelError::OutOfMemory);
+  REQUIRE(table.bytes() == before);
+  REQUIRE(budget.used() == before);
+  REQUIRE(table.registry_handle((1 << HandleSlotBits) | 2) == 0);
+  REQUIRE(table.close((1 << HandleSlotBits) | 2) == kernel::KernelError::InvalidHandle);
+  const auto retried = table.begin(budget, largeSize);
+  REQUIRE(retried);
+  REQUIRE(*retried == ((1 << HandleSlotBits) | 2));
+  REQUIRE(budget.used() == before + largeSize);
+  REQUIRE_FALSE(table.close(*retried));
+  REQUIRE(budget.used() == before);
+  table.clear();
+  REQUIRE(table.bytes() == 0);
+  REQUIRE(budget.used() == 0);
+  table.clear();
+  REQUIRE(budget.used() == 0);
+}
+
+TEST_CASE("Font storage moves transfer one allocation and release replaced ownership", "[font][upload]") {
+  EnsureObjectManagerInitialized();
+  using kernel::font::FontResourceStorage;
+  constexpr size_t size = 1000;
+  const auto before = kernel::vmm::debug_slab_cache_allocated_bytes(size);
+  {
+    auto first = FontResourceStorage::allocate(size);
+    REQUIRE(first);
+    auto *address = first.data();
+    first.data()[0] = 31;
+    auto moved = static_cast<FontResourceStorage &&>(first);
+    REQUIRE_FALSE(first);
+    REQUIRE(first.size() == 0);
+    REQUIRE(moved.data() == address);
+    REQUIRE(moved.data()[0] == 31);
+    auto replacement = FontResourceStorage::allocate(size);
+    REQUIRE(replacement);
+    REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(size) == before + 2048);
+    replacement = static_cast<FontResourceStorage &&>(moved);
+    REQUIRE_FALSE(moved);
+    REQUIRE(replacement.data() == address);
+    REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(size) == before + 1024);
+  }
+  REQUIRE(kernel::vmm::debug_slab_cache_allocated_bytes(size) == before);
+}
+
+TEST_CASE("Font commit transfers storage without copying and clear retains external face ownership", "[font][upload]") {
+  EnsureObjectManagerInitialized();
+  using namespace kernel::font;
+  ResourceBudget budget;
+  FaceRegistry faces;
+  ResourceTable table;
+  const auto data = resource();
+  const auto upload = table.begin(budget, uint32_t(data.size()));
+  REQUIRE(upload);
+  REQUIRE_FALSE(table.append(*upload, 0, data.data(), data.size()));
+  uint32_t validation = 0;
+  const auto committed = table.commit(*upload, faces, validation);
+  REQUIRE(committed);
+  auto held = faces.acquire(table.registry_handle(*committed));
+  REQUIRE(held);
+  const auto *address = held->view().bytes().data;
+  REQUIRE(budget.used() == 0);
+  REQUIRE(faces.bytes() == data.size());
+  table.clear();
+  REQUIRE(table.bytes() == 0);
+  REQUIRE(budget.used() == 0);
+  REQUIRE(faces.bytes() == data.size());
+  REQUIRE(held->view().bytes().data == address);
+  held.reset();
+  REQUIRE(faces.bytes() == 0);
+}
+
+TEST_CASE("Committed face retains the exact moved font storage until its last reference", "[font][upload]") {
+  EnsureObjectManagerInitialized();
+  using namespace kernel::font;
+  FaceRegistry faces;
+  auto bytes = resource();
+  auto storage = FontResourceStorage::allocate(bytes.size());
+  REQUIRE(storage);
+  for (size_t i = 0; i < bytes.size(); ++i) storage.data()[i] = bytes[i];
+  auto *address = storage.data();
+  uint32_t validation = 0;
+  const auto published = faces.publish(static_cast<FontResourceStorage &&>(storage), validation);
+  REQUIRE(published);
+  REQUIRE_FALSE(storage);
+  auto held = faces.acquire(*published);
+  REQUIRE(held);
+  REQUIRE(held->view().bytes().data == address);
+  REQUIRE_FALSE(faces.close(*published));
+  REQUIRE(faces.bytes() == bytes.size());
+  held.reset();
+  REQUIRE(faces.bytes() == 0);
+}
+
+TEST_CASE("Fontloader policy integrates actual resource rollback before builtin publication", "[font][upload][fallback]") {
+  EnsureObjectManagerInitialized();
+  using namespace kernel::font;
+  using namespace fontloader;
+  for (unsigned failure = 0; failure < 3; ++failure) {
+    ResourceBudget budget;
+    FaceRegistry faces;
+    DefaultFont defaults(faces);
+    ResourceTable table;
+    auto bytes = resource();
+    if (failure == 2) bytes[0] = 0;
+    uint32_t regular = 0, bold = 0;
+    const auto result = load_pair("regular", "bold", regular, bold,
+        [&](const char *path, uint32_t &face) {
+          if (path[0] == 'b') return LoadResult::ConfiguredFontNotFound;
+          if (failure == 0) test_host_vmm::FailNextMalloc();
+          return upload_resource(bytes.data(), uint32_t(bytes.size()), face,
+              [&](uint32_t size, uint32_t &upload) -> uint32_t {
+                const auto begun = table.begin(budget, size);
+                if (begun) upload = *begun;
+                return kernel::KErrorToSysReturnCode(begun ? kernel::make_error_code(kernel::KernelError::Success) : begun.error());
+              },
+              [&](uint32_t upload, uint32_t offset, const uint8_t *data, uint32_t size) -> uint32_t {
+                return kernel::KErrorToSysReturnCode(table.append(upload, offset, data, size));
+              },
+              [&](uint32_t upload, uint32_t &output, uint32_t &validation) -> uint32_t {
+                const auto committed = table.commit(upload, faces, validation);
+                if (committed) output = *committed;
+                return kernel::KErrorToSysReturnCode(committed ? kernel::make_error_code(kernel::KernelError::Success) : committed.error());
+              },
+              [&](uint32_t upload) -> uint32_t { return kernel::KErrorToSysReturnCode(table.close(upload)); },
+              [](const char *, uint32_t) {});
+        }, [&](uint32_t handle) { return !table.close(handle); });
+    REQUIRE(result == (failure == 0 ? LoadResult::UploadOutOfMemory :
+                       failure == 1 ? LoadResult::ConfiguredFontNotFound : LoadResult::Fatal));
+    REQUIRE(table.bytes() == 0);
+    REQUIRE(budget.used() == 0);
+    REQUIRE(faces.bytes() == 0);
+    const bool ready = finish_startup(uint32_t(result), [&] {
+      REQUIRE(table.bytes() == 0);
+      REQUIRE(faces.bytes() == 0);
+      return !defaults.publish_builtin([](void *, DefaultFont &target, UiFont &&candidate) {
+        UiFont displaced;
+        target.commit(static_cast<UiFont &&>(candidate), displaced);
+        return kernel::make_error_code(kernel::KernelError::Success);
+      }, nullptr);
+    }, [](const char *) {});
+    REQUIRE(ready == (failure != 2));
+    REQUIRE(defaults.snapshot().bitmapBackend == ready);
+  }
 }
