@@ -44,7 +44,8 @@ the Resource Manager, which reserves fixed port, memory, interrupt, and DMA
 ranges and rejects conflicts. `StartDevice` can read
 the resulting assigned descriptors and initialize the hardware. For example,
 `serial_uart` stores its I/O base and IRQ in an extension and reads assigned
-resources, with defaults in this implementation.
+resources, with defaults in this implementation. ATA channels follow a fixed
+descriptor order; see [ATA channel resources](Storage.md#ata-channel-resources).
 
 ## Build registration
 

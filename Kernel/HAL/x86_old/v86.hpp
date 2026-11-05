@@ -75,17 +75,15 @@ extern "C" [[noreturn]] void v86_non_v86_gp_panic(uint32_t error_code, uint32_t 
 // ordinary blocking function call to HAL_x86_ExecBiosInt.
 extern "C" void hal_x86_v86_enter() noexcept;
 
-// Single in-flight v86 session state (synchronous, non-reentrant by design;
-// hardware IRQs taken during the call are reflected to the BIOS, never to
-// kernel handlers).
-// Referenced by name from raw asm (hal_x86_v86_enter/v86_gp_stub), so every
-// one of these is marked [[gnu::used]] to survive LTO.
+// CPU-local assembly entry scratch for the active v86 session (synchronous,
+// non-reentrant per CPU by design; hardware IRQs taken during the call are
+// reflected to the BIOS, never to kernel handlers). The session's mutable
+// monitor state (virtual IF, IRQ tracking, saved esp0, result registers) is
+// continuation-owned: see the V86Session struct in v86.cpp. These words are
+// referenced by name from raw asm (hal_x86_v86_enter/v86_gp_stub), so every
+// one of them is marked [[gnu::used]] to survive LTO.
 extern "C" {
-extern HAL_x86_BiosRegs *g_v86_regs_ptr;
-extern uint32_t g_v86_saved_esp0;
 extern uint32_t g_v86_resume_esp;
-extern uint32_t g_v86_virtual_if;
-extern int32_t g_v86_pending_irq;
 
 extern uint32_t g_v86_eax, g_v86_ebx, g_v86_ecx, g_v86_edx, g_v86_esi, g_v86_edi;
 extern uint32_t g_v86_cs, g_v86_eip, g_v86_eflags, g_v86_esp, g_v86_ss;

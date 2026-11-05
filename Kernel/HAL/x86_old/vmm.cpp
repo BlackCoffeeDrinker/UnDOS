@@ -1,15 +1,18 @@
 
 #include "vmm.hpp"
+#include "pmm_accounting.hpp"
 
+#include "pmm.hpp"
 #include "v86.hpp"
 
 #include <kernel/hal_interface.hpp>
+#include <kernel/spinlock.hpp>
 
 using kernel::PhysicalAddress;
 using kernel::VirtualAddress;
 
 namespace {
-void register_root(uintptr_t root) noexcept;
+bool register_root(uintptr_t root) noexcept;
 void unregister_root(uintptr_t root) noexcept;
 void propagate_kernel_pde(size_t pd_index) noexcept;
 }// namespace
@@ -18,16 +21,20 @@ namespace hal::x86 {
 constexpr uintptr_t RECURSIVE_PT_WINDOW = 0xFFC00000;
 constexpr uintptr_t RECURSIVE_PD_WINDOW = 0xFFFFF000;
 
-inline page_directory_entry_t *get_page_directory() noexcept {
+static page_directory_entry_t *get_page_directory() noexcept {
   return reinterpret_cast<page_directory_entry_t *>(RECURSIVE_PD_WINDOW);
 }
 
-inline page_table_entry_t *get_page_table(VirtualAddress virtual_addr) noexcept {
+static page_table_entry_t *get_page_table(VirtualAddress virtual_addr) noexcept {
   const uintptr_t pd_index = static_cast<uintptr_t>(virtual_addr >> 22);
   return reinterpret_cast<page_table_entry_t *>(RECURSIVE_PT_WINDOW + (pd_index * 4096));
 }
 
-PageFlags translate_flags(kernel::vmm::ProtectFlags flags) noexcept {
+static page_table_entry_t *get_recursive_window(size_t slot) noexcept {
+  return reinterpret_cast<page_table_entry_t *>(RECURSIVE_PT_WINDOW + (slot * 4096));
+}
+
+static PageFlags translate_flags(kernel::vmm::ProtectFlags flags) noexcept {
   // Pages mapped via map_page must be present by default
   auto x86_flags = PageFlags::PRESENT;
 
@@ -61,7 +68,9 @@ void init_vmm() noexcept {
   // Force a global TLB flush by reloading CR3 to validate our window setup immediately
   __asm__ volatile("mov %0, %%cr3" ::"r"(current_pd_phys) : "memory");
 
-  ::register_root(current_pd_phys);
+  if (!::register_root(current_pd_phys)) {
+    HAL_PLATFORM_Panic("Failed to register the kernel address space", __FILE__, __LINE__);
+  }
 }
 }// namespace hal::x86
 
@@ -95,6 +104,28 @@ UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_GetPhysicalAddress(VirtualAddress virt
   return page_table[pt_index].get_frame() + page_offset;
 }
 
+UNDOS_HAL_API_DEF bool HAL_VMM_QueryPage(VirtualAddress virt, kernel::vmm::ProtectFlags *flags) noexcept {
+  using hal::x86::PageFlags;
+  const uintptr_t pd_index = static_cast<uintptr_t>(virt >> 22);
+  const uintptr_t pt_index = static_cast<uintptr_t>((virt >> 12) & 0x3FF);
+
+  const auto *directory = hal::x86::get_page_directory();
+  if (!directory[pd_index].is_present()) return false;
+  const auto *page_table = hal::x86::get_page_table(virt);
+  if (!page_table[pt_index].is_present()) return false;
+
+  // Both levels must grant an access for the CPU to allow it at CPL3.
+  const auto pde = static_cast<PageFlags>(directory[pd_index].value);
+  const auto pte = static_cast<PageFlags>(page_table[pt_index].value);
+  auto result = kernel::vmm::ProtectFlags::READ;
+  if (has_flag(pde, PageFlags::WRITABLE) && has_flag(pte, PageFlags::WRITABLE))
+    result = result | kernel::vmm::ProtectFlags::WRITE;
+  if (has_flag(pde, PageFlags::USER) && has_flag(pte, PageFlags::USER))
+    result = result | kernel::vmm::ProtectFlags::USER;
+  if (flags) *flags = result;
+  return true;
+}
+
 UNDOS_HAL_API_DEF void HAL_VMM_SwitchAddressSpace(PhysicalAddress new_root) noexcept {
   __asm__ volatile("mov %0, %%cr3" ::"r"(static_cast<uintptr_t>(new_root)) : "memory");
 }
@@ -112,35 +143,72 @@ constexpr size_t KERNEL_SPLIT = 768;// 0xC0000000 >> 22
 // active is visible from every other one.
 constexpr size_t MAX_ADDRESS_SPACES = 64;
 uintptr_t g_roots[MAX_ADDRESS_SPACES];
+uint32_t g_root_owners[MAX_ADDRESS_SPACES];
 size_t g_root_count = 0;
+kernel::SpinLock g_root_lock;
 
-void register_root(uintptr_t root) noexcept {
-  if (g_root_count < MAX_ADDRESS_SPACES) g_roots[g_root_count++] = root;
+bool register_root(uintptr_t root) noexcept {
+  const uintptr_t state = g_root_lock.lock_irqsave();
+  if (g_root_count >= MAX_ADDRESS_SPACES) {
+    g_root_lock.unlock_irqrestore(state);
+    return false;
+  }
+  g_roots[g_root_count] = root;
+  g_root_owners[g_root_count] = 0;
+  ++g_root_count;
+  g_root_lock.unlock_irqrestore(state);
+  return true;
 }
 
 void unregister_root(uintptr_t root) noexcept {
+  const uintptr_t state = g_root_lock.lock_irqsave();
   for (size_t i = 0; i < g_root_count; ++i) {
     if (g_roots[i] == root) {
-      g_roots[i] = g_roots[--g_root_count];
+      --g_root_count;
+      g_roots[i] = g_roots[g_root_count];
+      g_root_owners[i] = g_root_owners[g_root_count];
+      g_roots[g_root_count] = 0;
+      g_root_owners[g_root_count] = 0;
+      g_root_lock.unlock_irqrestore(state);
       return;
     }
   }
+  g_root_lock.unlock_irqrestore(state);
+}
+
+uint32_t address_space_owner(uintptr_t root) noexcept {
+  const uintptr_t state = g_root_lock.lock_irqsave();
+  uint32_t pid = 0;
+  for (size_t i = 0; i < g_root_count; ++i) {
+    if (g_roots[i] == root) {
+      pid = g_root_owners[i];
+      break;
+    }
+  }
+  g_root_lock.unlock_irqrestore(state);
+  return pid;
 }
 
 // Copy PDE `pd_index` of the active directory into every other registered one.
 void propagate_kernel_pde(size_t pd_index) noexcept {
   auto *directory = hal::x86::get_page_directory();
   const uintptr_t current = static_cast<uintptr_t>(HAL_VMM_GetCurrentTranslationRoot());
-  auto *window = reinterpret_cast<hal::x86::page_directory_entry_t *>(
-      hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096));
-  for (size_t i = 0; i < g_root_count; ++i) {
-    if (g_roots[i] == current) continue;
-    directory[TEMP_PD_SLOT].set_page_table(g_roots[i], hal::x86::PageFlags::PRESENT | hal::x86::PageFlags::WRITABLE);
-    HAL_VMM_Flush(VirtualAddress(reinterpret_cast<uintptr_t>(window)));
+  uintptr_t roots[MAX_ADDRESS_SPACES]{};
+  size_t count = 0;
+  const uintptr_t state = g_root_lock.lock_irqsave();
+  count = g_root_count;
+  for (size_t i = 0; i < count; ++i) roots[i] = g_roots[i];
+  g_root_lock.unlock_irqrestore(state);
+  for (size_t i = 0; i < count; ++i) {
+    if (roots[i] == current) continue;
+    directory[TEMP_PD_SLOT].set_page_table(roots[i], hal::x86::PageFlags::PRESENT | hal::x86::PageFlags::WRITABLE);
+    HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
+    auto *window = reinterpret_cast<hal::x86::page_directory_entry_t *>(
+        hal::x86::get_recursive_window(TEMP_PD_SLOT));
     window[pd_index] = directory[pd_index];
   }
   directory[TEMP_PD_SLOT].clear();
-  HAL_VMM_Flush(VirtualAddress(reinterpret_cast<uintptr_t>(window)));
+  HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
 }
 }// namespace
 
@@ -151,7 +219,6 @@ UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_CreateAddressSpace() noexcept {
   }
 
   auto *directory = hal::x86::get_page_directory();
-
   // Temporarily alias the new page directory's frame as a page table so we can
   // read/write its 1024 entries through the recursive window.
   directory[TEMP_PD_SLOT].set_page_table(
@@ -160,7 +227,7 @@ UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_CreateAddressSpace() noexcept {
   HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
 
   auto *new_pd = reinterpret_cast<hal::x86::page_directory_entry_t *>(
-      hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096));
+      hal::x86::get_recursive_window(TEMP_PD_SLOT));
 
   constexpr size_t kernel_split = 768;// 0xC0000000 >> 22
 
@@ -187,8 +254,25 @@ UNDOS_HAL_API_DEF PhysicalAddress HAL_VMM_CreateAddressSpace() noexcept {
   directory[TEMP_PD_SLOT].clear();
   HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
 
-  register_root(static_cast<uintptr_t>(new_pd_phys));
+  if (!register_root(static_cast<uintptr_t>(new_pd_phys))) {
+    HAL_PMM_FreeFrames(new_pd_phys, 1);
+    return 0;
+  }
   return new_pd_phys;
+}
+
+UNDOS_HAL_API_DEF bool HAL_VMM_SetAddressSpaceOwner(PhysicalAddress root, uint32_t pid) noexcept {
+  if (!root || !pid) return false;
+  const uintptr_t state = g_root_lock.lock_irqsave();
+  for (size_t i = 0; i < g_root_count; ++i) {
+    if (g_roots[i] == static_cast<uintptr_t>(root) && g_root_owners[i] == 0) {
+      g_root_owners[i] = pid;
+      g_root_lock.unlock_irqrestore(state);
+      return true;
+    }
+  }
+  g_root_lock.unlock_irqrestore(state);
+  return false;
 }
 
 UNDOS_HAL_API_DEF void HAL_VMM_DestroyAddressSpace(PhysicalAddress root) noexcept {
@@ -197,31 +281,51 @@ UNDOS_HAL_API_DEF void HAL_VMM_DestroyAddressSpace(PhysicalAddress root) noexcep
   }
 
   auto *directory = hal::x86::get_page_directory();
-
   directory[TEMP_PD_SLOT].set_page_table(
       static_cast<uintptr_t>(root),
       hal::x86::PageFlags::PRESENT | hal::x86::PageFlags::WRITABLE);
   HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
 
-  auto *target_pd = reinterpret_cast<hal::x86::page_directory_entry_t *>(
-      hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096));
+  const auto *target_pd = reinterpret_cast<hal::x86::page_directory_entry_t *>(
+      hal::x86::get_recursive_window(TEMP_PD_SLOT));
 
   constexpr size_t kernel_split = 768;// 0xC0000000 >> 22
-
-  // Reclaim any user-half page table frames; callers are responsible for
-  // freeing the physical frames backing individual pages (tracked via VADs)
-  // before calling this.
+  uintptr_t user_tables[kernel_split]{};
   for (size_t i = 0; i < kernel_split; ++i) {
-    if (target_pd[i].is_present()) {
-      HAL_PMM_FreeFrames(target_pd[i].get_page_table(), 1);
-      target_pd[i].clear();
+    if (target_pd[i].is_present()) user_tables[i] = target_pd[i].get_page_table();
+  }
+  const uint32_t owner_pid = address_space_owner(static_cast<uintptr_t>(root));
+
+  for (const unsigned long user_table: user_tables) {
+    if (!user_table) continue;
+    directory[TEMP_PD_SLOT].set_page_table(
+        user_table, hal::x86::PageFlags::PRESENT | hal::x86::PageFlags::WRITABLE);
+    HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
+    auto *table = hal::x86::get_recursive_window(TEMP_PD_SLOT);
+
+    if (owner_pid) {
+      for (size_t entry = 0; entry < 1024; ++entry) {
+        const bool present = table[entry].is_present();
+        const bool user = hal::x86::has_flag(
+            static_cast<hal::x86::PageFlags>(table[entry].value),
+            hal::x86::PageFlags::USER);
+        (void) hal::x86::reclaim_owned_mapping(
+            owner_pid, present, user, table[entry].get_frame(),
+            [](uint32_t pid, uintptr_t frame) {
+              return HAL_PMM_FreeOwnedFrames(pid, PhysicalAddress(frame), 1);
+            });
+      }
     }
+    directory[TEMP_PD_SLOT].clear();
+    HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
+    HAL_PMM_FreeFrames(PhysicalAddress(user_table), 1);
   }
 
   directory[TEMP_PD_SLOT].clear();
   HAL_VMM_Flush(VirtualAddress(hal::x86::RECURSIVE_PT_WINDOW + (TEMP_PD_SLOT * 4096)));
 
   unregister_root(static_cast<uintptr_t>(root));
+  if (owner_pid) HAL_PMM_UnregisterOwner(owner_pid);
   HAL_PMM_FreeFrames(root, 1);
 }
 
@@ -229,13 +333,27 @@ UNDOS_HAL_API_DEF bool HAL_VMM_MapPage(VirtualAddress virtual_addr, PhysicalAddr
   const uintptr_t pd_index = static_cast<uintptr_t>(virtual_addr >> 22);
   const uintptr_t pt_index = static_cast<uintptr_t>((virtual_addr >> 12) & 0x3FF);
 
-  // Handle x86 multi-level table allocation safely within the HAL
+  PhysicalAddress spare_table{};
+  if (!hal::x86::get_page_directory()[pd_index].is_present()) {
+    spare_table = HAL_PMM_AllocateFrames(1);
+    if (!spare_table) return false;
+  }
+  const uintptr_t mapping_state = HAL_CPU_SaveAndDisableInterrupts();
+  // A preempted allocator can have installed the shared kernel PDE while
+  // this call acquired its spare frame. Publish/initialize atomically on UP.
+  struct RestoreMapping {
+    uintptr_t state;
+    PhysicalAddress spare;
+    ~RestoreMapping() {
+      HAL_CPU_RestoreInterrupts(state);
+      if (spare) HAL_PMM_FreeFrames(spare, 1);
+    }
+  } restore{mapping_state, spare_table};
   if (auto *directory = hal::x86::get_page_directory();
       !directory[pd_index].is_present()) {
-    const PhysicalAddress new_table_phys = HAL_PMM_AllocateFrames(1);
-    if (!new_table_phys) {
-      return false;
-    }
+    if (!spare_table) return false;
+    const PhysicalAddress new_table_phys = spare_table;
+    restore.spare = PhysicalAddress(0);
 
     directory[pd_index].set_page_table(
         static_cast<uintptr_t>(new_table_phys),
@@ -267,11 +385,22 @@ UNDOS_HAL_API_DEF bool HAL_VMM_MapPage(VirtualAddress virtual_addr, PhysicalAddr
 
   // Translate generic flags to raw x86 bits
   page_table[pt_index].set_frame(static_cast<uintptr_t>(physical_addr), hal::x86::translate_flags(flags));
+  if (virtual_addr.value < 0xC0000000 &&
+      kernel::vmm::has_flag(flags, kernel::vmm::ProtectFlags::USER)) {
+    const uint32_t owner = ::address_space_owner(
+        static_cast<uintptr_t>(HAL_VMM_GetCurrentTranslationRoot()));
+    if (owner) hal::x86::assign_frame_owner(physical_addr, owner);
+  }
 
   return true;
 }
 
 UNDOS_HAL_API_DEF void HAL_VMM_UnmapPage(VirtualAddress virtual_addr) noexcept {
+  const uintptr_t mapping_state = HAL_CPU_SaveAndDisableInterrupts();
+  struct RestoreMapping {
+    uintptr_t state;
+    ~RestoreMapping() { HAL_CPU_RestoreInterrupts(state); }
+  } restore{mapping_state};
   const uintptr_t pd_index = static_cast<uintptr_t>(virtual_addr >> 22);
   const uintptr_t pt_index = static_cast<uintptr_t>((virtual_addr >> 12) & 0x3FF);
 
@@ -281,6 +410,10 @@ UNDOS_HAL_API_DEF void HAL_VMM_UnmapPage(VirtualAddress virtual_addr) noexcept {
 
     // 1. Clear the target page frame entry
     page_table[pt_index].clear();
+
+    // Shared kernel tables are retained regardless of occupancy. Scanning
+    // them on every temporary syscall unmap only extends the IRQ-off span.
+    if (pd_index >= KERNEL_SPLIT) return;
 
     // 2. Check if the parent Page Table is now entirely empty
     bool table_is_empty = true;
@@ -347,8 +480,8 @@ void ensure_page_user_writable(kernel::VirtualAddress virtual_addr, kernel::Phys
   }
 
   if (auto *page_table = get_page_table(virtual_addr); !page_table[pt_index].is_present() ||
-      !has_flag(static_cast<PageFlags>(page_table[pt_index].value), PageFlags::USER) ||
-      !has_flag(static_cast<PageFlags>(page_table[pt_index].value), PageFlags::WRITABLE)) {
+                                                       !has_flag(static_cast<PageFlags>(page_table[pt_index].value), PageFlags::USER) ||
+                                                       !has_flag(static_cast<PageFlags>(page_table[pt_index].value), PageFlags::WRITABLE)) {
     page_table[pt_index].set_frame(static_cast<uintptr_t>(physical_addr), user_writable);
     HAL_VMM_Flush(virtual_addr);
   }

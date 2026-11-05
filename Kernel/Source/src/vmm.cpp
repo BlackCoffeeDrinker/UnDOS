@@ -4,8 +4,17 @@
 #include <kernel/hal_interface.hpp>
 
 #include "memory/Cache.hpp"
+#include "vmm_owner_lifecycle.hpp"
 
 extern uint32_t g_page_size;
+
+#if __STDC_HOSTED__
+namespace kernel::vmm::test_hooks {
+void (*after_borrowed_claim)() = nullptr;
+void (*before_borrowed_reserve)() = nullptr;
+void (*before_borrowed_map)(VirtualAddressDescriptor *) = nullptr;
+}// namespace kernel::vmm::test_hooks
+#endif
 
 //#define KALLOC_DEBUG 1
 
@@ -15,13 +24,31 @@ constexpr size_t g_cache_sizes[] = {16, 32, 64, 128, 256, 512, 1024, 2048};
 
 kernel::vmm::AddressSpace g_kernel_address_space{};
 kstd::array<kernel::memory::Cache, 8> g_malloc_caches;
-#if defined(UNDOS_KE_MALLOC_TEST_HOOKS)
-bool g_fail_next_malloc_for_test = false;
-bool g_fail_next_backing_remove_for_test = false;
-#endif
 kstd::expected<void *, kstd::error_code> allocate_user_backed_region(
     kernel::vmm::AddressSpace &as, size_t size, const char *name,
     kernel::vmm::ProtectFlags flags, const char *operation) noexcept;
+}// namespace
+
+namespace kernel::detail {
+void rw_mutex_relax() noexcept { KE_SCHED_Yield(); }
+uint32_t rw_load(const uint32_t *word) noexcept {
+  return HAL_ATOMIC_Load32(VirtualAddress::from_ptr(word), PlatformMemoryOrder::Acquire);
+}
+void rw_store(uint32_t *word, uint32_t value) noexcept {
+  HAL_ATOMIC_Store32(VirtualAddress::from_ptr(word), value, PlatformMemoryOrder::Release);
+}
+bool rw_cas(uint32_t *word, uint32_t &expected, uint32_t desired) noexcept {
+  return HAL_ATOMIC_CompareExchange32(VirtualAddress::from_ptr(word), expected, desired, PlatformMemoryOrder::AcquireRelease);
+}
+void rw_add(uint32_t *word, uint32_t delta) noexcept {
+  HAL_ATOMIC_FetchAdd32(VirtualAddress::from_ptr(word), delta, PlatformMemoryOrder::Release);
+}
+}// namespace kernel::detail
+
+namespace {
+// User address spaces are guarded by their own RwMutex; the kernel one by the
+// arena mutex (its VAD tree backs the heap, which must not re-enter).
+bool is_user_as(const kernel::vmm::AddressSpace &as) noexcept { return &as != &g_kernel_address_space; }
 }// namespace
 
 namespace kernel::vmm {
@@ -34,21 +61,16 @@ void init() noexcept {
 void late_init() noexcept {
 }
 
-kstd::error_code create_user_address_space(AddressSpace &out_as) noexcept {
-  // A default-constructed AddressSpace carries the Invalid sentinel, not a root.
-  if (out_as.translation_root && out_as.translation_root != PhysicalAddress::Invalid) return KernelError::InvalidState;
-  const PhysicalAddress root = HAL_VMM_CreateAddressSpace();
-  if (!root) {
-    return KernelError::OutOfMemory;
-  }
-
-  out_as.vads = VadTree();
-  out_as.translation_root = root;
-  out_as.asid = 0;
-  out_as.current_base = 0x10000000;
-  out_as.limit = 0xC0000000;
-
-  return {};
+kstd::error_code create_user_address_space(AddressSpace &out_as, uint32_t owner_pid) noexcept {
+  return detail::create_owned_address_space_root(
+      out_as, owner_pid,
+      [](uint32_t pid) noexcept { return HAL_PMM_RegisterOwner(pid); },
+      []() noexcept { return HAL_VMM_CreateAddressSpace(); },
+      [](PhysicalAddress root, uint32_t pid) noexcept {
+        return HAL_VMM_SetAddressSpaceOwner(root, pid);
+      },
+      [](PhysicalAddress root) noexcept { HAL_VMM_DestroyAddressSpace(root); },
+      [](uint32_t pid) noexcept { HAL_PMM_UnregisterOwner(pid); });
 }
 
 void destroy_user_address_space(AddressSpace &as) noexcept {
@@ -59,15 +81,23 @@ void destroy_user_address_space(AddressSpace &as) noexcept {
   // Reclaim the physical frames backing each mapped region while the target
   // address space is active, since HAL_VMM_GetPhysicalAddress walks whatever
   // page directory CR3 currently points at.
+  ExclusiveGuard guard(as.lock, is_user_as(as));
   const PhysicalAddress caller_root = HAL_VMM_GetCurrentTranslationRoot();
   const uintptr_t irq_state = HAL_CPU_SaveAndDisableInterrupts();
 
   HAL_VMM_SwitchAddressSpace(as.translation_root);
 
-  as.vads.clear([](VirtualAddressDescriptor *vad) noexcept {
+  as.vads.clear([&as](VirtualAddressDescriptor *vad) noexcept {
+    if (vad->kind != kernel::vmm::VadKind::Ordinary) {
+      HAL_PLATFORM_Panic("Nonordinary VAD in user address-space teardown", __FILE__, __LINE__);
+    }
     for (VirtualAddress page = vad->start; page < vad->end; page += g_page_size) {
       if (const PhysicalAddress phys = HAL_VMM_GetPhysicalAddress(page)) {
-        HAL_PMM_FreeFrames(phys, 1);
+        HAL_VMM_UnmapPage(page);
+        HAL_SMP_ShootdownTlb(page);
+        if (as.owner_pid) HAL_PMM_FreeOwnedFrames(as.owner_pid, phys, 1);
+        else
+          HAL_PMM_FreeFrames(phys, 1);
       }
     }
     // Explicitly run the destructor to release the VAD's KObjectPtr<KMemoryBackingObject>
@@ -81,6 +111,7 @@ void destroy_user_address_space(AddressSpace &as) noexcept {
 
   HAL_VMM_DestroyAddressSpace(as.translation_root);
   as.translation_root = PhysicalAddress(0);
+  as.owner_pid = 0;
 }
 
 kstd::expected<void *, kstd::error_code> allocate_memory(AddressSpace &as, size_t size, ProtectFlags flags) noexcept {
@@ -171,6 +202,7 @@ kstd::error_code map_fixed_memory(AddressSpace &as, uintptr_t address, size_t si
   if (size > SIZE_MAX - (g_page_size - 1)) return KernelError::ArithmeticOverflow;
   const size_t aligned = (size + g_page_size - 1) & ~(g_page_size - 1);
   if (aligned > static_cast<uintptr_t>(as.limit) - address) return KernelError::OutOfRange;
+  ExclusiveGuard guard(as.lock, is_user_as(as));
   bool overlap = false;
   as.vads.each([&](VirtualAddressDescriptor *existing) {
     if (address < static_cast<uintptr_t>(existing->end) &&
@@ -243,19 +275,10 @@ UNDOS_KERNEL_API_DEF void *KE_Malloc(size_t size) noexcept {
   if (size == 0) [[unlikely]] {
     return nullptr;
   }
-#if defined(UNDOS_KE_MALLOC_TEST_HOOKS)
-  if (g_fail_next_malloc_for_test) {
-    g_fail_next_malloc_for_test = false;
-    return nullptr;
-  }
-#endif
 
   for (auto &g_malloc_cache: g_malloc_caches) {
     if (size <= g_malloc_cache.object_size()) {
       auto allocate = g_malloc_cache.allocate();
-#if defined(KALLOC_DEBUG) && KALLOC_DEBUG == 1
-      KE_Print("ALLOC: {} @ {}", size, allocate);
-#endif
       return allocate;
     }
   }
@@ -263,22 +286,12 @@ UNDOS_KERNEL_API_DEF void *KE_Malloc(size_t size) noexcept {
   // Larger than the biggest fixed-size cache: fall back to a dedicated,
   // page-backed allocation instead of failing outright.
   if (auto *large = kernel::memory::allocate_large(size)) {
-#if defined(KALLOC_DEBUG) && KALLOC_DEBUG == 1
-    KE_Print("ALLOC LARGE: {} @ {}", size, large);
-#endif
     return large;
   }
 
   KE_Print("ALLOC FAILED: {}", size);
   return nullptr;
 }
-
-#if defined(UNDOS_KE_MALLOC_TEST_HOOKS)
-namespace test_host_vmm {
-void FailNextMalloc() noexcept { g_fail_next_malloc_for_test = true; }
-void FailNextBackingRemoval() noexcept { g_fail_next_backing_remove_for_test = true; }
-}
-#endif
 
 namespace kernel::vmm {
 size_t debug_slab_cache_allocated_bytes(size_t size) noexcept {
@@ -295,9 +308,6 @@ UNDOS_KERNEL_API_DEF void KE_Free(void *ptr) noexcept {
   if (!ptr) [[unlikely]] { return; }
 
   if (auto *slab = kernel::memory::find_slab(ptr)) {
-#if defined(KALLOC_DEBUG) && KALLOC_DEBUG == 1
-    KE_Print("FREE SLAB: {}", ptr);
-#endif
     slab->cache()->free(ptr, *slab);
     return;
   }
@@ -306,12 +316,29 @@ UNDOS_KERNEL_API_DEF void KE_Free(void *ptr) noexcept {
 }
 
 namespace {
-// Shared address-bump/limit-check logic used by every VAD-reserving
-// allocator. Bumps `as.current_base` by the page-aligned size and creates a
-// bare VAD spanning the reserved range, or returns an error on address-space
-// exhaustion. Callers are responsible for setting `vad->backing` (if any).
+using kernel::vmm::VadKind;
+using kernel::vmm::VirtualAddressDescriptor;
+
+// BorrowedFree alias ranges of the kernel address space (the only one that
+// holds borrowed aliases), ordered by start. Guarded by the arena mutex, like
+// the VAD tree; reserve and release search it instead of walking every VAD.
+kernel::adt::AvlTree<VirtualAddressDescriptor, &VirtualAddressDescriptor::free_node> g_borrowed_free;
+
+void destroy_vads(VirtualAddressDescriptor *retired) noexcept {
+  while (retired) {
+    auto *next = retired->retired_next;
+    retired->~VirtualAddressDescriptor();
+    KE_Free(retired);
+    retired = next;
+  }
+}
+
+// Reserve a bare VAD; borrowed aliases first reuse unmapped alias ranges.
+// Other reservations, or cache misses, advance the page-aligned bump pointer.
+// Callers are responsible for setting vad->backing (if any).
 kstd::expected<kernel::vmm::VirtualAddressDescriptor *, kstd::error_code>
-reserve_vad(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags) noexcept {
+reserve_vad(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlags flags,
+            bool borrowed = false) noexcept {
   if (as.current_base == 0) {
     return kstd::unexpected(kernel::KernelError::NotInitialized);
   }
@@ -320,27 +347,116 @@ reserve_vad(kernel::vmm::AddressSpace &as, size_t size, kernel::vmm::ProtectFlag
 
   const size_t aligned_size = (size + g_page_size - 1) & ~(g_page_size - 1);
 
-  if (as.current_base > as.limit || aligned_size > as.limit.value - as.current_base.value) {
+  if (!borrowed &&
+      (as.current_base > as.limit || aligned_size > as.limit.value - as.current_base.value)) {
     return kstd::unexpected(kernel::KernelError::AddressSpaceExhausted);
   }
 
   if (auto vad = KE_CreateObject<kernel::vmm::VirtualAddressDescriptor>()) {
-    // Metadata allocation can grow the slab heap and advance this address space.
-    if (as.current_base > as.limit || aligned_size > as.limit.value - as.current_base.value) {
-      return kstd::unexpected(kernel::KernelError::AddressSpaceExhausted);
+    kernel::ExclusiveGuard guard(as.lock, is_user_as(as));
+    kstd::unique_lock arena(kernel::memory::arena_mutex(), kstd::defer_lock);
+    if (&as == &g_kernel_address_space) arena.lock();
+    kernel::VirtualAddress addr{};
+    if (borrowed) {
+      VirtualAddressDescriptor *free = nullptr;
+      g_borrowed_free.each([&](VirtualAddressDescriptor *range) {
+        if (!free &&
+            range->end.value - range->start.value >= aligned_size &&
+            range->start <= as.limit &&
+            aligned_size <= as.limit.value - range->start.value)
+          free = range;
+      });
+      if (free) {
+        addr = free->start;
+        g_borrowed_free.remove(free);
+        if (free->end.value - addr.value == aligned_size) {
+          free->kind = VadKind::BorrowedPreparing;
+          // Return the unused preallocated descriptor outside the arena.
+          arena.unlock();
+          return free;
+        }
+        as.vads.remove(free);
+        free->start += aligned_size;
+        as.vads.insert(*free);
+        g_borrowed_free.insert(*free);
+      }
     }
-    const kernel::VirtualAddress addr = as.current_base;
+    if (!addr) {
+      // Metadata allocation can grow the slab heap and advance this address space.
+      if (as.current_base > as.limit || aligned_size > as.limit.value - as.current_base.value) {
+        return kstd::unexpected(kernel::KernelError::AddressSpaceExhausted);
+      }
+      addr = as.current_base;
+      as.current_base += aligned_size;
+    }
     vad.value()->start = addr;
     vad.value()->end = addr + size;
     vad.value()->flags = flags;
+    vad.value()->kind = borrowed ? VadKind::BorrowedPreparing : VadKind::Ordinary;
 
     auto *rawvad = vad->release();
     as.vads.insert(*rawvad);
-    as.current_base += aligned_size;
     return rawvad;
   } else {
     return kstd::unexpected(vad.error());
   }
+}
+
+// Called only for a descriptor exclusively owned by preparation or release.
+kstd::error_code release_borrowed_region(VirtualAddressDescriptor *vad) noexcept {
+  auto &as = g_kernel_address_space;
+  bool empty = true;
+  for (auto page = vad->start; page < vad->end; page += g_page_size) {
+    if (HAL_VMM_GetPhysicalAddress(page)) empty = false;
+  }
+  VirtualAddressDescriptor *retired = nullptr;
+  bool valid = false;
+  {
+    kstd::unique_lock arena(kernel::memory::arena_mutex());
+    valid = as.vads.find(vad->start) == vad &&
+            (vad->kind == VadKind::BorrowedUnmapping ||
+             vad->kind == VadKind::BorrowedPreparing);
+    if (!empty || !valid) {
+      if (as.vads.find(vad->start) == vad) vad->kind = VadKind::BorrowedQuarantined;
+    } else {
+      vad->kind = VadKind::BorrowedFree;
+      vad->borrowed_pointer = kernel::VirtualAddress(0);
+      vad->borrowed_size = 0;
+      vad->borrowed_source = nullptr;
+      vad->borrowed_root = kernel::PhysicalAddress(0);
+      vad->borrowed_asid = 0;
+      // VADs never overlap, so the free neighbours are the descriptors that
+      // contain end and start-1: two ordered lookups instead of a full walk.
+      const auto free_at = [&](kernel::VirtualAddress addr) -> VirtualAddressDescriptor * {
+        auto *other = as.vads.find(addr);
+        return other && other != vad && other->kind == VadKind::BorrowedFree ? other : nullptr;
+      };
+      auto *right = free_at(vad->end);
+      if (right && right->start != vad->end) right = nullptr;
+      auto *left = vad->start.value ? free_at(kernel::VirtualAddress(vad->start.value - 1)) : nullptr;
+      if (left && left->end != vad->start) left = nullptr;
+      if (left || right) as.vads.remove(vad);
+      VirtualAddressDescriptor *const neighbors[] = {left, right};
+      for (auto *neighbor: neighbors) {
+        if (!neighbor) continue;
+        as.vads.remove(neighbor);
+        g_borrowed_free.remove(neighbor);
+        if (neighbor->start < vad->start) vad->start = neighbor->start;
+        if (neighbor->end > vad->end) vad->end = neighbor->end;
+        neighbor->retired_next = retired;
+        retired = neighbor;
+      }
+      if (left || right) as.vads.insert(*vad);
+      g_borrowed_free.insert(*vad);
+    }
+  }
+  destroy_vads(retired);
+  if (!empty || !valid) {
+    KE_Print("VMM borrowed cleanup invariant: extent quarantined; live PTE={} claim={}",
+             !empty, valid);
+    return empty ? kernel::KernelError::InvalidState : kernel::KernelError::DeviceError;
+  }
+  return {};
 }
 }// namespace
 
@@ -361,8 +477,16 @@ KE_VMM_MapBackingObject(kernel::vmm::AddressSpace &as, const kernel::KObjectPtr<
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_VMM_FreeRegion(kernel::vmm::AddressSpace &as, void *addr) noexcept {
-  if (auto *vad = as.vads.find(kernel::VirtualAddress::from_ptr(addr))) {
-    as.vads.remove(vad);
+  kernel::vmm::VirtualAddressDescriptor *vad = nullptr;
+  {
+    kernel::ExclusiveGuard guard(as.lock, is_user_as(as));
+    kstd::unique_lock arena(kernel::memory::arena_mutex(), kstd::defer_lock);
+    if (&as == &g_kernel_address_space) arena.lock();
+    vad = as.vads.find(kernel::VirtualAddress::from_ptr(addr));
+    if (vad && vad->kind != VadKind::Ordinary) return kernel::KernelError::InvalidState;
+    if (vad) as.vads.remove(vad);
+  }
+  if (vad) {
     // Explicitly run the destructor to release the VAD's KObjectPtr<KMemoryBackingObject>
     // reference before returning the raw storage to the allocator.
     vad->~VirtualAddressDescriptor();
@@ -399,18 +523,7 @@ kstd::expected<void *, kstd::error_code> allocate_user_backed_region(
 
   auto vad = KE_VMM_MapBackingObject(as, *backing, size, flags);
   if (!vad) {
-#if defined(UNDOS_KE_MALLOC_TEST_HOOKS)
-    kstd::error_code cleanupStatus;
-    if (g_fail_next_backing_remove_for_test) {
-      g_fail_next_backing_remove_for_test = false;
-      cleanupStatus = kernel::KernelError::IoError;
-    } else {
-      cleanupStatus = KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing);
-    }
-#else
-    const auto cleanupStatus = KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing);
-#endif
-    if (cleanupStatus) {
+    if (const auto cleanupStatus = KE_OB_RemoveObject(KE_OB_GetMemoryDirectory(), *backing)) {
       KE_Print("{}: failed to remove backing object: {}", operation, cleanupStatus.message());
     }
     return kstd::unexpected(vad.error());
@@ -431,21 +544,21 @@ KE_VMM_CreateDirectBacking(kernel::VirtualAddress directAddress, size_t size) no
   backing.value()->kind = kernel::KMemoryBackingObject::Kind::Anonymous;
   backing.value()->size = size;
   backing.value()->directAddress = directAddress;
-  const auto status = KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), *backing);
-  if (status) return kstd::unexpected(status);
+  if (const auto status = KE_OB_InsertObject(KE_OB_GetMemoryDirectory(), *backing))
+    return kstd::unexpected(status);
   return *backing;
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<void *, kstd::error_code> KE_VMM_AllocateUserData(kernel::vmm::AddressSpace &as, size_t size) noexcept {
   return allocate_user_backed_region(as, size, "UserData",
-      kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE | kernel::vmm::ProtectFlags::USER,
-      "KE_VMM_AllocateUserData");
+                                     kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE | kernel::vmm::ProtectFlags::USER,
+                                     "KE_VMM_AllocateUserData");
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<void *, kstd::error_code> KE_VMM_AllocateUserProcess(kernel::vmm::AddressSpace &as, size_t size) noexcept {
   return allocate_user_backed_region(as, size, "UserProcess",
-      kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE | kernel::vmm::ProtectFlags::USER,
-      "KE_VMM_AllocateUserProcess");
+                                     kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::EXECUTE | kernel::vmm::ProtectFlags::USER,
+                                     "KE_VMM_AllocateUserProcess");
 }
 
 UNDOS_KERNEL_API_DEF kernel::vmm::AddressSpace &KE_VMM_GetKernelAddressSpace() noexcept {
@@ -485,27 +598,33 @@ UNDOS_KERNEL_API_DEF kstd::expected<void *, kstd::error_code> KE_VMM_MapBorrowed
 
   // Walk the source address space's page tables while it's active to
   // capture the physical frames backing the borrowed range.
-  const kernel::PhysicalAddress caller_root = HAL_VMM_GetCurrentTranslationRoot();
-  const bool switch_to_source = as.translation_root && as.translation_root != caller_root;
-  uintptr_t irq_state = 0;
-  if (switch_to_source) {
-    irq_state = HAL_CPU_SaveAndDisableInterrupts();
-    HAL_VMM_SwitchAddressSpace(as.translation_root);
-  }
-
   bool ok = true;
-  for (size_t i = 0; i < page_count; ++i) {
-    const kernel::PhysicalAddress phys = HAL_VMM_GetPhysicalAddress(page_start + i * g_page_size);
-    if (!phys) {
-      ok = false;
-      break;
+  {
+    // Shared: the source's page tables must not change while they are read.
+    // TODO(SMP): the frames stay referenced by the alias after this; a
+    // concurrent unmap of the source needs a pin/refcount on them.
+    kernel::SharedGuard guard(as.lock, is_user_as(as));
+    const kernel::PhysicalAddress caller_root = HAL_VMM_GetCurrentTranslationRoot();
+    const bool switch_to_source = as.translation_root && as.translation_root != caller_root;
+    uintptr_t irq_state = 0;
+    if (switch_to_source) {
+      irq_state = HAL_CPU_SaveAndDisableInterrupts();
+      HAL_VMM_SwitchAddressSpace(as.translation_root);
     }
-    phys_pages[i] = phys;
-  }
 
-  if (switch_to_source) {
-    HAL_VMM_SwitchAddressSpace(caller_root);
-    HAL_CPU_RestoreInterrupts(irq_state);
+    for (size_t i = 0; i < page_count; ++i) {
+      const kernel::PhysicalAddress phys = HAL_VMM_GetPhysicalAddress(page_start + i * g_page_size);
+      if (!phys) {
+        ok = false;
+        break;
+      }
+      phys_pages[i] = phys;
+    }
+
+    if (switch_to_source) {
+      HAL_VMM_SwitchAddressSpace(caller_root);
+      HAL_CPU_RestoreInterrupts(irq_state);
+    }
   }
 
   if (!ok) {
@@ -514,14 +633,27 @@ UNDOS_KERNEL_API_DEF kstd::expected<void *, kstd::error_code> KE_VMM_MapBorrowed
   }
 
   kernel::vmm::AddressSpace &kernel_as = KE_VMM_GetKernelAddressSpace();
-  auto kernel_region_result = KE_VMM_AllocateRegion(kernel_as, page_count * g_page_size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+#if __STDC_HOSTED__
+  if (kernel::vmm::test_hooks::before_borrowed_reserve)
+    kernel::vmm::test_hooks::before_borrowed_reserve();
+#endif
+  auto kernel_region_result = reserve_vad(kernel_as, page_count * g_page_size,
+                                          kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE, true);
   if (!kernel_region_result) {
     KE_Free(phys_pages);
     return kstd::unexpected(kernel_region_result.error());
   }
-  void *kernel_region = *kernel_region_result;
-
-  const kernel::VirtualAddress kernel_start = kernel::VirtualAddress::from_ptr(kernel_region);
+  const kernel::VirtualAddress kernel_start = (*kernel_region_result)->start;
+  auto *borrowed_vad = *kernel_region_result;
+  borrowed_vad->borrowed_pointer = kernel_start + offset;
+  borrowed_vad->borrowed_size = size;
+  borrowed_vad->borrowed_source = &as;
+  borrowed_vad->borrowed_root = as.translation_root;
+  borrowed_vad->borrowed_asid = as.asid;
+#if __STDC_HOSTED__
+  if (kernel::vmm::test_hooks::before_borrowed_map)
+    kernel::vmm::test_hooks::before_borrowed_map(borrowed_vad);
+#endif
   size_t mapped = 0;
   for (; mapped < page_count; ++mapped) {
     if (!HAL_VMM_MapPage(kernel_start + mapped * g_page_size, phys_pages[mapped], kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE)) {
@@ -539,19 +671,22 @@ UNDOS_KERNEL_API_DEF kstd::expected<void *, kstd::error_code> KE_VMM_MapBorrowed
       HAL_VMM_UnmapPage(page);
       HAL_SMP_ShootdownTlb(page);
     }
-    const auto cleanupStatus = KE_VMM_FreeRegion(kernel_as, kernel_region);
+    const auto cleanupStatus = release_borrowed_region(borrowed_vad);
     if (cleanupStatus) {
       KE_Print("KE_VMM_MapBorrowed: failed to release reserved region: {}",
                cleanupStatus.message());
     }
-    return kstd::unexpected(kernel::KernelError::DeviceError);
+    return kstd::unexpected(cleanupStatus ? cleanupStatus : kstd::error_code(kernel::KernelError::DeviceError));
   }
 
+  {
+    kstd::unique_lock arena(kernel::memory::arena_mutex());
+    borrowed_vad->kind = VadKind::BorrowedActive;
+  }
   return (kernel_start + offset).as_ptr();
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_VMM_UnmapBorrowed(void *addr, size_t size, kernel::vmm::AddressSpace &as) noexcept {
-  (void) as;// The borrow is only ever mapped into the kernel address space.
   if (!addr || size == 0) {
     return kernel::KernelError::InvalidArgument;
   }
@@ -562,19 +697,117 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_VMM_UnmapBorrowed(void *addr, size_t si
     return kernel::KernelError::ArithmeticOverflow;
   }
 
-  const kernel::VirtualAddress mapped_addr = input;
-  const kernel::VirtualAddress page_start = mapped_addr.align_down(g_page_size);
-  const kernel::VirtualAddress page_end = (mapped_addr + size).align_up(g_page_size);
-  const size_t page_count = (page_end.value - page_start.value) / g_page_size;
-
-  for (size_t i = 0; i < page_count; ++i) {
-    HAL_VMM_UnmapPage(page_start + i * g_page_size);
+  VirtualAddressDescriptor *vad;
+  {
+    kstd::unique_lock arena(kernel::memory::arena_mutex());
+    vad = g_kernel_address_space.vads.find(input);
+    if (!vad || vad->kind == VadKind::Ordinary ||
+        vad->kind == VadKind::BorrowedFree) return kernel::KernelError::NotFound;
+    if (vad->kind != VadKind::BorrowedActive) return kernel::KernelError::InvalidState;
+    if (vad->borrowed_pointer != input || vad->borrowed_source != &as ||
+        vad->borrowed_root != as.translation_root ||
+        vad->borrowed_asid != as.asid) return kernel::KernelError::InvalidAddress;
+    if (vad->borrowed_size != size) return kernel::KernelError::InvalidSize;
+    if (vad->start != input.align_down(g_page_size) ||
+        vad->end != (input + size).align_up(g_page_size) ||
+        !vad->start.is_aligned(g_page_size) || !vad->end.is_aligned(g_page_size)) {
+      vad->kind = VadKind::BorrowedQuarantined;
+    } else {
+      vad->kind = VadKind::BorrowedUnmapping;
+    }
+  }
+  if (vad->kind == VadKind::BorrowedQuarantined) {
+    KE_Print("VMM borrowed release invariant: invalid recorded extent; quarantined");
+    return kernel::KernelError::InvalidState;
+  }
+#if __STDC_HOSTED__
+  if (kernel::vmm::test_hooks::after_borrowed_claim)
+    kernel::vmm::test_hooks::after_borrowed_claim();
+#endif
+  for (auto page = vad->start; page < vad->end; page += g_page_size) {
+    HAL_VMM_UnmapPage(page);
     // Unmapping removes a translation other CPUs may still have cached, so
     // this one has to go out to all of them, not just the local TLB.
-    HAL_SMP_ShootdownTlb(page_start + i * g_page_size);
+    HAL_SMP_ShootdownTlb(page);
   }
 
-  return KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), page_start.as_ptr());
+  return release_borrowed_region(vad);
+}
+
+namespace {
+// The single per-page preparation step of a direct user copy, called with
+// as.lock held shared. Today it only requires the page to be present and to
+// grant the access in hardware, so the copy can never fault. Copy-on-write
+// (make a shared page private and writable) and demand paging belong here
+// later; changing the page tables needs the lock exclusively, so that code
+// must report "retry exclusive" and copy_user re-takes the lock, re-checks
+// the page and fixes it. Callers do not change.
+kstd::error_code prepare_user_page(kernel::vmm::AddressSpace &as, kernel::VirtualAddress page, bool write) noexcept {
+  (void) as;
+  auto present = kernel::vmm::ProtectFlags::NONE;
+  if (!HAL_VMM_QueryPage(page, &present)) return kernel::KernelError::InvalidAddress;
+  if (!kernel::vmm::has_flag(present, kernel::vmm::ProtectFlags::USER)) return kernel::KernelError::InvalidAddress;
+  if (write && !kernel::vmm::has_flag(present, kernel::vmm::ProtectFlags::WRITE)) return kernel::KernelError::InvalidAddress;
+  return {};
+}
+
+// Portable permission check against the kernel's own record of the range.
+// Pages no VAD describes are judged by their page entry alone (above).
+kstd::error_code check_user_page(kernel::vmm::AddressSpace &as, kernel::VirtualAddress page, bool write) noexcept {
+  if (const auto *vad = as.vads.find(page)) {
+    if (vad->kind != VadKind::Ordinary) return kernel::KernelError::InvalidAddress;
+    const auto need = kernel::vmm::ProtectFlags::USER |
+                      (write ? kernel::vmm::ProtectFlags::WRITE : kernel::vmm::ProtectFlags::READ);
+    if (!kernel::vmm::has_flag(vad->flags, need)) return kernel::KernelError::InvalidAddress;
+  }
+  return prepare_user_page(as, page, write);
+}
+
+kstd::error_code copy_user(kernel::vmm::AddressSpace &as, uintptr_t user, uint8_t *kernel_ptr,
+                           size_t size, bool write) noexcept {
+  if (size == 0) return {};
+  if (!user) return kernel::KernelError::InvalidAddress;
+  if (g_page_size == 0) return kernel::KernelError::NotInitialized;
+  if (size > UINTPTR_MAX - user) return kernel::KernelError::ArithmeticOverflow;
+  if (as.limit && user + size > as.limit.value) return kernel::KernelError::InvalidAddress;
+
+  if (!as.translation_root || as.translation_root != HAL_VMM_GetCurrentTranslationRoot()) {
+    // Not the active address space: its pages are not visible here, so go
+    // through a temporary borrowed alias instead.
+    const auto mapped = KE_VMM_MapBorrowed(reinterpret_cast<void *>(user), size, as);
+    if (!mapped) return mapped.error();
+    if (write) __builtin_memcpy(*mapped, kernel_ptr, size);
+    else __builtin_memcpy(kernel_ptr, *mapped, size);
+    return KE_VMM_UnmapBorrowed(*mapped, size, as);
+  }
+
+  // The shared lock keeps every VAD and page entry of `as` in place for the
+  // whole copy, on any CPU, so a checked page cannot be unmapped before it is
+  // copied. Interrupts stay enabled.
+  kernel::SharedGuard guard(as.lock, is_user_as(as));
+  while (size) {
+    const kernel::VirtualAddress page = kernel::VirtualAddress(user).align_down(g_page_size);
+    const size_t room = page.value + g_page_size - user;
+    const size_t chunk = size < room ? size : room;
+    if (const auto status = check_user_page(as, page, write)) return status;
+    if (write) __builtin_memcpy(reinterpret_cast<void *>(user), kernel_ptr, chunk);
+    else __builtin_memcpy(kernel_ptr, reinterpret_cast<const void *>(user), chunk);
+    user += chunk;
+    kernel_ptr += chunk;
+    size -= chunk;
+  }
+  return {};
+}
+}// namespace
+
+UNDOS_KERNEL_API_DEF kstd::error_code KE_VMM_CopyFromUser(kernel::vmm::AddressSpace &as, void *dst, const void *userSrc, size_t size) noexcept {
+  if (!dst && size) return kernel::KernelError::InvalidArgument;
+  return copy_user(as, reinterpret_cast<uintptr_t>(userSrc), static_cast<uint8_t *>(dst), size, false);
+}
+
+UNDOS_KERNEL_API_DEF kstd::error_code KE_VMM_CopyToUser(kernel::vmm::AddressSpace &as, void *userDst, const void *src, size_t size) noexcept {
+  if (!src && size) return kernel::KernelError::InvalidArgument;
+  return copy_user(as, reinterpret_cast<uintptr_t>(userDst), const_cast<uint8_t *>(static_cast<const uint8_t *>(src)), size, true);
 }
 
 UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &info) noexcept {
@@ -596,7 +829,7 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
   // belongs to the currently running thread's owning process, while a
   // kernel-mode fault (or a user fault with no owning process, which should
   // never happen) is resolved against the kernel address space.
-  const kernel::vmm::AddressSpace *as = &KE_VMM_GetKernelAddressSpace();
+  kernel::vmm::AddressSpace *as = &KE_VMM_GetKernelAddressSpace();
   if (info.user) {
     if (const auto current_thread = KE_SCHED_GetCurrentThread(); current_thread && current_thread->owner_process) {
       as = &current_thread->owner_process->address_space;
@@ -605,12 +838,22 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
     }
   }
 
+  // Shared for the user address space: its VADs must stay put while the
+  // fault is resolved. Safe because no code faults while holding the lock
+  // exclusively. Kernel-mode faults on the kernel space take no lock.
+  // TODO(SMP): two CPUs faulting on one page may both map it; re-check the
+  // PTE under an exclusive lock once demand paging is used for user memory.
+  kernel::SharedGuard guard(as->lock, info.user);
+
   // 2. Look up the VAD covering the faulting address in that address space.
   // No VAD means the access targets memory that was never reserved for this
   // address space -- an invalid access that must be fatal.
   const auto *vad = as->vads.find(info.fault_addr);
   if (!vad) {
     fatal("Page Fault: access to unmapped/invalid address");
+  }
+  if (vad->kind != kernel::vmm::VadKind::Ordinary) {
+    fatal("Page Fault: access to reserved borrowed alias");
   }
 
   // 3. Protection checks: reject accesses that violate the VAD's declared

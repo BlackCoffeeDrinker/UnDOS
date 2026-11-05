@@ -2,6 +2,7 @@
 #include "syscalls.hpp"
 #include "vmm.hpp"
 #include "process.hpp"
+#include "task_stats.hpp"
 
 #include <kernel/kobject/KEventObject.hpp>
 #include <kernel/kobject/KIOObject.hpp>
@@ -150,6 +151,9 @@ kstd::error_code handle_GetInfo_V1(__KRN_PROC_GETINFO_V1 &&args) {
   (void) args;
   return kernel::KernelError::NotImplemented;
 }
+kstd::error_code handle_GetTaskSnapshot_V1(__KRN_PROC_GETTASKSNAPSHOT_V1 &&args) {
+  return kernel::task_stats::capture(args);
+}
 /** Terminates the current process with the given return code. */
 kstd::error_code handle_Exit_V1(__KRN_PROC_EXIT_V1 &&args) {
   if (const auto proc = current_process(); proc && proc->startupEvent && !proc->startupReady)
@@ -193,7 +197,8 @@ kstd::error_code handle_FreePages_V1(__KRN_MEM_FREEPAGES_V1 &&args) {
   const size_t size = (static_cast<size_t>(args.size) + 4095) & ~size_t(4095);
   const auto *vad = as.vads.find(address);
   // Whole eager anonymous regions only; never release aliases/backing objects.
-  if (!vad || vad->start != address || vad->end.value - vad->start.value != size ||
+  if (!vad || vad->kind != kernel::vmm::VadKind::Ordinary ||
+      vad->start != address || vad->end.value - vad->start.value != size ||
       vad->backing || vad->lock_count) return kernel::KernelError::InvalidAddress;
   for (size_t offset = 0; offset < size; offset += 4096) {
     if (!HAL_VMM_GetPhysicalAddress(address + offset)) return kernel::KernelError::InvalidAddress;
@@ -203,7 +208,7 @@ kstd::error_code handle_FreePages_V1(__KRN_MEM_FREEPAGES_V1 &&args) {
     const auto physical = HAL_VMM_GetPhysicalAddress(page);
     HAL_VMM_UnmapPage(page);
     HAL_SMP_ShootdownTlb(page);
-    HAL_PMM_FreeFrames(physical, 1);
+    (void) HAL_PMM_FreeOwnedFrames(proc->pid, physical, 1);
   }
   return KE_VMM_FreeRegion(as, address.as_ptr());
 }

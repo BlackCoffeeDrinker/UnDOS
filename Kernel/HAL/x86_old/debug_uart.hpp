@@ -99,7 +99,7 @@ class PolledUart {
     return ConfigurationMatches();
   }
 
-  bool ConfigurationMatches() noexcept {
+  bool ConfigurationMatches() const noexcept {
     return io_.read(io_.context, base_ + Ier) == 0x00 &&
            io_.read(io_.context, base_ + Lcr) == 0x03 &&
            io_.read(io_.context, base_ + Mcr) == 0x03;

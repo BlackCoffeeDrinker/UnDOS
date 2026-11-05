@@ -8,6 +8,7 @@
 
 namespace kernel {
 struct KMemoryBackingObject;
+struct KGraphicsAdapter;
 
 // 1. Enums declared first
 enum class PixelFormat : uint8_t {
@@ -88,6 +89,7 @@ namespace SurfaceFlags {
 constexpr uint32_t TopDown = (1 << 0);   // Scanline 0 is top (positive pitch)
 constexpr uint32_t Linear = (1 << 1);    // Linear memory layout (vs banked/planar)
 constexpr uint32_t UserMapped = (1 << 2);// Buffer mapped into userland address space
+constexpr uint32_t Lost = (1 << 3);      // Adapter memory lost (mode change/reset); draws fail
 }// namespace SurfaceFlags
 
 // Backing memory abstraction for a framebuffer or offscreen surface.
@@ -97,6 +99,7 @@ struct KSurface : KObjectT<KSurface, 1, TYPE_SURFACE> {
   // Hardware & Device Context Binding
   KObjectPtr<KMemoryBackingObject> backing;      // Memory backing the surface's pixel data
   KObjectPtr<KDisplay> display{nullptr};         // Owning display head (null for offscreen DIBs)
+  KObjectPtr<KGraphicsAdapter> adapter{nullptr};// Allocating adapter; null = system RAM, software only
   SurfaceType type{SurfaceType::OffscreenBitmap};// System RAM vs Hardware VRAM
 
   // Geometry & Layout (directly populated from KDisplayModeInfo)

@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <process_startup.hpp>
+#include <process_identity.hpp>
 
 namespace {
 using namespace kernel::process_startup;
@@ -89,4 +90,25 @@ TEST_CASE("Process startup builds aligned bounded i386 argc argv stack", "[proce
   REQUIRE(equal(bytes + buffer[16] - 0x20000, "/app"));
   REQUIRE(equal(bytes + buffer[17] - 0x20000, "a b"));
   REQUIRE(equal(bytes + buffer[18] - 0x20000, "c"));
+}
+
+TEST_CASE("Production process identity sequence stays unique and fails closed at exhaustion",
+          "[process-startup][task-manager][production]") {
+  kernel::process::IdentitySequence sequence;
+  uint32_t pid = 0;
+  uint64_t incarnation = 0;
+  REQUIRE(sequence.assign(pid, incarnation));
+  REQUIRE(pid == 1);
+  REQUIRE(incarnation == 1);
+  REQUIRE(sequence.assign(pid, incarnation));
+  REQUIRE(pid == 2);
+  REQUIRE(incarnation == 2);
+
+  kernel::process::IdentitySequence finalIdentity(UINT32_MAX, UINT64_MAX);
+  REQUIRE(finalIdentity.assign(pid, incarnation));
+  REQUIRE(pid == UINT32_MAX);
+  REQUIRE(incarnation == UINT64_MAX);
+  REQUIRE_FALSE(finalIdentity.assign(pid, incarnation));
+  REQUIRE(pid == UINT32_MAX);
+  REQUIRE(incarnation == UINT64_MAX);
 }

@@ -6,6 +6,7 @@
 #include <kernel/memory/page_fault.hpp>
 #include <kernel/memory/protect.hpp>
 #include <kernel/memory/vad.hpp>
+#include <kernel/rw_mutex.hpp>
 #include <utility.hpp>
 #include <expected.hpp>
 
@@ -28,8 +29,14 @@ struct AddressSpace {
   VadTree vads;
   PhysicalAddress translation_root = PhysicalAddress::Invalid;// Architecture-specific root (e.g., CR3, TTBR, satp)
   uint32_t asid = 0;                                          // Address Space Identifier (if supported by arch)
+  uint32_t owner_pid = 0;                                     // Nonzero for process-owned user address spaces
   VirtualAddress current_base = VirtualAddress::Invalid;
   VirtualAddress limit = VirtualAddress::Invalid;
+  // Guards `vads` and the page tables of a user address space: exclusive to
+  // change them, shared to rely on them (user copies, page faults). Order:
+  // lock, then the arena mutex, then spinlocks. Never fault while holding it
+  // exclusively. The kernel address space uses the arena mutex instead.
+  RwMutex lock;
 };
 }// namespace kernel::vmm
 
@@ -151,6 +158,13 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * another (typically user-mode) address space. Returns the kernel-mapped
  * pointer or the reason mapping failed. Callers must release the mapping with
  * KE_VMM_UnmapBorrowed once done.
+ * The caller owns exactly one synchronous release with the exact returned
+ * pointer, requested byte length, and original AddressSpace identity. The
+ * source space and frames must stay alive through release; frames are not
+ * pinned here. Do not retain or release the pointer after successful unmap.
+ * Stale raw releases after same-address reuse are unsupported caller misuse.
+ * Do not call from hardware IRQ context; contended arena work requires a
+ * schedulable current thread.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::VmmRegionResult,
@@ -162,12 +176,46 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @brief Method KE_VMM_UnmapBorrowed
  *
  * Reverses KE_VMM_MapBorrowed: unmaps the kernel-side pages backing `addr`
- * and frees the kernel virtual region that was reserved for the borrow.
+ * and returns the reserved extent to borrowed-alias reuse only after every
+ * translation is absent. Failed cleanup is diagnosed and quarantined.
+ * Validates the exact live alias before changing PTEs and claims its release
+ * exclusively. The pointer becomes invalid after success. No generation-token
+ * protection is provided against a duplicate after successful release/reuse.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
     kstd::error_code,
     KE_VMM_UnmapBorrowed,
     void *addr, size_t size, kernel::vmm::AddressSpace &as);
+
+/**
+ * @ingroup VMM
+ * @brief Method KE_VMM_CopyFromUser
+ *
+ * Copies `size` bytes from `userSrc` (as seen from `as`) into kernel memory at
+ * `dst`. When `as` is the active address space the copy is direct: every page
+ * is checked against its VAD (USER + READ) and must be present, so the copy
+ * never faults. Otherwise it falls back to a borrowed alias. Not for IRQ
+ * context.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kstd::error_code,
+    KE_VMM_CopyFromUser,
+    kernel::vmm::AddressSpace &as, void *dst, const void *userSrc, size_t size);
+
+/**
+ * @ingroup VMM
+ * @brief Method KE_VMM_CopyToUser
+ *
+ * Copies `size` bytes from kernel memory at `src` to `userDst` in `as`. The
+ * direct path requires USER + WRITE in the VAD and in the page entry; the
+ * kernel checks this itself because ring 0 may ignore write protection
+ * (i386). Each page goes through one preparation hook first, the single place
+ * where copy-on-write / demand paging will make it private and writable.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(
+    kstd::error_code,
+    KE_VMM_CopyToUser,
+    kernel::vmm::AddressSpace &as, void *userDst, const void *src, size_t size);
 
 UNDOS_KERNEL_PUBLIC_V1API(
     void,

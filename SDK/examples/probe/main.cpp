@@ -3,7 +3,8 @@
 #include <undoscrt/string.h>
 #include <userspace.h>
 #include <undos/font/resource.hpp>
-#include <undosgui/gui.hpp>
+#include <windows.h>
+#include <undosgui/extensions.h>
 
 static_assert(sizeof(HANDLE) == 4 && alignof(HANDLE) == 4);
 static_assert(sizeof(__SYS_PROC_CREATEPROCESS_V2) == 36 &&
@@ -24,30 +25,65 @@ unsigned phase;
 }
 
 void check_font_layout() {
-  gui::TextExtent narrow{}, wide{}, measured{}, fitted{};
-  const gui::Font font = gui::Font::acquire();
-  if (!font) fail();
-  const gui::TextLayout layout(font);
-  if (!layout.measure("iiii", narrow) || !layout.measure("WWWW", wide) ||
-      narrow.width >= wide.width) fail();
+  UNDOS_TEXT_EXTENT narrow{}, wide{}, measured{}, fitted{};
+  UNDOS_FONT font = 0;
+  uint32_t generation = 0;
+  if (!UndosAcquireFont(UNDOS_FONT_SYSTEM_DEFAULT,
+      UNDOS_GLYPH_FALLBACK_NOTDEF, &font, &generation))
+    fail();
+  (void)generation;
+  if (!UndosMeasureText(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, "iiii", &narrow) ||
+      !UndosMeasureText(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, "WWWW", &wide) ||
+      narrow.advanceWidth >= wide.advanceWidth)
+    fail();
   char output[64]{};
-  if (!layout.fit_prefix("WWWW", output, sizeof(output), wide.width, fitted) ||
-      strcmp(output, "WWWW") || fitted.width != wide.width) fail();
-  if (!layout.fit_prefix("WWWW", output, sizeof(output), 0, fitted) || output[0] ||
-      fitted.width || fitted.height != wide.height) fail();
-  if (!layout.fit_prefix("", output, sizeof(output), 100, fitted) || output[0] || fitted.width) fail();
-  if (!layout.measure("...", measured) ||
-      !layout.fit_prefix("WWWWWWWW", output, 4, measured.width, fitted) || strcmp(output, "...")) fail();
-  if (!layout.measure("\xc3\xa9...", measured) ||
-      !layout.fit_prefix("\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9", output,
-                     sizeof(output), measured.width, fitted) ||
-      fitted.width > measured.width || strcmp(output, "\xc3\xa9...")) fail();
-  fitted = {99, 99};
-  if (layout.fit_prefix("x", output, 3, 100, fitted) || fitted.width || fitted.height) fail();
+  if (!UndosFitTextPrefix(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, "WWWW", output, sizeof(output), wide.advanceWidth,
+      &fitted) || strcmp(output, "WWWW") ||
+      fitted.advanceWidth != wide.advanceWidth)
+    fail();
+  if (!UndosFitTextPrefix(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, "WWWW", output, sizeof(output), 0, &fitted) ||
+      output[0] || fitted.advanceWidth || fitted.lineHeight != wide.lineHeight)
+    fail();
+  if (!UndosFitTextPrefix(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, "", output, sizeof(output), 100, &fitted) ||
+      output[0] || fitted.advanceWidth)
+    fail();
+  if (!UndosMeasureText(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, "...", &measured) ||
+      !UndosFitTextPrefix(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, "WWWWWWWW", output, 4, measured.advanceWidth,
+      &fitted) || strcmp(output, "..."))
+    fail();
+  if (!UndosMeasureText(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, "\xc3\xa9...", &measured) ||
+      !UndosFitTextPrefix(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, "\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9",
+      output, sizeof(output), measured.advanceWidth, &fitted) ||
+      fitted.advanceWidth > measured.advanceWidth ||
+      strcmp(output, "\xc3\xa9..."))
+    fail();
+  if (!UndosFitTextTail(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, "WWWWWWWW", output, sizeof(output),
+      wide.advanceWidth, &fitted) || fitted.advanceWidth > wide.advanceWidth)
+    fail();
+  memset(output, 'x', sizeof(output));
+  fitted = {99, 98, 97, 96, 95, 94, 93, 92};
+  if (UndosFitTextPrefix(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, "x", output, 3, 100, &fitted) ||
+      output[0] != 'x' || fitted.advanceWidth != 98 ||
+      fitted.lineHeight != 97)
+    fail();
   char oversized[1026];
   memset(oversized, 'W', sizeof(oversized) - 1);
   oversized[sizeof(oversized) - 1] = 0;
-  if (layout.fit_prefix(oversized, output, sizeof(output), 100, fitted)) fail();
+  if (UndosFitTextPrefix(font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+      UNDOS_TEXT_BASIC, oversized, output, sizeof(output), 100, &fitted))
+    fail();
+  if (!UndosCloseFont(font)) fail();
   (void)UD_SYS_PrintV1("SDK probe: proportional text fitting PASS");
 }
 }

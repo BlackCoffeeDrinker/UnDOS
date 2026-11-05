@@ -1,5 +1,9 @@
-#include <undosgui/gui.hpp>
+#include <userspace.h>
+#include <windows.h>
+#include <undosgui/extensions.h>
+#include <undoscrt/stdio.h>
 #include <undoscrt/string.h>
+#include <undos/syscalls.h>
 #include "model.hpp"
 
 namespace {
@@ -19,8 +23,9 @@ struct TreeNode {
   bool expanded{false};
 };
 struct State {
-  uint32_t hwnd{0};
-  uint32_t menu{0};
+  HWND hwnd{nullptr};
+  HMENU menu{nullptr};
+  UNDOS_UI_CONTEXT ui{};
   bool running{true};
   char path[PathCapacity] = "/";
   char status[256] = "Ready";
@@ -44,8 +49,57 @@ struct State {
 State app;
 void notice(const char *title, const char *text);
 
+void recover_windows() {
+  for (UINT attempt = 0; attempt < 64; ++attempt) {
+    UNDOS_WINDOW_CREATION_RECOVERY creation{};
+    if (UndosGetWindowCreationRecovery(&creation)) {
+      if (!DestroyWindow(creation.window)) {
+        crt_printf("filemanager: creation cleanup failed setup error/status %u/%u "
+                   "cleanup error/status %u/%u\n",
+                   creation.setupError, creation.setupStatus,
+                   creation.cleanupError, creation.cleanupStatus);
+        return;
+      }
+      continue;
+    }
+    UNDOS_UI_CLEANUP_RECOVERY cleanup{};
+    if (UndosGetUiCleanupRecovery(&cleanup)) {
+      if (!DestroyWindow(cleanup.window)) {
+        crt_printf("filemanager: UI cleanup failed operation error/status %u/%u "
+                   "cleanup error/status %u/%u\n",
+                   cleanup.operationError, cleanup.operationStatus,
+                   cleanup.cleanupError, cleanup.cleanupStatus);
+        return;
+      }
+      continue;
+    }
+    break;
+  }
+}
+
+void check_dispatch_result(uint32_t before) {
+  if (app.ui.resultSerial != before && app.ui.result < 0) {
+    crt_printf("filemanager: default UI operation failed operation error/status %u/%u cleanup error/status %u/%u\n",
+               app.ui.operationError, app.ui.operationStatus,
+               app.ui.cleanupError, app.ui.cleanupStatus);
+    (void)UD_SYS_PrintV1("filemanager: default UI operation failed");
+  }
+  recover_windows();
+}
+
+bool dialog(const char *title, const char *text, UNDOS_DIALOG_FIELD *fields,
+            UINT count, BOOL confirm) {
+  const int result = UndosRunDialog(&app.ui, app.hwnd, title, text, fields,
+                                    count, confirm);
+  if (result < 0)
+    crt_printf("filemanager: dialog failed %u/%u\n", app.ui.operationError,
+               app.ui.operationStatus);
+  recover_windows();
+  return result > 0;
+}
+
 struct Layout {
-  Rect area{};
+  RECT area{};
   bool compactToolbar{false};
   int toolbarRows{1};
   int lineHeight{0};
@@ -64,18 +118,22 @@ struct Layout {
 
 Layout layout() {
   Layout result{};
-  result.area = gui::client(app.hwnd);
+  if (!GetClientRect(app.hwnd, &result.area)) return result;
   result.compactToolbar = result.area.right < CompactToolbarWidth;
-  gui::TextMetrics metrics{};
-  if (gui::system_font().metrics(metrics)) result.lineHeight = static_cast<int>(metrics.lineHeight);
+  UNDOS_TEXT_METRICS metrics{};
+  if (UndosGetFontMetrics(app.ui.font, UNDOS_TEXT_REGULAR,
+                          UNDOS_TEXT_BASIC, &metrics))
+    result.lineHeight = static_cast<int>(metrics.lineHeight);
   result.rowHeight = result.lineHeight + 4;
   for (const char *label : Toolbar) {
-    const int height = gui::button_height(label);
+    int height = 0;
+    if (!UndosGetButtonHeight(app.ui.font, label, &height)) return result;
     if (height > result.buttonHeight) result.buttonHeight = height;
   }
   const char *const footerLabels[] = {"Prev", "Next", "Props"};
   for (const char *label : footerLabels) {
-    const int height = gui::button_height(label);
+    int height = 0;
+    if (!UndosGetButtonHeight(app.ui.font, label, &height)) return result;
     if (height > result.buttonHeight) result.buttonHeight = height;
   }
   result.toolbarPitch = result.buttonHeight + 4;
@@ -99,33 +157,49 @@ int visible_rows(const Layout &current) {
   return rows > 0 ? rows : 1;
 }
 
-bool append_menu(uint32_t menu, MenuItemFlags flags, uint32_t item, const char *text) {
-  return gui::check(UD_SYS_AppendMenuV1(menu, flags, item, text), "AppendMenu");
+bool syscall_ok(SyscallReturnCode result, const char *operation) {
+  if (result == SyscallReturnCode_OKAY) return true;
+  crt_printf("filemanager: %s failed status %u\n", operation,
+             static_cast<unsigned>(result));
+  (void)UD_SYS_PrintV1("filemanager: syscall failed");
+  return false;
 }
 
-uint32_t create_menu(bool popup) {
-  uint32_t menu = 0;
-  if (!gui::check(UD_SYS_CreateMenuV1(popup, &menu), "CreateMenu")) return 0;
+bool sdk_ok(BOOL result, const char *operation) {
+  if (result) return true;
+  crt_printf("filemanager: %s failed error %u status %u\n", operation,
+             GetLastError(), UndosGetLastStatus());
+  (void)UD_SYS_PrintV1("filemanager: GUI operation failed");
+  return false;
+}
+
+bool append_menu(HMENU menu, UINT flags, UINT_PTR item, const char *text) {
+  return sdk_ok(AppendMenu(menu, flags, item, text), "AppendMenu");
+}
+
+HMENU create_menu(bool popup) {
+  HMENU menu = popup ? CreatePopupMenu() : CreateMenu();
+  if (!menu) sdk_ok(FALSE, "CreateMenu");
   return menu;
 }
 
-bool append_command(uint32_t menu, Command commandId, const char *text) {
-  return append_menu(menu, MenuItemFlags_String, static_cast<uint32_t>(commandId), text);
+bool append_command(HMENU menu, Command commandId, const char *text) {
+  return append_menu(menu, MF_STRING, static_cast<uint32_t>(commandId), text);
 }
 
-bool append_popup(uint32_t root, const char *text, uint32_t &popup) {
+bool append_popup(HMENU root, const char *text, HMENU &popup) {
   popup = create_menu(true);
   if (!popup) return false;
-  if (append_menu(root, MenuItemFlags_Popup, popup, text)) return true;
-  gui::check(UD_SYS_DestroyMenuV1(popup), "DestroyMenu");
+  if (append_menu(root, MF_POPUP, reinterpret_cast<UINT_PTR>(popup), text)) return true;
+  (void)DestroyMenu(popup);
   popup = 0;
   return false;
 }
 
 bool create_app_menu() {
-  const uint32_t root = create_menu(false);
+  const HMENU root = create_menu(false);
   if (!root) return false;
-  uint32_t file = 0, view = 0;
+  HMENU file = nullptr, view = nullptr;
   bool okay = append_popup(root, "File", file) &&
               append_popup(root, "View", view);
   okay = okay && append_command(file, Open, "Open / Run");
@@ -143,8 +217,8 @@ bool create_app_menu() {
   okay = okay && append_command(view, SortSize, "Sort page by size");
   okay = okay && append_command(view, Reverse, "Reverse order");
   okay = okay && append_command(root, Help, "Help");
-  if (!okay || !gui::check(UD_SYS_SetMenuV1(app.hwnd, root), "SetMenu")) {
-    gui::check(UD_SYS_DestroyMenuV1(root), "DestroyMenu");
+  if (!okay || !sdk_ok(SetMenu(app.hwnd, root), "SetMenu")) {
+    (void)DestroyMenu(root);
     return false;
   }
   app.menu = root;
@@ -152,8 +226,8 @@ bool create_app_menu() {
 }
 
 void focus() {
-  gui::check(UD_SYS_SetFocusV1(app.hwnd), "SetFocus");
-  gui::invalidate(app.hwnd);
+  (void)sdk_ok(UndosSetFocus(app.hwnd), "SetFocus");
+  (void)sdk_ok(InvalidateRect(app.hwnd, nullptr, TRUE), "InvalidateRect");
 }
 
 void message(const char *title, const char *text) {
@@ -162,7 +236,7 @@ void message(const char *title, const char *text) {
 }
 
 bool checked(uint32_t result, const char *operation) {
-  if (gui::check(result, operation)) return true;
+  if (syscall_ok(static_cast<SyscallReturnCode>(result), operation)) return true;
   copy(app.status, sizeof(app.status), "Operation failed");
   message(operation, "Failed: missing path, existing target, busy/read-only volume or I/O error.\nShort names only. See the serial log for the status code.");
   return false;
@@ -219,8 +293,8 @@ bool load(const char *path, uint32_t page = 0) {
   copy(app.readyMarker, sizeof(app.readyMarker), "filemanager: directory ready path=");
   const size_t prefix = strlen(app.readyMarker);
   copy(app.readyMarker + prefix, sizeof(app.readyMarker) - prefix, app.path);
-  gui::check(UD_SYS_SetWindowTextV1(app.hwnd, "File Manager"), "SetWindowText");
-  gui::invalidate(app.hwnd);
+  (void)sdk_ok(SetWindowText(app.hwnd, "File Manager"), "SetWindowText");
+  (void)sdk_ok(InvalidateRect(app.hwnd, nullptr, TRUE), "InvalidateRect");
   return true;
 }
 
@@ -330,8 +404,8 @@ void open_selection() {
 void operate(Command command) {
   char source[PathCapacity]{}, destination[PathCapacity]{}, input[PathCapacity]{};
   if (command == NewFolder) {
-    gui::Field field{.label = "Folder name (8.3)", .value = input, .capacity = sizeof(input)};
-    if (!gui::dialog("Create directory", "Create a folder in the current directory.", &field, 1,
+    UNDOS_DIALOG_FIELD field{.label = "Folder name (8.3)", .value = input, .capacity = sizeof(input)};
+    if (!dialog("Create directory", "Create a folder in the current directory.", &field, 1,
                       true)) { focus(); return; }
     if (!input[0] || strchr(input, '/') || !join(app.path, input, source)) {
       message("Invalid name", "Enter one short folder name."); return;
@@ -339,12 +413,12 @@ void operate(Command command) {
   } else {
     if (!selected_path(source)) return;
     if (command == Delete) {
-      if (!gui::dialog("Delete permanently", source, nullptr, 0, true)) { focus(); return; }
+      if (!dialog("Delete permanently", source, nullptr, 0, TRUE)) { focus(); return; }
     } else {
       if (command == Rename) copy(input, sizeof(input), app.entries[app.selection].name);
       else copy(input, sizeof(input), source);
-      gui::Field field{.label = command == Rename ? "New name (8.3)" : "Destination path", .value = input, .capacity = sizeof(input)};
-      if (!gui::dialog(command == Copy ? "Copy file" : command == Move ? "Move file" : "Rename",
+      UNDOS_DIALOG_FIELD field{.label = command == Rename ? "New name (8.3)" : "Destination path", .value = input, .capacity = sizeof(input)};
+      if (!dialog(command == Copy ? "Copy file" : command == Move ? "Move file" : "Rename",
           "Existing destinations are never replaced. Same volume only.", &field, 1,
           true)) { focus(); return; }
       if ((command == Rename && strchr(input, '/')) || !join(app.path, input, destination)) {
@@ -357,7 +431,7 @@ void operate(Command command) {
       command == Copy ? UD_SYS_CopyFileV1(source, destination) :
       UD_SYS_MoveFileV1(source, destination);
   if (result == SyscallReturnCode_UNSUPPORTED) {
-    gui::check(result, "File operation");
+    (void)syscall_ok(static_cast<SyscallReturnCode>(result), "File operation");
     message("Unsupported operation", "Folder copy and cross-parent folder moves are not supported.\nUse short names. Long-name entries and some volumes are read-only.");
   } else checked(result, "File operation");
   // A device failure may have changed disk state. Never retain stale tree nodes.
@@ -378,10 +452,10 @@ void properties() {
   if (entry.attributes & 4) attributes[n++] = 'S';
   if (entry.attributes & 16) attributes[n++] = 'D';
   if (entry.attributes & 32) attributes[n++] = 'A';
-  gui::Field fields[] = {{.label = "Path", .value = path, .capacity = sizeof(path)},
+  UNDOS_DIALOG_FIELD fields[] = {{.label = "Path", .value = path, .capacity = sizeof(path)},
                         {.label = "Size in bytes", .value = size, .capacity = sizeof(size)},
                         {.label = "Attributes (R H S D A)", .value = attributes, .capacity = sizeof(attributes)}};
-  gui::dialog("Properties", "Information only. Edits in this dialog are not saved.", fields, 3,
+  dialog("Properties", "Information only. Edits in this dialog are not saved.", fields, 3,
                false);
   focus();
 }
@@ -392,8 +466,8 @@ void command(Command action) {
   else if (action == Location) {
     char path[PathCapacity]{};
     copy(path, sizeof(path), app.path);
-    gui::Field field{.label = "Absolute path", .value = path, .capacity = sizeof(path)};
-    if (gui::dialog("Go to directory", "UnDOS paths start with / (no DOS drive letters).", &field, 1,
+    UNDOS_DIALOG_FIELD field{.label = "Absolute path", .value = path, .capacity = sizeof(path)};
+    if (dialog("Go to directory", "UnDOS paths start with / (no DOS drive letters).", &field, 1,
                      true)) load(path);
     focus();
   } else if (action == Refresh) { reset_tree(); load(app.path); }
@@ -419,41 +493,91 @@ void command(Command action) {
       "Operations change the disk. There is no undo.");
   else if (action == Exit) app.running = false;
   else operate(action);
-  gui::invalidate(app.hwnd);
+  (void)sdk_ok(InvalidateRect(app.hwnd, nullptr, TRUE), "InvalidateRect");
 }
 
-void text(gui::Paint &paint, int x, int y, const char *value, int width,
-    uint32_t color = gui::Ink, uint32_t background = gui::Paper) {
+bool set_colors(HDC dc, UINT foreground, UINT background,
+                BOOL opaque = TRUE) {
+  const COLORREF fg = UndosPaletteColor(foreground);
+  const COLORREF bg = UndosPaletteColor(background);
+  return fg != CLR_INVALID && bg != CLR_INVALID &&
+      SetTextColor(dc, fg) != CLR_INVALID && SetBkColor(dc, bg) != CLR_INVALID &&
+      SetBkMode(dc, opaque ? OPAQUE : TRANSPARENT) != 0;
+}
+
+bool fill(HDC dc, int left, int top, int right, int bottom, UINT color) {
+  return set_colors(dc, color, color) &&
+      UndosFillRectangle(dc, left, top, right, bottom);
+}
+
+bool draw(HDC dc, int x, int y, const char *value, UINT foreground = 0,
+          UINT background = 15) {
+  return set_colors(dc, foreground, background) &&
+      UndosDrawText(dc, x, y, UNDOS_TEXT_REGULAR, UNDOS_TEXT_PROPORTIONAL,
+                    UNDOS_TEXT_BASIC, value);
+}
+
+bool begin_paint(PAINTSTRUCT &paint) {
+  paint = {};
+  paint.hdc = BeginPaint(app.hwnd, &paint);
+  if (!paint.hdc) return sdk_ok(FALSE, "BeginPaint");
+  UNDOS_FONT previous = 0;
+  BOOL hadPrevious = FALSE;
+  if (!UndosSelectFont(paint.hdc, app.ui.font, &previous, &hadPrevious)) {
+    sdk_ok(FALSE, "UndosSelectFont");
+    (void)EndPaint(app.hwnd, &paint);
+    return false;
+  }
+  if (hadPrevious && !UndosCloseFont(previous)) {
+    sdk_ok(FALSE, "UndosCloseFont");
+    (void)EndPaint(app.hwnd, &paint);
+    return false;
+  }
+  return true;
+}
+
+void end_paint(PAINTSTRUCT &paint) {
+  if (!EndPaint(app.hwnd, &paint)) (void)sdk_ok(FALSE, "EndPaint");
+}
+
+void text(HDC dc, int x, int y, const char *value, int width,
+    UINT color = 0, UINT background = 15) {
   if (width <= 0) return;
   char clipped[256]{};
-  gui::TextExtent extent{};
-  const gui::TextLayout layout(gui::system_font());
-  if (layout.fit_prefix(value, clipped, sizeof(clipped), static_cast<uint32_t>(width), extent))
-    paint.draw_text(x, y, clipped, gui::FontStyle::Regular, color, background);
+  UNDOS_TEXT_EXTENT extent{};
+  if (UndosFitTextPrefix(app.ui.font, UNDOS_TEXT_REGULAR,
+          UNDOS_TEXT_PROPORTIONAL, UNDOS_TEXT_BASIC, value, clipped,
+          sizeof(clipped), static_cast<UINT>(width), &extent))
+    (void)draw(dc, x, y, clipped, color, background);
 }
 
 void paint() {
-  gui::Paint p(app.hwnd);
-  if (!p) return;
+  PAINTSTRUCT paint{};
+  if (!begin_paint(paint)) return;
   const auto current = layout();
-  if (current.lineHeight <= 0 || current.rowHeight <= 0) return;
-  const Rect area = current.area;
+  if (current.lineHeight <= 0 || current.rowHeight <= 0) {
+    end_paint(paint);
+    return;
+  }
+  HDC dc = paint.hdc;
+  const RECT area = current.area;
   const int right = area.right, bottom = area.bottom;
   const int rowsVisible = visible_rows(current);
-  p.fill(0, 0, right, bottom, gui::Face);
+  (void)fill(dc, 0, 0, right, bottom, 7);
   for (int i = 0; i < 9; ++i) {
     const int buttonRow = current.compactToolbar ? i / 5 : 0;
     const int buttonColumn = current.compactToolbar ? i % 5 : i;
-    p.button(4 + buttonColumn * 72, ToolbarTop + buttonRow * current.toolbarPitch, 70, Toolbar[i]);
+    (void)UndosDrawButton(dc, app.ui.font, 4 + buttonColumn * 72,
+        ToolbarTop + buttonRow * current.toolbarPitch, 70, Toolbar[i], FALSE);
   }
-  p.fill(4, current.pathTop, right - 4, current.pathBottom, gui::Paper);
-  text(p, 10, current.pathTextY, app.path, right - 24);
-  p.draw_text(8, current.headerY, "[/] Directory tree", gui::FontStyle::Regular, app.treeFocus ? gui::Highlight : gui::Ink);
-  p.draw_text(TreeWidth + 10, current.headerY, "Name", gui::FontStyle::Regular, !app.treeFocus ? gui::Highlight : gui::Ink);
-  text(p, right - 186, current.headerY, "Bytes", 104, gui::Ink, gui::Face);
-  text(p, right - 76, current.headerY, "Attr", 40, gui::Ink, gui::Face);
-  p.fill(4, current.listTop, TreeWidth - 2, current.listBottom, gui::Paper);
-  p.fill(TreeWidth + 2, current.listTop, right - 4, current.listBottom, gui::Paper);
+  (void)fill(dc, 4, current.pathTop, right - 4, current.pathBottom, 15);
+  text(dc, 10, current.pathTextY, app.path, right - 24);
+  (void)draw(dc, 8, current.headerY, "[/] Directory tree", app.treeFocus ? 1u : 0u, 7);
+  (void)draw(dc, TreeWidth + 10, current.headerY, "Name", !app.treeFocus ? 1u : 0u, 7);
+  text(dc, right - 186, current.headerY, "Bytes", 104, 0, 7);
+  text(dc, right - 76, current.headerY, "Attr", 40, 0, 7);
+  (void)fill(dc, 4, current.listTop, TreeWidth - 2, current.listBottom, 15);
+  (void)fill(dc, TreeWidth + 2, current.listTop, right - 4, current.listBottom, 15);
   for (int row = 0; row < rowsVisible; ++row) {
     const int y = current.listTop + row * current.rowHeight;
     const int textY = y + (current.rowHeight - current.lineHeight) / 2;
@@ -461,57 +585,58 @@ void paint() {
     if (nodeIndex < app.treeCount) {
       const auto &node = app.tree[nodeIndex];
       const bool selected = app.treeFocus && nodeIndex == app.treeSelection;
-      const auto bg = selected ? gui::Highlight : gui::Paper;
-      p.fill(5, y, TreeWidth - 3, y + current.rowHeight, bg);
+      const UINT bg = selected ? 1u : 15u;
+      (void)fill(dc, 5, y, TreeWidth - 3, y + current.rowHeight, bg);
       const int indent = node.depth < 8 ? node.depth * 14 : 112;
-      p.draw_text(8 + indent, textY, node.expanded ? "-" : "+", gui::FontStyle::Regular, selected ? gui::Paper : gui::Ink, bg);
-      text(p, 22 + indent, textY, nodeIndex ? basename(node.path) : "/", TreeWidth - 44 - indent,
-           selected ? gui::Paper : gui::Ink, bg);
+      (void)draw(dc, 8 + indent, textY, node.expanded ? "-" : "+", selected ? 15u : 0u, bg);
+      text(dc, 22 + indent, textY, nodeIndex ? basename(node.path) : "/",
+           TreeWidth - 44 - indent, selected ? 15u : 0u, bg);
     }
     const int index = app.scroll + row;
     if (index >= app.count) continue;
     const auto &entry = app.entries[index];
     const bool selected = !app.treeFocus && index == app.selection;
-    const auto bg = selected ? gui::Highlight : gui::Paper;
-    const auto fg = selected ? gui::Paper : gui::Ink;
-    p.fill(TreeWidth + 3, y, right - 21, y + current.rowHeight, bg);
-    p.draw_text(TreeWidth + 8, textY, entry.directory() ? "+" : " ", gui::FontStyle::Regular, fg, bg);
-    text(p, TreeWidth + 24, textY, entry.name, right - TreeWidth - 220, fg, bg);
+    const UINT bg = selected ? 1u : 15u;
+    const UINT fg = selected ? 15u : 0u;
+    (void)fill(dc, TreeWidth + 3, y, right - 21, y + current.rowHeight, bg);
+    (void)draw(dc, TreeWidth + 8, textY, entry.directory() ? "+" : " ", fg, bg);
+    text(dc, TreeWidth + 24, textY, entry.name, right - TreeWidth - 220, fg, bg);
     char number[24]{};
     if (entry.directory()) copy(number, sizeof(number), "<DIR>");
     else decimal(entry.size, number);
-    text(p, right - 186, textY, number, 104, fg, bg);
+    text(dc, right - 186, textY, number, 104, fg, bg);
     char attributes[] = "----";
     if (entry.attributes & 1) attributes[0] = 'R';
     if (entry.attributes & 2) attributes[1] = 'H';
     if (entry.attributes & 4) attributes[2] = 'S';
     if (entry.attributes & 32) attributes[3] = 'A';
-    text(p, right - 76, textY, attributes, 40, fg, bg);
+    text(dc, right - 76, textY, attributes, 40, fg, bg);
   }
   const int bars[] = {TreeWidth - 18, right - 20};
   const int counts[] = {app.treeCount, app.count};
   const int offsets[] = {app.treeScroll, app.scroll};
   for (int i = 0; i < 2; ++i) {
-    p.fill(bars[i], current.listTop, bars[i] + 16, current.listBottom, gui::Face);
-    p.draw_text(bars[i] + 4, current.listTop + 2, "^");
-    p.draw_text(bars[i] + 4, current.listBottom - current.lineHeight - 2, "v");
+    (void)fill(dc, bars[i], current.listTop, bars[i] + 16, current.listBottom, 7);
+    (void)draw(dc, bars[i] + 4, current.listTop + 2, "^");
+    (void)draw(dc, bars[i] + 4, current.listBottom - current.lineHeight - 2, "v");
     const int arrowHeight = current.lineHeight + 4;
     const int track = current.listBottom - current.listTop - 2 * arrowHeight;
     if (track > 0 && counts[i] > rowsVisible) {
       const int thumb = current.listTop + arrowHeight + offsets[i] * track / (counts[i] - rowsVisible);
-      p.fill(bars[i] + 2, thumb, bars[i] + 14, thumb + current.rowHeight, 8);
+      (void)fill(dc, bars[i] + 2, thumb, bars[i] + 14, thumb + current.rowHeight, 8);
     }
   }
-  p.button(4, current.footerTop, 64, "Prev");
-  p.button(72, current.footerTop, 64, "Next");
-  p.button(144, current.footerTop, 64, "Props");
+  (void)UndosDrawButton(dc, app.ui.font, 4, current.footerTop, 64, "Prev", FALSE);
+  (void)UndosDrawButton(dc, app.ui.font, 72, current.footerTop, 64, "Next", FALSE);
+  (void)UndosDrawButton(dc, app.ui.font, 144, current.footerTop, 64, "Props", FALSE);
   char page[24]{};
   decimal(static_cast<uint64_t>(app.page) + 1, page);
-  p.draw_text(222, current.footerTop + (current.buttonHeight - current.lineHeight) / 2, "Page");
-  p.draw_text(266, current.footerTop + (current.buttonHeight - current.lineHeight) / 2, page);
-  p.draw_text(330, current.footerTop + (current.buttonHeight - current.lineHeight) / 2,
-              app.nextPage ? "(more entries)" : "(last page)");
-  text(p, 8, current.footerTextY, app.status, right - 16, gui::Ink, gui::Face);
+  (void)draw(dc, 222, current.footerTop + (current.buttonHeight - current.lineHeight) / 2, "Page", 0, 7);
+  (void)draw(dc, 266, current.footerTop + (current.buttonHeight - current.lineHeight) / 2, page, 0, 7);
+  (void)draw(dc, 330, current.footerTop + (current.buttonHeight - current.lineHeight) / 2,
+             app.nextPage ? "(more entries)" : "(last page)", 0, 7);
+  text(dc, 8, current.footerTextY, app.status, right - 16, 0, 7);
+  end_paint(paint);
 }
 
 void page(bool next) {
@@ -520,20 +645,55 @@ void page(bool next) {
 }
 
 void notice(const char *title, const char *value) {
-  gui::message(title, value);
+  (void)dialog(title, value, nullptr, 0, FALSE);
 }
 
-void procedure(const Msg &msg) {
-  if (msg.message == WindowMessage_Close) app.running = false;
-  else if (msg.message == WindowMessage_FontChanged) { ensure_visible(); gui::invalidate(app.hwnd); }
-  else if (msg.message == WindowMessage_Command && msg.wParam <= Reverse)
+LRESULT CALLBACK procedure(HWND window, UINT messageId, WPARAM wParam,
+                           LPARAM lParam) {
+  const MSG msg{.hwnd = window, .message = messageId,
+                .wParam = wParam, .lParam = lParam};
+  if (messageId == WM_CLOSE || messageId == WM_DESTROY) {
+    app.running = false;
+    return 0;
+  }
+  if (messageId == WM_FONTCHANGED) {
+    if ((!app.ui.metricsValid || wParam != app.ui.metrics.generation) &&
+        !UndosRefreshUi(&app.ui)) {
+      crt_printf("filemanager: font refresh failed %u/%u\n",
+                 app.ui.operationError, app.ui.operationStatus);
+      app.running = false;
+      return 0;
+    }
+    ensure_visible();
+    (void)InvalidateRect(app.hwnd, nullptr, TRUE);
+    return 0;
+  }
+  else if (messageId == WM_COMMAND && msg.wParam <= Reverse) {
     command(static_cast<Command>(msg.wParam));
-  else if (msg.message == WindowMessage_Paint) paint();
-  else if (msg.message == WindowMessage_Size) { ensure_visible(); gui::invalidate(app.hwnd); }
-  else if (msg.message == WindowMessage_KeyDown) {
+    return 0;
+  }
+  else if (messageId == WM_PAINT) {
+    paint();
+    return 0;
+  }
+  else if (messageId == WM_SIZE || messageId == WM_DISPLAYCHANGE) {
+    if (messageId == WM_DISPLAYCHANGE) {
+      UINT width = 0, height = 0;
+      if (!UndosGetDisplaySize(&app.ui, &width, &height)) {
+        crt_printf("filemanager: display refresh failed %u/%u\n",
+                   GetLastError(), UndosGetLastStatus());
+        app.running = false;
+        return 0;
+      }
+    }
+    ensure_visible();
+    (void)InvalidateRect(app.hwnd, nullptr, TRUE);
+    return 0;
+  }
+  else if (messageId == WM_KEYDOWN) {
     const auto current = layout();
     const int rowsVisible = visible_rows(current);
-    if (current.rowHeight <= 0 || current.lineHeight <= 0) return;
+    if (current.rowHeight <= 0 || current.lineHeight <= 0) return 0;
     const auto key = msg.wParam;
     if (key == 9) app.treeFocus = !app.treeFocus;
     else if (key == 13) command(Open);
@@ -563,13 +723,15 @@ void procedure(const Msg &msg) {
       if (app.tree[app.treeSelection].expanded != expand) expand_tree(app.treeSelection);
     }
     ensure_visible();
-    gui::invalidate(app.hwnd);
-  } else if (msg.message == WindowMessage_LButtonDown || msg.message == WindowMessage_LButtonDblClk) {
-    const int x = gui::mouse_x(msg), y = gui::mouse_y(msg);
+    (void)InvalidateRect(app.hwnd, nullptr, TRUE);
+    return 0;
+  } else if (messageId == WM_LBUTTONDOWN || messageId == WM_LBUTTONDBLCLK) {
+    const int x = static_cast<int16_t>(lParam & 0xFFFF);
+    const int y = static_cast<int16_t>(lParam >> 16);
     const auto current = layout();
-    const Rect area = current.area;
+    const RECT area = current.area;
     const int rowsVisible = visible_rows(current);
-    if (current.rowHeight <= 0 || current.lineHeight <= 0) return;
+    if (current.rowHeight <= 0 || current.lineHeight <= 0) return 0;
     if (y >= ToolbarTop && y < ToolbarTop + current.toolbarRows * current.toolbarPitch && x >= 4) {
       const int buttonRow = (y - ToolbarTop) / current.toolbarPitch;
       const int buttonColumn = (x - 4) / 72;
@@ -608,7 +770,7 @@ void procedure(const Msg &msg) {
         if (index < app.treeCount) {
           app.treeFocus = true;
           app.treeSelection = index;
-          if (msg.message == WindowMessage_LButtonDblClk) { expand_tree(index); navigate_tree(); }
+          if (messageId == WM_LBUTTONDBLCLK) { expand_tree(index); navigate_tree(); }
           else if (x < 22 + app.tree[index].depth * 14) expand_tree(index);
           else navigate_tree();
         }
@@ -617,7 +779,7 @@ void procedure(const Msg &msg) {
         if (index < app.count) {
           app.treeFocus = false;
           app.selection = index;
-          if (msg.message == WindowMessage_LButtonDblClk) open_selection();
+          if (messageId == WM_LBUTTONDBLCLK) open_selection();
         }
       }
     } else if (y >= current.footerTop && y < current.footerTop + current.buttonHeight) {
@@ -626,48 +788,124 @@ void procedure(const Msg &msg) {
       else if (x >= 144 && x < 208) command(Properties);
     }
     ensure_visible();
-    gui::invalidate(app.hwnd);
+    (void)InvalidateRect(app.hwnd, nullptr, TRUE);
+    return 0;
   }
+  return DefWindowProc(window, messageId, wParam, lParam);
 }
 } // namespace
 
 extern "C" int main(int argc, char **argv) {
-  gui::TextMetrics font{};
-  if (!gui::system_font().metrics(font) || !font.lineHeight) return 1;
+  if (!UndosInitUi(&app.ui)) {
+    crt_printf("filemanager: UI initialization failed %u/%u\n",
+               app.ui.operationError, app.ui.operationStatus);
+    if (app.ui._sdkState) (void)UndosCloseUi(&app.ui);
+    return 1;
+  }
+  UINT displayWidth = 0, displayHeight = 0;
+  UNDOS_TEXT_METRICS font{};
+  if (!UndosGetDisplaySize(&app.ui, &displayWidth, &displayHeight) ||
+      !UndosGetFontMetrics(app.ui.font, UNDOS_TEXT_REGULAR,
+                           UNDOS_TEXT_BASIC, &font) ||
+      !font.lineHeight || !displayWidth || !displayHeight) {
+    (void)sdk_ok(FALSE, "display/font metrics");
+    (void)UndosCloseUi(&app.ui);
+    return 1;
+  }
   const int windowWidth = 680;
   const int initialRows = 12;
   int buttonHeight = 0;
   for (const char *label : Toolbar) {
-    const int height = gui::button_height(label);
+    int height = 0;
+    if (!UndosGetButtonHeight(app.ui.font, label, &height)) {
+      (void)sdk_ok(FALSE, "UndosGetButtonHeight");
+      (void)UndosCloseUi(&app.ui);
+      return 1;
+    }
     if (height > buttonHeight) buttonHeight = height;
   }
   const char *const footerLabels[] = {"Prev", "Next", "Props"};
   for (const char *label : footerLabels) {
-    const int height = gui::button_height(label);
+    int height = 0;
+    if (!UndosGetButtonHeight(app.ui.font, label, &height)) {
+      (void)sdk_ok(FALSE, "UndosGetButtonHeight");
+      (void)UndosCloseUi(&app.ui);
+      return 1;
+    }
     if (height > buttonHeight) buttonHeight = height;
   }
   const int64_t wantedHeight = 4 + 2 * (buttonHeight + 4) +
                                static_cast<int64_t>(initialRows + 4) * (font.lineHeight + 4) + 48;
-  const int initialHeight = static_cast<int>(wantedHeight);
-  if (!gui::register_class("FileManager", procedure)) return 1;
-  app.hwnd = gui::window("FileManager", "File Manager", 30, 30, windowWidth, initialHeight);
-  if (!app.hwnd) return 1;
-  if (!create_app_menu()) return 1;
+  const int initialHeight = static_cast<int>(
+      wantedHeight < displayHeight ? wantedHeight : displayHeight);
+  WNDCLASS klass{};
+  klass.lpfnWndProc = procedure;
+  klass.hbrBackground = UNDOS_PALETTE_BRUSH(7);
+  klass.lpszClassName = "FileManager";
+  if (!RegisterClass(&klass)) {
+    (void)sdk_ok(FALSE, "RegisterClass");
+    (void)UndosCloseUi(&app.ui);
+    return 1;
+  }
+  app.hwnd = CreateWindow("FileManager", "File Manager",
+      WS_VISIBLE | WS_OVERLAPPEDWINDOW, 30, 30,
+      windowWidth < static_cast<int>(displayWidth) ? windowWidth
+                                                   : static_cast<int>(displayWidth),
+      initialHeight, nullptr, nullptr, nullptr, nullptr);
+  if (!app.hwnd || !UndosAttachUiContext(app.hwnd, &app.ui)) {
+    (void)sdk_ok(FALSE, "CreateWindow/attach File Manager");
+    recover_windows();
+    if (app.hwnd) (void)DestroyWindow(app.hwnd);
+    (void)UndosCloseUi(&app.ui);
+    return 1;
+  }
+  if (!create_app_menu()) {
+    recover_windows();
+    (void)DestroyWindow(app.hwnd);
+    if (app.menu) (void)DestroyMenu(app.menu);
+    (void)UndosCloseUi(&app.ui);
+    return 1;
+  }
   reset_tree();
   if (!load(argc > 1 && argv ? argv[1] : "/")) copy(app.status, sizeof(app.status), "Cannot load directory. Use Path or Refresh to retry.");
   else expand_tree(0);
   focus();
-  Msg msg{};
-  while (app.running && gui::next(msg)) {
-    gui::dispatch(msg);
+  MSG msg{};
+  while (app.running) {
+    const int received = GetMessage(&msg, nullptr, 0, 0);
+    if (received < 0) {
+      (void)sdk_ok(FALSE, "GetMessage");
+      break;
+    }
+    if (!received) break;
+    const uint32_t serial = app.ui.resultSerial;
+    (void)DispatchMessage(&msg);
+    check_dispatch_result(serial);
     // Report a loaded directory once its repaint has drained from the queue.
-    Msg pending{};
-    if (app.readyMarker[0] && UD_SYS_PeekMessageV1(&pending, 0) == SyscallReturnCode_TIMEOUT) {
+    MSG pending{};
+    if (app.readyMarker[0] &&
+        !PeekMessage(&pending, nullptr, 0, 0, PM_NOREMOVE) &&
+        GetLastError() == ERROR_TIMEOUT) {
       (void) UD_SYS_PrintV1(app.readyMarker);
       app.readyMarker[0] = 0;
     }
   }
-  const bool destroyed = gui::destroy(app.hwnd);
-  const bool menuDestroyed = gui::check(UD_SYS_DestroyMenuV1(app.menu), "DestroyMenu");
-  return destroyed && menuDestroyed ? 0 : 1;
+  bool cleanupOkay = true;
+  if (app.hwnd && !DestroyWindow(app.hwnd)) {
+    (void)sdk_ok(FALSE, "DestroyWindow");
+    cleanupOkay = false;
+  }
+  app.hwnd = nullptr;
+  recover_windows();
+  if (app.menu && !DestroyMenu(app.menu)) {
+    (void)sdk_ok(FALSE, "DestroyMenu");
+    cleanupOkay = false;
+  }
+  app.menu = nullptr;
+  if (!UndosCloseUi(&app.ui)) {
+    crt_printf("filemanager: UI close failed %u/%u\n",
+               app.ui.operationError, app.ui.operationStatus);
+    cleanupOkay = false;
+  }
+  return cleanupOkay ? 0 : 1;
 }

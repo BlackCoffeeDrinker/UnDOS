@@ -4,14 +4,41 @@
 
 #include <tuple.hpp>
 
+#include "intr.hpp"
 #include "tss.hpp"
 #include "vmm.hpp"
+#include "v86_irq_tracking.hpp"
 
 using kernel::PhysicalAddress;
 using kernel::VirtualAddress;
 
 namespace hal::x86 {
+
+// Mutable v86 monitor state, owned by the active session's continuation: the
+// instance lives in HAL_x86_ExecBiosInt's own stack frame, so it travels with
+// the suspended continuation of the calling thread instead of being
+// process-wide global state. Only the CPU-local active-session pointer below
+// and the assembly entry scratch (the g_v86_* register staging words and
+// g_v86_resume_esp, written by name from hal_x86_v86_enter with interrupts
+// disabled) remain per CPU.
+struct V86Session {
+  V86IrqTracking irq_tracking{};
+  HAL_x86_BiosRegs *regs{nullptr};
+  uint32_t saved_esp0{0};
+  uint32_t virtual_if{0};
+  V86Session *previous{nullptr};
+};
+
 namespace {
+
+// Per-CPU pointer to the CPU's active v86 session (this strictly-UP HAL has
+// one CPU, so the single word is CPU 0's per-CPU state -- same ownership rule
+// as the hardware-interrupt depth in context.cpp). The monitor dispatchers
+// (#GP/IRQ) run on the same CPU as the session they interrupt, and sessions
+// are synchronous, so the pointer is only ever touched by that CPU.
+V86Session *g_v86_active_session = nullptr;
+
+inline V86Session &v86_session() noexcept { return *g_v86_active_session; }
 
 // The v86 stub page: a permanently-resident, identity-mapped 3-byte real-mode
 // code snippet `INT n; HLT`, patched per call with the target interrupt
@@ -65,8 +92,6 @@ void ensure_low_memory_identity_mapped() noexcept {
 }
 
 }// namespace
-
-// See v86.hpp: single in-flight v86 session state.
 }// namespace hal::x86
 
 // [[gnu::used]] throughout: these globals are only ever referenced by name
@@ -75,12 +100,7 @@ void ensure_low_memory_identity_mapped() noexcept {
 // optimized away even though the linker still needs them to resolve those
 // assembly stubs.
 extern "C" {
-[[gnu::used]] HAL_x86_BiosRegs *g_v86_regs_ptr = nullptr;
-uint32_t g_v86_saved_esp0 = 0;
 [[gnu::used]] uint32_t g_v86_resume_esp = 0;
-uint32_t g_v86_virtual_if = 0;
-// IRQ line (0-15) taken while the BIOS had virtual IF clear, or -1.
-int32_t g_v86_pending_irq = -1;
 
 [[gnu::used]] uint32_t g_v86_eax = 0, g_v86_ebx = 0, g_v86_ecx = 0, g_v86_edx = 0, g_v86_esi = 0, g_v86_edi = 0;
 [[gnu::used]] uint32_t g_v86_cs = 0, g_v86_eip = 0, g_v86_eflags = 0, g_v86_esp = 0, g_v86_ss = 0;
@@ -145,7 +165,8 @@ namespace {
 // g_v86_resume_esp -- exactly the mirror image of hal_x86_v86_enter's own
 // callee-saved-register save. Never returns to the raw #GP stub.
 [[noreturn]] void complete_v86_session(v86_context_t &ctx) noexcept {
-  if (auto *regs = g_v86_regs_ptr) {
+  v86_session().irq_tracking.complete_session();
+  if (auto *regs = v86_session().regs) {
     regs->ax = static_cast<uint16_t>(ctx.eax);
     regs->bx = static_cast<uint16_t>(ctx.ebx);
     regs->cx = static_cast<uint16_t>(ctx.ecx);
@@ -157,7 +178,7 @@ namespace {
     regs->flags = static_cast<uint16_t>(ctx.eflags);
   }
 
-  tss_set_esp0(g_v86_saved_esp0);
+  tss_set_esp0(v86_session().saved_esp0);
 
   const uint32_t resume_esp = g_v86_resume_esp;
   __asm__ volatile(
@@ -178,12 +199,17 @@ namespace {
 // CPU would: push FLAGS/CS/IP on the v86 stack and clear IF. The BIOS handler
 // sends its own EOI through the emulated OUT path.
 void reflect_irq(v86_context_t &ctx, uint32_t irq) noexcept {
+  if (!v86_session().irq_tracking.begin_reflected({
+          static_cast<uint16_t>(ctx.esp), static_cast<uint16_t>(ctx.cs),
+          static_cast<uint16_t>(ctx.eip)})) {
+    HAL_PLATFORM_Panic("V86 reflected IRQ nesting overflow", __FILE__, __LINE__);
+  }
   const uint8_t vector = irq < 8 ? static_cast<uint8_t>(0x08 + irq)
                                  : static_cast<uint8_t>(0x70 + (irq - 8));
   const auto *ivt_entry = reinterpret_cast<const volatile uint16_t *>(static_cast<uint32_t>(vector) * 4u);
 
   auto flags = static_cast<uint16_t>(ctx.eflags);
-  flags = g_v86_virtual_if ? (flags | EFLAGS_IF) : static_cast<uint16_t>(flags & ~EFLAGS_IF);
+  flags = v86_session().virtual_if ? (flags | EFLAGS_IF) : static_cast<uint16_t>(flags & ~EFLAGS_IF);
 
   auto sp = static_cast<uint16_t>(ctx.esp);
   const auto ss = static_cast<uint16_t>(ctx.ss);
@@ -197,16 +223,15 @@ void reflect_irq(v86_context_t &ctx, uint32_t irq) noexcept {
 
   ctx.cs = ivt_entry[1];
   ctx.eip = ivt_entry[0];
-  g_v86_virtual_if = 0;
+  v86_session().virtual_if = 0;
   ctx.eflags |= EFLAGS_IF;
 }
 
 // Called after the BIOS sets virtual IF again (STI/POPF/IRET).
 void deliver_pending_irq(v86_context_t &ctx) noexcept {
   ctx.eflags |= EFLAGS_IF;
-  if (g_v86_virtual_if && g_v86_pending_irq >= 0) {
-    const auto irq = static_cast<uint32_t>(g_v86_pending_irq);
-    g_v86_pending_irq = -1;
+  uint32_t irq;
+  if (v86_session().virtual_if && v86_session().irq_tracking.take_pending(irq)) {
     reflect_irq(ctx, irq);
   }
 }
@@ -323,12 +348,12 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
 
   switch (opcode) {
     case 0xFA:// CLI
-      g_v86_virtual_if = 0;
+      hal::x86::v86_session().virtual_if = 0;
       set_ip(static_cast<uint16_t>(ip + prefix_len + 1));
       return;
 
     case 0xFB:// STI
-      g_v86_virtual_if = 1;
+      hal::x86::v86_session().virtual_if = 1;
       set_ip(static_cast<uint16_t>(ip + prefix_len + 1));
       hal::x86::deliver_pending_irq(*ctx);
       return;
@@ -336,7 +361,7 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
     case 0x9C: {// PUSHF
       const auto sp = static_cast<uint16_t>(ctx->esp - 2);
       auto flags = static_cast<uint16_t>(ctx->eflags);
-      flags = g_v86_virtual_if ? (flags | hal::x86::EFLAGS_IF) : static_cast<uint16_t>(flags & ~hal::x86::EFLAGS_IF);
+      flags = hal::x86::v86_session().virtual_if ? (flags | hal::x86::EFLAGS_IF) : static_cast<uint16_t>(flags & ~hal::x86::EFLAGS_IF);
       *hal::x86::v86_word_ptr(static_cast<uint16_t>(ctx->ss), sp) = flags;
       ctx->esp = sp;
       set_ip(static_cast<uint16_t>(ip + prefix_len + 1));
@@ -346,7 +371,7 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
     case 0x9D: {// POPF
       const auto sp = static_cast<uint16_t>(ctx->esp);
       const uint16_t flags = *hal::x86::v86_word_ptr(static_cast<uint16_t>(ctx->ss), sp);
-      g_v86_virtual_if = (flags & hal::x86::EFLAGS_IF) ? 1 : 0;
+      hal::x86::v86_session().virtual_if = (flags & hal::x86::EFLAGS_IF) ? 1 : 0;
       ctx->eflags = (ctx->eflags & 0xFFFF0000u) | flags | hal::x86::EFLAGS_IF;
       ctx->esp = static_cast<uint16_t>(sp + 2);
       set_ip(static_cast<uint16_t>(ip + prefix_len + 1));
@@ -354,26 +379,28 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
       return;
     }
 
-    case 0xF4:// HLT: BIOS routine returned, complete the call.
-      if (g_v86_pending_irq >= 0) {
+    case 0xF4: {// HLT: BIOS routine returned, complete the call.
+      uint32_t pending_irq;
+      if (hal::x86::v86_session().irq_tracking.take_pending(pending_irq)) {
         // The PIC still holds this IRQ in service. Let the BIOS handle it
         // first; its IRET returns to this HLT, which then completes.
-        const auto irq = static_cast<uint32_t>(g_v86_pending_irq);
-        g_v86_pending_irq = -1;
-        hal::x86::reflect_irq(*ctx, irq);
+        hal::x86::reflect_irq(*ctx, pending_irq);
         return;
       }
       hal::x86::complete_v86_session(*ctx);
       __builtin_unreachable();
+    }
 
     case 0xCD: {// INT n
+      hal::x86::v86_session().irq_tracking.begin_dispatch(
+          hal::x86::V86IrqTracking::DispatchKind::SoftwareInt);
       const uint8_t vector = *hal::x86::v86_byte_ptr(cs, static_cast<uint16_t>(opcode_off + 1));
       const auto *ivt_entry = reinterpret_cast<const volatile uint16_t *>(static_cast<uint32_t>(vector) * 4u);
       const uint16_t target_ip = ivt_entry[0];
       const uint16_t target_cs = ivt_entry[1];
 
       auto flags = static_cast<uint16_t>(ctx->eflags);
-      flags = g_v86_virtual_if ? (flags | hal::x86::EFLAGS_IF) : static_cast<uint16_t>(flags & ~hal::x86::EFLAGS_IF);
+      flags = hal::x86::v86_session().virtual_if ? (flags | hal::x86::EFLAGS_IF) : static_cast<uint16_t>(flags & ~hal::x86::EFLAGS_IF);
 
       auto sp = static_cast<uint16_t>(ctx->esp);
       const auto ss = static_cast<uint16_t>(ctx->ss);
@@ -387,7 +414,9 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
 
       ctx->cs = target_cs;
       set_ip(target_ip);
-      g_v86_virtual_if = 0;
+      hal::x86::v86_session().virtual_if = 0;
+      hal::x86::v86_session().irq_tracking.end_dispatch(
+          hal::x86::V86IrqTracking::DispatchKind::SoftwareInt);
       return;
     }
 
@@ -403,9 +432,11 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
 
       ctx->esp = sp;
       ctx->cs = new_cs;
-      g_v86_virtual_if = (new_flags & hal::x86::EFLAGS_IF) ? 1 : 0;
+      hal::x86::v86_session().virtual_if = (new_flags & hal::x86::EFLAGS_IF) ? 1 : 0;
       ctx->eflags = (ctx->eflags & 0xFFFF0000u) | new_flags | hal::x86::EFLAGS_IF;
       set_ip(new_ip);
+      hal::x86::v86_session().irq_tracking.complete_iret({
+          static_cast<uint16_t>(ctx->esp), new_cs, new_ip});
       hal::x86::deliver_pending_irq(*ctx);
       return;
     }
@@ -553,14 +584,18 @@ extern "C" [[gnu::used]] void v86_gp_dispatch(hal::x86::v86_context_t *ctx) noex
 // ctx->error_code holds the IRQ line pushed by the stub.
 extern "C" [[gnu::used]] void v86_irq_dispatch(hal::x86::v86_context_t *ctx) noexcept {
   const uint32_t irq = ctx->error_code;
-  if (g_v86_virtual_if) {
+  const bool reflect =
+      hal::x86::v86_session().irq_tracking.begin_hardware_dispatch(
+          hal::x86::v86_session().virtual_if != 0, irq);
+  if (reflect) {
     hal::x86::reflect_irq(*ctx, irq);
+    hal::x86::v86_session().irq_tracking.end_hardware_dispatch();
     return;
   }
   // BIOS has interrupts virtually disabled: hold the IRQ (still in service
   // at the PIC) and block further ones until STI/POPF/IRET or completion.
-  g_v86_pending_irq = static_cast<int32_t>(irq);
   ctx->eflags &= ~hal::x86::EFLAGS_IF;
+  hal::x86::v86_session().irq_tracking.end_hardware_dispatch();
 }
 
 UNDOS_HAL_API_DEF void HAL_x86_ExecBiosInt(uint8_t interrupt_number, HAL_x86_BiosRegs &regs) noexcept {
@@ -571,10 +606,16 @@ UNDOS_HAL_API_DEF void HAL_x86_ExecBiosInt(uint8_t interrupt_number, HAL_x86_Bio
   *hal::x86::v86_byte_ptr(hal::x86::V86_STUB_SEGMENT, hal::x86::V86_STUB_OFFSET + 1) = interrupt_number;
   *hal::x86::v86_byte_ptr(hal::x86::V86_STUB_SEGMENT, hal::x86::V86_STUB_OFFSET + 2) = 0xF4;
 
-  g_v86_regs_ptr = &regs;
-  g_v86_virtual_if = (regs.flags & (1u << 9)) ? 1u : 0u;
-  g_v86_pending_irq = -1;
+  // Session state is continuation-owned: it lives in this call's own stack
+  // frame and travels with this thread's suspended continuation. Only the
+  // CPU-local active-session pointer (saved/restored here for robustness
+  // against a future nested session) names it.
+  hal::x86::V86Session session_state;
+  session_state.previous = hal::x86::g_v86_active_session;
+  hal::x86::g_v86_active_session = &session_state;
 
+  session_state.regs = &regs;
+  session_state.virtual_if = (regs.flags & (1u << 9)) ? 1u : 0u;
   g_v86_eax = regs.ax;
   g_v86_ebx = regs.bx;
   g_v86_ecx = regs.cx;
@@ -592,7 +633,7 @@ UNDOS_HAL_API_DEF void HAL_x86_ExecBiosInt(uint8_t interrupt_number, HAL_x86_Bio
   g_v86_gs = hal::x86::V86_STUB_SEGMENT;
   // Real IF is set so hardware IRQs reach the BIOS (e.g. Award INT 13h waits
   // for IRQ14). The IRQ stubs reflect them into the real-mode IVT; the BIOS
-  // sees only the virtual IF tracked in g_v86_virtual_if.
+  // sees only the virtual IF tracked in the session's virtual_if.
   g_v86_eflags = hal::x86::EFLAGS_VM | hal::x86::EFLAGS_IF | hal::x86::EFLAGS_RESERVED |
                  (regs.flags & 0x0CD5u);
 
@@ -604,7 +645,7 @@ UNDOS_HAL_API_DEF void HAL_x86_ExecBiosInt(uint8_t interrupt_number, HAL_x86_Bio
   // permanently-resident global, since it is only ever needed for the
   // duration of this function.
   alignas(16) uint8_t trap_stack[4096];
-  g_v86_saved_esp0 = hal::x86::tss_get_esp0();
+  session_state.saved_esp0 = hal::x86::tss_get_esp0();
   hal::x86::tss_set_esp0(reinterpret_cast<uintptr_t>(trap_stack + sizeof(trap_stack)));
 
   HAL_CPU_DisableInterrupts();
@@ -618,5 +659,6 @@ UNDOS_HAL_API_DEF void HAL_x86_ExecBiosInt(uint8_t interrupt_number, HAL_x86_Bio
   HAL_IO_Out8(0x21, saved_master_mask);
   HAL_CPU_EnableInterrupts();
 
-  g_v86_regs_ptr = nullptr;
+  session_state.regs = nullptr;
+  hal::x86::g_v86_active_session = session_state.previous;
 }

@@ -1,15 +1,15 @@
 #pragma once
 
-#include <stddef.h>
-#include <stdint.h>
 #include <atomic.hpp>
 #include <expected.hpp>
-#include <mutex.hpp>
 #include <kernel/__core.hpp>
-#include <kernel/kerror.hpp>
-#include <kernel/mutex.hpp>
 #include <kernel/fwd/KPtr.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/kobject/KDispatcherHeader.hpp>
+#include <kernel/mutex.hpp>
+#include <mutex.hpp>
+#include <stddef.h>
+#include <stdint.h>
 
 namespace kernel::tty {
 
@@ -21,11 +21,11 @@ struct WinSize {
 };
 
 enum TtyFlags : uint32_t {
-  TTY_ECHO       = 1 << 0,  // Echo typed characters back to source
-  TTY_CANONICAL  = 1 << 1,  // Canonical (cooked) mode vs raw mode
-  TTY_CR_TO_NL   = 1 << 2,  // Map \r to \n on input
-  TTY_NL_TO_CRNL = 1 << 3,  // Map \n to \r\n on output
-  TTY_ECHO_NL    = 1 << 4,  // Echo newline even if ECHO is off
+  TTY_ECHO = 1 << 0,      // Echo typed characters back to source
+  TTY_CANONICAL = 1 << 1, // Canonical (cooked) mode vs raw mode
+  TTY_CR_TO_NL = 1 << 2,  // Map \r to \n on input
+  TTY_NL_TO_CRNL = 1 << 3,// Map \n to \r\n on output
+  TTY_ECHO_NL = 1 << 4,   // Echo newline even if ECHO is off
 };
 
 struct TtyConfig {
@@ -36,9 +36,9 @@ struct TtyConfig {
 constexpr size_t kDefaultBufferSize = 4096;
 constexpr size_t kMaxEditBufferSize = 1024;
 
-template <typename T, size_t Capacity>
+template<typename T, size_t Capacity>
 class RingBuffer {
-public:
+  public:
   static constexpr size_t kCapacity = Capacity;
 
   constexpr RingBuffer() noexcept = default;
@@ -95,7 +95,7 @@ public:
     return readCount;
   }
 
-private:
+  private:
   T m_data[Capacity]{};
   size_t m_head{0};
   size_t m_tail{0};
@@ -103,7 +103,7 @@ private:
 };
 
 class KVtty {
-public:
+  public:
   KVtty();
   ~KVtty() = default;
 
@@ -154,11 +154,11 @@ public:
     return m_refCount.load(kstd::memory_order_relaxed);
   }
 
-private:
+  private:
   kstd::atomic<uint32_t> m_refCount{0};
-  mutable kernel::Mutex m_lock;
+  mutable Mutex m_lock;
   RingBuffer<uint8_t, kDefaultBufferSize> m_sinkInRing;   // Input available for sink to read
-  RingBuffer<uint8_t, kDefaultBufferSize> m_sourceOutRing; // Output available for source to read
+  RingBuffer<uint8_t, kDefaultBufferSize> m_sourceOutRing;// Output available for source to read
   uint8_t m_editBuffer[kMaxEditBufferSize]{};
   size_t m_editLen{0};
 
@@ -166,19 +166,25 @@ private:
   bool m_sourceClosed{false};
   bool m_sinkClosed{false};
   bool m_eofSignaled{false};
-  kernel::KDispatcherHeader m_inputReady{.signalled = false, .manualReset = true, .waiters = nullptr};
+  KDispatcherHeader m_inputReady{.signalled = false, .manualReset = true, .waiters = nullptr};
 };
 
-} // namespace kernel::tty
+}// namespace kernel::tty
 
 namespace kernel::tty {
 
 struct VttyRefTraits {
   using base_type = KVtty;
   template<typename T>
-  constexpr static void inc_ref(T *ref) { if (ref) ref->retain(); }
+  constexpr static void inc_ref(T *ref) {
+    if (ref)
+      ref->retain();
+  }
   template<typename T>
-  constexpr static void dec_ref(T *ref) { if (ref) ref->release(); }
+  constexpr static void dec_ref(T *ref) {
+    if (ref)
+      ref->release();
+  }
   template<typename T>
   constexpr static T *release(T *ptr) { return ptr; }
   template<typename T, typename U>
@@ -187,9 +193,9 @@ struct VttyRefTraits {
 
 using VttyPtr = detail::KPtr<KVtty, VttyRefTraits>;
 
-} // namespace kernel::tty
+}// namespace kernel::tty
 
 namespace kernel {
 using KVtty = tty::KVtty;
 using VttyPtr = tty::VttyPtr;
-}
+}// namespace kernel

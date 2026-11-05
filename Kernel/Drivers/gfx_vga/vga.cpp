@@ -1,9 +1,9 @@
 
 #include <Kernel.hpp>
 
-#include "vga_registers.hpp"
-#include "vga_palette.hpp"
 #include "vga_mode.hpp"
+#include "vga_palette.hpp"
+#include "vga_registers.hpp"
 
 #include <undos/syscalls/__enum_IoControlCode.h>
 #include <undos/syscalls/__struct_IoctlDisplayMode.h>
@@ -16,12 +16,16 @@ constexpr size_t kPageSize = 4096;
 constexpr uint32_t kModeWidth = kernel::gfx::vga::ModeWidth;
 constexpr uint32_t kModeHeight = kernel::gfx::vga::ModeHeight;
 constexpr uint32_t kModePitch = kernel::gfx::vga::ModePitch;
+constexpr uint8_t kGcMode = 0x05;
+constexpr uint32_t kShadowStride = kModeWidth;
+constexpr size_t kShadowSize = static_cast<size_t>(kShadowStride) * kModeHeight;
 
 // Per-instance state, held in the function device object's extension (see
 // Vga_AddDevice); the driver keeps no mutable globals.
 struct VgaContext {
   kernel::KObjectPtr<kernel::KGraphicsAdapter> adapter;
   kernel::VirtualAddress framebuffer;
+  uint8_t *shadow{nullptr};
   bool modeKnown{false};
   bool enabled{false};
   size_t modeIndex{};
@@ -34,7 +38,7 @@ void Vga_ProgramMode12h() {
   for (uint8_t i = 0; i < vga_regs::kSequencer.size(); ++i) {
     HAL_IO_Out8(vga_regs::kSequencerIndex, i);
     HAL_IO_Out8(vga_regs::kSequencerData, static_cast<uint8_t>(
-        vga_regs::kSequencer[i] | (i == 1 ? 0x20 : 0)));
+                                              vga_regs::kSequencer[i] | (i == 1 ? 0x20 : 0)));
   }
 
   // Clear the CRTC write-protect bit (bit 7 of index 0x11) so indices 0-7
@@ -61,47 +65,100 @@ void Vga_ProgramMode12h() {
   }
 
   vga_regs::ProgramPalette16([](uint16_t port, uint8_t value) { HAL_IO_Out8(port, value); });
-
 }
 
-// Sets a single pixel through the classic "Set/Reset + Bit Mask" planar
-// write technique: a read-modify-write of one byte in the mapped window
-// touches the same bit across all 4 planes at once.
-void Vga_PlotPixel(uint8_t *base, int x, int y, uint32_t colorIndex) {
-  if (x < 0 || y < 0 || static_cast<uint32_t>(x) >= kModeWidth || static_cast<uint32_t>(y) >= kModeHeight) {
-    return;
+struct VgaModeData {
+  uint8_t *candidate{nullptr};
+  uint8_t *previous{nullptr};
+  bool installed{false};
+};
+
+void WriteSequencer(uint8_t index, uint8_t value) {
+  HAL_IO_Out8(vga_regs::kSequencerIndex, index);
+  HAL_IO_Out8(vga_regs::kSequencerData, value);
+}
+
+uint8_t ReadSequencer(uint8_t index) {
+  HAL_IO_Out8(vga_regs::kSequencerIndex, index);
+  return HAL_IO_In8(vga_regs::kSequencerData);
+}
+
+void WriteGraphics(uint8_t index, uint8_t value) {
+  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, index);
+  HAL_IO_Out8(vga_regs::kGraphicsControllerData, value);
+}
+
+uint8_t ReadGraphics(uint8_t index) {
+  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, index);
+  return HAL_IO_In8(vga_regs::kGraphicsControllerData);
+}
+
+uint8_t Vga_EncodePlaneByte(const uint8_t *shadow, uint32_t y,
+                            uint32_t byte, uint8_t plane) {
+  uint8_t result = 0;
+  for (uint32_t bit = 0; bit < 8; ++bit) {
+    const uint32_t x = byte * 8 + bit;
+    if (shadow[static_cast<size_t>(y) * kShadowStride + x] & (1u << plane))
+      result |= static_cast<uint8_t>(0x80u >> bit);
   }
-
-  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcSetReset);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerData, static_cast<uint8_t>(colorIndex & 0x0F));
-  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcEnableSetReset);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0x0F);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcBitMask);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerData, static_cast<uint8_t>(0x80 >> (x % 8)));
-
-  uint8_t *addr = base + static_cast<size_t>(y) * kModePitch + static_cast<size_t>(x) / 8;
-  // A read loads the VGA's internal latches; the following write then
-  // applies the Set/Reset color across all planes, masked by the bit mask.
-  const volatile uint8_t latch = *addr;
-  (void) latch;
-  *addr = 0xFF;
+  return result;
 }
 
-// Reads a single pixel's color index back by cycling the Read Map Select
-// register across the 4 planes.
-uint32_t Vga_ReadPixel(uint8_t *base, int x, int y) {
-  const auto bit = static_cast<uint8_t>(0x80 >> (x % 8));
-  const uint8_t *addr = base + static_cast<size_t>(y) * kModePitch + static_cast<size_t>(x) / 8;
+void Vga_PresentShadow(uint8_t *shadow, volatile uint8_t *framebuffer,
+                       const kernel::KClipRect *rects, size_t count) {
+  if (!shadow || !framebuffer || (!rects && count)) return;
+  const uint8_t oldMapMask = ReadSequencer(0x02);
+  const uint8_t oldSetReset = ReadGraphics(vga_regs::kGcSetReset);
+  const uint8_t oldEnableSetReset = ReadGraphics(vga_regs::kGcEnableSetReset);
+  const uint8_t oldReadMap = ReadGraphics(vga_regs::kGcReadMapSelect);
+  const uint8_t oldMode = ReadGraphics(kGcMode);
+  const uint8_t oldBitMask = ReadGraphics(vga_regs::kGcBitMask);
 
-  uint32_t colorIndex = 0;
-  for (uint8_t plane = 0; plane < 4; ++plane) {
-    HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcReadMapSelect);
-    HAL_IO_Out8(vga_regs::kGraphicsControllerData, plane);
-    if (*addr & bit) {
-      colorIndex |= (1u << plane);
+  WriteGraphics(vga_regs::kGcEnableSetReset, 0x00);
+  WriteGraphics(kGcMode, static_cast<uint8_t>(oldMode & ~0x03u));
+  WriteGraphics(vga_regs::kGcBitMask, 0xFF);
+  for (size_t i = 0; i < count; ++i) {
+    const auto &requested = rects[i];
+    const int32_t left = requested.left < 0 ? 0 : requested.left;
+    const int32_t top = requested.top < 0 ? 0 : requested.top;
+    const int32_t right = requested.right > static_cast<int32_t>(kModeWidth)
+                              ? static_cast<int32_t>(kModeWidth)
+                              : requested.right;
+    const int32_t bottom = requested.bottom > static_cast<int32_t>(kModeHeight)
+                               ? static_cast<int32_t>(kModeHeight)
+                               : requested.bottom;
+    if (right <= left || bottom <= top) continue;
+    const int32_t firstByte = left / 8;
+    const int32_t lastByte = (right - 1) / 8;
+    for (int32_t y = top; y < bottom; ++y) {
+      for (int32_t byte = firstByte; byte <= lastByte; ++byte) {
+        const size_t offset = static_cast<size_t>(y) * kModePitch +
+                              static_cast<size_t>(byte);
+        for (uint8_t plane = 0; plane < 4; ++plane) {
+          WriteSequencer(0x02, static_cast<uint8_t>(1u << plane));
+          framebuffer[offset] = Vga_EncodePlaneByte(
+              shadow, static_cast<uint32_t>(y), static_cast<uint32_t>(byte), plane);
+        }
+      }
     }
   }
-  return colorIndex;
+  WriteSequencer(0x02, oldMapMask);
+  WriteGraphics(vga_regs::kGcSetReset, oldSetReset);
+  WriteGraphics(vga_regs::kGcEnableSetReset, oldEnableSetReset);
+  WriteGraphics(vga_regs::kGcReadMapSelect, oldReadMap);
+  WriteGraphics(kGcMode, oldMode);
+  WriteGraphics(vga_regs::kGcBitMask, oldBitMask);
+}
+
+void Vga_PlotPixel(uint8_t *base, int x, int y, uint32_t colorIndex) {
+  if (x < 0 || y < 0 || static_cast<uint32_t>(x) >= kModeWidth ||
+      static_cast<uint32_t>(y) >= kModeHeight) return;
+  base[static_cast<size_t>(y) * kShadowStride + static_cast<size_t>(x)] =
+      static_cast<uint8_t>(colorIndex & 0x0F);
+}
+
+uint32_t Vga_ReadPixel(const uint8_t *base, int x, int y) {
+  return base[static_cast<size_t>(y) * kShadowStride + static_cast<size_t>(x)] & 0x0F;
 }
 // endregion
 
@@ -115,8 +172,8 @@ kstd::error_code Vga_Probe(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & 
 // The single, fixed head this adapter drives. Identity only: the entry
 // points are bound later, from Vga_ConfigureDisplay.
 kstd::error_code Vga_ProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
-                             const kernel::KGraphicsAdapterDisplayEnumInfo &enumInfo,
-                             kernel::KGraphicsAdapterDisplayInfo &outInfo) {
+                                  const kernel::KGraphicsAdapterDisplayEnumInfo &enumInfo,
+                                  kernel::KGraphicsAdapterDisplayInfo &outInfo) {
   if (enumInfo.displayIndex != 0) {
     return kernel::KernelError::OutOfRange;
   }
@@ -130,7 +187,7 @@ kstd::error_code Vga_ProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdap
 }
 
 kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> Vga_GetModeInfo(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
-                                                                       size_t modeIndex) {
+                                                                           size_t modeIndex) {
   kernel::KDisplayModeInfo outInfo{};
   if (!kernel::gfx::vga::GetModeInfo(modeIndex, outInfo)) {
     return kstd::unexpected(kernel::KernelError::OutOfRange);
@@ -141,77 +198,110 @@ kstd::expected<kernel::KDisplayModeInfo, kstd::error_code> Vga_GetModeInfo(const
 kstd::error_code Vga_PrepareMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
                                  size_t modeIndex,
                                  kernel::KDisplayModeReservation &reservation) {
-  if (modeIndex != 0) {
-    return kernel::KernelError::OutOfRange;
-  }
-  if (!display || !display->adapter) {
-    return kernel::KernelError::InvalidArgument;
-  }
-
-  const auto *ctx_vga = display->adapter->GetDeviceExtensionAs<VgaContext>();
-  if (!ctx_vga || !ctx_vga->framebuffer) {
+  if (modeIndex != 0) return kernel::KernelError::OutOfRange;
+  if (!display || !display->adapter) return kernel::KernelError::InvalidArgument;
+  const auto *context = display->adapter->GetDeviceExtensionAs<VgaContext>();
+  if (!context || !context->framebuffer)
     return kernel::KernelError::DeviceNotReady;
-  }
+  auto mode = Vga_GetModeInfo(display, modeIndex);
+  if (!mode) return mode.error();
 
-  auto backing = KE_VMM_CreateDirectBacking(ctx_vga->framebuffer, kVgaFramebufferSize);
+  auto *transaction = static_cast<VgaModeData *>(KE_Malloc(sizeof(VgaModeData)));
+  if (!transaction) return kernel::KernelError::OutOfMemory;
+  *transaction = {};
+  transaction->candidate = static_cast<uint8_t *>(KE_Malloc(kShadowSize));
+  if (!transaction->candidate) {
+    KE_Free(transaction);
+    return kernel::KernelError::OutOfMemory;
+  }
+  __builtin_memset(transaction->candidate, 0, kShadowSize);
+  auto backing = KE_VMM_CreateDirectBacking(
+      kernel::VirtualAddress::from_ptr(transaction->candidate), kShadowSize);
   if (!backing) {
-    KE_Print("gfx_vga: could not allocate mode backing, keeping the current mode: {}", backing.error().message());
+    KE_Free(transaction->candidate);
+    KE_Free(transaction);
     return backing.error();
   }
 
-  auto mode = Vga_GetModeInfo(display, modeIndex);
-  if (!mode) return mode.error();
   reservation = {};
   reservation.modeIndex = modeIndex;
   reservation.mode = *mode;
+  reservation.driverData = transaction;
   reservation.binding.backing = kstd::move(*backing);
   reservation.binding.type = kernel::SurfaceType::Framebuffer;
-  reservation.binding.flags = kernel::SurfaceFlags::TopDown;
+  reservation.binding.flags = kernel::SurfaceFlags::Linear | kernel::SurfaceFlags::TopDown;
+  reservation.binding.surfaceStride = kShadowStride;
   return kernel::KernelError::Success;
 }
 
 kstd::error_code Vga_ProgramMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
                                  kernel::KDisplayModeReservation &reservation) {
-  if (!display || !display->adapter || reservation.modeIndex != 0 ||
+  auto *context = display && display->adapter
+                      ? display->adapter->GetDeviceExtensionAs<VgaContext>()
+                      : nullptr;
+  auto *transaction = static_cast<VgaModeData *>(reservation.driverData);
+  if (!context || !context->framebuffer || !transaction ||
+      !transaction->candidate || reservation.modeIndex != 0 ||
       reservation.mode.width != kModeWidth || reservation.mode.height != kModeHeight ||
-      !reservation.binding.backing)
+      reservation.binding.surfaceStride != kShadowStride)
     return kernel::KernelError::InvalidArgument;
-  const auto *ctx_vga = display->adapter->GetDeviceExtensionAs<VgaContext>();
-  if (!ctx_vga || !ctx_vga->framebuffer) return kernel::KernelError::DeviceNotReady;
 
   Vga_ProgramMode12h();
-
-  HAL_IO_Out8(vga_regs::kSequencerIndex, 0x02);// Map Mask
-  HAL_IO_Out8(vga_regs::kSequencerData, 0x0F);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcEnableSetReset);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0x00);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcBitMask);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0xFF);
-  auto *fb = reservation.binding.backing->directAddress.as_ptr<volatile uint8_t>();
-  for (size_t i = 0; i < static_cast<size_t>(kModePitch) * kModeHeight; ++i)
-    fb[i] = 0;
-
-  auto *mutableContext = display->adapter->GetDeviceExtensionAs<VgaContext>();
-  mutableContext->modeKnown = true;
-  mutableContext->modeIndex = reservation.modeIndex;
+  transaction->previous = context->shadow;
+  context->shadow = transaction->candidate;
+  transaction->installed = true;
+  const kernel::KClipRect full{0, 0, static_cast<int32_t>(kModeWidth),
+                               static_cast<int32_t>(kModeHeight)};
+  Vga_PresentShadow(context->shadow,
+                    context->framebuffer.as_ptr<volatile uint8_t>(), &full, 1);
+  context->modeKnown = true;
+  context->modeIndex = reservation.modeIndex;
   return kernel::KernelError::Success;
 }
 
-void Vga_FinishMode(const kernel::KObjectPtr<kernel::KDisplay> & /*display*/,
-                    kernel::KDisplayModeReservation & /*reservation*/,
-                    bool /*committed*/) {}
+void Vga_FinishMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
+                    kernel::KDisplayModeReservation &reservation,
+                    bool committed) {
+  auto *context = display && display->adapter
+                      ? display->adapter->GetDeviceExtensionAs<VgaContext>()
+                      : nullptr;
+  auto *transaction = static_cast<VgaModeData *>(reservation.driverData);
+  if (!transaction) return;
+  if (committed) {
+    if (transaction->previous) KE_Free(transaction->previous);
+  } else {
+    if (transaction->installed && context && context->shadow == transaction->candidate) {
+      context->shadow = transaction->previous;
+      if (context->shadow) {
+        Vga_ProgramMode12h();
+        kernel::KClipRect full{0, 0, static_cast<int32_t>(kModeWidth),
+                               static_cast<int32_t>(kModeHeight)};
+        Vga_PresentShadow(context->shadow,
+                          context->framebuffer.as_ptr<volatile uint8_t>(), &full, 1);
+      }
+    }
+    KE_Free(transaction->candidate);
+  }
+  KE_Free(transaction);
+}
 
 kstd::error_code Vga_RestoreMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
                                  size_t modeIndex,
-                                 kernel::KDisplayModeReservation & /*reservation*/) {
+                                 kernel::KDisplayModeReservation &reservation) {
   if (!display || !display->adapter || modeIndex != 0)
     return kernel::KernelError::Unsupported;
-  const auto *ctx_vga = display->adapter->GetDeviceExtensionAs<VgaContext>();
-  if (!ctx_vga || !ctx_vga->framebuffer) return kernel::KernelError::DeviceNotReady;
+  auto *context = display->adapter->GetDeviceExtensionAs<VgaContext>();
+  auto *transaction = static_cast<VgaModeData *>(reservation.driverData);
+  if (!context || !context->framebuffer || !transaction || !transaction->previous)
+    return kernel::KernelError::DeviceNotReady;
   Vga_ProgramMode12h();
-  auto *mutableContext = display->adapter->GetDeviceExtensionAs<VgaContext>();
-  mutableContext->modeKnown = true;
-  mutableContext->modeIndex = modeIndex;
+  context->shadow = transaction->previous;
+  const kernel::KClipRect full{0, 0, static_cast<int32_t>(kModeWidth),
+                               static_cast<int32_t>(kModeHeight)};
+  Vga_PresentShadow(context->shadow,
+                    context->framebuffer.as_ptr<volatile uint8_t>(), &full, 1);
+  context->modeKnown = true;
+  context->modeIndex = modeIndex;
   return kernel::KernelError::Success;
 }
 
@@ -278,70 +368,46 @@ kstd::error_code Vga_ConfigureDisplay(const kernel::KObjectPtr<kernel::KGraphics
   return kernel::KernelError::Success;
 }
 
-kstd::error_code Vga_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KSurface> &dst, int x, int y, int w, int h, uint32_t colorIndex) {
-  if (!dst || !dst->backing || !dst->backing->directAddress) {
+kstd::error_code Vga_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &,
+                              const kernel::KObjectPtr<kernel::KSurface> &dst,
+                              int x, int y, int w, int h, uint32_t colorIndex) {
+  if (!dst || !dst->backing || !dst->backing->directAddress)
     return kernel::KernelError::Unsupported;
-  }
-  if (w <= 0 || h <= 0) {
+  if (w <= 0 || h <= 0) return kernel::KernelError::InvalidSize;
+  if (dst->pitch <= 0 || static_cast<uint32_t>(dst->pitch) < dst->width ||
+      static_cast<uint64_t>(dst->pitch) * dst->height > dst->sizeInBytes)
     return kernel::KernelError::InvalidSize;
-  }
-
+  const int64_t left = x < 0 ? 0 : x;
+  const int64_t top = y < 0 ? 0 : y;
+  const int64_t right = static_cast<int64_t>(x) + w > dst->width
+                            ? dst->width
+                            : static_cast<int64_t>(x) + w;
+  const int64_t bottom = static_cast<int64_t>(y) + h > dst->height
+                             ? dst->height
+                             : static_cast<int64_t>(y) + h;
   auto *base = dst->backing->directAddress.as_ptr<uint8_t>();
-
-  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcSetReset);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerData, static_cast<uint8_t>(colorIndex & 0x0F));
-  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcEnableSetReset);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0x0F);
-
-  const int xEnd = x + w - 1;
-  const int byteStart = x / 8;
-  const int byteEnd = xEnd / 8;
-
-  for (int row = y; row < y + h; ++row) {
-    if (row < 0 || static_cast<uint32_t>(row) >= kModeHeight) continue;
-
-    for (int b = byteStart; b <= byteEnd; ++b) {
-      uint8_t mask = 0xFF;
-      if (b == byteStart) mask &= static_cast<uint8_t>(0xFF >> (x % 8));
-      if (b == byteEnd) mask &= static_cast<uint8_t>(0xFF << (7 - (xEnd % 8)));
-
-      HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcBitMask);
-      HAL_IO_Out8(vga_regs::kGraphicsControllerData, mask);
-
-      uint8_t *addr = base + static_cast<size_t>(row) * kModePitch + static_cast<size_t>(b);
-      const volatile uint8_t latch = *addr;
-      (void) latch;
-      *addr = 0xFF;
-    }
-  }
-
-  // Restore defaults so a stray direct memory access elsewhere doesn't
-  // silently pick up a stale Set/Reset or Bit Mask state.
-  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcBitMask);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0xFF);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcEnableSetReset);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0x00);
+  for (int64_t row = top; row < bottom; ++row)
+    __builtin_memset(base + static_cast<size_t>(row) * static_cast<size_t>(dst->pitch) +
+                         static_cast<size_t>(left),
+                     static_cast<uint8_t>(colorIndex & 0x0F),
+                     static_cast<size_t>(right - left));
   return kernel::KernelError::Success;
 }
 
-kstd::error_code Vga_DrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KSurface> &dst, int x0, int y0, int x1, int y1, uint32_t colorIndex) {
-  if (!dst || !dst->backing || !dst->backing->directAddress) {
+kstd::error_code Vga_DrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &,
+                              const kernel::KObjectPtr<kernel::KSurface> &dst,
+                              int x0, int y0, int x1, int y1, uint32_t colorIndex) {
+  if (!dst || !dst->backing || !dst->backing->directAddress)
     return kernel::KernelError::Unsupported;
-  }
-
   auto *base = dst->backing->directAddress.as_ptr<uint8_t>();
-
   const int dx = x1 > x0 ? x1 - x0 : x0 - x1;
   const int sx = x0 < x1 ? 1 : -1;
   const int dy = -(y1 > y0 ? y1 - y0 : y0 - y1);
   const int sy = y0 < y1 ? 1 : -1;
   int err = dx + dy;
-
   while (true) {
     Vga_PlotPixel(base, x0, y0, colorIndex);
-    if (x0 == x1 && y0 == y1) {
-      break;
-    }
+    if (x0 == x1 && y0 == y1) break;
     const int e2 = 2 * err;
     if (e2 >= dy) {
       err += dy;
@@ -355,54 +421,55 @@ kstd::error_code Vga_DrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter>
   return kernel::KernelError::Success;
 }
 
-kstd::expected<uint32_t, kstd::error_code> Vga_ReadSurfacePixel(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &,
-                                                            const kernel::KObjectPtr<kernel::KSurface> &src,
-                                                            int x, int y) {
-  if (!src || !src->backing || !src->backing->directAddress) return kstd::unexpected(kernel::KernelError::Unsupported);
+kstd::expected<uint32_t, kstd::error_code> Vga_ReadSurfacePixel(
+    const kernel::KObjectPtr<kernel::KGraphicsAdapter> &,
+    const kernel::KObjectPtr<kernel::KSurface> &src, int x, int y) {
+  if (!src || !src->backing || !src->backing->directAddress)
+    return kstd::unexpected(kernel::KernelError::Unsupported);
   if (x < 0 || y < 0 || static_cast<uint32_t>(x) >= src->width ||
-      static_cast<uint32_t>(y) >= src->height) return kstd::unexpected(kernel::KernelError::OutOfRange);
-  const uint32_t color = Vga_ReadPixel(src->backing->directAddress.as_ptr<uint8_t>(), x, y);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerIndex, vga_regs::kGcReadMapSelect);
-  HAL_IO_Out8(vga_regs::kGraphicsControllerData, 0);
-  return color;
+      static_cast<uint32_t>(y) >= src->height)
+    return kstd::unexpected(kernel::KernelError::OutOfRange);
+  return Vga_ReadPixel(src->backing->directAddress.as_ptr<uint8_t>(), x, y);
 }
 
-kstd::error_code Vga_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
-                const kernel::KObjectPtr<kernel::KSurface> &dst,
-                int dstX, int dstY,
-                const kernel::KObjectPtr<kernel::KSurface> &src,
-                int srcX, int srcY,
-                uint32_t width, uint32_t height,
-                kernel::RasterOp rop) {
-  if (rop != kernel::RasterOp::SRCCOPY) {
-    // Anything other than a straight copy is left to the kernel's software
-    // fallback (KE_GFX_Software*), which doesn't understand planar layouts.
-    return kernel::KernelError::Unsupported;
-  }
-
+kstd::error_code Vga_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &,
+                            const kernel::KObjectPtr<kernel::KSurface> &dst,
+                            int dstX, int dstY,
+                            const kernel::KObjectPtr<kernel::KSurface> &src,
+                            int srcX, int srcY,
+                            uint32_t width, uint32_t height,
+                            kernel::RasterOp rop) {
+  if (rop != kernel::RasterOp::SRCCOPY) return kernel::KernelError::Unsupported;
   if (!dst || !dst->backing || !dst->backing->directAddress ||
-      !src || !src->backing || !src->backing->directAddress) {
+      !src || !src->backing || !src->backing->directAddress)
     return kernel::KernelError::Unsupported;
-  }
-
   auto *dstBase = dst->backing->directAddress.as_ptr<uint8_t>();
-  auto *srcBase = src->backing->directAddress.as_ptr<uint8_t>();
-
+  const auto *srcBase = src->backing->directAddress.as_ptr<uint8_t>();
   for (uint32_t row = 0; row < height; ++row) {
     for (uint32_t col = 0; col < width; ++col) {
-      const uint32_t colorIndex = Vga_ReadPixel(srcBase, srcX + static_cast<int>(col), srcY + static_cast<int>(row));
-      Vga_PlotPixel(dstBase, dstX + static_cast<int>(col), dstY + static_cast<int>(row), colorIndex);
+      const int x = dstX + static_cast<int>(col);
+      const int y = dstY + static_cast<int>(row);
+      const int sourceX = srcX + static_cast<int>(col);
+      const int sourceY = srcY + static_cast<int>(row);
+      if (x < 0 || y < 0 || sourceX < 0 || sourceY < 0 ||
+          static_cast<uint32_t>(x) >= dst->width || static_cast<uint32_t>(y) >= dst->height ||
+          static_cast<uint32_t>(sourceX) >= src->width || static_cast<uint32_t>(sourceY) >= src->height)
+        continue;
+      const uint32_t index = Vga_ReadPixel(srcBase, sourceX, sourceY);
+      Vga_PlotPixel(dstBase, x, y, index);
     }
   }
   return kernel::KernelError::Success;
 }
 
-void Vga_Present(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/, const kernel::KObjectPtr<kernel::KSurface> &surface, const kernel::KClipRect *rects, size_t count) {
-  (void) surface;
-  (void) rects;
-  (void) count;
-  // The mapped window is already the visible framebuffer in mode 0x12:
-  // there's no page-flipping to perform here.
+void Vga_Present(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
+                 const kernel::KObjectPtr<kernel::KSurface> &surface,
+                 const kernel::KClipRect *rects, size_t count) {
+  if (!surface || !surface->backing || !surface->backing->directAddress) return;
+  const auto *context = adapter ? adapter->GetDeviceExtensionAs<VgaContext>() : nullptr;
+  if (!context || !context->framebuffer) return;
+  Vga_PresentShadow(surface->backing->directAddress.as_ptr<uint8_t>(),
+                    context->framebuffer.as_ptr<volatile uint8_t>(), rects, count);
 }
 // endregion
 
@@ -508,3 +575,6 @@ UNDOS_DRIVER_ENTRY {
   driver->StartDevice = Vga_StartDevice;
   driver->DeviceControl = Vga_DeviceControl;
 }
+
+#undef VGA_MODE_FREE
+#undef VGA_MODE_ALLOC

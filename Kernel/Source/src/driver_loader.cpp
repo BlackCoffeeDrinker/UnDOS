@@ -36,7 +36,8 @@ kstd::expected<uintptr_t, kstd::error_code> ResolveSymbol(kstd::string_view name
 // buffer. The name is captured separately since KObject::name is const and
 // can only be set once the KDriverObject is actually constructed.
 void CaptureDriverName(void *context, kstd::string_view name, const uint8_t *data, size_t) {
-  if (name != ".driver_name") return;
+  if (name != ".driver_name")
+    return;
   auto *name_out = static_cast<kstd::static_string<64> *>(context);
   *name_out = reinterpret_cast<const char *>(data);
 }
@@ -171,7 +172,8 @@ void LoadLastResortDrivers() {
 
 UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KDriverObject>, kstd::error_code>
 KE_DRIVER_Load(const kstd::string_view &path) noexcept {
-  if (path.empty()) return kstd::unexpected(kernel::KernelError::InvalidArgument);
+  if (path.empty())
+    return kstd::unexpected(kernel::KernelError::InvalidArgument);
 
   kstd::static_string<64> captured_name = "";
 
@@ -222,20 +224,24 @@ KE_DRIVER_Load(const kstd::string_view &path) noexcept {
   driver_object.value()->load_base = result->load_base;
   driver_object.value()->total_size = result->total_size;
   driver_object.value()->entry_point = reinterpret_cast<void (*)(kernel::KObjectPtr<kernel::KDriverObject> &, const kernel::KConfigurationKeyPtr &)>(result->entry_point.value);
+  if (const auto init_status = kernel::elf::RunInitializers(*result)) {
+    KE_Print("KE_DRIVER_Load: '{}' has invalid constructor tables: {}", path, init_status.message());
+    return kstd::unexpected(init_status);
+  }
   driver_object.value()->entry_point(*driver_object, driverConfig);
 
   // TODO: Remove the entry point from memory once it's done executing
 
-  const auto status = KE_OB_InsertObject(KE_OB_GetDriverDirectory(), *driver_object);
-  if (status) return kstd::unexpected(status);
-  const auto pnp_status = KE_PNP_RegisterDriver(*driver_object);
-  if (pnp_status) {
-    const auto rollback_status = KE_OB_RemoveObject(KE_OB_GetDriverDirectory(), *driver_object);
-    if (rollback_status) {
+  if (const auto status = KE_OB_InsertObject(KE_OB_GetDriverDirectory(), *driver_object))
+    return kstd::unexpected(status);
+
+  if (const auto pnp_status = KE_PNP_RegisterDriver(*driver_object)) {
+    if (const auto rollback_status = KE_OB_RemoveObject(KE_OB_GetDriverDirectory(), *driver_object)) {
       KE_Print("KE_DRIVER_Load: failed to roll back driver registration: {}",
                rollback_status.message());
     }
     return kstd::unexpected(pnp_status);
   }
+
   return *driver_object;
 }

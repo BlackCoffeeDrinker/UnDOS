@@ -16,7 +16,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
-TASK_ROOT = (ROOT / "build/bios-chs-fallback").resolve()
+TASK_ROOT = (ROOT / "build/build-hddimg").resolve()
 MILESTONES = (
     "UnDOS Kernel INIT with page size",
     "Root UUID 3937-4d14 selected volume",
@@ -129,7 +129,7 @@ def validate_candidate(report, image):
     if report.get("default_menu_id") != "undos-console-vga":
         raise ValueError("Candidate does not preserve the historical menu ID")
     if image == (ROOT / "HDD_IMG.IMG").resolve() or TASK_ROOT not in image.parents:
-        raise ValueError("Only a private candidate under build/bios-chs-fallback may be tested")
+        raise ValueError("Only a private candidate under build/build-hddimg may be tested")
     if not image.is_file() or image.stat().st_nlink != 1:
         raise ValueError("Candidate must be a regular, single-link file")
     if sha256(image) != report.get("candidate_sha256"):
@@ -185,7 +185,7 @@ def main():
         raise ValueError("Candidate report must not be a symlink")
     report_path = args.candidate_report.resolve(strict=True)
     if TASK_ROOT not in report_path.parents:
-        raise ValueError("Candidate report must be under build/bios-chs-fallback")
+        raise ValueError("Candidate report must be under build/build-hddimg")
     report = json.loads(report_path.read_text())
     candidate_path = Path(report["candidate_image"])
     if candidate_path.is_symlink():

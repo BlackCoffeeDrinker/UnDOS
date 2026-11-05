@@ -96,8 +96,8 @@ Style comes from `head.macStyle` and `post.isFixedPitch`; weight comes from
 
 All declared wire-format limits apply, including 4 MiB input, 8 MiB output and
 4096 glyphs. Intermediate section storage is bounded by the output budget.
-No exceptions or hosted runtime are required. Like existing `kstd::vector`,
-the decoder requires a working allocation provider; the application reports
+No exceptions or hosted runtime are required. Its `GrowableArray` storage
+uses the CRT heap (`crt_realloc`/`crt_free`); the application reports
 allocation failure and terminates rather than throwing or continuing with a
 null allocation. Bytecode is preserved, not semantically validated or executed.
 

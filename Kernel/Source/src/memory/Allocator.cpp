@@ -9,6 +9,11 @@
 extern uint32_t g_page_size;
 
 namespace kernel::memory {
+#if __STDC_HOSTED__
+namespace test_hooks {
+void (*slowPages)(bool) = nullptr;
+}
+#endif
 namespace {
 adt::AvlTree<Slab, &Slab::avl_node> g_global_registry;
 SpinLock g_registry_lock;
@@ -20,44 +25,83 @@ struct LargeAllocHeader {
   size_t pages;
 };
 
-SpinLock g_large_alloc_lock;
+ArenaMutex g_arena_mutex;
+
+void *allocate_pages(size_t bytes) noexcept {
+#if __STDC_HOSTED__
+  if (test_hooks::slowPages) test_hooks::slowPages(false);
+#endif
+  auto &as = KE_VMM_GetKernelAddressSpace();
+  if (!g_page_size || !bytes || bytes > SIZE_MAX - (g_page_size - 1)) return nullptr;
+  const size_t pages = (bytes + g_page_size - 1) / g_page_size;
+  const size_t mapped_bytes = pages * g_page_size;
+  if (as.current_base > as.limit ||
+      g_page_size > as.limit.value - as.current_base.value ||
+      mapped_bytes > as.limit.value - as.current_base.value - g_page_size)
+    return nullptr;
+  const auto physical = HAL_PMM_AllocateFrames(pages);
+  if (!physical) return nullptr;
+  const VirtualAddress address = as.current_base + g_page_size;
+  const auto original_base = as.current_base;
+  as.current_base = address + mapped_bytes;
+  size_t mapped = 0;
+  for (; mapped < pages; ++mapped) {
+    const auto page = address + mapped * g_page_size;
+    if (!HAL_VMM_MapPage(page, physical + mapped * g_page_size,
+                        vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE))
+      break;
+    HAL_SMP_ShootdownTlb(page);
+    __builtin_memset(page.as_ptr(), 0, g_page_size);
+  }
+  if (mapped != pages) {
+    for (size_t i = 0; i < mapped; ++i) {
+      const auto page = address + i * g_page_size;
+      HAL_VMM_UnmapPage(page);
+      HAL_SMP_ShootdownTlb(page);
+    }
+    HAL_PMM_FreeFrames(physical, pages);
+    as.current_base = original_base;
+    return nullptr;
+  }
+  return address.as_ptr();
+}
+
+void free_pages(VirtualAddress address, size_t pages) noexcept {
+#if __STDC_HOSTED__
+  if (test_hooks::slowPages) test_hooks::slowPages(true);
+#endif
+  const auto physical = HAL_VMM_GetPhysicalAddress(address);
+  for (size_t i = 0; i < pages; ++i) {
+    const auto page = address + i * g_page_size;
+    HAL_VMM_UnmapPage(page);
+    HAL_SMP_ShootdownTlb(page);
+  }
+  HAL_PMM_FreeFrames(physical, pages);
+}
 }// namespace
 
+ArenaMutex &arena_mutex() noexcept { return g_arena_mutex; }
 
 Slab *find_slab(void *ptr) noexcept {
-  g_registry_lock.lock();
+  IrqSpinLockGuard guard(g_registry_lock);
   Slab *slab = g_global_registry.find(reinterpret_cast<uintptr_t>(ptr));
-  g_registry_lock.unlock();
   return slab;
 }
 
 Slab *Allocator::allocate_slab(Cache &cache) noexcept {
-  const size_t pages = layout_.slab_size / layout_.page_size;
-  const PhysicalAddress phys = HAL_PMM_AllocateFrames(pages);
-  if (!phys) {
-    KE_Print("Failed to allocate physical frames for slab!");
-    return nullptr;
-  }
+  kstd::unique_lock arena(arena_mutex());
+  void *allocation = allocate_pages(layout_.slab_size);
+  if (!allocation) return nullptr;
 
-  auto &as = KE_VMM_GetKernelAddressSpace();
-  const VirtualAddress virt = as.current_base + layout_.page_size;
-  as.current_base = virt + layout_.slab_size;
-
-  for (size_t i = 0; i < pages; ++i) {
-    HAL_VMM_MapPage(
-        virt + i * layout_.page_size,
-        phys + i * layout_.page_size,
-        vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
-  }
-
-  const kstd::span memory(virt.as_ptr<uint8_t>(), layout_.slab_size);
+  const kstd::span memory(static_cast<uint8_t *>(allocation), layout_.slab_size);
 
   void *slab_storage = memory.data() + layout_.control_offset;
   auto *slab = new (slab_storage) Slab(layout_, memory, &cache);
 
-  g_registry_lock.lock();
-  g_global_registry.insert(*slab);
-  g_registry_lock.unlock();
+  {
+    IrqSpinLockGuard guard(g_registry_lock);
+    g_global_registry.insert(*slab);
+  }
   total_allocated_ += layout_.slab_size;
 
   return slab;
@@ -68,24 +112,15 @@ void *allocate_large(size_t size) noexcept {
   const size_t total = size + sizeof(LargeAllocHeader);
   const size_t page_count = total / g_page_size + (total % g_page_size != 0);
 
-  g_large_alloc_lock.lock();
-
-  auto allocation = vmm::allocate_memory(
-      KE_VMM_GetKernelAddressSpace(), total,
-      vmm::ProtectFlags::READ | vmm::ProtectFlags::WRITE);
-
-  if (!allocation) {
-    g_large_alloc_lock.unlock();
-    KE_Print("Failed to allocate large allocation!");
-    return nullptr;
-  }
-  void *virt_ptr = *allocation;
+  kstd::unique_lock arena(arena_mutex());
+  // Heap pages are eager and explicitly freed; no VAD allocation may recurse
+  // into a cache while the arena is held.
+  void *virt_ptr = allocate_pages(total);
+  if (!virt_ptr) return nullptr;
 
   auto *header = static_cast<LargeAllocHeader *>(virt_ptr);
   header->magic = kLargeAllocMagic;
   header->pages = page_count;
-
-  g_large_alloc_lock.unlock();
 
   return static_cast<uint8_t *>(virt_ptr) + sizeof(LargeAllocHeader);
 }
@@ -94,47 +129,30 @@ void free_large(void *ptr) noexcept {
   const VirtualAddress virt = VirtualAddress::from_ptr(ptr) - sizeof(LargeAllocHeader);
   const auto *header = virt.as_ptr<LargeAllocHeader>();
 
-  g_large_alloc_lock.lock();
+  kstd::unique_lock arena(arena_mutex());
 
   if (header->magic != kLargeAllocMagic) [[unlikely]] {
-    g_large_alloc_lock.unlock();
     KE_Print("free_large: invalid header at {}", ptr);
     return;
   }
 
   const size_t pages = header->pages;
-  const PhysicalAddress phys = HAL_VMM_GetPhysicalAddress(virt);
-
-  for (size_t i = 0; i < pages; ++i) {
-    HAL_VMM_UnmapPage(virt + i * g_page_size);
-  }
-
-  HAL_PMM_FreeFrames(phys, pages);
-  const auto region_status = KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), virt.as_ptr());
-  if (region_status) {
-    KE_Print("free_large: failed to release virtual region: {}",
-             region_status.message());
-  }
-
-  g_large_alloc_lock.unlock();
+  free_pages(virt, pages);
 }
 
 void Allocator::free_slab(Slab &slab) noexcept {
-  g_registry_lock.lock();
-  g_global_registry.remove(&slab);
-  g_registry_lock.unlock();
+  kstd::unique_lock arena(arena_mutex());
+  {
+    IrqSpinLockGuard guard(g_registry_lock);
+    g_global_registry.remove(&slab);
+  }
 
   total_allocated_ -= layout_.slab_size;
 
   const VirtualAddress virt = VirtualAddress::from_ptr(slab.memory().data());
-  const PhysicalAddress phys = HAL_VMM_GetPhysicalAddress(virt);
 
   const size_t pages = slab.memory().size() / layout_.page_size;
-  for (size_t i = 0; i < pages; ++i) {
-    HAL_VMM_UnmapPage(virt + i * layout_.page_size);
-  }
-
-  HAL_PMM_FreeFrames(phys, pages);
+  free_pages(virt, pages);
 }
 
 

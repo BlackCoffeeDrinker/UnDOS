@@ -15,8 +15,25 @@ using atomic_cmpxchg64_fn = bool (*)(volatile uint64_t *p, uint64_t &expected, u
 namespace {
 volatile unsigned int atomic_lock_word = 0;
 
-void atomic_lock_386() noexcept {
-  // 386-safe spinlock using XCHG (the only atomic instruction guaranteed)
+// 386-safe spinlock using XCHG (the only atomic instruction guaranteed).
+//
+// The 386 tier is strictly uniprocessor (approved strategy:
+// native_smp_safe_386_up_fallback), so the only agent that can contend for
+// atomic_lock_word on the same CPU is a local interrupt handler. Save EFLAGS
+// and disable local interrupts before taking the lock so an IRQ producer can
+// never preempt a same-CPU holder and deadlock on it; the saved IF state is
+// restored on unlock (interrupts stay disabled when the caller entered with
+// them disabled, e.g. from an interrupt gate). This fallback is serialized,
+// not lock-free, and must never be used by an SMP-capable configuration.
+unsigned int atomic_lock_386_irqsave() noexcept {
+  unsigned int eflags;
+  asm volatile(
+      "pushfl\n\t"
+      "popl %0\n\t"
+      "cli"
+      : "=r"(eflags)
+      :
+      : "memory");
   while (true) {
     unsigned int expected = 0;
     asm volatile(
@@ -27,9 +44,16 @@ void atomic_lock_386() noexcept {
     if (expected == 0)
       break;
   }
+  return eflags;
 }
 
-void atomic_unlock_386() noexcept { atomic_lock_word = 0; }
+void atomic_unlock_386_irqrestore(unsigned int eflags) noexcept {
+  atomic_lock_word = 0;
+  constexpr unsigned int kEflagsIf = 1u << 9;
+  if (eflags & kEflagsIf) {
+    asm volatile("sti" ::: "memory");
+  }
+}
 
 void atomic_memory_order(PlatformMemoryOrder order) noexcept {
   switch (order) {
@@ -63,12 +87,12 @@ unsigned int atomic_fetch_add_386(volatile void *ptr,
       order == PlatformMemoryOrder::AcquireRelease)
     asm volatile("" ::: "memory");
 
-  atomic_lock_386();
+  const unsigned int eflags = atomic_lock_386_irqsave();
 
   unsigned int old = *p;
   *p = old + val;
 
-  atomic_unlock_386();
+  atomic_unlock_386_irqrestore(eflags);
 
   // Acquire semantics after unlock
   if (order == PlatformMemoryOrder::Acquire ||
@@ -91,12 +115,12 @@ unsigned int atomic_fetch_sub_386(volatile void *ptr,
       order == PlatformMemoryOrder::AcquireRelease)
     asm volatile("" ::: "memory");
 
-  atomic_lock_386();
+  const unsigned int eflags = atomic_lock_386_irqsave();
 
   unsigned int old = *p;
   *p = old - val;
 
-  atomic_unlock_386();
+  atomic_unlock_386_irqrestore(eflags);
 
   if (order == PlatformMemoryOrder::Acquire ||
       order == PlatformMemoryOrder::AcquireRelease)
@@ -150,7 +174,7 @@ bool atomic_compare_exchange_32_386(volatile void *ptr,
       order == PlatformMemoryOrder::AcquireRelease)
     asm volatile("" ::: "memory");
 
-  atomic_lock_386();
+  const unsigned int eflags = atomic_lock_386_irqsave();
 
   bool success = (*p == expected);
   if (success) {
@@ -159,7 +183,7 @@ bool atomic_compare_exchange_32_386(volatile void *ptr,
     expected = *p;
   }
 
-  atomic_unlock_386();
+  atomic_unlock_386_irqrestore(eflags);
 
   if (order == PlatformMemoryOrder::Acquire ||
       order == PlatformMemoryOrder::AcquireRelease)
@@ -194,34 +218,34 @@ bool atomic_compare_exchange_32_cmpxchg(volatile void *ptr,
 }
 
 uint64_t atomic_load_64_386(volatile uint64_t *p) noexcept {
-  atomic_lock_386();
+  const unsigned int eflags = atomic_lock_386_irqsave();
   const uint64_t val = *p;
-  atomic_unlock_386();
+  atomic_unlock_386_irqrestore(eflags);
   return val;
 }
 
 void atomic_store_64_386(volatile uint64_t *p, uint64_t val) noexcept {
-  atomic_lock_386();
+  const unsigned int eflags = atomic_lock_386_irqsave();
   *p = val;
-  atomic_unlock_386();
+  atomic_unlock_386_irqrestore(eflags);
 }
 
 uint64_t atomic_exchange_64_386(volatile uint64_t *p, uint64_t val) noexcept {
-  atomic_lock_386();
+  const unsigned int eflags = atomic_lock_386_irqsave();
   const uint64_t old = *p;
   *p = val;
-  atomic_unlock_386();
+  atomic_unlock_386_irqrestore(eflags);
   return old;
 }
 
 bool atomic_compare_exchange_64_386(volatile uint64_t *p, uint64_t &expected, uint64_t desired) noexcept {
-  atomic_lock_386();
+  const unsigned int eflags = atomic_lock_386_irqsave();
   const bool success = (*p == expected);
   if (success)
     *p = desired;
   else
     expected = *p;
-  atomic_unlock_386();
+  atomic_unlock_386_irqrestore(eflags);
   return success;
 }
 

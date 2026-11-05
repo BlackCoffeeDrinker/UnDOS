@@ -1,4 +1,4 @@
-#include "../../../Apps/Fontloader/decoder.hpp"
+#include "fontloader_test_support.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 namespace {
@@ -120,7 +120,7 @@ struct Fixture {
 };
 DecodeError run(Fixture &fixture, Buffer &output) {
   const auto file = fixture.build();
-  return decode({.data = file.data(), .size = file.size()}, output);
+  return decode_into({.data = file.data(), .size = file.size()}, output);
 }
 } // namespace
 
@@ -232,7 +232,7 @@ TEST_CASE("font loader rejects truncated SFNT and glyph data", "[fontloader]") {
   const auto file = fixture.build();
   Buffer output;
   for (size_t length = 0; length < file.size(); ++length) {
-    REQUIRE(decode({file.data(), length}, output) != DecodeError::None);
+    REQUIRE(decode_into({file.data(), length}, output) != DecodeError::None);
     REQUIRE(output.empty());
   }
   auto &glyf = fixture.get(tag('g','l','y','f'));
@@ -372,7 +372,7 @@ TEST_CASE("font loader rejects composite cycles, flags and invalid attachment", 
 
 TEST_CASE("font loader enforces global bounds and rejects unsupported outlines", "[fontloader]") {
   Buffer output;
-  REQUIRE(decode({nullptr, MaxFileBytes + 1}, output) == DecodeError::InvalidSize);
+  REQUIRE(decode_into({nullptr, MaxFileBytes + 1}, output) == DecodeError::InvalidSize);
   Fixture glyphs;
   be16(glyphs.get(tag('m','a','x','p')), 4, MaxGlyphs + 1);
   REQUIRE(run(glyphs, output) == DecodeError::ResourceLimit);
@@ -440,10 +440,10 @@ TEST_CASE("font loader rejects duplicate and overlapping table records", "[fontl
   auto file = fixture.build();
   Buffer output;
   be32(file, 28, big32(file.data() + 12));
-  REQUIRE(decode({file.data(), file.size()}, output) == DecodeError::InvalidDirectory);
+  REQUIRE(decode_into({file.data(), file.size()}, output) == DecodeError::InvalidDirectory);
   file = fixture.build();
   be32(file, 36, big32(file.data() + 20));
-  REQUIRE(decode({file.data(), file.size()}, output) == DecodeError::InvalidDirectory);
+  REQUIRE(decode_into({file.data(), file.size()}, output) == DecodeError::InvalidDirectory);
 }
 
 TEST_CASE("font loader successful single-bit mutations retain resource invariants", "[fontloader]") {
@@ -453,7 +453,7 @@ TEST_CASE("font loader successful single-bit mutations retain resource invariant
   for (size_t i = 0; i < file.size(); ++i) {
     for (uint32_t bit = 0; bit < 8; ++bit) {
       file[i] ^= uint8_t(1u << bit);
-      const auto error = decode({.data = file.data(), .size = file.size()}, output);
+      const auto error = decode_into({.data = file.data(), .size = file.size()}, output);
       if (error == DecodeError::None) {
         REQUIRE(validate({output.data(), output.size()}) == Error::None);
       } else {

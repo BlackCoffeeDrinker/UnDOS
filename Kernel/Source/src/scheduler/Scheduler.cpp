@@ -2,10 +2,11 @@
 
 #include <Kernel.hpp>
 
-#include "../stdkrn.hpp"
+#include "stdkrn.hpp"
 #include "CpuContext.hpp"
 #include "KernelStackCleanup.hpp"
 #include "ReadyQueue.hpp"
+#include "ScheduleNext.hpp"
 #include <percpu.hpp>
 
 // Page size published by the boot path (see kernel/src/main.cpp).
@@ -15,7 +16,7 @@ namespace kernel::sched {
 namespace {
 
 // Number of timer ticks a thread runs before it is rotated out (round-robin).
-constexpr uint32_t DEFAULT_QUANTUM = 5;
+constexpr uint32_t DEFAULT_QUANTUM = detail::DefaultQuantum;
 
 void log_cleanup_failure(const char *operation, kstd::error_code status) noexcept {
   if (status) {
@@ -194,70 +195,12 @@ void enqueue_on(const uint32_t cpu_id, KThreadObject *thread) noexcept {
   }
 }
 
-// Core scheduling decision + context switch. MUST be called with interrupts
-// disabled. Picks the highest-priority thread on THIS CPU's queue, re-queues
-// the outgoing thread if it is still runnable, and swaps CPU context. When
-// there is nothing else to run, the current thread simply keeps the CPU.
-void schedule_next() noexcept {
-  auto &ctx = cpu::current_context();
-  KThreadObject *prev = ctx.current.get();
-
-  // Pick and re-queue under the queue lock, but drop it before switching:
-  // the outgoing thread resumes inside this function much later, and must
-  // not be holding a lock while it is descheduled.
-  const uintptr_t state = ctx.ready_lock.lock_irqsave();
-  KThreadObject *next = ctx.ready.pop_next();
-  if (next && prev && prev->state == KThreadObject::State::Running) {
-    prev->state = KThreadObject::State::Ready;
-    ctx.ready.enqueue(prev);
-  }
-  ctx.ready_lock.unlock_irqrestore(state);
-
-  if (!next) {
-    // Nothing else ready on this CPU: keep running the current thread.
-    if (prev) prev->quantum_ticks = DEFAULT_QUANTUM;
-    return;
-  }
-
-  next->state = KThreadObject::State::Running;
-  next->quantum_ticks = DEFAULT_QUANTUM;
-
-  // Publish the new current thread before switching, so the incoming context
-  // (including a brand-new thread's trampoline) observes itself as current.
-  ctx.current = KObjectPtr(next);
-
-  // User threads carry their own translation root; switch address spaces first.
-  if (next->translation_root != PhysicalAddress(0) &&
-      HAL_VMM_GetCurrentTranslationRoot() != next->translation_root) {
-    HAL_VMM_SwitchAddressSpace(next->translation_root);
-  }
-
-  // Keep the TSS esp0 pointed at the incoming thread's own kernel stack, so a
-  // ring-3 -> ring-0 transition (syscall, IRQ) while it is running lands on
-  // the right stack rather than whichever thread ran last. The outgoing
-  // thread's live value is saved first: it may differ from its stack top
-  // (e.g. the v86 monitor's private trap stack during a BIOS call), and
-  // restoring a stale value on resume would let the next trap scribble
-  // over arbitrary memory.
-  if (prev && prev != next) {
-    prev->kernel_stack_esp0 = HAL_CPU_GetKernelStack();
-  }
-  HAL_CPU_SetKernelStack(next->kernel_stack_esp0);
-
-  if (prev == next) {
-    return;
-  }
-
-  // Save prev's SP into its TCB and load next's saved SP. When prev is later
-  // rescheduled, control resumes right here.
-  HAL_CPU_SwitchContext(prev->kernel_stack_top, next->kernel_stack_top);
-}
-
 void init_bsp() noexcept {
   cpu::init_contexts();
 
   auto &ctx = cpu::current_context();
   ctx.online = true;
+  ctx.accounting.clock_available = true;
 
   // Adopt the currently-running execution stream as the bootstrap thread. Its
   // saved stack pointer is captured automatically by the first context switch,
@@ -289,6 +232,7 @@ void init_bsp() noexcept {
 void init_ap(const uint32_t cpu_id) noexcept {
   auto &ctx = cpu::contexts()[cpu_id];
   ctx.online = true;
+  ctx.accounting.clock_available = true;
 
   // Same trick as the BSP: the stream this AP arrived on becomes its first
   // thread, so a context switch away from it has somewhere to save state.
@@ -386,7 +330,8 @@ KE_SCHED_CreateThread(cfunc<void(void *)> entry, void *arg, uint8_t priority) no
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KThreadObject>, kstd::error_code>
-KE_SCHED_CreateUserThread(const vmm::AddressSpace &as, VirtualAddress user_entry, VirtualAddress user_stack_top) noexcept {
+KE_SCHED_CreateUserThread(const vmm::AddressSpace &as, VirtualAddress user_entry,
+                          VirtualAddress user_stack_top, KProcessObject *owner) noexcept {
   kstd::static_string<64> name;
   kstd::format(name, "uthread{}", sched::next_thread_id());
 
@@ -404,6 +349,7 @@ KE_SCHED_CreateUserThread(const vmm::AddressSpace &as, VirtualAddress user_entry
   t.value()->priority = 1;
   t.value()->state = KThreadObject::State::Ready;
   t.value()->translation_root = as.translation_root;
+  t.value()->owner_process = owner;
   t.value()->kernel_stack_base = base;
   t.value()->kernel_stack_esp0 = top;
   t.value()->kernel_stack_top = HAL_CPU_InitUserThreadContext(top, user_entry, user_stack_top);
@@ -457,4 +403,8 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void KE_SCHED_Terminate() noexcept {
 
 UNDOS_KERNEL_API_DEF KObjectPtr<KThreadObject> KE_SCHED_GetCurrentThread() noexcept {
   return cpu::current_context().current;
+}
+
+UNDOS_KERNEL_API_DEF void KE_SCHED_ChargeTimerTick(kernel::InterruptedMode mode) noexcept {
+  sched::charge_timer_tick(mode);
 }

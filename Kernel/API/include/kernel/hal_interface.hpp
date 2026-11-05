@@ -12,6 +12,18 @@
 #include <kernel/memory/address.hpp>
 #include <kernel/virtual_memory.hpp>
 
+namespace kernel {
+struct PhysicalMemoryUsage {
+  uint64_t totalBytes{0};
+  uint64_t usedBytes{0};
+  uint64_t freeBytes{0};
+  uint64_t unmanagedBytes{0};
+  bool initialized{false};
+  bool ownershipValid{false};
+  bool sharedOwnershipUnsupported{false};
+};
+}
+
 // region Platform API
 /**
  * @ingroup PLATFORM
@@ -144,6 +156,19 @@ UNDOS_HAL_PUBLIC_V1API(void, HAL_INTR_DisconnectInterrupt, uint32_t irq);
  * PIC via a read-modify-write of its Interrupt Mask Register.
  */
 UNDOS_HAL_PUBLIC_V1API(void, HAL_INTR_SetIrqMask, uint32_t irq, bool masked);
+
+/**
+ * @ingroup INTERRUPT
+ * @brief Method HAL_INTR_CompleteInterrupt
+ *
+ * Completes deferred service for one interrupt occurrence. The kernel
+ * dispatcher calls this after every callback in the dequeue snapshot for the
+ * source has returned. For a level-triggered source (which the HAL gate
+ * masked before sending EOI) this unmasks the line so a still-asserted level
+ * is re-presented; for an edge-triggered source it is a no-op. The HAL owns
+ * each source's trigger mode; the current 8259 PIC path is edge-triggered.
+ */
+UNDOS_HAL_PUBLIC_V1API(void, HAL_INTR_CompleteInterrupt, uint32_t irq);
 // endregion
 
 // region CPU Execution Environment API
@@ -165,6 +190,32 @@ UNDOS_HAL_PUBLIC_V1API(uint32_t, HAL_PLATFORM_GetCpuCount);
  * correctly.
  */
 UNDOS_HAL_PUBLIC_V1API(void, HAL_CPU_EnableInterrupts);
+
+/**
+ * @ingroup CPU
+ * @brief Query whether the current execution context is handling a hardware IRQ.
+ *
+ * Returns true while a native hardware IRQ handler is active and while that
+ * handler's continuation is suspended or resumed across a context switch.
+ * The x86 V86 monitor also returns true while it dispatches a hardware IRQ or
+ * executes a BIOS handler for a reflected hardware IRQ. Ordinary V86 BIOS
+ * calls and software INT instructions do not set this state.
+ *
+ * This query describes only the calling CPU. It does not require a current
+ * scheduler thread and does not allocate, block, or access scheduler state.
+ *
+ * Continuation contract: the HAL owns each logical CPU's active hardware-IRQ
+ * continuation depth. Hardware entry increments the calling CPU's depth and
+ * the matching exit decrements it; overflow/underflow is a HAL invariant
+ * violation and panics. HAL_CPU_SwitchContext saves the outgoing
+ * continuation's depth with its saved CPU context and restores the incoming
+ * continuation's depth before it resumes, so the query always reflects the
+ * current continuation, not prior scheduler or CPU bookkeeping. New thread
+ * contexts built by HAL_CPU_InitThreadContext/HAL_CPU_InitUserThreadContext
+ * start at depth zero. The scheduler never sets, clears, or infers this
+ * state.
+ */
+UNDOS_HAL_PUBLIC_V1API(bool, HAL_CPU_InHardwareInterrupt);
 
 /**
  * @ingroup CPU
@@ -333,6 +384,11 @@ UNDOS_HAL_PUBLIC_V1API(void, HAL_PMM_FreeFrames, kernel::PhysicalAddress base, s
  *
  */
 UNDOS_HAL_PUBLIC_V1API(void, HAL_PMM_ReserveRegion, kernel::PhysicalAddress base, size_t length);
+UNDOS_HAL_PUBLIC_V1API(bool, HAL_PMM_QueryUsage, kernel::PhysicalMemoryUsage *out);
+UNDOS_HAL_PUBLIC_V1API(bool, HAL_PMM_RegisterOwner, uint32_t pid);
+UNDOS_HAL_PUBLIC_V1API(void, HAL_PMM_UnregisterOwner, uint32_t pid);
+UNDOS_HAL_PUBLIC_V1API(bool, HAL_PMM_QueryOwnerFrames, uint32_t pid, uint64_t *frames);
+UNDOS_HAL_PUBLIC_V1API(bool, HAL_PMM_FreeOwnedFrames, uint32_t pid, kernel::PhysicalAddress base, size_t count);
 // endregion
 
 // region Virtual Memory Manager API
@@ -362,6 +418,16 @@ UNDOS_HAL_PUBLIC_V1API(kernel::PhysicalAddress, HAL_VMM_GetPhysicalAddress, kern
 
 /**
  * @ingroup VMM
+ * @brief Method HAL_VMM_QueryPage
+ *
+ * Walks the active page structures for `virt`. Returns false when the page is
+ * not present; otherwise stores its portable protection (READ always, plus
+ * WRITE/USER as the hardware entry allows) in `*flags` and returns true.
+ */
+UNDOS_HAL_PUBLIC_V1API(bool, HAL_VMM_QueryPage, kernel::VirtualAddress virt, kernel::vmm::ProtectFlags *flags);
+
+/**
+ * @ingroup VMM
  * @brief Method KE_VMM_SwitchAddressSpace
  * 
  * Loads a new translation root (e.g. CR3, TTBR, satp).
@@ -376,6 +442,7 @@ UNDOS_HAL_PUBLIC_V1API(void, HAL_VMM_SwitchAddressSpace, kernel::PhysicalAddress
  * the kernel's higher-half mappings cloned/shared, and an empty user half.
  */
 UNDOS_HAL_PUBLIC_V1API(kernel::PhysicalAddress, HAL_VMM_CreateAddressSpace);
+UNDOS_HAL_PUBLIC_V1API(bool, HAL_VMM_SetAddressSpaceOwner, kernel::PhysicalAddress root, uint32_t pid);
 
 /**
  * @ingroup VMM

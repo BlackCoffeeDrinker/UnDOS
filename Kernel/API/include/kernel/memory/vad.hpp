@@ -16,6 +16,11 @@ struct KMemoryBackingObject;
 }// namespace kernel
 
 namespace kernel::vmm {
+struct AddressSpace;
+enum class VadKind : uint8_t {
+  Ordinary, BorrowedPreparing, BorrowedActive, BorrowedUnmapping,
+  BorrowedFree, BorrowedQuarantined
+};
 
 struct VirtualAddressDescriptor {
   VirtualAddress start;
@@ -28,8 +33,17 @@ struct VirtualAddressDescriptor {
   // object (e.g. scratch mappings) -- such VADs are treated as anonymous.
   KObjectPtr<KMemoryBackingObject> backing;
   uint16_t lock_count = 0;
+  VadKind kind{VadKind::Ordinary};
+  VirtualAddress borrowed_pointer{};
+  size_t borrowed_size{};
+  const AddressSpace *borrowed_source{};
+  PhysicalAddress borrowed_root{};
+  uint32_t borrowed_asid{};
+  VirtualAddressDescriptor *retired_next{};
 
   adt::AvlNode<VirtualAddressDescriptor> node;
+  // Links BorrowedFree descriptors into the VMM's free alias-range tree.
+  adt::AvlNode<VirtualAddressDescriptor> free_node;
 
   bool operator<(const VirtualAddressDescriptor &other) const noexcept { return start < other.start; }
   bool operator==(const VirtualAddressDescriptor &other) const noexcept { return start == other.start; }

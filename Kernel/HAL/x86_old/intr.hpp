@@ -104,5 +104,7 @@ static_assert(sizeof(idt_entry_t) == 8);
 static_assert(sizeof(idtr_t) == 6);
 
 void init_idt();
+void begin_hardware_interrupt() noexcept;
+void end_hardware_interrupt() noexcept;
 
 }// namespace hal::x86

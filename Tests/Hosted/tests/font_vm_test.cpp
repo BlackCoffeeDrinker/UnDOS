@@ -1,3 +1,4 @@
+#include "gfx/font/font_program_cache.hpp"
 #include "gfx/font/vm.hpp"
 #include "gfx/font/vm_opcodes.hpp"
 #include <catch2/catch_test_macros.hpp>
@@ -592,6 +593,46 @@ namespace {
       functions.reset();
       REQUIRE_FALSE(functions.definitions[0].defined);
       REQUIRE(machine.run({0xb0, 0, 0x2b}, functions.state) == Error::InvalidFunction);
+    }
+
+    TEST_CASE("font VM validates jumps inside function bodies against the body", "[font][fontvm]") {
+      Functions functions;
+      Machine machine;
+      // Function 0 jumps over two DUPs; function 1 jumps into push data.
+      const Program font{0xb0, 0, 0x2c, 0xb0, 3, 0x1c, 0x20, 0x20, 0xb0, 5, 0x2d,
+                         0xb0, 1, 0x2c, 0xb0, 2, 0x1c, 0xb0, 9, 0x2d};
+      REQUIRE(machine.run(font, functions.state, MaxWork, Phase::Font) == Error::None);
+      REQUIRE(machine.run({0xb0, 0, 0x2b}, functions.state) == Error::None);
+      REQUIRE(machine.result.stackSize == 1);
+      REQUIRE(machine.stack[0] == 5);
+      REQUIRE(machine.run({0xb1, 2, 0, 0x2a}, functions.state) == Error::None);
+      REQUIRE(machine.result.stackSize == 2);
+      REQUIRE(machine.run({0xb0, 1, 0x2b}, functions.state) == Error::InvalidJump);
+    }
+
+    TEST_CASE("font VM does not rescan function bodies on call and return", "[font][fontvm]") {
+      Functions functions;
+      Machine machine;
+      Program font{0xb0, 0, 0x2c};
+      for (int i = 0; i < 20; ++i) { font.push_back(0xb0); font.push_back(1); font.push_back(0x21); }
+      font.push_back(0x2d);
+      REQUIRE(machine.run(font, functions.state, MaxWork, Phase::Font) == Error::None);
+      REQUIRE(machine.run({0xb1, 100, 0, 0x2a}, functions.state) == Error::None);
+      REQUIRE(machine.result.stackSize == 0);
+      // Each iteration executes 60 body bytes and one return charge; no rescans.
+      REQUIRE(machine.result.work <= 100 * 61 + 2 * 4);
+      REQUIRE(machine.run({0xb1, 100, 0, 0x2a}, functions.state, 100 * 61) == Error::WorkLimit);
+    }
+
+    TEST_CASE("font VM rejects malformed conditionals inside definitions at definition time", "[font][fontvm]") {
+      Functions functions;
+      Machine machine;
+      // IF without EIF inside the body, and EIF closing an outer IF from inside the body.
+      REQUIRE(machine.run({0xb0, 1, 0xb0, 0, 0x2c, 0x58, 0x2d}, functions.state, MaxWork, Phase::Font) ==
+              Error::InvalidDefinition);
+      functions.reset();
+      REQUIRE(machine.run({0xb0, 1, 0x58, 0xb0, 0, 0x2c, 0x59, 0x2d, 0x59}, functions.state, MaxWork,
+                          Phase::Font) == Error::InvalidConditional);
     }
 
     TEST_CASE("font VM handles empty bodies push data and branch-local definitions", "[font][fontvm]") {
@@ -1565,4 +1606,46 @@ TEST_CASE("font VM keeps built-in opcodes and validates IDEF operands", "[font][
   REQUIRE(machine.run({0xb8, 0x01, 0x00, IDEF, ENDF}, defs.state, MaxWork, Phase::Font) == Error::InvalidParameter);
   defs.reset();
   REQUIRE(machine.run({0xb0, 0xff, IDEF, ENDF}, defs.state, MaxWork, Phase::Font) == Error::None);
+}
+
+
+TEST_CASE("font VM flags size-dependent font programs for the face cache", "[font][fontvm]") {
+  Function definitions[4]{};
+  int32_t storage[2]{};
+  uint8_t written[2]{};
+  State state{{storage, 2}, {written, 2}, {}};
+  state.functions = {definitions, 4};
+  Machine machine;
+  REQUIRE(initialize(state, {}, 16, 1000) == Error::None);
+  // Pure fpgm: a definition plus a storage write.
+  REQUIRE(machine.run({0xb0, 0, 0x2c, 0xb0, 3, 0x60, 0x2d, 0xb1, 1, 42, 0x42}, state, MaxWork, Phase::Font) ==
+          Error::None);
+  REQUIRE_FALSE(machine.result.ppemDependent);
+  kernel::font::glyph::FontProgramCache cache;
+  cache.publish(state, machine.result.ppemDependent);
+  REQUIRE_FALSE(cache.per_size());
+
+  Function copies[4]{};
+  int32_t storageCopy[2]{};
+  uint8_t writtenCopy[2]{};
+  State other{{storageCopy, 2}, {writtenCopy, 2}, {}};
+  other.functions = {copies, 4};
+  REQUIRE(initialize(other, {}, 30, 1000) == Error::None);
+  REQUIRE(cache.restore(other));
+  REQUIRE(copies[0].defined);
+  REQUIRE(storageCopy[1] == 42);
+  REQUIRE(writtenCopy[1] == 1);
+  REQUIRE(copies[0].body.size == definitions[0].body.size);
+
+  // MPPEM, even inside a called function, makes the result per size.
+  REQUIRE(initialize(state, {}, 16, 1000) == Error::None);
+  REQUIRE(machine.run({0xb0, 0, 0x2c, 0x4b, 0x21, 0x2d, 0xb0, 0, 0x2b}, state, MaxWork, Phase::Font) ==
+          Error::None);
+  REQUIRE(machine.result.ppemDependent);
+  kernel::font::glyph::FontProgramCache perSize;
+  perSize.publish(state, machine.result.ppemDependent);
+  REQUIRE(perSize.per_size());
+  REQUIRE_FALSE(perSize.restore(other));
+  REQUIRE(machine.run({0x4b, 0x21}, state, MaxWork, Phase::Prep) == Error::None);
+  REQUIRE_FALSE(machine.result.ppemDependent);
 }

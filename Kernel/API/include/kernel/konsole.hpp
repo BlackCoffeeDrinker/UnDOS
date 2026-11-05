@@ -1,5 +1,8 @@
 #pragma once
 
+#include <kernel/fwd/KObjectPtr.hpp>
+#include <kernel/kobject/KVttyObject.hpp>
+
 #include <strfmt.hpp>
 
 /**
@@ -11,6 +14,11 @@
  * embedded line break starts a new, separately timestamped line.
  */
 UNDOS_KERNEL_PUBLIC_V1API(void, KE_PrintBuffer, const char *str, size_t len);
+
+// Default console sink endpoint (set by whatever driver or subsystem provides the system console)
+UNDOS_KERNEL_PUBLIC_V1API(void, KE_TTY_SetDefaultConsole, const kernel::KObjectPtr<kernel::KVttySinkObject> &sink);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KVttySinkObject>, KE_TTY_GetDefaultConsoleSink);
+
 
 // Every KE_Print call emits exactly one log line; do not end messages with
 // "\r\n". Each overload hands the whole message to KE_PrintBuffer at once.

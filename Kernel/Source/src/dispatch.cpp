@@ -10,10 +10,10 @@
 
 namespace {
 
-kernel::InterruptRecordRing g_interruptRing;
+// Constant-initialised: registration must work even if the kernel image's
+// constructor walk is missing (an unconstructed core rejects every IRQ).
+constinit kernel::dispatch::DpcCore g_dpcCore;
 kernel::KObjectPtr<kernel::KThreadObject> g_dispatchThread;
-kernel::dispatch::InterruptHandlerRegistry g_interruptHandlers;
-kernel::Mutex g_handlersLock;
 
 // Auto-reset dispatcher header the thread parks on. The signal is sticky
 // (KDispatcherHeader::TryAcquire consumes it), so an enqueue that lands
@@ -24,21 +24,7 @@ kernel::KDispatcherHeader g_recordAvailable{};
 
 void InterruptDispatchThread(void *) {
   for (;;) {
-    kernel::HalInterruptRecord record{};
-
-    while (g_interruptRing.Pop(record)) {
-      kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject>
-          handlers[kernel::dispatch::InterruptHandlerRegistry::kMaxHandlersPerInterrupt]{};
-      size_t count = 0;
-      {
-        kstd::unique_lock guard(g_handlersLock);
-        g_interruptHandlers.CopyHandlers(record.irq, handlers, count);
-      }
-      for (size_t i = 0; i < count; ++i) {
-        if (handlers[i] && handlers[i]->service_routine) {
-          handlers[i]->service_routine(handlers[i], handlers[i]->service_context);
-        }
-      }
+    while (g_dpcCore.DrainOne()) {
     }
 
     if (const auto waitStatus = KE_SCHED_WaitForHeader(g_recordAvailable, kernel::WAIT_INFINITE)) {
@@ -47,12 +33,22 @@ void InterruptDispatchThread(void *) {
     }
   }
 }
+
+// Publish the queue slot first (done by the caller), then wake the worker.
+// Sticky signal, usable from an interrupt gate: KE_EVENT_Signal masks
+// interrupts itself and is safe before init() created the thread.
+inline void WakeWorker() noexcept {
+  KE_EVENT_Signal(g_recordAvailable, false);
+}
 }// namespace
 
 namespace kernel::dispatch {
 void init() noexcept {
-  g_interruptRing.Reset();
-  g_interruptHandlers.Reset();
+  g_dpcCore.Reset();
+  // Thread identity feeds the core's self-disconnect detection (a handler
+  // calling KE_IO_DisconnectInterrupt from its own dispatch callback).
+  g_dpcCore.SetThreadIdSource(
+      []() noexcept -> void * { return KE_SCHED_GetCurrentThread().get(); });
   g_recordAvailable.manualReset = false;
   g_recordAvailable.signalled = false;
   // Spawn dispatch thread at elevated priority (10), running ahead of normal threads (priority 1)
@@ -64,17 +60,15 @@ void init() noexcept {
   g_dispatchThread = *thread;
 }
 
-InterruptRecordRing &get_ring() noexcept {
-  return g_interruptRing;
+DpcCore &core() noexcept {
+  return g_dpcCore;
 }
 }// namespace kernel::dispatch
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_EnqueueInterrupt(const kernel::HalInterruptRecord &record) noexcept {
-  const auto status = g_interruptRing.Push(record);
+  const auto status = g_dpcCore.EnqueueInterrupt(record);
   if (!status) {
-    // Sticky signal, usable from an interrupt gate: KE_EVENT_Signal masks
-    // interrupts itself and is safe before init() created the thread.
-    KE_EVENT_Signal(g_recordAvailable, false);
+    WakeWorker();
   }
   return status;
 }
@@ -82,11 +76,37 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_EnqueueInterrupt(const kernel:
 UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_RegisterHandler(
     uint32_t interruptId,
     const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
-  kstd::unique_lock guard(g_handlersLock);
-  return g_interruptHandlers.Register(interruptId, isr);
+  return g_dpcCore.RegisterHandler(interruptId, isr);
 }
 
-UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_UnregisterHandler(uint32_t interruptId) noexcept {
-  kstd::unique_lock guard(g_handlersLock);
-  return g_interruptHandlers.Unregister(interruptId);
+UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_UnregisterHandler(
+    uint32_t interruptId,
+    const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
+  return g_dpcCore.UnregisterHandler(interruptId, isr);
+}
+
+UNDOS_KERNEL_API_DEF size_t KE_DISPATCH_HandlerCount(uint32_t interruptId) noexcept {
+  return g_dpcCore.HandlerCount(interruptId);
+}
+
+UNDOS_KERNEL_API_DEF kstd::error_code KE_DPC_Register(kernel::KDpc &dpc) noexcept {
+  return g_dpcCore.RegisterDpc(dpc);
+}
+
+UNDOS_KERNEL_API_DEF kstd::error_code KE_DPC_Unregister(kernel::KDpc &dpc) noexcept {
+  return g_dpcCore.UnregisterDpc(dpc);
+}
+
+UNDOS_KERNEL_API_DEF kstd::error_code KE_DPC_Queue(
+    kernel::KDpc &dpc,
+    const kernel::HalInterruptRecord &args) noexcept {
+  const auto status = g_dpcCore.QueueDpc(dpc, args);
+  if (!status) {
+    WakeWorker();
+  }
+  return status;
+}
+
+UNDOS_KERNEL_API_DEF bool KE_DPC_Cancel(kernel::KDpc &dpc) noexcept {
+  return g_dpcCore.CancelDpc(dpc);
 }

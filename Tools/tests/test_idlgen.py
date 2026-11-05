@@ -35,7 +35,10 @@ class ScalarAliasTests(unittest.TestCase):
             self.assertIn("if (!mapped) return mapped.error();", output)
             mapping = output.index("if (headerCopy.values != nullptr && headerCopy.valuesLength > 0)")
             self.assertLess(output.index("args.values_capacity = headerCopy.valuesLength;"), mapping)
-            self.assertGreater(output.index("args.values_len = headerCopy.valuesLength;"), mapping)
+            self.assertGreater(output.rindex("args.values_len = headerCopy.valuesLength;"), mapping)
+            # Small output buffers go through a stub-local buffer and are copied back.
+            self.assertIn("headerCopy.valuesLength * sizeof(uint32_t) <= UNDOS_INLINE_COPY_MAX", output)
+            self.assertIn("KE_VMM_CopyToUserspace(address_space, headerCopy.values, valuesInline", output)
             self.assertIn("size_t values_capacity", (Path(directory) / "__kernel_types.h").read_text())
             self.assertIn("if (headerCopy.valuesLength == 0) return kernel::KernelError::InvalidArgument;",
                           dispatch.split("static kstd::error_code Dispatch_Input_V1(")[1])
@@ -90,7 +93,7 @@ class ScalarAliasTests(unittest.TestCase):
         repository = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory(prefix="undos-idl-cmake-") as directory:
             root = Path(directory)
-            for name in ("BuildSupport", "Tools/idlgen", "ABI/IDL"):
+            for name in ("BuildSupport", "Tools/idlgen", "ABI"):
                 shutil.copytree(repository / name, root / name,
                                 ignore=shutil.ignore_patterns("__pycache__"))
             shutil.copy2(repository / "Tools/create-syscalls.py", root / "Tools")
@@ -99,9 +102,9 @@ class ScalarAliasTests(unittest.TestCase):
                 project(SyscallGenerationTest LANGUAGES CXX)
                 set(TESTING_ONLY ON)
                 include(BuildSupport/Project.cmake)
+                add_subdirectory(ABI)
                 add_executable(probe probe.cpp)
-                target_include_directories(probe PRIVATE "${UNDOS_SYSCALL_INCLUDE_DIR}")
-                add_dependencies(probe undos-syscalls-gen)
+                target_link_libraries(probe PRIVATE KernelUserlandShared)
             """)
             (root / "probe.cpp").write_text(
                 '#include <undos/syscalls/__aliases.h>\n'
@@ -129,7 +132,7 @@ class ScalarAliasTests(unittest.TestCase):
             self.assertTrue((generated / "include/undos/syscalls/__syscall_BuildProbe_V1.h").is_file())
             self.assertIn("UD_SYS_BuildProbeV1", (generated / "include/userspace.h").read_text())
             self.assertFalse((root / "ABI/userspace.h").exists())
-            self.assertFalse((root / "ABI/include/undos/syscalls").exists())
+            self.assertEqual([], [p for p in (root / "ABI/include/undos/syscalls").rglob("*") if p.is_file()])
             self.assertFalse((root / "Kernel").exists())
 
     def test_kernel_errors_are_converted_only_at_public_dispatch(self):
@@ -149,7 +152,8 @@ class ScalarAliasTests(unittest.TestCase):
             self.assertIn("return kernel::KernelError::NoCurrentThread;", dispatch)
             self.assertIn("return kernel::KernelError::NoCurrentProcess;", dispatch)
             self.assertIn("const kstd::error_code ret = handle_Example_V1(", dispatch)
-            self.assertIn("if (!mapped) [[unlikely]] return mapped.error();", dispatch)
+            self.assertIn("return KE_VMM_CopyToUser(as, userPtr, kernelPtr, length);", dispatch)
+            self.assertIn("KE_VMM_CopyFromUser(address_space, &headerCopy, userData", dispatch)
             self.assertIn("if (const auto error = KE_VMM_CopyToUserspace(", dispatch)
             self.assertIn("; error) return error;", dispatch)
             self.assertNotIn("kernel::KernelError handle_", declarations)

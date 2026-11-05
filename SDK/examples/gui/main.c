@@ -1,32 +1,46 @@
 #include <windows.h>
+#include <undosgui/extensions.h>
+#include <undoscrt/stdio.h>
 
-static BOOL running = TRUE;
-static HFONT systemFont;
-static struct TextMetricsV2 textMetrics;
+static BOOL systemFontValid;
+static UNDOS_FONT systemFont;
+static UNDOS_TEXT_METRICS textMetrics;
+
+static void recover_failed_window_creations(void) {
+  for (uint32_t attempt = 0; attempt < 64; ++attempt) {
+    UNDOS_WINDOW_CREATION_RECOVERY recovery = {0};
+    if (!UndosGetWindowCreationRecovery(&recovery)) return;
+    if (DestroyWindow(recovery.window)) continue;
+    const DWORD cleanupError = GetLastError();
+    const DWORD cleanupStatus = UndosGetLastStatus();
+    (void)crt_printf(
+        "gui: window setup error=%u status=%u; cleanup error=%u status=%u\n",
+        recovery.setupError, recovery.setupStatus, cleanupError, cleanupStatus);
+    return;
+  }
+}
 
 static BOOL refresh_font(void) {
-  HFONT replacement = 0;
+  UNDOS_FONT replacement;
   uint32_t generation = 0;
-  struct TextMetricsV2 metrics = {0};
-  if (!AcquireFont(FontSource_AcquireSystemDefault, GlyphFallbackPolicy_FallbackFaceNotdef,
-                  &replacement, &generation) ||
-      !GetFontMetrics(replacement, TextStyle_StyleRegular,
-                      TextRepertoire_RepertoireBasic, &metrics) ||
+  UNDOS_TEXT_METRICS metrics = {0};
+  BOOL acquired = UndosAcquireFont(UNDOS_FONT_SYSTEM_DEFAULT,
+      UNDOS_GLYPH_FALLBACK_NOTDEF, &replacement, &generation);
+  if (!acquired ||
+      !UndosGetFontMetrics(replacement, UNDOS_TEXT_REGULAR,
+                           UNDOS_TEXT_BASIC, &metrics) ||
       metrics.generation != generation) {
-    if (replacement) (void)CloseFont(replacement);
+    if (acquired) (void)UndosCloseFont(replacement);
     return FALSE;
   }
-  if (systemFont) (void)CloseFont(systemFont);
+  if (systemFontValid) (void)UndosCloseFont(systemFont);
   systemFont = replacement;
+  systemFontValid = TRUE;
   textMetrics = metrics;
   return TRUE;
 }
 
 static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
-  if (message == WM_CLOSE) {
-    running = FALSE;
-    return 0;
-  }
   if (message == WM_FONTCHANGED) {
     if (refresh_font()) {
       RECT rect;
@@ -36,14 +50,17 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wParam, LP
     }
     return 0;
   }
+  if (message == WM_DESTROY) {
+    PostQuitMessage(0);
+    return 0;
+  }
   if (message == WM_PAINT) {
     PAINTSTRUCT paint;
     HDC dc = BeginPaint(window, &paint);
     if (dc) {
-      (void)DrawText(dc, 12, 12, TextStyle_StyleRegular,
-                     TextLayoutMode_LayoutProportional,
-                     TextRepertoire_RepertoireBasic,
-                     "Hello from the UnDOS C SDK!");
+      (void)UndosDrawText(dc, 12, 12, UNDOS_TEXT_REGULAR,
+                          UNDOS_TEXT_PROPORTIONAL, UNDOS_TEXT_BASIC,
+                          "Hello from the UnDOS C SDK — café");
       (void)EndPaint(window, &paint);
     }
     return 0;
@@ -53,28 +70,37 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wParam, LP
 
 int main(void) {
   if (!refresh_font()) return 1;
-  WNDCLASSA windowClass = {0};
+  WNDCLASS windowClass = {0};
   windowClass.lpfnWndProc = window_proc;
-  windowClass.hbrBackground = (HBRUSH)(uintptr_t)7;
+  windowClass.hbrBackground = UNDOS_PALETTE_BRUSH(7);
   windowClass.lpszClassName = "SDKHello";
-  if (!RegisterClass(&windowClass)) return 1;
+  if (!RegisterClass(&windowClass)) {
+    if (systemFontValid) (void)UndosCloseFont(systemFont);
+    return 1;
+  }
 
   HWND window = CreateWindow("SDKHello", "SDK Hello",
                              WS_VISIBLE | WS_CAPTION | WS_BORDER,
                              40, 40, 320, (int)textMetrics.lineHeight + 24,
                              NULL, NULL, NULL, NULL);
   if (!window) {
-    (void)CloseFont(systemFont);
+    recover_failed_window_creations();
+    (void)UndosCloseFont(systemFont);
     return 1;
   }
 
   MSG message;
-  int status;
-  while (running && (status = GetMessage(&message, NULL, 0, 0)) > 0) {
+  for (;;) {
+    int status = GetMessage(&message, NULL, 0, 0);
+    if (status < 0) {
+      if (systemFontValid) (void)UndosCloseFont(systemFont);
+      (void)DestroyWindow(window);
+      return 1;
+    }
+    if (status == 0) break;
     (void)TranslateMessage(&message);
     (void)DispatchMessage(&message);
   }
-  if (status < 0) return 1;
-  (void)CloseFont(systemFont);
-  return DestroyWindow(window) ? 0 : 1;
+  if (systemFontValid) (void)UndosCloseFont(systemFont);
+  return 0;
 }

@@ -47,13 +47,13 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForHeader(KDispatcherHeader &
   if (!self) return KernelError::NoCurrentThread;
 
   // Check-then-block under the wait lock so a signal cannot slip in between.
-  const uintptr_t irq_state = wait::lock().lock_irqsave();
+  const uintptr_t irq_state = kernel::wait::lock().lock_irqsave();
   if (header.TryAcquire()) {
-    wait::lock().unlock_irqrestore(irq_state);
+    kernel::wait::lock().unlock_irqrestore(irq_state);
     return {};
   }
   if (timeout.count() == 0) {
-    wait::lock().unlock_irqrestore(irq_state);
+    kernel::wait::lock().unlock_irqrestore(irq_state);
     return KernelError::Timeout;
   }
 
@@ -63,7 +63,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForHeader(KDispatcherHeader &
   const bool timed = timeout.count() > 0;
   if (timed) {
     wb.deadline = kstd::chrono::duration_cast<decltype(wb.deadline)>(KE_TIME_GetSystemTime() + timeout);
-    wait::g_timed.Add(wb);
+    kernel::wait::g_timed.Add(wb);
   }
 
   while (!wb.satisfied && !wb.timed_out) {
@@ -71,20 +71,20 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForHeader(KDispatcherHeader &
     // signals us needs it. Interrupts stay masked throughout, so nothing on
     // this CPU can observe the gap; a remote signaller sees the thread marked
     // Blocked by block_current_locked and re-queues it.
-    wait::lock().unlock();
+    kernel::wait::lock().unlock();
     sched::block_current_locked();
-    wait::lock().lock();
+    kernel::wait::lock().lock();
   }
 
-  if (timed) wait::g_timed.Remove(wb);
+  if (timed) kernel::wait::g_timed.Remove(wb);
   if (!wb.satisfied) header.RemoveWaiter(wb);
-  wait::lock().unlock_irqrestore(irq_state);
+  kernel::wait::lock().unlock_irqrestore(irq_state);
   return wb.satisfied ? KernelError::Success : KernelError::Timeout;
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForObject(const KObjectPtr<KObject> &object,
                                                         kstd::chrono::milliseconds timeout) noexcept {
-  auto *header = wait::header_of(object);
+  auto *header = kernel::wait::header_of(object);
   if (!header) return KernelError::NotWaitable;
   // Hold a reference for the duration of the wait so a concurrent close
   // cannot free the header under us.
@@ -95,9 +95,9 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForObject(const KObjectPtr<KO
 UNDOS_KERNEL_API_DEF void KE_EVENT_Signal(KDispatcherHeader &header, bool wakeAll) noexcept {
   // Usable from interrupt context: the lock masks interrupts itself and
   // restores whatever state the caller had.
-  const uintptr_t state = wait::lock().lock_irqsave();
-  header.Signal(wakeAll, wait::wake);
-  wait::lock().unlock_irqrestore(state);
+  const uintptr_t state = kernel::wait::lock().lock_irqsave();
+  header.Signal(wakeAll, kernel::wait::wake);
+  kernel::wait::lock().unlock_irqrestore(state);
 }
 
 UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KEventObject>, kstd::error_code>

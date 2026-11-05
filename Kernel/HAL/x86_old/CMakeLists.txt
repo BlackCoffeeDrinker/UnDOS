@@ -26,6 +26,7 @@ add_hal(hal_x86_old
         cpuid.hpp
         v86.cpp
         v86.hpp
+        v86_irq_tracking.hpp
         bootdev.cpp
         smp_up.cpp
 )

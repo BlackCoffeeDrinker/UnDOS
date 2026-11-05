@@ -1,7 +1,9 @@
 #include "stdkrn.hpp"
 #include <kernel/device.hpp>
 #include <kernel/io.hpp>
+#include <kernel/kobject/KDispatcherHeader.hpp>
 #include <kernel/mutex.hpp>
+#include <kernel/scheduler.hpp>
 #include <kernel/object_manager.hpp>
 #include <kernel/tty/tty_device.hpp>
 #include <mutex.hpp>
@@ -16,8 +18,28 @@ struct AttachedPair {
 
 AttachedPair s_attachedPairs[MAX_ATTACHED_DEVICES];
 kernel::Mutex s_attachLock;
-kernel::KObjectPtr<kernel::KVttySinkObject> s_defaultConsoleSink{nullptr};
+kernel::Mutex s_pumpLock;
+kernel::KDispatcherHeader s_pumpWake{.manualReset = false};
+
+void tty_pump_thread(void *) {
+  for (;;) {
+    KE_TTY_PumpAllAttachedDevices();
+    const auto status = KE_SCHED_WaitForHeader(s_pumpWake, kstd::chrono::milliseconds(10));
+    if (status && status != kernel::KernelError::Timeout) {
+      KE_Print("TTY pump wait failed: {}", status.message());
+      HAL_PLATFORM_Panic("TTY pump wait failed", __FILE__, __LINE__);
+    }
+  }
+}
 }// namespace
+
+namespace kernel::tty::detail {
+kstd::error_code StartPumpThread() noexcept {
+  const auto worker = KE_SCHED_CreateThread(
+      kernel::cfunc<void(void *)>(&tty_pump_thread), nullptr, 1);
+  return worker ? kernel::KernelError::Success : worker.error();
+}
+}// namespace kernel::tty::detail
 
 UNDOS_KERNEL_API_DEF kstd::expected<kernel::tty::TtyPair, kstd::error_code> KE_TTY_CreatePair(
     const kstd::string_view &namePrefix) noexcept {
@@ -46,26 +68,36 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::tty::TtyPair, kstd::error_code> KE_T
 UNDOS_KERNEL_API_DEF kstd::error_code KE_TTY_AttachDevice(const kernel::tty::VttyPtr &vtty,
                                                              const kernel::KDevicePtr<kernel::KDevice> &device) noexcept {
   if (!vtty || !device) return kernel::KernelError::InvalidArgument;
-  kstd::unique_lock lock(s_attachLock);
 
-  // Check if already attached
-  for (auto &s_attachedPair: s_attachedPairs) {
-    if (s_attachedPair.vtty.get() == vtty.get()) {
-      s_attachedPair.device = device;
-      return {};
+  bool attached = false;
+  {
+    kstd::unique_lock lock(s_attachLock);
+
+    // Check if already attached
+    for (auto &s_attachedPair: s_attachedPairs) {
+      if (s_attachedPair.vtty.get() == vtty.get()) {
+        s_attachedPair.device = device;
+        attached = true;
+        break;
+      }
+    }
+
+    // Find free slot
+    if (!attached) {
+      for (auto &s_attachedPair: s_attachedPairs) {
+        if (s_attachedPair.vtty == nullptr) {
+          s_attachedPair.vtty = vtty;
+          s_attachedPair.device = device;
+          attached = true;
+          break;
+        }
+      }
     }
   }
 
-  // Find free slot
-  for (auto &s_attachedPair: s_attachedPairs) {
-    if (s_attachedPair.vtty == nullptr) {
-      s_attachedPair.vtty = vtty;
-      s_attachedPair.device = device;
-      return {};
-    }
-  }
-
-  return kernel::KernelError::ResourceLimitExceeded;
+  if (!attached) return kernel::KernelError::ResourceLimitExceeded;
+  KE_EVENT_Signal(s_pumpWake, false);
+  return {};
 }
 
 UNDOS_KERNEL_API_DEF void KE_TTY_DetachDevice(const kernel::tty::VttyPtr &vtty) noexcept {
@@ -126,6 +158,7 @@ size_t DrainSourceToDevice(const kernel::tty::VttyPtr &vtty, const kernel::KDevi
 
 UNDOS_KERNEL_API_DEF size_t KE_TTY_PumpDevice(const kernel::tty::VttyPtr &vtty) noexcept {
   if (!vtty) return 0;
+  kstd::unique_lock pumpLock(s_pumpLock);
   const auto device = KE_TTY_GetAttachedDevice(vtty);
   if (!device) return 0;
 
@@ -166,12 +199,3 @@ UNDOS_KERNEL_API_DEF void KE_TTY_PumpAllAttachedDevices() noexcept {
   }
 }
 
-UNDOS_KERNEL_API_DEF void KE_TTY_SetDefaultConsole(const kernel::KObjectPtr<kernel::KVttySinkObject> &sink) noexcept {
-  kstd::unique_lock lock(s_attachLock);
-  s_defaultConsoleSink = sink;
-}
-
-UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KVttySinkObject> KE_TTY_GetDefaultConsoleSink() noexcept {
-  kstd::unique_lock lock(s_attachLock);
-  return s_defaultConsoleSink;
-}

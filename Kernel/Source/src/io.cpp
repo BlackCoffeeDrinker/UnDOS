@@ -177,21 +177,29 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KInterruptService
   isr->service_context = context;
   isr->irql = 0;
 
+  // The dispatch registry makes the first/last-registration decision and the
+  // HAL source connect atomically under its own lock: the first registration
+  // for a line connects the HAL source (failing with ResourceConflict and no
+  // side effects), later compatible registrations share it.
   if (const auto status = KE_DISPATCH_RegisterHandler(irq, isr); status) {
     return kstd::unexpected(status);
-  }
-
-  if (!HAL_INTR_ConnectInterrupt(irq, isr)) {
-    KE_DISPATCH_UnregisterHandler(irq);
-    return kstd::unexpected(kernel::KernelError::ResourceConflict);
   }
 
   return isr;
 }
 
-UNDOS_KERNEL_API_DEF void KE_IO_DisconnectInterrupt(uint32_t irq) noexcept {
-  KE_DISPATCH_UnregisterHandler(irq);
-  HAL_INTR_DisconnectInterrupt(irq);
+UNDOS_KERNEL_API_DEF void KE_IO_DisconnectInterrupt(
+    uint32_t irq,
+    const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
+  // The dispatch registry removes exactly this (irq, isr) registration,
+  // disconnects the HAL source atomically with the last-handler decision, and
+  // waits for the handler's in-flight callbacks before returning, so the
+  // caller may free its service_context afterwards. A disconnect issued from
+  // the handler's own dispatch callback is rejected (it would self-deadlock
+  // on that rundown wait); diagnose it so the defective driver is visible.
+  if (const auto status = KE_DISPATCH_UnregisterHandler(irq, isr); status) {
+    KE_Print("KE_IO_DisconnectInterrupt(irq={}): rejected: {}", irq, status.message());
+  }
 }
 
 namespace kernel {

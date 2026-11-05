@@ -195,17 +195,21 @@ committed input or EOF rather than treating an empty input queue as EOF.
 
 ### Graphics and text rendering
 
-Default-font publication retains printable ASCII and the Terminal replacement
-masks for that publication. `UiGlyphs` pins these masks so USER chrome can draw
-them without VM execution, rasterization, or mask allocation under the USER
-scene lock. Prepare other glyphs before acquiring the scene lock.
+Default-font publication measures the printable ASCII and Terminal replacement
+outlines for both faces. `UiGlyphs` retains those measurements and the completed
+font-metric summaries without rasterizing masks. Its full per-publication table
+fills each mask on first use and retains the first successful mask for that
+generation. USER chrome prewarms its strings before taking the scene lock; if a
+string has an unready slot, USER draws the whole string with the bitmap font
+instead of rasterizing under the lock.
 
-On `main`, every `Realization::glyph()` call takes the realization mutex and
-loads and rasterizes a new mask. Hinted realizations execute eligible glyph
-programs; unhinted realizations do not execute glyph programs. `main` has no
-shared glyph cache. The shared-cache implementation is preserved on the
-`glyph-cache` branch. These rendering details do not change the ABI wire
-contracts.
+Each `Realization::glyph()` call takes the realization mutex and loads the
+glyph. Nonempty outlines are rasterized into a new mask; empty outlines return
+an advance-only mask without rasterization. Hinted realizations execute
+eligible glyph programs; unhinted realizations do not execute glyph programs.
+Repeated glyph IDs in one text call reuse the first mask. `main` has no shared
+glyph cache; the shared-cache implementation remains on the `glyph-cache`
+branch. These rendering details do not change the ABI wire contracts.
 
 ### ABI conformance workflow
 

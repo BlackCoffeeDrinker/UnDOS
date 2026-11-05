@@ -40,6 +40,7 @@ constexpr uint8_t WriteToAuxPort = 0xD4;// next data byte is forwarded to the au
 namespace device {
 constexpr uint8_t Reset = 0xFF;  // -> Ack then BatPass on success
 constexpr uint8_t Ack = 0xFA;
+constexpr uint8_t Resend = 0xFE;
 constexpr uint8_t BatPass = 0xAA;
 
 // Aux (mouse) device commands, used from Task 14/15 onward, always sent

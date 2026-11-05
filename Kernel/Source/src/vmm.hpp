@@ -16,7 +16,7 @@ kstd::error_code map_fixed_memory(AddressSpace &as, uintptr_t address, size_t si
 // Creates a fully-initialized, isolated user address space backed by a fresh
 // HAL translation root (kernel higher-half cloned, user half empty).
 // Returns false if the underlying HAL allocation failed.
-kstd::error_code create_user_address_space(AddressSpace &out_as) noexcept;
+kstd::error_code create_user_address_space(AddressSpace &out_as, uint32_t owner_pid) noexcept;
 
 // Reclaims a user address space previously built by create_user_address_space:
 // frees any physical frames still tracked by its VADs, then destroys the

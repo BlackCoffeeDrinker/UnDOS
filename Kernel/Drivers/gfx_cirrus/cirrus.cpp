@@ -1,5 +1,6 @@
 
 #include <Kernel.hpp>
+#include <stdkrn.hpp>
 
 #include <kernel/gfx/video_present.hpp>
 
@@ -23,21 +24,15 @@ struct CirrusModeCatalogKey {
   kernel::KMonitorCapabilities monitorCaps{};
 };
 
-#ifdef UNDOS_CIRRUS_TEST_HOOKS
-struct CirrusTestCounters {
-  size_t computeGtfCalls{};
-  size_t choosePllCalls{};
-  size_t catalogBuilds{};
-  size_t contextDestructions{};
-  size_t catalogDestructions{};
-  bool failNextCatalogAllocation{};
-};
 
-CirrusTestCounters &Cirrus_TestCounters() {
-  static CirrusTestCounters counters{};
-  return counters;
-}
-#endif
+// One offscreen VRAM allocation (Step 13). `surface` is identity only: GFX
+// calls DestroySurface before the surface is freed, which clears the entry.
+struct CirrusVramBlock {
+  kernel::KSurface *surface{};
+  uint32_t offset{};
+  uint32_t size{};
+};
+constexpr size_t kMaxVramBlocks = 32;
 
 // Per-instance state, held in the function device object's extension (see
 // Cirrus_AddDevice). Everything below `shadow` is only valid once a mode has
@@ -62,12 +57,11 @@ struct CirrusContext {
   size_t modeCatalogCount{};
   CirrusModeCatalogKey modeCatalogKey{};
   bool modeCatalogKeyValid{};
+  // Offscreen VRAM starts after the scanout area of the active mode.
+  uint32_t vramBase{};
+  CirrusVramBlock vramBlocks[kMaxVramBlocks]{};
 
   ~CirrusContext() {
-#ifdef UNDOS_CIRRUS_TEST_HOOKS
-    ++Cirrus_TestCounters().contextDestructions;
-    if (modeCatalog) ++Cirrus_TestCounters().catalogDestructions;
-#endif
     KE_Free(modeCatalog);
   }
 };
@@ -303,6 +297,19 @@ void Cirrus_WriteVram(CirrusContext *const ctx_cirrus, uint32_t vramOffset, cons
   }
 }
 
+void Cirrus_ReadVram(CirrusContext *const ctx_cirrus, uint32_t vramOffset, uint8_t *dst, size_t length) {
+  const auto *window = ctx_cirrus->window.as_ptr<volatile uint8_t>();
+  while (length) {
+    const uint32_t windowOffset = Cirrus_SetBank(ctx_cirrus, vramOffset);
+    size_t chunk = cirrus_regs::kWindowSize - windowOffset;
+    if (chunk > length) chunk = length;
+    for (size_t i = 0; i < chunk; ++i) dst[i] = window[windowOffset + i];
+    vramOffset += static_cast<uint32_t>(chunk);
+    dst += chunk;
+    length -= chunk;
+  }
+}
+
 // Aborts whatever the engine is doing and disarms it. The reset is only
 // acted on when the bit falls again, so both writes are required: leaving
 // the engine armed would make it swallow every later window write.
@@ -403,6 +410,45 @@ bool IsPrimary(CirrusContext *const ctx_cirrus, const kernel::KObjectPtr<kernel:
   return surface && surface->backing && surface->backing->directAddress == ctx_cirrus->shadow;
 }
 
+// Where a surface of this adapter lives in VRAM: the primary at offset 0,
+// offscreen surfaces in their allocated block. False for anything else.
+struct CirrusPlacement {
+  uint32_t offset{};
+  uint32_t pitch{};
+  uint32_t width{};
+  uint32_t height{};
+  bool primary{};
+};
+
+bool Cirrus_Locate(CirrusContext *const ctx_cirrus, const kernel::KObjectPtr<kernel::KSurface> &surface,
+                   CirrusPlacement &out) {
+  if (!ctx_cirrus->shadow || !ctx_cirrus->depth || !surface) return false;
+  if (IsPrimary(ctx_cirrus, surface)) {
+    out = {.offset = 0, .pitch = ctx_cirrus->pitch, .width = ctx_cirrus->timing->width,
+           .height = ctx_cirrus->timing->height, .primary = true};
+    return true;
+  }
+  if (surface->flags & kernel::SurfaceFlags::Lost) return false;
+  for (const auto &block: ctx_cirrus->vramBlocks) {
+    if (block.surface == surface.get()) {
+      out = {.offset = block.offset, .pitch = static_cast<uint32_t>(surface->pitch),
+             .width = surface->width, .height = surface->height, .primary = false};
+      return true;
+    }
+  }
+  return false;
+}
+
+// A mode change reuses VRAM: every offscreen surface is lost and its block freed.
+void Cirrus_LoseOffscreen(CirrusContext *const ctx_cirrus) {
+  for (auto &block: ctx_cirrus->vramBlocks) {
+    if (block.surface) block.surface->flags |= kernel::SurfaceFlags::Lost;
+    block = {};
+  }
+  const uint32_t scanout = ctx_cirrus->timing ? ctx_cirrus->pitch * ctx_cirrus->timing->height : 0;
+  ctx_cirrus->vramBase = (scanout + 255u) & ~255u;
+}
+
 // The fill colour is held in the foreground colour bytes, widened to the
 // active depth.
 void Cirrus_ProgramFillColour(CirrusContext *const ctx_cirrus, uint32_t colour) {
@@ -443,12 +489,13 @@ void Cirrus_FillShadow(CirrusContext *const ctx_cirrus, int x, int y, int w, int
 // Unsupported asks the caller to use the software fallback; Timeout means the
 // blit engine stalled and was reset.
 kstd::error_code Cirrus_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
-                                const kernel::KObjectPtr<kernel::KSurface> &dst, int x, int y, int w, int h, uint32_t colour) {
+                                 const kernel::KObjectPtr<kernel::KSurface> &dst, int x, int y, int w, int h, uint32_t colour) {
   if (!adapter) return kernel::KernelError::InvalidArgument;
   const auto ctx_cirrus = adapter->GetDeviceExtensionAs<CirrusContext>();
   if (!ctx_cirrus) return kernel::KernelError::NotInitialized;
 
-  if (!IsPrimary(ctx_cirrus, dst)) return kernel::KernelError::Unsupported;
+  CirrusPlacement place{};
+  if (!Cirrus_Locate(ctx_cirrus, dst, place)) return kernel::KernelError::Unsupported;
   if (w <= 0 || h <= 0) return kernel::KernelError::InvalidSize;
   if (x < 0) {
     w += x;
@@ -458,8 +505,8 @@ kstd::error_code Cirrus_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapt
     h += y;
     y = 0;
   }
-  if (x + w > static_cast<int>(ctx_cirrus->timing->width)) w = static_cast<int>(ctx_cirrus->timing->width) - x;
-  if (y + h > static_cast<int>(ctx_cirrus->timing->height)) h = static_cast<int>(ctx_cirrus->timing->height) - y;
+  if (x + w > static_cast<int>(place.width)) w = static_cast<int>(place.width) - x;
+  if (y + h > static_cast<int>(place.height)) h = static_cast<int>(place.height) - y;
   if (w <= 0 || h <= 0) return kernel::KernelError::Success;
 
   if (!Cirrus_WaitForBlitter()) {
@@ -469,10 +516,10 @@ kstd::error_code Cirrus_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapt
 
   const uint32_t bytesPerPixel = BytesPerPixel(ctx_cirrus->depth->bpp);
   const uint32_t widthBytes = static_cast<uint32_t>(w) * bytesPerPixel;
-  const uint32_t dstAddress = static_cast<uint32_t>(y) * ctx_cirrus->pitch + static_cast<uint32_t>(x) * bytesPerPixel;
+  const uint32_t dstAddress = place.offset + static_cast<uint32_t>(y) * place.pitch + static_cast<uint32_t>(x) * bytesPerPixel;
 
   Cirrus_ProgramFillColour(ctx_cirrus, colour);
-  Cirrus_ProgramBlitGeometry(widthBytes, static_cast<uint32_t>(h), ctx_cirrus->pitch, 0, dstAddress);
+  Cirrus_ProgramBlitGeometry(widthBytes, static_cast<uint32_t>(h), place.pitch, 0, dstAddress);
   WriteGraphics(cirrus_regs::kGrBltRop, cirrus_regs::kBltRopSrcCopy);
   WriteGraphics(cirrus_regs::kGrBltModeExtension, cirrus_regs::kBltModeExtSolidFill);
   WriteGraphics(cirrus_regs::kGrBltMode,
@@ -488,18 +535,18 @@ kstd::error_code Cirrus_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapt
   WriteGraphics(cirrus_regs::kGrBltModeExtension, 0x00);
 
   // VRAM is already correct, so this produces no transfer: only the shadow
-  // still needs the same pixels.
-  Cirrus_FillShadow(ctx_cirrus, x, y, w, h, colour);
+  // still needs the same pixels. Offscreen surfaces are VRAM-only.
+  if (place.primary) Cirrus_FillShadow(ctx_cirrus, x, y, w, h, colour);
   return kernel::KernelError::Success;
 }
 
 kstd::error_code Cirrus_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
-                              const kernel::KObjectPtr<kernel::KSurface> &dst,
-                              int dstX, int dstY,
-                              const kernel::KObjectPtr<kernel::KSurface> &src,
-                              int srcX, int srcY,
-                              uint32_t width, uint32_t height,
-                              kernel::RasterOp rop) {
+                               const kernel::KObjectPtr<kernel::KSurface> &dst,
+                               int dstX, int dstY,
+                               const kernel::KObjectPtr<kernel::KSurface> &src,
+                               int srcX, int srcY,
+                               uint32_t width, uint32_t height,
+                               kernel::RasterOp rop) {
 
   if (!adapter) return kernel::KernelError::InvalidArgument;
   const auto ctx_cirrus = adapter->GetDeviceExtensionAs<CirrusContext>();
@@ -508,13 +555,15 @@ kstd::error_code Cirrus_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter
   // Anything other than a straight copy, or a surface that isn't in VRAM,
   // is left to the kernel's software fallback.
   // Partially off-screen copies are also left to the clipping fallback.
-  if (rop != kernel::RasterOp::SRCCOPY || !IsPrimary(ctx_cirrus, dst) || !IsPrimary(ctx_cirrus, src)) return kernel::KernelError::Unsupported;
+  CirrusPlacement dp{}, sp{};
+  if (rop != kernel::RasterOp::SRCCOPY || !Cirrus_Locate(ctx_cirrus, dst, dp) || !Cirrus_Locate(ctx_cirrus, src, sp))
+    return kernel::KernelError::Unsupported;
   if (width == 0 || height == 0) return kernel::KernelError::Success;
   if (dstX < 0 || dstY < 0 || srcX < 0 || srcY < 0) return kernel::KernelError::Unsupported;
-  if (dstX + static_cast<int>(width) > static_cast<int>(ctx_cirrus->timing->width) ||
-      srcX + static_cast<int>(width) > static_cast<int>(ctx_cirrus->timing->width) ||
-      dstY + static_cast<int>(height) > static_cast<int>(ctx_cirrus->timing->height) ||
-      srcY + static_cast<int>(height) > static_cast<int>(ctx_cirrus->timing->height)) {
+  if (dstX + static_cast<int>(width) > static_cast<int>(dp.width) ||
+      srcX + static_cast<int>(width) > static_cast<int>(sp.width) ||
+      dstY + static_cast<int>(height) > static_cast<int>(dp.height) ||
+      srcY + static_cast<int>(height) > static_cast<int>(sp.height)) {
     return kernel::KernelError::Unsupported;
   }
 
@@ -525,20 +574,23 @@ kstd::error_code Cirrus_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter
 
   const uint32_t bytesPerPixel = BytesPerPixel(ctx_cirrus->depth->bpp);
   const uint32_t widthBytes = width * bytesPerPixel;
-  uint32_t dstAddress = static_cast<uint32_t>(dstY) * ctx_cirrus->pitch + static_cast<uint32_t>(dstX) * bytesPerPixel;
-  uint32_t srcAddress = static_cast<uint32_t>(srcY) * ctx_cirrus->pitch + static_cast<uint32_t>(srcX) * bytesPerPixel;
+  const uint32_t dstStart = dp.offset + static_cast<uint32_t>(dstY) * dp.pitch + static_cast<uint32_t>(dstX) * bytesPerPixel;
+  const uint32_t srcStart = sp.offset + static_cast<uint32_t>(srcY) * sp.pitch + static_cast<uint32_t>(srcX) * bytesPerPixel;
+  uint32_t dstAddress = dstStart;
+  uint32_t srcAddress = srcStart;
 
   // Overlapping rectangles moving forwards would overwrite source rows
   // before they are read, so the engine walks them backwards instead.
-  const bool backwards = dstAddress > srcAddress &&
-                         dstAddress < srcAddress + static_cast<uint32_t>(height) * ctx_cirrus->pitch;
+  // Distinct surfaces occupy disjoint VRAM and never overlap.
+  const bool same = dst.get() == src.get();
+  const bool backwards = same && dstAddress > srcAddress &&
+                         dstAddress < srcAddress + static_cast<uint32_t>(height) * dp.pitch;
   if (backwards) {
-    const uint32_t span = (height - 1) * ctx_cirrus->pitch + widthBytes - 1;
-    dstAddress += span;
-    srcAddress += span;
+    dstAddress += (height - 1) * dp.pitch + widthBytes - 1;
+    srcAddress += (height - 1) * sp.pitch + widthBytes - 1;
   }
 
-  Cirrus_ProgramBlitGeometry(widthBytes, height, ctx_cirrus->pitch, ctx_cirrus->pitch, dstAddress);
+  Cirrus_ProgramBlitGeometry(widthBytes, height, dp.pitch, sp.pitch, dstAddress);
   WriteGraphics(cirrus_regs::kGrBltSrcAddrLow, static_cast<uint8_t>(srcAddress & 0xFF));
   WriteGraphics(cirrus_regs::kGrBltSrcAddrMid, static_cast<uint8_t>((srcAddress >> 8) & 0xFF));
   WriteGraphics(cirrus_regs::kGrBltSrcAddrHigh, static_cast<uint8_t>((srcAddress >> 16) & 0x3F));
@@ -553,9 +605,20 @@ kstd::error_code Cirrus_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter
     return kernel::KernelError::Timeout;
   }
 
+  if (!dp.primary) return kernel::KernelError::Success;// offscreen: VRAM-only
+  auto *shadow = ctx_cirrus->shadow.as_ptr<uint8_t>();
+  if (!sp.primary) {
+    // Offscreen -> screen: the shadow can only learn the pixels from VRAM.
+    // Without this, the next Present would overwrite them with stale shadow.
+    for (uint32_t row = 0; row < height; ++row) {
+      const uint32_t at = dstStart + row * dp.pitch;
+      Cirrus_ReadVram(ctx_cirrus, at, shadow + at, widthBytes);
+    }
+    return kernel::KernelError::Success;
+  }
+
   // Mirror the copy into the shadow buffer, row by row, so both copies of
   // the screen agree.
-  auto *shadow = ctx_cirrus->shadow.as_ptr<uint8_t>();
   const bool downwards = dstY > srcY;
   for (uint32_t i = 0; i < height; ++i) {
     const uint32_t row = downwards ? height - 1 - i : i;
@@ -574,11 +637,89 @@ kstd::error_code Cirrus_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter
   return kernel::KernelError::Success;
 }
 
+void Cirrus_DestroySurface(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter, kernel::KSurface *surface);
+
+// Frees its VRAM block when the last reference goes, so the block table
+// never names a freed surface. `adapter` is set by GFX right after creation.
+struct CirrusVramSurface final : kernel::KSurface {
+  using KSurface::KSurface;
+  ~CirrusVramSurface() override { Cirrus_DestroySurface(adapter, this); }
+};
+
+// Offscreen surfaces (Step 13): first fit in a fixed block table after the
+// scanout area. Only the active depth is supported (the blitter's pixel
+// width is per mode). VRAM-only: no backing, no shadow.
+kstd::error_code Cirrus_CreateSurface(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter, uint32_t width,
+                                      uint32_t height, kernel::PixelFormat format,
+                                      kernel::KObjectPtr<kernel::KSurface> &out) {
+  if (!adapter) return kernel::KernelError::InvalidArgument;
+  const auto ctx_cirrus = adapter->GetDeviceExtensionAs<CirrusContext>();
+  if (!ctx_cirrus || !ctx_cirrus->shadow || !ctx_cirrus->depth) return kernel::KernelError::Unsupported;
+  if (format != ctx_cirrus->depth->pixelFormat) return kernel::KernelError::Unsupported;
+  if (!width || !height || width > 4096 || height > 4096) return kernel::KernelError::InvalidSize;
+
+  const uint32_t bytesPerPixel = BytesPerPixel(ctx_cirrus->depth->bpp);
+  const uint32_t pitch = (width * bytesPerPixel + 7u) & ~7u;
+  if (pitch > 0x1FFF) return kernel::KernelError::Unsupported;
+  const uint32_t size = (pitch * height + 255u) & ~255u;
+
+  CirrusVramBlock *slot = nullptr;
+  for (auto &block: ctx_cirrus->vramBlocks)
+    if (!block.surface) {
+      slot = &block;
+      break;
+    }
+  if (!slot) return kernel::KernelError::OutOfMemory;
+
+  // Lowest free offset that overlaps no live block.
+  uint32_t offset = ctx_cirrus->vramBase;
+  for (bool moved = true; moved;) {
+    moved = false;
+    for (const auto &block: ctx_cirrus->vramBlocks) {
+      if (block.surface && offset < block.offset + block.size && block.offset < offset + size) {
+        offset = block.offset + block.size;
+        moved = true;
+      }
+    }
+  }
+  if (offset + size > ctx_cirrus->vramBytes || offset + size < offset) return kernel::KernelError::OutOfMemory;
+
+  auto surface = kernel::CreateKObject<CirrusVramSurface>("CirrusVram");
+  if (!surface) return surface.error();
+  auto &s = **surface;
+  s.adapter = adapter;
+  s.type = kernel::SurfaceType::OffscreenBitmap;
+  s.width = width;
+  s.height = height;
+  s.pitch = static_cast<int32_t>(pitch);
+  s.bpp = ctx_cirrus->depth->bpp;
+  s.sizeInBytes = size;
+  s.pixelFormat = format;
+  s.flags = kernel::SurfaceFlags::TopDown | kernel::SurfaceFlags::Linear;
+  *slot = {.surface = surface->get(), .offset = offset, .size = size};
+  out = kstd::move(*surface);
+  return kernel::KernelError::Success;
+}
+
+void Cirrus_DestroySurface(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter, kernel::KSurface *surface) {
+  if (!adapter || !surface) return;
+  const auto ctx_cirrus = adapter->GetDeviceExtensionAs<CirrusContext>();
+  if (!ctx_cirrus) return;
+  for (auto &block: ctx_cirrus->vramBlocks)
+    if (block.surface == surface) block = {};
+}
+
+// VRAM is only reachable through the 64 KiB bank window: no linear CPU mapping.
+kstd::error_code Cirrus_Map(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &, kernel::KSurface *, void *&,
+                            uint32_t &) {
+  return kernel::KernelError::Unsupported;
+}
+
 // The engine has no line primitive, so lines are walked in the shadow
 // buffer; the swept area is covered by the caller's paint region, which
 // reaches VRAM at EndPaint.
 kstd::error_code Cirrus_DrawLine(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
-                                const kernel::KObjectPtr<kernel::KSurface> &dst, int x0, int y0, int x1, int y1, uint32_t colour) {
+                                 const kernel::KObjectPtr<kernel::KSurface> &dst, int x0, int y0, int x1, int y1, uint32_t colour) {
   if (!adapter) return kernel::KernelError::InvalidArgument;
   const auto ctx_cirrus = adapter->GetDeviceExtensionAs<CirrusContext>();
   if (!ctx_cirrus) return kernel::KernelError::NotInitialized;
@@ -784,18 +925,12 @@ bool Cirrus_ValidatePllSeed(const CirrusPllSeed &seed, uint64_t targetClockHz,
 
 bool Cirrus_ComputeGtf(uint32_t width, uint32_t height, uint32_t refresh,
                        cirrus_timing::GtfMode &out) {
-#ifdef UNDOS_CIRRUS_TEST_HOOKS
-  ++Cirrus_TestCounters().computeGtfCalls;
-#endif
   return cirrus_timing::ComputeGtf(width, height, refresh, out);
 }
 
 bool Cirrus_ChoosePll(uint32_t targetClockHz, uint32_t maximumErrorPpm,
                       cirrus_timing::PllCandidate &out, uint32_t maximumClockHz,
                       cirrus_timing::Chip chip) {
-#ifdef UNDOS_CIRRUS_TEST_HOOKS
-  ++Cirrus_TestCounters().choosePllCalls;
-#endif
   return cirrus_timing::ChoosePll(targetClockHz, maximumErrorPpm, out,
                                   maximumClockHz, chip);
 }
@@ -929,12 +1064,6 @@ CirrusModeCatalogKey Cirrus_CurrentCatalogKey(
 }
 
 void *Cirrus_AllocateCatalog(size_t bytes) {
-#ifdef UNDOS_CIRRUS_TEST_HOOKS
-  if (Cirrus_TestCounters().failNextCatalogAllocation) {
-    Cirrus_TestCounters().failNextCatalogAllocation = false;
-    return nullptr;
-  }
-#endif
   return KE_Malloc(bytes);
 }
 
@@ -997,9 +1126,6 @@ kstd::error_code Cirrus_EnsureModeCatalog(const kernel::KDisplay &display,
   ctx.modeCatalogCount = count;
   ctx.modeCatalogKey = key;
   ctx.modeCatalogKeyValid = true;
-#ifdef UNDOS_CIRRUS_TEST_HOOKS
-  ++Cirrus_TestCounters().catalogBuilds;
-#endif
   KE_Free(retired);
   return kernel::KernelError::Success;
 }
@@ -1052,8 +1178,8 @@ kstd::error_code Cirrus_Probe(const kernel::KObjectPtr<kernel::KGraphicsAdapter>
 // The single head this adapter drives. Identity only: the entry points are
 // bound later, from Cirrus_ConfigureDisplay.
 kstd::error_code Cirrus_ProbeDisplay(const kernel::KObjectPtr<kernel::KGraphicsAdapter> & /*adapter*/,
-                                    const kernel::KGraphicsAdapterDisplayEnumInfo &enumInfo,
-                                    kernel::KGraphicsAdapterDisplayInfo &outInfo) {
+                                     const kernel::KGraphicsAdapterDisplayEnumInfo &enumInfo,
+                                     kernel::KGraphicsAdapterDisplayInfo &outInfo) {
   if (enumInfo.displayIndex != 0) {
     return kernel::KernelError::OutOfRange;
   }
@@ -1158,6 +1284,7 @@ kstd::error_code Cirrus_ProgramReservedMode(
     }
     return error;
   }
+  Cirrus_LoseOffscreen(ctx);
   Cirrus_FlushScreen(ctx);
   ctx->modeKnown = true;
   ctx->modeIndex = reservation.modeIndex;
@@ -1184,8 +1311,10 @@ kstd::error_code Cirrus_RestoreMode(
   if (const auto error = Cirrus_ProgramMode(ctx); error) {
     ctx->modeKnown = false;
     ctx->enabled = false;
+    Cirrus_LoseOffscreen(ctx);
     return error;
   }
+  Cirrus_LoseOffscreen(ctx);
   Cirrus_FlushScreen(ctx);
   ctx->modeKnown = true;
   ctx->modeIndex = modeIndex;
@@ -1199,8 +1328,8 @@ void Cirrus_FinishMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
   if (!reservation.driverData) return;
   auto *data = static_cast<CirrusReservationData *>(reservation.driverData);
   auto *ctx = display && display->adapter
-      ? display->adapter->GetDeviceExtensionAs<CirrusContext>()
-      : nullptr;
+                  ? display->adapter->GetDeviceExtensionAs<CirrusContext>()
+                  : nullptr;
   if (committed) {
     if (data->previousShadow && data->previousShadow != data->candidateShadow)
       KE_Free(data->previousShadow.as_ptr<void>());
@@ -1398,6 +1527,9 @@ void Cirrus_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   graphicsAdapter->ConfigureDisplay = Cirrus_ConfigureDisplay;
   graphicsAdapter->FillRect = Cirrus_FillRect;
   graphicsAdapter->DrawLine = Cirrus_DrawLine;
+  graphicsAdapter->CreateSurface = Cirrus_CreateSurface;
+  graphicsAdapter->DestroySurface = Cirrus_DestroySurface;
+  graphicsAdapter->Map = Cirrus_Map;
   graphicsAdapter->BitBlt = Cirrus_BitBlt;
   graphicsAdapter->Present = Cirrus_Present;
   graphicsAdapter->caps = kernel::KGfxCaps::HwFill | kernel::KGfxCaps::HwBlt | kernel::KGfxCaps::VisibleFill;

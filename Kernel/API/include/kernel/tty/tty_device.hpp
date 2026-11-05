@@ -2,8 +2,8 @@
 
 #include <expected.hpp>
 #include <kernel/__core.hpp>
-#include <kernel/kerror.hpp>
 #include <kernel/fwd/KDevicePtr.hpp>
+#include <kernel/kerror.hpp>
 #include <kernel/kobject/KVttyObject.hpp>
 #include <kernel/tty/tty.hpp>
 
@@ -37,7 +37,3 @@ UNDOS_KERNEL_PUBLIC_V1API(kernel::tty::VttyPtr, KE_TTY_GetDeviceVtty, const kern
 
 UNDOS_KERNEL_PUBLIC_V1API(size_t, KE_TTY_PumpDevice, const kernel::tty::VttyPtr &vtty);
 UNDOS_KERNEL_PUBLIC_V1API(void, KE_TTY_PumpAllAttachedDevices);
-
-// Default console sink endpoint (set by whatever driver or subsystem provides the system console)
-UNDOS_KERNEL_PUBLIC_V1API(void, KE_TTY_SetDefaultConsole, const kernel::KObjectPtr<kernel::KVttySinkObject> &sink);
-UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KVttySinkObject>, KE_TTY_GetDefaultConsoleSink);

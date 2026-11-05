@@ -111,7 +111,7 @@ The HAL subsystem serves as the boundary interface between the platform-agnostic
 - **CMake Interface:** Structured as a CMake `INTERFACE` library, primarily utilizing headers and templates.
 - **`kstd` Namespace:** Facilities are scoped under `kstd` instead of `std` to strictly separate them from standard hosted environments.
 
-**Features & Primary API (`SDK/KStd/`):**
+**Features & Primary API (`Kernel/KStd/`, kernel space only):**
 - **Memory:** `kstd::unique_ptr`, `kstd::allocator_traits`.
 - **Data Views & Utilities:** `kstd::span`, `kstd::string_view`, `kstd::optional`, `kstd::expected`, `kstd::tuple`, `kstd::array`.
 - **Kernel Strings:** Custom strings like `kstd::static_string` and `kstd::buffer_string` avoid dynamic heap allocations typically found in `std::string`.

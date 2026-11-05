@@ -2,17 +2,15 @@
 
 #include <list.hpp>
 
+#include <expected.hpp>
 #include <kernel/__core.hpp>
 #include <kernel/kerror.hpp>
-#include <kernel/gfx/KDeviceContextTable.hpp>
-#include <kernel/gfx/KFontResourceTable.hpp>
 #include <kernel/kobject/KDispatcherHeader.hpp>
 #include <kernel/kobject/KEventObject.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/kobject/ObjectType.hpp>
 #include <kernel/virtual_memory.hpp>
-#include <expected.hpp>
 
 namespace kernel {
 struct KSubsystemObject;
@@ -53,10 +51,10 @@ struct ProcessHandleTable {
   // Opaque proof of one Reserve() call: the slot number plus a per-table
   // identity, so a stale token cannot name a later entry that reuses the slot.
   class Reservation {
-   public:
+public:
     Reservation() = default;
 
-   private:
+private:
     friend struct ProcessHandleTable;
     Reservation(KHandle handle, uint32_t identity) : handle_(handle), identity_(identity) {}
     KHandle handle_{};
@@ -77,7 +75,7 @@ struct ProcessHandleTable {
     const auto index = static_cast<uint32_t>(stream);
     if (index >= 3) return KernelError::InvalidArgument;
     if (!standard_streams[index].available) return KernelError::StandardStreamUnavailable;
-    for (const auto &entry : entries) {
+    for (const auto &entry: entries) {
       if (entry.handle == standard_streams[index].value && entry.object) {
         handle = entry.handle;
         return KernelError::Success;
@@ -96,7 +94,7 @@ struct ProcessHandleTable {
   }
 
   kstd::error_code AllocateStandardHandle(StandardStream stream, const KObjectPtr<KObject> &object,
-                              HandleAccess access) {
+                                          HandleAccess access) {
     if (!object) return KernelError::InvalidArgument;
     if (static_cast<uint32_t>(stream) >= 3) return KernelError::InvalidArgument;
     auto handle = Allocate(object, access, HandleFlags::Inheritable);
@@ -107,8 +105,8 @@ struct ProcessHandleTable {
   }
 
   kstd::expected<KHandle, kstd::error_code> Allocate(const KObjectPtr<KObject> &obj,
-                   HandleAccess access,
-                   HandleFlags flags) {
+                                                     HandleAccess access,
+                                                     HandleFlags flags) {
     if (!obj) return kstd::unexpected(KernelError::InvalidArgument);
     return AllocateEntry(obj, access, flags);
   }
@@ -157,8 +155,8 @@ struct ProcessHandleTable {
   }
 
   kstd::expected<KHandle, kstd::error_code> AllocateEntry(const KObjectPtr<KObject> &obj,
-                   HandleAccess access,
-                   HandleFlags flags) {
+                                                          HandleAccess access,
+                                                          HandleFlags flags) {
     uint32_t raw;
 
     if (!free_list.empty()) {
@@ -200,7 +198,7 @@ struct ProcessHandleTable {
           return KernelError::AccessDenied;
 
         if (--it->refcount == 0) {
-          for (auto &stream : standard_streams) {
+          for (auto &stream: standard_streams) {
             if (stream.available && stream.value == h) stream.available = false;
           }
           free_list.push_back(h);
@@ -218,10 +216,17 @@ struct ProcessHandleTable {
 // lives inside vmm::AddressSpace / KThreadObject.
 struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
   using KObjectT::KObjectT;
+  // Exiting: teardown in progress, reject new work. Terminated: fully torn down.
   enum class State : uint8_t { Running,
+                               Exiting,
                                Terminated };
 
   vmm::AddressSpace address_space{};
+  uint32_t pid{0};
+  uint64_t incarnation{0};
+  uint64_t cpuTicks{0};
+  uint64_t userTicks{0};
+  uint64_t kernelTicks{0};
   KObjectPtr<KThreadObject> main_thread;
   KObjectPtr<KSubsystemObject> subsystem;
   int32_t exit_code{0};
@@ -233,17 +238,17 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
   bool startupReady{false};
 
   ProcessHandleTable handles;
-  DeviceContextTable dcTable;
-  font::ResourceTable fontResources;
+  // Component-owned per-process state (GFX: device contexts, font resources).
 
   kstd::error_code AttachStandardStreams(const KObjectPtr<KObject> &sink) {
     if (!sink) return KernelError::InvalidArgument;
-    const auto input = handles.AllocateStandardHandle(StandardStream::Stdin, sink, ProcessHandleTable::HandleAccess::Read);
-    if (input) return input;
-    const auto output = handles.AllocateStandardHandle(StandardStream::Stdout, sink, ProcessHandleTable::HandleAccess::Write);
-    if (output) {
+    if (const auto input = handles.AllocateStandardHandle(StandardStream::Stdin, sink, ProcessHandleTable::HandleAccess::Read))
+      return input;
+    if (const auto output = handles.AllocateStandardHandle(StandardStream::Stdout, sink, ProcessHandleTable::HandleAccess::Write)) {
       KHandle handle{};
-      if (!handles.GetStandardHandle(StandardStream::Stdin, handle)) handles.Close(handle);
+      if (!handles.GetStandardHandle(StandardStream::Stdin, handle)) {
+        handles.Close(handle);
+      }
       return output;
     }
     const auto error = handles.AllocateStandardHandle(StandardStream::Stderr, sink, ProcessHandleTable::HandleAccess::Write);
@@ -263,7 +268,7 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
         if (handles.Close(handle)) break;
       }
     };
-    for (const auto &entry : parentHandles.entries) {
+    for (const auto &entry: parentHandles.entries) {
       if (entry.reservation) continue;
       if ((static_cast<uint32_t>(entry.flags) & static_cast<uint32_t>(ProcessHandleTable::HandleFlags::Inheritable)) != 0) {
         const auto count = handles.entries.size();

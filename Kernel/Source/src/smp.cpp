@@ -33,11 +33,8 @@ kstd::error_code wait_until_online(const cpu::CpuContext &ctx) noexcept {
   HAL_ATOMIC_ThreadFence(PlatformMemoryOrder::Release);
 
   HAL_CPU_EnableInterrupts();
-
-  for (;;) {
-    HAL_CPU_Halt();
-    KE_SCHED_Yield();
-  }
+  KE_SCHED_Terminate();
+  __builtin_unreachable();
 }
 
 void start_secondary_cpus() noexcept {

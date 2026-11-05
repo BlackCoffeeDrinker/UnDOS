@@ -148,6 +148,13 @@ kstd::expected<kernel::KObjectPtr<kernel::KSubsystemObject>, kstd::error_code> L
     return kstd::unexpected(status);
   }
 
+  // Dependencies are loaded (and constructed); run this image's constructors
+  // before anything is registered so a bad table leaves no side effects.
+  if (const auto status = kernel::elf::RunInitializers(*image)) {
+    KE_Print("KE_SUBSYSTEM_Load: '{}' has invalid constructor tables: {}", moduleName, status.message());
+    return kstd::unexpected(status);
+  }
+
   auto module = kernel::CreateKObject<kernel::KModuleObject>(kstd::static_string<64>(moduleName));
   if (!module) return kstd::unexpected(module.error());
   (*module)->load_base = image->load_base;

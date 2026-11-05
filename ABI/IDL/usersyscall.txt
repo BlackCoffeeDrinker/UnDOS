@@ -176,6 +176,16 @@ syscall V1 USER InvalidateRect [406] {
     whole: IN c<uint32_t>;
 };
 
+/** Adds rect (client coordinates) to the invalid area. erase must be 0 or 1;
+ * any true request remains pending until BeginPaint consumes the update region.
+ */
+syscall V2 USER InvalidateRect [424] {
+    hwnd:  IN c<uint32_t>;
+    rect:  IN RECT;
+    whole: IN c<uint32_t>;
+    erase: IN c<uint32_t>;
+};
+
 /** Returns a DC clipped to the visible invalid client, origin at the client.
  * Only one paint DC per window; EndPaint must match its hwnd/DC pair.
  */

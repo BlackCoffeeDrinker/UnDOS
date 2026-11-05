@@ -1,6 +1,8 @@
 
 #include "pit.hpp"
 
+#include <Kernel.hpp>
+#include <kernel/hal_interface.hpp>
 #include <kernel/time.hpp>
 
 namespace hal::x86 {
@@ -27,4 +29,5 @@ void set_system_timer_frequency(uint32_t target_hz) noexcept {
   // 3. Update the Executive kernel's increment scale factor
   KE_TIME_SetIncrement(kstd::chrono::nanoseconds(nanoseconds_per_tick));
 }
-}// namespace kernel::x86::pit
+
+}// namespace hal::x86

@@ -26,6 +26,7 @@ constexpr auto Unknown = DeviceType{0};
 constexpr auto Bus = "bus"_dev;
 constexpr auto DiskController = "disk_controller"_dev;
 constexpr auto Disk = "disk"_dev;
+constexpr auto Optical = "optical"_dev;
 constexpr auto Keyboard = "keyboard"_dev;
 constexpr auto Mouse = "mouse"_dev;
 constexpr auto Gamepad = "gamepad"_dev;

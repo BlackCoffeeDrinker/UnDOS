@@ -9,6 +9,7 @@
 
 namespace kernel {
 struct KThreadObject;
+enum class InterruptedMode : uint8_t;
 }
 
 namespace kernel::sched {
@@ -27,6 +28,7 @@ void init_ap(uint32_t cpu_id) noexcept;
 void tick() noexcept;
 
 void schedule_next() noexcept;
+void charge_timer_tick(InterruptedMode mode) noexcept;
 
 // Interrupts MUST be disabled. Marks the current thread blocked and switches
 // away; returns once another party has made it ready again.

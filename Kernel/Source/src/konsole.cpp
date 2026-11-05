@@ -6,6 +6,7 @@ extern "C" UNDOS_KERNEL_API_DEF [[noreturn]] void KE_RUNTIME_Panic(const char *m
 }
 
 namespace {
+kernel::KObjectPtr<kernel::KVttySinkObject> s_defaultConsoleSink{nullptr};
 
 bool IsLineBreak(char c) noexcept {
   return c == '\r' || c == '\n';
@@ -41,26 +42,42 @@ size_t FormatTimestamp(char (&out)[24]) noexcept {
 
 void PrintLine(const char *str, size_t len) noexcept {
   char prefix[24];
-  // TODO: Dump to console - calling HAL_Debug_FirmwarePrint is WRONG
-  HAL_Debug_FirmwarePrint(prefix, FormatTimestamp(prefix));
-  if (len > 0) HAL_Debug_FirmwarePrint(str, len);
-  HAL_Debug_FirmwarePrint("\r\n", 2);
+
+  if (len > 0) {
+    HAL_Debug_FirmwarePrint(prefix, FormatTimestamp(prefix));
+    HAL_Debug_FirmwarePrint(str, len);
+    HAL_Debug_FirmwarePrint("\r\n", 2);
+  }
 }
 
 }// namespace
 
 void KE_PrintBuffer(const char *str, size_t len) noexcept {
-  if (!str) return;
+  if (!str)
+    return;
 
   while (len > 0 && IsLineBreak(str[len - 1])) --len;
 
   // Embedded line breaks ("\r\n", "\n\r", "\n", "\r") each start a new line.
   size_t start = 0;
+
   for (size_t i = 0; i < len; ++i) {
-    if (!IsLineBreak(str[i])) continue;
+    if (!IsLineBreak(str[i]))
+      continue;
     PrintLine(str + start, i - start);
-    if (i + 1 < len && IsLineBreak(str[i + 1]) && str[i + 1] != str[i]) ++i;
+    if (i + 1 < len && IsLineBreak(str[i + 1]) && str[i + 1] != str[i])
+      ++i;
     start = i + 1;
   }
+
   PrintLine(str + start, len - start);
+}
+
+
+UNDOS_KERNEL_API_DEF void KE_TTY_SetDefaultConsole(const kernel::KObjectPtr<kernel::KVttySinkObject> &sink) noexcept {
+  s_defaultConsoleSink = sink;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KObjectPtr<kernel::KVttySinkObject> KE_TTY_GetDefaultConsoleSink() noexcept {
+  return s_defaultConsoleSink;
 }

@@ -14,10 +14,12 @@ APPLICATIONS = {
     "Terminal": ("Apps/Terminal", ("term.elf",)),
     "Demo": ("Apps/Demo", ("demo.elf",)),
     "FileManager": ("Apps/FileManager", ("winfile.elf",)),
+    "TaskManager": ("Apps/TaskManager", ("taskmgr.elf", "taskprobe.elf")),
     "Init": ("Apps/Init", ("init.elf", "initlib.so")),
     "Fontloader": ("Apps/Fontloader", ("fontload.elf",)),
     "ABI": ("Tests/ABI", ("abitest.elf", "abitest.so", "abinext.so", "abimiss.elf")),
 }
+APP_INSTALL_NAMES = {("TaskManager", "taskprobe.elf"): "taskprob.elf"}
 
 
 def run(*command):
@@ -56,7 +58,8 @@ def main():
                 "-v", f"{ROOT}:/src", "-w", "/src",
                 args.toolchain_image, "python3", "Scripts/build.py", "kernel",
                 "--build-root", str(Path("/src") / relative_build),
-                "--config", args.config, "--jobs", args.jobs)
+                "--config", args.config, "--jobs", args.jobs,
+                *(("--cmake-arg=" + argument) for argument in args.cmake_arg))
             kernel_manifest = build_root / "kernel" / args.config / f"artifacts-{args.config}.json"
             probe_manifest = (
                 build_root / "grub-direct-loader"
@@ -154,7 +157,8 @@ def main():
                 path = directory / filename
                 if not path.is_file():
                     raise RuntimeError(f"Missing application artifact: {path}")
-                destination = "System/" + filename
+                installed_name = APP_INSTALL_NAMES.get((name, filename), filename)
+                destination = "System/" + installed_name
                 if destination in files:
                     raise RuntimeError(f"Duplicate application artifact: {destination}")
                 files[destination] = str(path)

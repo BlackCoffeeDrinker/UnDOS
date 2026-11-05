@@ -217,7 +217,9 @@ image. If durability or hash verification fails after replacement, the script
 reports that the image was already replaced; it does not roll back.
 
 The GRUB source/configuration preparation is an explicit prerequisite. The
-module command fails if the matching prepared files are missing. It does not
+module command fails if the matching prepared files are missing; with internet
+access, `./build-hdd.sh --prepare-toolchain` recreates them once under
+`build/grub-direct-loader/` from pinned downloads. It does not
 substitute another GRUB release or target compiler. The generated module is
 marked `GPLv3+`. Current task authorization permits private local testing and
 the checked local HDD update only. Do not distribute the module or image.
@@ -422,6 +424,7 @@ the task-local `fat32.img` as a hard disk without attaching the ISO;
 `UNDOS_QEMU_BOOT=d` preserves the default ISO boot. A serial-only boot is not a
 visual GUI check. `UNDOS_QEMU_MEMORY` accepts `8`, `16`, or `32` MiB for
 bounded low-memory scenarios and defaults to `32`.
+
 `python3 Tools/progman-smoke.py --output build/grub-direct-loader/smoke --vga cirrus`
 uses that wrapper to capture shell/menu/application checkpoints and verify a
 quoted argument reaches the demo; use `--vga std` for the fallback path. Inspect
@@ -550,7 +553,7 @@ See [KDevicePtr](../Kernel/API/include/kernel/fwd/KDevicePtr.hpp) and
 > [!IMPORTANT]
 > When generating code modifications or additions for the UnDOS codebase, you must adhere strictly to these constraints:
 
-* **No hosted standard library headers:** Do not include `<iostream>`, `<string>`, `<vector>`, or another hosted standard header. Use the header-only equivalents provided by `<strfmt.hpp>` or `SDK/KStd` in the `kstd` namespace.
+* **No hosted standard library headers:** Do not include `<iostream>`, `<string>`, `<vector>`, or another hosted standard header. Use the header-only equivalents provided by `<strfmt.hpp>` or `Kernel/KStd` in the `kstd` namespace (kernel space only).
 * **PMM Initialization Placement:** Any allocation arrays, tracking structures, or page frame bitmaps generated for memory subsystem design must calculate their initial
   position pointers starting exactly at `boot_info->kernel_virtual_end`. Do not use hardcoded markers.
 * **C-linkage exports:** Functions with API visibility must use `extern "C"` so the Stage 1.5 symbol map can match their names exactly.

@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include "elf_init.hpp"
 #include "stdkrn.hpp"
 #include "vmm.hpp"
 
@@ -53,7 +54,17 @@ struct LoadResult {
   VirtualAddress load_base{0};
   size_t total_size{0};
   VirtualAddress entry_point{0};
+  // Constructor tables found by section name (relocatable path only) plus
+  // the image bounds and mode. LoadElfFromVfs never runs them.
+  InitTables init{};
 };
+
+// Runs a kernel module's .ctors then .init_array once, after relocation and
+// dependency loading and before its entry point. Fails (running nothing) if
+// any table or entry lies outside the image; rejects user-mode images.
+inline kstd::error_code RunInitializers(const LoadResult &result) noexcept {
+  return RunInitTables(result.init);
+}
 
 // Opens `path` via the VFS, parses it as an ELF32 image, allocates a region
 // sized to span its PT_LOAD segments, maps and copies each segment, and

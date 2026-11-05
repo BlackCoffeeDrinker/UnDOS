@@ -1,6 +1,5 @@
 #pragma once
 
-#include <kernel/gfx/KDeviceContextTable.hpp>
 #include <kernel/kobject/KConfigurationRoot.hpp>
 #include <kernel/kobject/KDeviceObject.hpp>
 #include <kernel/kobject/KDirectoryObject.hpp>
@@ -20,5 +19,4 @@
 #include <kernel/kobject/KSurface.hpp>
 #include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/kobject/KVolumeMountObject.hpp>
-#include <kernel/kobject/KWindowObject.hpp>
 #include <kernel/kobject/ObjectType.hpp>

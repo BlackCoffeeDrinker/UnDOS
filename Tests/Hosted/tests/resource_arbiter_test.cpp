@@ -173,6 +173,40 @@ TEST_CASE("Shared IRQ coexists but exclusive conflicts", "[resource]") {
   }
 }
 
+TEST_CASE("A second identical exclusive ATA channel claim is refused", "[resource]") {
+  // Same shape bus_isa reports for a legacy ATA channel: command block,
+  // control block, shared IRQ.
+  auto makeAtaAlternative = [](IoResourceList &alt, IoResourceDescriptor (&descs)[3]) {
+    descs[0] = MakeDesc(ResourceType::Port, 0x1F0, 8);
+    descs[1] = MakeDesc(ResourceType::Port, 0x3F6, 1);
+    descs[2] = MakeDesc(ResourceType::Interrupt, 14, 1, ResourceShare::Shared);
+    for (auto &d: descs) alt.descriptors.push_back(&d);
+  };
+
+  IoResourceList first;
+  IoResourceDescriptor firstDescs[3];
+  makeAtaAlternative(first, firstDescs);
+  common::DoubleList<CmPartialResourceDescriptor> reserved;
+  CmPartialResourceDescriptor poolA[4];
+  size_t usedA = 0;
+  auto allocA = [&]() -> CmPartialResourceDescriptor * { return usedA < 4 ? &poolA[usedA++] : nullptr; };
+  CmResourceList grantA;
+  REQUIRE_FALSE(TryReserveAlternative(first, reserved, grantA, allocA));
+  REQUIRE(grantA.descriptors.size() == 3);
+
+  IoResourceList second;
+  IoResourceDescriptor secondDescs[3];
+  makeAtaAlternative(second, secondDescs);
+  CmPartialResourceDescriptor poolB[4];
+  size_t usedB = 0;
+  auto allocB = [&]() -> CmPartialResourceDescriptor * { return usedB < 4 ? &poolB[usedB++] : nullptr; };
+  CmResourceList grantB;
+  const auto status = TryReserveAlternative(second, grantA.descriptors, grantB, allocB);
+  REQUIRE(status == KernelError::ResourceConflict);
+  REQUIRE(grantB.descriptors.empty());
+  REQUIRE(usedB == 0);
+}
+
 TEST_CASE("Empty alternative reserves an empty grant", "[resource]") {
   const IoResourceList alt;// no descriptors
   const common::DoubleList<CmPartialResourceDescriptor> reserved;

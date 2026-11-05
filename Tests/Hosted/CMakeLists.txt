@@ -1,19 +1,26 @@
 cmake_minimum_required(VERSION 3.27)
 project(UnDOSHosted VERSION 0.0.1 LANGUAGES C CXX)
+option(UNDOS_SDK_TESTS_ONLY
+    "Build only SDK GUI and migrated-app tests without Kernel targets" OFF)
 set(TESTING_ONLY ON)
 include(../../BuildSupport/Project.cmake)
 include(../../BuildSupport/CPM.cmake)
-add_subdirectory(../../SDK/KStd KStd)
-add_subdirectory(../../Kernel/API API)
 add_subdirectory(../../ABI ABI)
 
 if (NOT TARGET Catch2::Catch2WithMain)
     CPMAddPackage("gh:catchorg/Catch2@3.15.1")
 endif ()
 enable_testing()
-find_package(Threads REQUIRED)
-
 include(${Catch2_SOURCE_DIR}/extras/Catch.cmake)
 
+if (UNDOS_SDK_TESTS_ONLY)
+    message(STATUS "UNDOS_SDK_TESTS_ONLY=ON: Kernel targets and API libraries are excluded")
+    add_subdirectory(tests)
+    return()
+endif ()
+
+add_subdirectory(../../Kernel/KStd KStd)
+add_subdirectory(../../Kernel/API API)
+find_package(Threads REQUIRED)
 add_subdirectory(main)
 add_subdirectory(tests)

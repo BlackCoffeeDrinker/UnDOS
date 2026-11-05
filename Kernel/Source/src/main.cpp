@@ -2,6 +2,7 @@
 
 #include "CommandLineParser.hpp"
 #include "configuration_manager.hpp"
+#include "crt_init.hpp"
 #include "dispatch.hpp"
 #include "driver_loader.hpp"
 #include "event_broadcaster.hpp"
@@ -12,11 +13,13 @@
 #include "module/module_registry.hpp"
 #include "object_manager.hpp"
 #include "pnp_manager.hpp"
+#include "profiler/profiler.hpp"
 #include "resource_manager.hpp"
 #include "scheduler/CpuContext.hpp"
 #include "scheduler/Scheduler.hpp"
 #include "smp.hpp"
 #include "subsystem_loader.hpp"
+#include "tty/tty_pump.hpp"
 #include "user/user.hpp"
 #include "vfs.hpp"
 #include "vmm.hpp"
@@ -134,6 +137,7 @@ const char *GetDeviceTypeName(kernel::DeviceType type) {
   if (type == kernel::device_type::Bus) return "Bus";
   if (type == kernel::device_type::DiskController) return "DiskController";
   if (type == kernel::device_type::Disk) return "Disk";
+  if (type == kernel::device_type::Optical) return "Optical";
   if (type == kernel::device_type::Keyboard) return "Keyboard";
   if (type == kernel::device_type::Mouse) return "Mouse";
   if (type == kernel::device_type::Video) return "Video";
@@ -187,9 +191,13 @@ void DumpDevice(const kernel::KDevicePtr<kernel::KDevice> &dev, int depth, bool 
 }// namespace
 
 UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT &boot_info) noexcept {
+  kernel::crt::run_global_constructors();
   g_page_size = boot_info.page_size;
 
   HAL_PLATFORM_Init(boot_info, KE_VMM_GetKernelAddressSpace());
+  if (!kernel::crt::global_constructors_ok()) {
+    HAL_PLATFORM_Panic("Kernel global constructors did not run\r\n", __FILE__, __LINE__);
+  }
   KE_Print("UnDOS Kernel INIT with page size {}", g_page_size);
   KE_Print("Command line: {}", boot_info.command_line);
 
@@ -204,8 +212,17 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
 
   kernel::driver::init();
   HAL_VMM_FinalizeInit();
+  kernel::prof::prof_init();
   kernel::sched::init_bsp();
   kernel::dispatch::init();
+  if (parser.has_key("profile_dump_every")) {
+    uint32_t seconds = 0;
+    for (const char c: parser.get("profile_dump_every", {})) {
+      if (c < '0' || c > '9') break;
+      seconds = seconds * 10 + static_cast<uint32_t>(c - '0');
+    }
+    kernel::prof::prof_schedule_dump(seconds);
+  }
   HAL_PLATFORM_InitializeSystemTimer();
   HAL_CPU_EnableInterrupts();
   kernel::event::init();
@@ -357,7 +374,14 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
     kernel::gfx::wait_for_drivers();
   }
 
-  kernel::user::init_raw_input();
+  if (const auto status = kernel::gfx::init(); status) {
+    KE_Print("GFX init failed: {}", status.message());
+    HAL_PLATFORM_Panic("GFX init failed", __FILE__, __LINE__);
+  }
+  if (const auto status = kernel::user::init(); status) {
+    KE_Print("USER init failed: {}", status.message());
+    HAL_PLATFORM_Panic("USER init failed", __FILE__, __LINE__);
+  }
 
   //DumpObjectTree(KE_OB_GetRootDirectory());
   //DumpDeviceTree();
@@ -368,11 +392,11 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
     KE_Print("Failed to start init: {}", process.error().message());
   }
 
-  // Thread 0 becomes a low-noise heartbeat. It must never return or shut the
-  // CPU down, which would tear down the threads now running on it.
-  for (;;) {
-    KE_TTY_PumpAllAttachedDevices();
-    HAL_CPU_Halt();
-    KE_SCHED_Yield();
+  if (const auto status = kernel::tty::detail::StartPumpThread(); status) {
+    KE_Print("Failed to start TTY pump thread: {}", status.message());
+    HAL_PLATFORM_Panic("Failed to start TTY pump thread", __FILE__, __LINE__);
   }
+
+  KE_SCHED_Terminate();
+  __builtin_unreachable();
 }

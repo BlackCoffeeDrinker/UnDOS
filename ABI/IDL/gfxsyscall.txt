@@ -288,6 +288,16 @@ syscall V1 GFX DeleteObject [307] {
     object: IN HANDLER;
 };
 
+// Bitmap compatible with the DC's current target: allocated in adapter memory
+// when the adapter supports it (zero-initialized, not CPU-mappable), otherwise
+// a system-RAM bitmap in the target's pixel format, as CreateBitmap.
+syscall V1 GFX CreateCompatibleBitmap [308] {
+    dc:      IN HANDLER;
+    width:   IN c<uint32_t>;
+    height:  IN c<uint32_t>;
+    handle:  OUT c<uint32_t>;
+};
+
 
 // -----------------------------------------------------
 //  Drawing Primitives

@@ -87,6 +87,131 @@ syscall V1 PROC GetInfo [201] {
     exitCode: OUT c<uint32_t>;
 };
 
+/** Availability bits returned in TaskSnapshotHeaderV1.validity and record validity fields. */
+flags TaskMetricValidity : uint32_t {
+    Cpu;
+    Memory;
+};
+
+/** Process state captured from the process directory. */
+enum TaskProcessState {
+    Running = 0,
+    Terminated = 1,
+};
+
+/** Reason CPU counters are unavailable; zero means available. */
+enum TaskCpuUnavailableReason {
+    CpuAvailable = 0,
+    CpuClockUnavailable = 1,
+    CpuCounterDiscontinuity = 2,
+    CpuTopologyUnsupported = 3,
+};
+
+/** Reason physical-memory ownership totals are unavailable; zero means available. */
+enum TaskMemoryUnavailableReason {
+    MemoryAvailable = 0,
+    MemoryManagerUninitialized = 1,
+    MemoryOwnershipUnavailable = 2,
+    MemorySharedOwnershipUnsupported = 3,
+};
+
+/** Fixed-width metadata for one coherent task-manager collection. */
+struct TaskSnapshotHeaderV1 {
+    /** ABI record version. */
+    version: c<uint32_t>;
+    /** CPU accounting epoch; CPU deltas require the same epoch. */
+    counterEpoch: c<uint64_t>;
+    /** Aggregate serviced PIT0 ticks at capture time; the V1 field name is retained. */
+    sampleCycles: c<uint64_t>;
+    /** Rounded PIT0 interrupt frequency (100 Hz); exact rate is 1193182/11931 Hz. */
+    clockHz: c<uint32_t>;
+    /** Quantization in ticks: one when available, zero otherwise. */
+    clockResolutionCycles: c<uint32_t>;
+    /** TaskMetricValidity bits independently describe CPU and memory data. */
+    validity: c<uint32_t>;
+    /** TaskCpuUnavailableReason value; zero means available. */
+    cpuReason: c<uint32_t>;
+    /** TaskMemoryUnavailableReason value; zero means available. */
+    memoryReason: c<uint32_t>;
+    /** Firmware-reported OS-usable physical RAM, in bytes. */
+    physicalTotalBytes: c<uint64_t>;
+    /** Allocated or reserved OS-usable physical RAM, in bytes. */
+    physicalUsedBytes: c<uint64_t>;
+    /** Allocatable OS-usable physical RAM, in bytes. */
+    physicalFreeBytes: c<uint64_t>;
+    /** System/reserved RAM after subtracting exported process-owned frames, in bytes. */
+    systemPhysicalBytes: c<uint64_t>;
+    /** OS-usable RAM outside the represented allocator range, in bytes. */
+    unmanagedPhysicalBytes: c<uint64_t>;
+};
+
+/** One online CPU's cumulative serviced PIT0 tick counters. */
+struct TaskCpuRecordV1 {
+    /** Stable logical CPU identity from the online scheduler context. */
+    cpuId: c<uint32_t>;
+    /** TaskMetricValidity bits for this CPU record. */
+    validity: c<uint32_t>;
+    /** Total serviced PIT0 ticks; not oscillator cycles or reconstructed wall time. */
+    totalCycles: c<uint64_t>;
+    /** Ticks interrupting the scheduler's exact idle thread. */
+    idleCycles: c<uint64_t>;
+    /** Ticks interrupting kernel work not charged to a process. */
+    systemCycles: c<uint64_t>;
+};
+
+/** One process-directory member and its cumulative accounting. */
+struct TaskProcessRecordV1 {
+    /** Monotonic boot-lifetime process ID; not a process-local handle. */
+    pid: c<uint32_t>;
+    /** Monotonic boot-lifetime incarnation used with PID as sample identity. */
+    incarnation: c<uint64_t>;
+    /** TaskProcessState value captured with this record. */
+    state: c<uint32_t>;
+    /** TaskMetricValidity bits independently describe CPU and memory data. */
+    validity: c<uint32_t>;
+    /** Cumulative serviced PIT0 ticks, including synchronous process kernel work. */
+    cpuCycles: c<uint64_t>;
+    /** Unique owned allocated user-frame bytes, excluding shared kernel mappings. */
+    physicalBytes: c<uint64_t>;
+    /** Byte offset into the packed names buffer. */
+    nameOffset: c<uint32_t>;
+    /** Name length in bytes including the terminating NUL. */
+    nameBytes: c<uint32_t>;
+};
+
+/**
+ * Captures a coherent task-manager sample. Query with queryOnly=1 and zero
+ * capacities, then allocate exact output buffers and fill with queryOnly=0.
+ * Insufficient fill capacity returns INVALID_SIZE with required counts and
+ * zero written counts, without writing records. Names are packed NUL-terminated
+ * bytes. Metric capability failures are reported in header validity/reason
+ * fields; they do not turn unavailable metrics into valid zero values.
+ */
+syscall V1 PROC GetTaskSnapshot [209] {
+    /** Exactly 0 for fill or 1 for a capacity query. */
+    queryOnly: IN c<uint32_t>;
+    /** Output CPU records; length is a record count. */
+    cpus: OUT buffer<struct<TaskCpuRecordV1>>;
+    /** Output process records; length is a record count. */
+    processes: OUT buffer<struct<TaskProcessRecordV1>>;
+    /** Packed process names; length is bytes including each NUL. */
+    names: OUT buffer<c<uint8_t>>;
+    /** Coherent headers and metric validity. */
+    header: OUT struct<TaskSnapshotHeaderV1>;
+    /** Required CPU record capacity. */
+    requiredCpus: OUT c<uint32_t>;
+    /** Required process record capacity. */
+    requiredProcesses: OUT c<uint32_t>;
+    /** Required name-buffer capacity in bytes. */
+    requiredNameBytes: OUT c<uint32_t>;
+    /** CPU records written; zero on query or failed fill. */
+    writtenCpus: OUT c<uint32_t>;
+    /** Process records written; zero on query or failed fill. */
+    writtenProcesses: OUT c<uint32_t>;
+    /** Name-buffer bytes written; zero on query or failed fill. */
+    writtenNameBytes: OUT c<uint32_t>;
+};
+
 /** Terminates the current process with the given return code. */
 syscall V1 PROC Exit [202] {
     /** Return code to report to the parent process. */

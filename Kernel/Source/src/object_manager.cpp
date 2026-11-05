@@ -3,6 +3,7 @@
 #include "stdkrn.hpp"
 #include <Kernel.hpp>
 #include <new.hpp>
+#include <kernel/spinlock.hpp>
 
 namespace {
 kernel::KObjectPtr<kernel::KDirectoryObject> g_root{};
@@ -12,6 +13,7 @@ kernel::KObjectPtr<kernel::KDirectoryObject> g_memory{};
 kernel::KObjectPtr<kernel::KDirectoryObject> g_filesystem{};
 kernel::KObjectPtr<kernel::KDirectoryObject> g_thread{};
 kernel::KObjectPtr<kernel::KDirectoryObject> g_process{};
+kernel::SpinLock g_process_directory_lock;
 kernel::KObjectPtr<kernel::KDirectoryObject> g_vfs{};
 kernel::KObjectPtr<kernel::KDirectoryObject> g_file{};
 kernel::KObjectPtr<kernel::KDirectoryObject> g_subsystem{};
@@ -127,6 +129,40 @@ void init() {
   g_configroots = kstd::move(configroots);
   g_gfx = kstd::move(gfx);
 }
+
+uintptr_t lock_process_directory() noexcept {
+  return g_process_directory_lock.lock_irqsave();
+}
+
+void unlock_process_directory(uintptr_t state) noexcept {
+  g_process_directory_lock.unlock_irqrestore(state);
+}
+
+size_t process_directory_count_locked() noexcept {
+  size_t count = 0;
+  if (!g_process) return count;
+  for (const auto object: g_process->child_list) {
+    if (object->type == TYPE_PROCESS) ++count;
+  }
+  return count;
+}
+
+bool capture_processes_locked(
+    KObject **out, size_t capacity, size_t &count) noexcept {
+  if (!g_process) {
+    count = 0;
+    return true;
+  }
+  count = process_directory_count_locked();
+  if (capacity < count || (count && !out)) return false;
+  size_t index = 0;
+  for (const auto object: g_process->child_list) {
+    if (object->type != TYPE_PROCESS) continue;
+    KE_OB_Retain(object);
+    out[index++] = object;
+  }
+  return index == count;
+}
 }// namespace kernel::objectmanager
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_OB_InsertObject(const kernel::KObjectPtr<kernel::KDirectoryObject> &parent, const kernel::KObjectPtr<kernel::KObject> &child) noexcept {
@@ -135,14 +171,18 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_OB_InsertObject(const kernel::KObjectPt
     return kernel::KernelError::InvalidArgument;
   }
 
+  const bool process_directory = parent.get() == g_process.get();
+  const uintptr_t state = process_directory ? g_process_directory_lock.lock_irqsave() : 0;
   if (child->parent != nullptr) [[unlikely]] {
     // Child already has a parent
+    if (process_directory) g_process_directory_lock.unlock_irqrestore(state);
     KE_Print("KE_OB_InsertObject failed for object {}: Object already has a parent", child->name);
     return kernel::KernelError::AlreadyAttached;
   }
 
   // Check if name already exists
   if (parent->child_list.find(kstd::string_view(child->name))) {
+    if (process_directory) g_process_directory_lock.unlock_irqrestore(state);
     KE_Print("KE_OB_InsertObject failed for object {}", child->name);
     return kernel::KernelError::AlreadyExists;
   }
@@ -151,6 +191,7 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_OB_InsertObject(const kernel::KObjectPt
   KE_OB_Retain(child.get());
   parent->child_list.push_back(child.get());
 
+  if (process_directory) g_process_directory_lock.unlock_irqrestore(state);
   return {};
 }
 
@@ -182,13 +223,17 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_OB_RemoveObject(const kernel::KObjectPt
     return kernel::KernelError::InvalidArgument;
   }
 
+  const bool process_directory = parent.get() == g_process.get();
+  const uintptr_t state = process_directory ? g_process_directory_lock.lock_irqsave() : 0;
   if (child->parent != parent.get()) [[unlikely]] {
+    if (process_directory) g_process_directory_lock.unlock_irqrestore(state);
     return kernel::KernelError::ParentMismatch;
   }
 
   parent->child_list.remove(child.get());
   child->parent = nullptr;
 
+  if (process_directory) g_process_directory_lock.unlock_irqrestore(state);
   // Undo the retain KE_OB_InsertObject performed on insertion.
   KE_OB_Release(child.get());
 

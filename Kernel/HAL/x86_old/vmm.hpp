@@ -63,6 +63,7 @@ static_assert(sizeof(page_directory_t) == 4096);
 
 void init_vmm() noexcept;
 
+
 // Ensures `virtual_addr` is present, identity-mapped to `physical_addr`, and
 // accessible from CPL3 (USER bit set) and writable -- unlike HAL_VMM_MapPage,
 // this *upgrades* the permissions of an already-present page instead of

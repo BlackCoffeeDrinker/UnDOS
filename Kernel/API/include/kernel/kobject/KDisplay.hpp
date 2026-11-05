@@ -35,6 +35,7 @@ struct KDisplaySurfaceBinding {
   KObjectPtr<KMemoryBackingObject> backing{nullptr};// Memory holding the pixel data
   SurfaceType type{SurfaceType::Framebuffer};       // VRAM scanout vs shadow in RAM
   uint32_t flags{0};                                // Bitfield of SurfaceFlags
+  uint32_t surfaceStride{0};                        // Software pixel stride; zero uses mode.pitch
 };
 
 struct KDisplayModeReservation {

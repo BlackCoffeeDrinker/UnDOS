@@ -8,10 +8,17 @@ Cache::Cache(size_t object_size, size_t alignment, size_t page_size) noexcept
 }
 
 void *Cache::allocate() noexcept {
-  lock_.lock();
-  void *ptr = allocate_locked();
-  lock_.unlock();
-  return ptr;
+  {
+    IrqSpinLockGuard guard(lock_);
+    if (void *ptr = allocate_locked()) return ptr;
+  }
+  // Slab acquisition can map pages and wait for the arena. Never nest it
+  // inside the cache's IRQ-masked metadata transaction.
+  Slab *slab = allocator_.allocate_slab(*this);
+  if (!slab) return nullptr;
+  IrqSpinLockGuard guard(lock_);
+  free_slabs_.push_back(slab);
+  return allocate_locked();
 }
 
 void *Cache::allocate_locked() noexcept {
@@ -42,16 +49,14 @@ void *Cache::allocate_locked() noexcept {
 }
 
 void Cache::free(void *ptr) noexcept {
-  lock_.lock();
+  IrqSpinLockGuard guard(lock_);
   Slab *slab = find_slab(ptr);
   if (slab) free_locked(ptr, *slab);
-  lock_.unlock();
 }
 
 void Cache::free(void *ptr, Slab &slab) noexcept {
-  lock_.lock();
+  IrqSpinLockGuard guard(lock_);
   free_locked(ptr, slab);
-  lock_.unlock();
 }
 
 void Cache::free_locked(void *ptr, Slab &slab) noexcept {
@@ -76,23 +81,26 @@ Slab *Cache::get_available_slab() noexcept {
   if (!partial_slabs_.empty()) return &partial_slabs_.front();
   if (!free_slabs_.empty()) return &free_slabs_.front();
 
-  Slab *new_slab = allocator_.allocate_slab(*this);
-  if (new_slab) {
-    free_slabs_.push_back(new_slab);
-  }
-  return new_slab;
+  return nullptr;
 }
 
 size_t Cache::reclaim() noexcept {
-  lock_.lock();
+  common::DoubleList<Slab> detached;
+  {
+    IrqSpinLockGuard guard(lock_);
+    while (!free_slabs_.empty()) {
+      Slab *slab = &free_slabs_.front();
+      free_slabs_.remove(slab);
+      detached.push_back(slab);
+    }
+  }
   size_t count = 0;
-  while (!free_slabs_.empty()) {
-    Slab *slab = &free_slabs_.front();
-    free_slabs_.remove(slab);
+  while (!detached.empty()) {
+    Slab *slab = &detached.front();
+    detached.remove(slab);
     allocator_.free_slab(*slab);
     count++;
   }
-  lock_.unlock();
   return count;
 }
 

@@ -20,7 +20,7 @@ REQUIRED_LAYOUT_INPUTS = {
     "Boot/GrubDirect/bootinfo_wire.h",
     "Boot/GrubDirect/core/types.h",
     "Kernel/API/include/kernel/boot/boot_info.hpp",
-    "SDK/KStd/include/static_string.hpp",
+    "Kernel/KStd/include/static_string.hpp",
 }
 
 

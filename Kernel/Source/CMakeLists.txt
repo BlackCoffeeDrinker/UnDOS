@@ -1,5 +1,41 @@
 enable_language(ASM)
 
+# Compile settings shared by the kernel and its object libraries, so that
+# objects compiled outside the kernel target are built exactly as before.
+function(undos_kernel_compile_settings target)
+    target_compile_definitions(${target} PRIVATE UNDOS_KERNEL_COMPILE)
+    target_link_libraries(${target} PRIVATE undos_warnings undos_options)
+    target_link_libraries(${target} PUBLIC libkcpp KernelHeaders KernelUserlandShared KernelSyscallDispatch)
+    target_link_libraries(${target} PRIVATE undos_font_resource)
+    target_include_directories(${target} PRIVATE src ${UNDOS_ROOT}/Kernel/Drivers/volmgr)
+    target_include_directories(${target} PRIVATE src/syscalls)
+
+    target_compile_options(${target} PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto -fno-use-cxa-atexit)
+
+    if (UNDOS_PROFILE)
+        target_compile_definitions(${target} PRIVATE UNDOS_PROFILE=1)
+        target_compile_options(${target} PRIVATE -finstrument-functions
+                # percpu.hpp / KPtr.hpp: header inlines reached from the hooks
+                "-finstrument-functions-exclude-file-list=src/profiler/,src/strlen.cpp,src/memchr.cpp,src/crt_init.cpp,src/atexit.cpp,src/guard/,src/scheduler/SchedulerSwitch.cpp,src/scheduler/CpuContext.cpp,src/percpu.cpp,src/percpu.hpp,kernel/fwd/KPtr.hpp"
+                # Name substrings: blocked-time noise and trivial helpers that only inflate the profile
+                "-finstrument-functions-exclude-function-list=schedule_next,Address<,span<,operator new,char_traits")
+    endif ()
+endfunction()
+
+# Kernel components (Kernel/Components): object libraries compiled with the
+# kernel settings. Their src/ directory is the public include root, so
+# the core includes "gfx/..." and "user/..." headers.
+function(undos_kernel_component target)
+    undos_kernel_compile_settings(${target})
+    target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    # CMake would compile a library with -fPIC; match the kernel executable's -fPIE.
+    get_target_property(_pic ${target} POSITION_INDEPENDENT_CODE)
+    if (_pic)
+        set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE OFF)
+        target_compile_options(${target} PRIVATE ${CMAKE_CXX_COMPILE_OPTIONS_PIE})
+    endif ()
+endfunction()
+
 add_executable(kernel
         src/memchr.cpp
         src/strlen.cpp
@@ -19,6 +55,7 @@ add_executable(kernel
         src/scheduler/CpuContext.hpp
         src/scheduler/CpuContext.cpp
         src/scheduler/Scheduler.hpp
+        src/scheduler/SchedulerSwitch.cpp
         src/scheduler/Scheduler.cpp
         src/driver_loader.cpp
         src/driver_loader.hpp
@@ -32,6 +69,10 @@ add_executable(kernel
         src/elf_segment_loader.cpp
         src/process.hpp
         src/process.cpp
+        src/process_notify.hpp
+        src/process_notify.cpp
+        src/task_stats.hpp
+        src/task_stats.cpp
         "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
         src/pnp_manager.cpp
         src/pnp_device_state.cpp
@@ -51,11 +92,12 @@ add_executable(kernel
         src/memory/Allocator.cpp
         src/memory/Cache.hpp
         src/memory/Cache.cpp
-        src/stdkrn.hpp
         src/module/module_registry.cpp
         src/module/module_registry.hpp
         src/guard/guard.cpp
         src/atexit.cpp
+        src/crt_init.cpp
+        src/crt_init.hpp
         src/io.cpp
         src/dispatch.cpp
         src/dispatch.hpp
@@ -79,32 +121,6 @@ add_executable(kernel
         src/syscalls/ABI.cpp
         src/syscalls/GetStdHandle.cpp
         src/syscalls/TTY.cpp
-        src/syscalls/GFX.cpp
-        src/syscalls/User.cpp
-        src/user/user.hpp
-        src/user/window.cpp
-        src/user/menu.cpp
-        src/user/msgqueue.cpp
-        src/user/paint.cpp
-        src/user/nonclient.cpp
-        src/user/rawinput.cpp
-        src/gfx/gfx_management.cpp
-        src/gfx/gfx_software_fallback.cpp
-        src/gfx/gfx_dc_table.cpp
-        src/gfx/font/font_resources.cpp
-        src/gfx/font/glyph.cpp
-        src/gfx/font/raster.cpp
-        src/gfx/font/face.cpp
-        src/gfx/font/realization.cpp
-        src/gfx/font/default_font.cpp
-        src/gfx/font/text.cpp
-        src/gfx/font/font_system.cpp
-        src/gfx/font/vm.cpp
-        src/gfx/font/vm_executor.cpp
-        src/gfx/font/vm_points.cpp
-        src/gfx/font/vm_hints.cpp
-        src/gfx/monitor_config.cpp
-
         src/input/input_manager.cpp
         src/input/input_manager.hpp
 
@@ -113,24 +129,20 @@ add_executable(kernel
         src/konsole.cpp
         src/event_broadcaster.cpp
         src/event_broadcaster.hpp
-        src/gfx/gfx.hpp
         src/kerror.cpp
         src/syscalls/KErrorToSysReturnCode.cpp
         src/syscalls/KErrorToSysReturnCode.hpp
         src/CommandLineParser.hpp
 )
 
-add_dependencies(kernel undos-syscalls-gen)
+undos_kernel_compile_settings(kernel)
+target_link_libraries(kernel PRIVATE kernel_user kernel_gfx)
 
-target_compile_definitions(kernel PRIVATE UNDOS_KERNEL_COMPILE)
-target_link_libraries(kernel PRIVATE undos_warnings undos_options)
-target_link_libraries(kernel PUBLIC libkcpp KernelHeaders KernelUserlandShared)
-target_link_libraries(kernel PRIVATE undos_font_resource)
-target_include_directories(kernel PRIVATE src ${UNDOS_ROOT}/Kernel/Drivers/volmgr)
-target_include_directories(kernel PRIVATE
-        "${UNDOS_SYSCALL_GENERATED_DIR}/kernel" "${UNDOS_SYSCALL_KERNEL_DIR}" src/syscalls)
+if (UNDOS_PROFILE)
+    target_sources(kernel PRIVATE src/profiler/profiler.cpp)
+    set_source_files_properties(src/profiler/profiler.cpp PROPERTIES COMPILE_OPTIONS -fno-instrument-functions)
+endif ()
 
-target_compile_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)
 target_link_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)
 
 target_link_options(kernel PRIVATE
@@ -142,10 +154,4 @@ target_link_options(kernel PRIVATE
         "-Wl,--emit-relocs"                    # CRITICAL: Keeps relocation sections intact for Stage 1.5
         "-Wl,--unresolved-symbols=ignore-all"  # CRITICAL: Allow missing HAL symbols
         "-Wl,--no-warn-rwx-segments"           # Suppress the security warning
-)
-
-add_custom_command(TARGET kernel POST_BUILD
-        COMMAND readelf -S $<TARGET_FILE:kernel>
-        COMMAND readelf -s $<TARGET_FILE:kernel>
-        COMMAND objdump -h $<TARGET_FILE:kernel>
 )

@@ -2,12 +2,24 @@
 """Build installed examples after relocating the SDK, then inspect their ABI."""
 
 import argparse
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import shutil
 import struct
 import subprocess
 import tempfile
+
+
+@contextmanager
+def validation_root(path):
+    if path is not None:
+        root = path.resolve()
+        root.mkdir(parents=True, exist_ok=False)
+        yield root
+        return
+    with tempfile.TemporaryDirectory(prefix="undos-sdk-") as directory:
+        yield Path(directory)
 
 
 def run(*args, **kwargs):
@@ -139,6 +151,85 @@ def check_drivers(sdk, root, output):
         (output / "libcin.txt").write_text("input 73\n")
 
 
+def check_gui_headers_and_symbols(sdk, root):
+    cc = str(sdk / "bin/i686-undos-gcc")
+    cxx = str(sdk / "bin/i686-undos-g++")
+    probes = {
+        "windows-only.c": "#include <windows.h>\nint main(void) { WNDCLASS c = {0}; return (int)c.style; }\n",
+        "extensions-only.c": "#include <undosgui/extensions.h>\nint main(void) { UNDOS_TEXT_EXTENT e = {0}; UNDOS_WINDOW_CREATION_RECOVERY r = {0}; return (int)(e.generation + r.setupStatus); }\n",
+        "combined.c": "#include <windows.h>\n#include <undosgui/extensions.h>\nint main(void) { UNDOS_WINDOW_CREATION_RECOVERY r = {0}; (void)UndosGetWindowCreationRecovery(&r); return RGB(1, 2, 3) == 0; }\n",
+        "native-first.cpp": "#include <userspace.h>\n#include <windows.h>\n#include <undosgui/extensions.h>\nint main() { WNDCLASS c{}; return static_cast<int>(c.style); }\n",
+        "public-first.cpp": "#include <windows.h>\n#include <undosgui/extensions.h>\n#include <userspace.h>\nint main() { WNDCLASS c{}; return static_cast<int>(c.style); }\n",
+    }
+    for filename, source in probes.items():
+        path = root / filename
+        path.write_text(source)
+        if filename.endswith(".c"):
+            run(cc, "-std=c11", "-pedantic-errors", "-Werror",
+                "-fsyntax-only", str(path))
+        else:
+            run(cxx, "-std=c++20", "-pedantic-errors", "-Werror",
+                "-fsyntax-only", str(path))
+
+    public = (sdk / "sysroot/usr/include/windows.h").read_text()
+    extensions = (sdk / "sysroot/usr/include/undosgui/extensions.h").read_text()
+    legacy_header = sdk / "sysroot/usr/include/undosgui/gui.hpp"
+    if legacy_header.exists():
+        raise RuntimeError(f"Legacy GUI header remains installed: {legacy_header}")
+    if "undos/syscalls" in public or "undos/syscalls" in extensions:
+        raise RuntimeError("Public GUI headers depend on generated syscall headers")
+    archive = sdk / "sysroot/usr/lib/libundosgui.a"
+    members = run("i686-elf-ar", "t", str(archive),
+                  capture_output=True, text=True).stdout.splitlines()
+    if any("gui.cpp" in member for member in members):
+        raise RuntimeError(f"Legacy GUI object remains in archive: {members}")
+    symbols = run("i686-elf-nm", "-g", "--defined-only", str(archive),
+                  capture_output=True, text=True).stdout
+    defined = {line.split()[-1] for line in symbols.splitlines() if line.split()}
+    required = {
+        "RegisterClass", "CreateWindowEx", "CreateWindow", "DestroyWindow",
+        "ShowWindow", "MoveWindow", "InvalidateRect", "GetClientRect",
+        "GetWindowRect", "GetWindowLongPtr", "SetWindowLongPtr",
+        "GetWindowLong", "SetWindowLong", "SetWindowText", "AppendMenu",
+        "CreateMenu", "CreatePopupMenu", "DestroyMenu", "SetMenu", "GetMenu",
+        "GetMessage", "PeekMessage", "PostMessage", "PostQuitMessage",
+        "DispatchMessage", "DefWindowProc", "TranslateMessage", "BeginPaint",
+        "EndPaint", "SetTextColor", "SetBkColor", "SetBkMode", "GetLastError",
+        "SetLastError", "UndosGetLastStatus",
+        "UndosGetWindowCreationRecovery", "UndosGetUiCleanupRecovery",
+        "UndosShowWindow", "UndosSetFocus", "UndosInitUi",
+        "UndosRefreshUi", "UndosCloseUi", "UndosAttachUiContext",
+        "UndosGetDisplaySize", "UndosFitTextPrefix", "UndosFitTextTail",
+        "UndosGetButtonHeight", "UndosDrawButton", "UndosDrawClassicIcon",
+        "UndosRunDialog",
+        "UndosPaletteColor", "UndosAcquireFont",
+        "UndosCloseFont", "UndosSelectFont", "UndosGetFontMetrics",
+        "UndosMeasureText", "UndosDrawText", "UndosFillRectangle",
+        "UndosMoveTo", "UndosLineTo",
+    }
+    missing = required - defined
+    if missing:
+        raise RuntimeError(f"Missing unsuffixed GUI symbols: {sorted(missing)}")
+    demangled = run("i686-elf-nm", "-C", "-g", "--defined-only", str(archive),
+                    capture_output=True, text=True).stdout
+    if "gui::" in demangled:
+        raise RuntimeError("Legacy gui:: symbols remain in the GUI archive")
+    forbidden = {f"{name}A" for name in required if f"{name}A" in defined}
+    if forbidden:
+        raise RuntimeError(f"Unexpected A-suffixed GUI exports: {sorted(forbidden)}")
+
+    c_helper = root / "c-only-helper.c"
+    c_helper.write_text(
+        "#include <undosgui/extensions.h>\n"
+        "int main(void) {\n"
+        "  UNDOS_UI_CLEANUP_RECOVERY recovery = {0};\n"
+        "  return UndosGetUiCleanupRecovery(&recovery) ? 0 : 0;\n"
+        "}\n")
+    run(cc, "-std=c11", "-pedantic-errors", "-Werror", str(c_helper),
+        "-lundosgui", "-o", str(root / "c-only-helper.elf"))
+    inspect(root / "c-only-helper.elf", 2)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", type=Path, default=Path(__file__).resolve().parents[2])
@@ -147,16 +238,18 @@ def main():
                         help="Also build a copy of the standalone Program Manager source with the relocated SDK")
     parser.add_argument("--application-source", type=Path, action="append", default=[],
                         help="Build a copied standalone SDK application directory; may be repeated")
+    parser.add_argument("--work-root", type=Path,
+                        help="Use a new caller-selected directory instead of a temporary directory")
     args = parser.parse_args()
     sdk = args.sdk.resolve()
-    with tempfile.TemporaryDirectory(prefix="undos-sdk-") as directory:
-        root = Path(directory)
+    with validation_root(args.work_root) as root:
         relocated = root / "relocated sdk"
         shutil.copytree(sdk, relocated)
         if (relocated / "sysroot/usr/include/kernel").exists():
             raise RuntimeError("SDK must not install kernel-private headers")
         toolchain = relocated / "share/cmake/UnDOS/UnDOS-toolchain.cmake"
         environment = dict(os.environ, CMAKE_TOOLCHAIN_FILE=str(toolchain))
+        check_gui_headers_and_symbols(relocated, root)
         for example in ("hello", "shared", "gui", "probe", "terminal"):
             source = relocated / "share/undos/examples" / example
             build = root / f"{example} build"

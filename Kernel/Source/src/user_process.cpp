@@ -1,10 +1,12 @@
 
 #include "elf_loader.hpp"
+#include "process_identity.hpp"
 #include "stdkrn.hpp"
 #include "vmm.hpp"
 #include <kernel/kobject/KIOObject.hpp>
-#include <process_startup.hpp>
+#include <kernel/spinlock.hpp>
 #include <kernel/tty/tty_device.hpp>
+#include <process_startup.hpp>
 
 #include <Kernel.hpp>
 
@@ -17,15 +19,28 @@ constexpr size_t PROCESS_NAME_TAIL = 48;
 // \Processes names are "<basename>#<serial>" so repeated launches of one
 // executable get distinct directory entries; argv[0] keeps the full path.
 uint32_t g_next_process_serial = 1;
+kernel::process::IdentitySequence g_process_identities;
+kernel::SpinLock g_process_identity_lock;
+
+bool assign_process_identity(kernel::KProcessObject &process) noexcept {
+  const uintptr_t state = g_process_identity_lock.lock_irqsave();
+  const bool assigned =
+      g_process_identities.assign(process.pid, process.incarnation);
+  g_process_identity_lock.unlock_irqrestore(state);
+  return assigned;
+}
 
 kstd::static_string<64> make_process_name(const kstd::string_view &exec_path) noexcept {
   size_t start = 0;
   for (size_t i = 0; i < exec_path.size(); ++i) {
-    if (exec_path[i] == '/') start = i + 1;
+    if (exec_path[i] == '/')
+      start = i + 1;
   }
   auto base = exec_path.substr(start);
-  if (base.empty()) base = exec_path;
-  if (base.size() > PROCESS_NAME_TAIL) base = base.substr(base.size() - PROCESS_NAME_TAIL);
+  if (base.empty())
+    base = exec_path;
+  if (base.size() > PROCESS_NAME_TAIL)
+    base = base.substr(base.size() - PROCESS_NAME_TAIL);
   kstd::static_string<64> name;
   kstd::format(name, "{}#{}", base, __atomic_fetch_add(&g_next_process_serial, 1u, __ATOMIC_RELAXED));
   return name;
@@ -38,9 +53,11 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> cre
   kernel::process_startup::Arguments startup;
   const auto parse_status = kernel::process_startup::parse(exec_path.data(), exec_path.size(),
                                                            arguments.data(), arguments.size(), startup);
-  if (parse_status) return kstd::unexpected(parse_status);
+  if (parse_status)
+    return kstd::unexpected(parse_status);
   const auto startup_size = kernel::process_startup::stack_size(startup);
-  if (startup_size > USER_STACK_SIZE / 2) return kstd::unexpected(kernel::KernelError::BufferTooSmall);
+  if (startup_size > USER_STACK_SIZE / 2)
+    return kstd::unexpected(kernel::KernelError::BufferTooSmall);
   // Step 1 — Create an isolated address space for the process.
   const auto process_name = make_process_name(exec_path);
   const auto process = kernel::CreateKObject<kernel::KProcessObject>(kstd::string_view(process_name));
@@ -48,18 +65,24 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> cre
     KE_Print("KE_USER_CreateProcess: failed to allocate KProcessObject");
     return kstd::unexpected(process.error());
   }
+  if (!assign_process_identity(*process.value())) {
+    return kstd::unexpected(kernel::KernelError::ResourceLimitExceeded);
+  }
 
   // Inherit inheritable handles (e.g. standard streams) from parent process if present
   if (streams) {
     auto status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stdin, streams->input,
                                                                   kernel::ProcessHandleTable::HandleAccess::Read);
-    if (status) return kstd::unexpected(status);
+    if (status)
+      return kstd::unexpected(status);
     status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stdout, streams->output,
                                                              kernel::ProcessHandleTable::HandleAccess::Write);
-    if (status) return kstd::unexpected(status);
+    if (status)
+      return kstd::unexpected(status);
     status = process.value()->handles.AllocateStandardHandle(kernel::StandardStream::Stderr, streams->error,
                                                              kernel::ProcessHandleTable::HandleAccess::Write);
-    if (status) return kstd::unexpected(status);
+    if (status)
+      return kstd::unexpected(status);
   } else if (const auto currentThread = KE_SCHED_GetCurrentThread()) {
     if (currentThread->owner_process) {
       if (const auto status = process.value()->InheritHandlesFrom(currentThread->owner_process->handles)) {
@@ -73,9 +96,9 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> cre
   if (!streams && process.value()->handles.entries.empty()) {
     if (const auto defaultSink = KE_TTY_GetDefaultConsoleSink()) {
       const auto ioObj = KE_IO_FromObject(defaultSink);
-      if (!ioObj) return kstd::unexpected(ioObj.error());
-      const auto status = process.value()->AttachStandardStreams(*ioObj);
-      if (status) {
+      if (!ioObj)
+        return kstd::unexpected(ioObj.error());
+      if (const auto status = process.value()->AttachStandardStreams(*ioObj)) {
         KE_Print("KE_USER_CreateProcess: failed to attach standard streams");
         return kstd::unexpected(status);
       }
@@ -83,16 +106,21 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> cre
   }
 
   auto startup_event = KE_EVENT_Create(true, false);
-  if (!startup_event) return kstd::unexpected(startup_event.error());
+  if (!startup_event) {
+    return kstd::unexpected(startup_event.error());
+  }
   process.value()->startupEvent = *startup_event;
   auto startup_handle = process.value()->handles.Allocate(
       kernel::KObjectPtr<kernel::KObject>(process.value()->startupEvent.get()),
       kernel::ProcessHandleTable::HandleAccess::Write,
       kernel::ProcessHandleTable::HandleFlags::None);
-  if (!startup_handle) return kstd::unexpected(startup_handle.error());
-  if (!process.value()->handles.Lookup(*startup_handle)) return kstd::unexpected(kernel::KernelError::OutOfMemory);
+  if (!startup_handle)
+    return kstd::unexpected(startup_handle.error());
+  if (!process.value()->handles.Lookup(*startup_handle))
+    return kstd::unexpected(kernel::KernelError::OutOfMemory);
 
-  if (const auto as_status = kernel::vmm::create_user_address_space(process.value()->address_space)) {
+  if (const auto as_status = kernel::vmm::create_user_address_space(
+          process.value()->address_space, process.value()->pid)) {
     KE_Print("KE_USER_CreateProcess: failed to create address space for {}", exec_path);
     return kstd::unexpected(as_status);
   }
@@ -163,7 +191,8 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> cre
 
   // Step 5 — Create the process's ring-3 main thread (registered under
   // \Threads by KE_SCHED_CreateUserThread).
-  const auto thread = KE_SCHED_CreateUserThread(process.value()->address_space, entry, user_stack_top);
+  const auto thread = KE_SCHED_CreateUserThread(
+      process.value()->address_space, entry, user_stack_top, process.value().get());
   if (!thread) {
     const auto rollback_status = KE_OB_RemoveObject(
         KE_OB_GetProcessDirectory(), kernel::KObjectPtr<kernel::KObject>(process.value().get()));
@@ -175,7 +204,6 @@ kstd::expected<kernel::KObjectPtr<kernel::KProcessObject>, kstd::error_code> cre
     return kstd::unexpected(thread.error());
   }
 
-  thread.value()->owner_process = process.value().get();
   process.value()->main_thread = *thread;
 
   // Step 6 — Ring-3 code can now reach the kernel via int 0x80 (see

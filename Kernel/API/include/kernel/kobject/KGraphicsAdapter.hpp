@@ -2,6 +2,7 @@
 
 
 #include <expected.hpp>
+#include <kernel/gfx/clip_rect.hpp>
 
 #include <kernel/__core.hpp>
 #include <kernel/cfunc.hpp>
@@ -15,7 +16,6 @@
 
 namespace kernel {
 struct KDriverObject;
-struct KClipRect;
 
 // What the adapter can do in hardware; drives how the kernel presents to it.
 enum class KGfxCaps : uint32_t {
@@ -122,6 +122,21 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
   cfunc<void(const KObjectPtr<KGraphicsAdapter> &,
              const KObjectPtr<KSurface> &surface, const KClipRect *rects, size_t count)>
       Present;
+
+  // Optional adapter-memory surfaces (Step 13). Unsupported/OutOfMemory lets
+  // the kernel fall back to a system-RAM bitmap. The created surface has
+  // `adapter` set and no display.
+  cfunc<kstd::error_code(const KObjectPtr<KGraphicsAdapter> &, uint32_t width, uint32_t height,
+                         PixelFormat format, KObjectPtr<KSurface> &out)>
+      CreateSurface;
+
+  // Returns the surface's adapter memory. Must not re-enter GFX, USER or the DC table.
+  cfunc<void(const KObjectPtr<KGraphicsAdapter> &, KSurface *surface)> DestroySurface;
+
+  // CPU access to an adapter surface; may fail (no CPU-visible mapping).
+  cfunc<kstd::error_code(const KObjectPtr<KGraphicsAdapter> &, KSurface *surface,
+                         void *&pixels, uint32_t &pitch)>
+      Map;
 
   KGfxCaps caps = KGfxCaps::None;
   uint32_t resourceGeneration{0};

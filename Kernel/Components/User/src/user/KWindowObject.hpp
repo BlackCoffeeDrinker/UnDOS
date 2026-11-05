@@ -1,0 +1,87 @@
+
+#pragma once
+
+#include <kernel/__core.hpp>
+#include "user/msgring.hpp"
+#include <kernel/gfx/region.hpp>
+#include "user/window_message.hpp"
+#include <kernel/kobject/KObjectT.hpp>
+
+namespace kernel {
+constexpr uint32_t kQueueSize = 256;
+constexpr uint32_t kPaintFairnessBacklog = 32;
+constexpr uint32_t kWindowClassNameLen = 32;
+constexpr uint32_t kWindowTitleLen = 64;
+
+using Ring = user::MessageRing<kQueueSize, user::kMsgMouseMove>;
+
+// One per thread that owns windows or pumps messages; one allocation per
+// thread, none per message.
+struct MessageQueue {
+  KThreadObject *thread{nullptr};
+  KProcessObject *process{nullptr};
+  Ring ring;
+  KDispatcherHeader header;// manual reset: signalled while work is pending
+  MessageQueue *next{nullptr};
+};
+
+struct WindowClass {
+  bool used{false};
+  kstd::static_string<kWindowClassNameLen> name;
+  uint32_t wndProc{0};
+  uint32_t background{0};
+  KProcessObject *process{nullptr};
+};
+
+struct KWindowObject : KObjectT<KWindowObject, 1, TYPE_WINDOW> {
+  using KObjectT::KObjectT;
+
+  enum class State : uint32_t {
+    Restored = 0,
+    Minimized = 2,
+    Maximized = 3,
+  };
+
+  uint32_t hwnd{0};
+  uint32_t classIndex{0};
+  kstd::static_string<kWindowTitleLen> title;
+  uint32_t style{0};
+  user::URect rect{};// screen coordinates
+  user::URect restoredRect{};
+  State state{State::Restored};
+  uint32_t iconOrder{0};// minimize sequence; arranges sibling icons stably
+  uint32_t parent{0};
+  uint32_t userData{0};
+  uint32_t menu{0};
+  uint32_t wndProc{0};
+  uint32_t background{0};
+
+  KProcessObject *process{nullptr};
+  MessageQueue *queue{nullptr};
+
+  user::URect invalid{};  // client coordinates
+  bool erasePending{false};
+  user::URegion paintClip;// screen coordinates, referenced by the BeginPaint DC
+  HDC paintDC{0};
+  // Owners of the paint DC closed by destroy_window_locked; dropped with the
+  // retired window after the scene lock is released.
+  DetachedDC retiredDC;
+  bool paintActive{false};
+  bool paintingErase{false};
+  user::URect painting{};// validated client damage, restored if painting is interrupted
+  user::URect paintErase{};// screen bounds of BeginPaint erase pixels still awaiting Present
+  uint32_t moveParam{0}, sizeParam{0};
+  uint8_t pendingGeometry{0};// coalesced Move/Size survive a full message ring
+  bool pendingDisplayChange{false};
+  uint32_t pendingFontGeneration{0};
+  uint32_t displayBpp{0}, displaySize{0};
+
+  // z-order, topmost first; the window table holds the reference.
+  KWindowObject *above{nullptr};
+  KWindowObject *below{nullptr};
+  KObjectPtr<KWindowObject> retiredNext;
+
+  [[nodiscard]] bool Visible() const noexcept { return (style & user::kStyleVisible) != 0; }
+};
+
+}// namespace kernel

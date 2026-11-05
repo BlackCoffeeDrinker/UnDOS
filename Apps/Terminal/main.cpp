@@ -4,18 +4,36 @@
 #include <undoscrt/process.h>
 #include <userspace.h>
 #include <undos/syscalls.h>
-#include <undosgui/gui.hpp>
+#include <windows.h>
+#include <undosgui/extensions.h>
 
 namespace {
 
 constexpr int32_t TERM_PADDING = 4;
 constexpr uint32_t MaxBufferRows = 4096;
 
+bool syscall_ok(uint32_t result, const char *operation) {
+  if (result == SyscallReturnCode_OKAY) return true;
+  crt_printf("term: %s failed, status %u\n", operation,
+             static_cast<unsigned>(result));
+  (void)UD_SYS_PrintV1("term: syscall failed");
+  return false;
+}
+
+bool sdk_ok(BOOL result, const char *operation) {
+  if (result) return true;
+  crt_printf("term: %s failed, error %u status %u\n", operation,
+             GetLastError(), UndosGetLastStatus());
+  (void)UD_SYS_PrintV1("term: GUI operation failed");
+  return false;
+}
+
 struct TerminalState {
   HANDLE sourceHandle{0};
   HANDLE sinkHandle{0};
-  uint32_t hwnd{0};
+  HWND hwnd{nullptr};
   bool running{true};
+  UNDOS_UI_CONTEXT ui{};
   uint16_t commandLength{0};
   uint32_t modifiers{0};
   HANDLE childHandle{0};
@@ -79,11 +97,13 @@ struct TerminalState {
   }
 
   bool update_layout() {
-    gui::TextMetrics metrics{};
-    if (!gui::system_font().metrics(metrics, gui::FontStyle::Regular,
-                                    gui::TextRepertoire::Terminal) ||
+    UNDOS_TEXT_METRICS metrics{};
+    if (!ui.metricsValid ||
+        !UndosGetFontMetrics(ui.font, UNDOS_TEXT_REGULAR, UNDOS_TEXT_TERMINAL,
+                             &metrics) ||
         !metrics.cellWidth || !metrics.cellHeight) return false;
-    const Rect area = gui::client(hwnd);
+    RECT area{};
+    if (!GetClientRect(hwnd, &area)) return false;
     const uint32_t width = area.right > 2 * TERM_PADDING
         ? static_cast<uint32_t>(area.right - 2 * TERM_PADDING) : 0;
     const uint32_t height = area.bottom > 2 * TERM_PADDING
@@ -107,7 +127,7 @@ struct TerminalState {
     if (scrollbackOffset > maximumScroll)
       scrollbackOffset = static_cast<uint16_t>(
           maximumScroll > UINT16_MAX ? UINT16_MAX : maximumScroll);
-    return gui::check(UD_SYS_SetConfigV1(
+    return syscall_ok(UD_SYS_SetConfigV1(
         sourceHandle,
         static_cast<TtyModeFlags>(TtyModeFlags_Echo | TtyModeFlags_Canonical |
                                   TtyModeFlags_CrToNl | TtyModeFlags_NlToCrNl),
@@ -231,11 +251,47 @@ struct TerminalState {
   }
 
   void render() {
-    gui::Paint paint(hwnd);
-    if (!paint) return;
-    const Rect area = gui::client(hwnd);
-    paint.fill(0, 0, area.right, area.bottom, 0);
-    if (!visibleRows || !visibleColumns || !cellWidth || !cellHeight) return;
+    PAINTSTRUCT paint{};
+    paint.hdc = BeginPaint(hwnd, &paint);
+    if (!paint.hdc) {
+      sdk_ok(FALSE, "BeginPaint");
+      return;
+    }
+    BOOL paintOpen = TRUE;
+    UNDOS_FONT previous = 0;
+    BOOL hadPrevious = FALSE;
+    if (!UndosSelectFont(paint.hdc, ui.font, &previous, &hadPrevious)) {
+      sdk_ok(FALSE, "UndosSelectFont");
+      (void)EndPaint(hwnd, &paint);
+      return;
+    }
+    if (hadPrevious && !UndosCloseFont(previous)) {
+      sdk_ok(FALSE, "UndosCloseFont");
+      (void)EndPaint(hwnd, &paint);
+      return;
+    }
+    RECT area{};
+    if (!GetClientRect(hwnd, &area)) {
+      sdk_ok(FALSE, "GetClientRect");
+      (void)EndPaint(hwnd, &paint);
+      return;
+    }
+    COLORREF background = UndosPaletteColor(0);
+    COLORREF foreground = UndosPaletteColor(15);
+    if (background == CLR_INVALID || foreground == CLR_INVALID ||
+        SetTextColor(paint.hdc, background) == CLR_INVALID ||
+        SetBkColor(paint.hdc, background) == CLR_INVALID ||
+        SetBkMode(paint.hdc, OPAQUE) == 0 ||
+        !UndosFillRectangle(paint.hdc, 0, 0, area.right, area.bottom)) {
+      sdk_ok(FALSE, "clear terminal");
+      (void)EndPaint(hwnd, &paint);
+      return;
+    }
+    if (!visibleRows || !visibleColumns || !cellWidth || !cellHeight) {
+      paintOpen = EndPaint(hwnd, &paint);
+      if (!paintOpen) sdk_ok(FALSE, "EndPaint");
+      return;
+    }
     const uint32_t bottom = cursorRow + 1;
     const uint32_t maxTop = bottom > visibleRows ? bottom - visibleRows : 0;
     const uint32_t top = maxTop > scrollbackOffset ? maxTop - scrollbackOffset : 0;
@@ -248,19 +304,31 @@ struct TerminalState {
       if (last >= 0) {
         memcpy(lineBuffer, contents, static_cast<size_t>(last + 1));
         lineBuffer[last + 1] = 0;
-        paint.draw_text(TERM_PADDING,
-                        TERM_PADDING + static_cast<int>(screenRow) * cellHeight,
-                        lineBuffer, gui::FontStyle::Regular, gui::Paper, 0, true,
-                        gui::TextLayoutMode::UniformGrid,
-                        gui::TextRepertoire::Terminal);
+        if (SetTextColor(paint.hdc, foreground) == CLR_INVALID ||
+            SetBkColor(paint.hdc, background) == CLR_INVALID ||
+            SetBkMode(paint.hdc, OPAQUE) == 0 ||
+            !UndosDrawText(paint.hdc, TERM_PADDING,
+                TERM_PADDING + static_cast<int>(screenRow) * cellHeight,
+                UNDOS_TEXT_REGULAR, UNDOS_TEXT_UNIFORM_GRID,
+                UNDOS_TEXT_TERMINAL, lineBuffer)) {
+          sdk_ok(FALSE, "draw terminal text");
+          break;
+        }
       }
     }
     if (!scrollbackOffset && cursorRow >= top && cursorRow < top + visibleRows &&
         cursorCol < visibleColumns) {
       const int x = TERM_PADDING + static_cast<int>(cursorCol) * cellWidth;
       const int y = TERM_PADDING + static_cast<int>(cursorRow - top) * cellHeight;
-      paint.fill(x, y, x + cellWidth, y + cellHeight, gui::Paper);
+      if (SetTextColor(paint.hdc, foreground) == CLR_INVALID ||
+          SetBkColor(paint.hdc, foreground) == CLR_INVALID ||
+          SetBkMode(paint.hdc, OPAQUE) == 0 ||
+          !UndosFillRectangle(paint.hdc, x, y, x + cellWidth,
+                              y + cellHeight))
+        sdk_ok(FALSE, "draw terminal cursor");
     }
+    if (!EndPaint(hwnd, &paint))
+      sdk_ok(FALSE, "EndPaint");
   }
 };
 
@@ -271,7 +339,8 @@ void drain_output() {
   bool changed = false;
   for (;;) {
     uint32_t count = sizeof(buffer);
-    if (!gui::check(UD_SYS_ReadV1(s_term.sourceHandle, buffer, &count), "Read terminal")) {
+    if (!syscall_ok(UD_SYS_ReadV1(s_term.sourceHandle, buffer, &count),
+                    "Read terminal")) {
       s_term.running = false;
       return;
     }
@@ -279,12 +348,14 @@ void drain_output() {
     changed = true;
     for (uint32_t i = 0; i < count; ++i) s_term.put_char(static_cast<char>(buffer[i]));
   }
-  if (changed) gui::invalidate(s_term.hwnd);
+  if (changed) (void)sdk_ok(InvalidateRect(s_term.hwnd, nullptr, TRUE),
+                            "InvalidateRect");
 }
 
 void output(const char *text) {
-  if (!gui::check(UD_SYS_WriteV1(s_term.sinkHandle, reinterpret_cast<const uint8_t *>(text),
-                                static_cast<uint32_t>(strlen(text))), "Write terminal"))
+  if (!syscall_ok(UD_SYS_WriteV1(s_term.sinkHandle,
+          reinterpret_cast<const uint8_t *>(text),
+          static_cast<uint32_t>(strlen(text))), "Write terminal"))
     s_term.running = false;
 }
 
@@ -319,14 +390,19 @@ void command(char *line) {
 
 void terminal_input(uint8_t ch) {
   if (!s_term.childRunning && (ch >= 32 || ch == '\t') && s_term.commandLength >= 240) {
-    gui::message("Command too long", "Commands are limited to 240 characters.");
-    gui::check(UD_SYS_SetFocusV1(s_term.hwnd), "SetFocus");
+    const int result = UndosRunDialog(&s_term.ui, s_term.hwnd,
+        "Command too long", "Commands are limited to 240 characters.",
+        nullptr, 0, FALSE);
+    if (result < 0)
+      sdk_ok(FALSE, "UndosRunDialog");
+    (void)sdk_ok(UndosSetFocus(s_term.hwnd), "SetFocus");
     return;
   }
   if (ch == '\n' || ch == 0x15) s_term.commandLength = 0;
   else if (ch == '\b') { if (s_term.commandLength) --s_term.commandLength; }
   else ++s_term.commandLength;
-  if (!gui::check(UD_SYS_WriteV1(s_term.sourceHandle, &ch, 1), "Terminal input")) {
+  if (!syscall_ok(UD_SYS_WriteV1(s_term.sourceHandle, &ch, 1),
+                  "Terminal input")) {
     s_term.running = false;
     return;
   }
@@ -334,7 +410,8 @@ void terminal_input(uint8_t ch) {
   if (ch == '\n' && !s_term.childRunning) {
     char line[256]{};
     uint32_t n = sizeof(line) - 1;
-    if (gui::check(UD_SYS_ReadV1(s_term.sinkHandle, reinterpret_cast<uint8_t *>(line), &n), "Read command")) {
+    if (syscall_ok(UD_SYS_ReadV1(s_term.sinkHandle,
+            reinterpret_cast<uint8_t *>(line), &n), "Read command")) {
       line[n] = 0;
       command(line);
       drain_output();
@@ -342,36 +419,128 @@ void terminal_input(uint8_t ch) {
   }
 }
 
-void procedure(const Msg &msg) {
-  if (msg.message == WindowMessage_Close) s_term.running = false;
-  else if (msg.message == WindowMessage_Paint) s_term.render();
-  else if (msg.message == WindowMessage_Size ||
-           msg.message == WindowMessage_FontChanged) {
-    if (!s_term.update_layout()) s_term.running = false;
-    gui::invalidate(msg.hwnd);
+LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM wParam,
+                           LPARAM lParam) {
+  if (message == WM_CLOSE) {
+    s_term.running = false;
+    return DefWindowProc(window, message, wParam, lParam);
   }
-  else if (msg.message == WindowMessage_KeyDown || msg.message == WindowMessage_KeyUp) {
-    s_term.modifiers = msg.lParam >> 16;
-    if (msg.message == WindowMessage_KeyUp) return;
-    if (msg.wParam == 13) terminal_input('\n');
-    else if (msg.wParam == 8) terminal_input('\b');
-    else if (msg.wParam == 9) terminal_input('\t');
-    else if (msg.wParam == 33) {
+  if (message == WM_DESTROY) {
+    s_term.running = false;
+    s_term.hwnd = nullptr;
+    return 0;
+  }
+  if (message == WM_PAINT) {
+    s_term.render();
+    return 0;
+  }
+  else if (message == WM_SIZE || message == WM_FONTCHANGED ||
+           message == WM_DISPLAYCHANGE) {
+    if (message == WM_DISPLAYCHANGE) {
+      UINT width = 0, height = 0;
+      if (!UndosGetDisplaySize(&s_term.ui, &width, &height)) {
+        s_term.running = false;
+        return 0;
+      }
+    }
+    if (message == WM_FONTCHANGED &&
+        (!s_term.ui.metricsValid ||
+         wParam != s_term.ui.metrics.generation) &&
+        !UndosRefreshUi(&s_term.ui)) {
+      s_term.running = false;
+      return 0;
+    }
+    if (!s_term.update_layout()) s_term.running = false;
+    (void)sdk_ok(InvalidateRect(window, nullptr, TRUE), "InvalidateRect");
+    return 0;
+  }
+  else if (message == WM_KEYDOWN || message == WM_KEYUP) {
+    s_term.modifiers = static_cast<uint32_t>(lParam >> 16);
+    if (message == WM_KEYUP) return 0;
+    if (wParam == VK_RETURN) terminal_input('\n');
+    else if (wParam == 8) terminal_input('\b');
+    else if (wParam == VK_TAB) terminal_input('\t');
+    else if (wParam == VK_PRIOR) {
       const uint32_t top = s_term.cursorRow + 1 > s_term.visibleRows
           ? s_term.cursorRow + 1 - s_term.visibleRows : 0;
       const uint32_t next = s_term.scrollbackOffset + s_term.visibleRows;
       s_term.scrollbackOffset = static_cast<uint16_t>(
           next > top ? top : next);
-      gui::invalidate(msg.hwnd);
-    } else if (msg.wParam == 34) {
+      (void)sdk_ok(InvalidateRect(window, nullptr, TRUE), "InvalidateRect");
+    } else if (wParam == VK_NEXT) {
       s_term.scrollbackOffset = s_term.scrollbackOffset > s_term.visibleRows
           ? s_term.scrollbackOffset - s_term.visibleRows : 0;
-      gui::invalidate(msg.hwnd);
+      (void)sdk_ok(InvalidateRect(window, nullptr, TRUE), "InvalidateRect");
     }
-    else if (msg.wParam == 'U' && (s_term.modifiers & 0x0c)) terminal_input(0x15);
-    else if (msg.wParam == 'D' && (s_term.modifiers & 0x0c) && s_term.childRunning) terminal_input(0x04);
-  } else if (msg.message == WindowMessage_Char && msg.wParam >= 32 && msg.wParam < 127 &&
-             !(s_term.modifiers & 0x3c)) terminal_input(static_cast<uint8_t>(msg.wParam));
+    else if (wParam == 'U' && (s_term.modifiers & 0x0c)) terminal_input(0x15);
+    else if (wParam == 'D' && (s_term.modifiers & 0x0c) && s_term.childRunning) terminal_input(0x04);
+    return 0;
+  } else if (message == WM_CHAR && wParam >= 32 && wParam < 127 &&
+             !(s_term.modifiers & 0x3c)) {
+    terminal_input(static_cast<uint8_t>(wParam));
+    return 0;
+  }
+  return DefWindowProc(window, message, wParam, lParam);
+}
+
+void recover_windows() {
+  for (UINT attempt = 0; attempt < 64; ++attempt) {
+    UNDOS_WINDOW_CREATION_RECOVERY creation{};
+    if (UndosGetWindowCreationRecovery(&creation)) {
+      if (!DestroyWindow(creation.window)) {
+        crt_printf("term: creation cleanup failed setup error/status %u/%u "
+                   "cleanup error/status %u/%u\n",
+                   creation.setupError, creation.setupStatus,
+                   creation.cleanupError, creation.cleanupStatus);
+        return;
+      }
+      continue;
+    }
+    UNDOS_UI_CLEANUP_RECOVERY cleanup{};
+    if (UndosGetUiCleanupRecovery(&cleanup)) {
+      if (!DestroyWindow(cleanup.window)) {
+        crt_printf("term: UI cleanup failed operation error/status %u/%u "
+                   "cleanup error/status %u/%u\n",
+                   cleanup.operationError, cleanup.operationStatus,
+                   cleanup.cleanupError, cleanup.cleanupStatus);
+        return;
+      }
+      continue;
+    }
+    break;
+  }
+}
+
+void check_dispatch_result(uint32_t before) {
+  if (s_term.ui.resultSerial != before && s_term.ui.result < 0) {
+    crt_printf("term: default UI operation failed operation error/status %u/%u cleanup error/status %u/%u\n",
+               s_term.ui.operationError, s_term.ui.operationStatus,
+               s_term.ui.cleanupError, s_term.ui.cleanupStatus);
+    (void)UD_SYS_PrintV1("term: default UI operation failed");
+  }
+  recover_windows();
+}
+
+void cleanup_terminal() {
+  if (s_term.childRunning) {
+    (void)syscall_ok(UD_SYS_CloseV1(s_term.childHandle), "Close process");
+    s_term.childRunning = false;
+  }
+  if (s_term.hwnd && !DestroyWindow(s_term.hwnd))
+    sdk_ok(FALSE, "DestroyWindow");
+  s_term.hwnd = nullptr;
+  recover_windows();
+  if (s_term.grid) crt_free(s_term.grid);
+  if (s_term.lineBuffer) crt_free(s_term.lineBuffer);
+  s_term.grid = s_term.lineBuffer = nullptr;
+  if (s_term.ui._sdkState && !UndosCloseUi(&s_term.ui))
+    crt_printf("term: UI cleanup failed %u/%u\n",
+               s_term.ui.operationError, s_term.ui.operationStatus);
+  if (s_term.sourceHandle)
+    (void)syscall_ok(UD_SYS_CloseV1(s_term.sourceHandle), "Close TTY source");
+  if (s_term.sinkHandle)
+    (void)syscall_ok(UD_SYS_CloseV1(s_term.sinkHandle), "Close TTY sink");
+  s_term.sourceHandle = s_term.sinkHandle = 0;
 }
 
 } // namespace
@@ -385,56 +554,89 @@ extern "C" int main(int argc, char **argv) {
   // 1. Allocate virtual TTY pair
   if (UD_SYS_CreateV1(&s_term.sourceHandle, &s_term.sinkHandle) != SyscallReturnCode_OKAY) {
     crt_puts("term: failed to allocate virtual TTY\n");
+    cleanup_terminal();
     return 1;
   }
 
-  gui::TextMetrics metrics{};
-  if (!gui::system_font().metrics(metrics, gui::FontStyle::Regular,
-                                  gui::TextRepertoire::Terminal) ||
-      !metrics.cellWidth || !metrics.cellHeight) return 1;
-  uint32_t display = 0;
-  DeviceCaps caps{};
-  if (!gui::check(UD_SYS_CreateDCV1("", "", DCInitFlags_Primary, &display),
-                  "Open terminal display")) return 1;
-  const bool queried = gui::check(UD_SYS_GetDeviceCapsV1(display, &caps),
-                                  "Query terminal display");
-  gui::check(UD_SYS_DeleteDCV1(display), "Close terminal display");
-  if (!queried || !caps.width || !caps.height) return 1;
-  if (!gui::register_class("Terminal", procedure, 0)) return 1;
+  if (!UndosInitUi(&s_term.ui)) {
+    crt_printf("term: UI initialization failed %u/%u\n",
+               s_term.ui.operationError, s_term.ui.operationStatus);
+    cleanup_terminal();
+    return 1;
+  }
+  UINT displayWidth = 0, displayHeight = 0;
+  UNDOS_TEXT_METRICS metrics{};
+  if (!UndosGetDisplaySize(&s_term.ui, &displayWidth, &displayHeight) ||
+      !UndosGetFontMetrics(s_term.ui.font, UNDOS_TEXT_REGULAR,
+                           UNDOS_TEXT_TERMINAL, &metrics) ||
+      !metrics.cellWidth || !metrics.cellHeight || !displayWidth ||
+      !displayHeight) {
+    sdk_ok(FALSE, "query terminal metrics/display");
+    cleanup_terminal();
+    return 1;
+  }
+  WNDCLASS klass{};
+  klass.lpfnWndProc = procedure;
+  klass.hbrBackground = UNDOS_PALETTE_BRUSH(0);
+  klass.lpszClassName = "Terminal";
+  if (!RegisterClass(&klass)) {
+    sdk_ok(FALSE, "RegisterClass");
+    cleanup_terminal();
+    return 1;
+  }
   const uint64_t requestedWidth = 72ull * metrics.cellWidth + 2 * TERM_PADDING + 6;
   const uint64_t requestedHeight = 23ull * metrics.cellHeight + 2 * TERM_PADDING +
                                   metrics.lineHeight + 12;
-  const uint64_t availableWidth = caps.width > 24 ? caps.width - 24 : caps.width;
-  const uint64_t availableHeight = caps.height > 34 ? caps.height - 34 : caps.height;
+  const uint64_t availableWidth = displayWidth > 24 ? displayWidth - 24 : displayWidth;
+  const uint64_t availableHeight = displayHeight > 34 ? displayHeight - 34 : displayHeight;
   const uint64_t screenWidth = availableWidth < INT32_MAX ? availableWidth : INT32_MAX;
   const uint64_t screenHeight = availableHeight < INT32_MAX ? availableHeight : INT32_MAX;
   const int32_t width = static_cast<int32_t>(
       requestedWidth < screenWidth ? requestedWidth : screenWidth);
   const int32_t height = static_cast<int32_t>(
       requestedHeight < screenHeight ? requestedHeight : screenHeight);
-  s_term.hwnd = gui::window("Terminal", "UnDOS Terminal", 24, 34,
-                            width, height);
-  if (!s_term.hwnd) return 1;
-  if (!s_term.update_layout()) return 1;
-  gui::check(UD_SYS_SetFocusV1(s_term.hwnd), "SetFocus");
+  s_term.hwnd = CreateWindow("Terminal", "UnDOS Terminal",
+      WS_OVERLAPPEDWINDOW, 24, 34, width, height,
+      nullptr, nullptr, nullptr, nullptr);
+  if (!s_term.hwnd) {
+    sdk_ok(FALSE, "CreateWindow");
+    recover_windows();
+    cleanup_terminal();
+    return 1;
+  }
+  if (!UndosAttachUiContext(s_term.hwnd, &s_term.ui) ||
+      !UndosShowWindow(s_term.hwnd, SW_SHOWNORMAL) ||
+      !UndosSetFocus(s_term.hwnd) || !s_term.update_layout()) {
+    sdk_ok(FALSE, "attach/show/layout/focus");
+    cleanup_terminal();
+    return 1;
+  }
 
   // Initial banner into the terminal
   output("UnDOS windowed virtual terminal\nType help for commands.\n\n> ");
   drain_output();
 
-  Msg msg{};
+  MSG msg{};
   while (s_term.running) {
     if (!s_term.childRunning) {
-      if (!gui::next(msg)) break;
-      gui::dispatch(msg);
+      const int received = GetMessage(&msg, nullptr, 0, 0);
+      if (received < 0) {
+        sdk_ok(FALSE, "GetMessage");
+        break;
+      }
+      if (!received) break;
+      const uint32_t serial = s_term.ui.resultSerial;
+      (void)DispatchMessage(&msg);
+      check_dispatch_result(serial);
       continue;
     }
-    const auto message = UD_SYS_PeekMessageV1(&msg, 1);
-    if (message == SyscallReturnCode_OKAY) {
-      if (msg.message == WindowMessage_Quit) break;
-      gui::dispatch(msg);
-    } else if (message != SyscallReturnCode_TIMEOUT) {
-      gui::check(message, "PeekMessage");
+    if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      if (msg.message == WM_QUIT) break;
+      const uint32_t serial = s_term.ui.resultSerial;
+      (void)DispatchMessage(&msg);
+      check_dispatch_result(serial);
+    } else if (GetLastError() != ERROR_TIMEOUT) {
+      sdk_ok(FALSE, "PeekMessage");
       break;
     }
     drain_output();
@@ -442,23 +644,18 @@ extern "C" int main(int argc, char **argv) {
     const auto waited = UD_SYS_WaitProcessV1(s_term.childHandle, 10, &status);
     if (waited == SyscallReturnCode_OKAY) {
       drain_output();
-      gui::check(UD_SYS_CloseV1(s_term.childHandle), "Close process");
+      (void)syscall_ok(UD_SYS_CloseV1(s_term.childHandle), "Close process");
       s_term.childRunning = false;
       (void) UD_SYS_PrintV1("term: foreground child exited");
       s_term.commandLength = 0;
       output("\n> ");
       drain_output();
     } else if (waited != SyscallReturnCode_TIMEOUT) {
-      gui::check(waited, "WaitProcess");
+      (void)syscall_ok(waited, "WaitProcess");
       break;
     }
   }
-  if (s_term.childRunning) gui::check(UD_SYS_CloseV1(s_term.childHandle), "Close process");
-  gui::destroy(s_term.hwnd);
-  if (s_term.grid) crt_free(s_term.grid);
-  if (s_term.lineBuffer) crt_free(s_term.lineBuffer);
-  gui::check(UD_SYS_CloseV1(s_term.sourceHandle), "Close TTY source");
-  gui::check(UD_SYS_CloseV1(s_term.sinkHandle), "Close TTY sink");
+  cleanup_terminal();
   (void) UD_SYS_PrintV1("term: session ended");
 
   return 0;

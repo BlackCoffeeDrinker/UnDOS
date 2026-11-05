@@ -27,6 +27,10 @@ set(UNDOS_SDK_LIB "${UNDOS_SDK_SYSROOT}/usr/lib")
 set(UNDOS_SDK_INCLUDE "${UNDOS_SDK_SYSROOT}/usr/include")
 set(UNDOS_SDK_CMAKE "share/cmake/UnDOS")
 
+# The SDK ships the font resource objects as libundos_font_resource.a.
+add_library(undos_font_resource_sdk STATIC $<TARGET_OBJECTS:undos_font_resource>)
+set_target_properties(undos_font_resource_sdk PROPERTIES OUTPUT_NAME undos_font_resource)
+
 # Shared libraries resolve public runtime symbols from the main executable.
 set_target_properties(undoscrt undosgui undos_font_resource PROPERTIES
     CXX_VISIBILITY_PRESET default C_VISIBILITY_PRESET default)
@@ -37,7 +41,7 @@ add_library(undos_sdk_dso OBJECT dso.cpp)
 target_compile_options(undos_sdk_dso PRIVATE -march=i386 -m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector)
 set_target_properties(undos_sdk_dso PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-install(TARGETS undoscrt undosgui undos_font_resource ARCHIVE DESTINATION ${UNDOS_SDK_LIB} COMPONENT SDK)
+install(TARGETS undoscrt undosgui undos_font_resource_sdk ARCHIVE DESTINATION ${UNDOS_SDK_LIB} COMPONENT SDK)
 install(FILES $<TARGET_OBJECTS:undos_sdk_crt0> DESTINATION ${UNDOS_SDK_LIB}
     RENAME crt0.o COMPONENT SDK)
 install(FILES $<TARGET_OBJECTS:undos_sdk_note> DESTINATION ${UNDOS_SDK_LIB}
@@ -48,16 +52,15 @@ install(DIRECTORY ../ABI/include/undos
     DESTINATION ${UNDOS_SDK_INCLUDE} COMPONENT SDK
     FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
     PATTERN "abi_note.hpp" EXCLUDE PATTERN "syscalls" EXCLUDE)
-install(FILES ${UNDOS_SYSCALL_PUBLIC_HEADERS}
-    DESTINATION ${UNDOS_SDK_INCLUDE}/undos/syscalls COMPONENT SDK)
-install(DIRECTORY ../CRT/include/undoscrt GUI/include/undosgui
+install(TARGETS KernelUserlandShared FILE_SET HEADERS
+    DESTINATION ${UNDOS_SDK_INCLUDE} COMPONENT SDK)
+install(DIRECTORY ../CRT/include/undoscrt
     DESTINATION ${UNDOS_SDK_INCLUDE} COMPONENT SDK
     FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp" PATTERN "lifecycle.hpp" EXCLUDE)
+install(DIRECTORY GUI/include/undosgui
+    DESTINATION ${UNDOS_SDK_INCLUDE} COMPONENT SDK
+    FILES_MATCHING PATTERN "*.h")
 install(FILES GUI/include/windows.h DESTINATION ${UNDOS_SDK_INCLUDE} COMPONENT SDK)
-install(FILES "${UNDOS_SYSCALL_INCLUDE_DIR}/userspace.h"
-    DESTINATION ${UNDOS_SDK_INCLUDE} COMPONENT SDK)
-install(DIRECTORY KStd/include/ DESTINATION ${UNDOS_SDK_INCLUDE}/kstd
-    COMPONENT SDK FILES_MATCHING PATTERN "*.hpp")
 install(DIRECTORY ../CRT/libc/include/ DESTINATION ${UNDOS_SDK_INCLUDE}
     COMPONENT SDK FILES_MATCHING PATTERN "*.h")
 install(FILES application.ld DESTINATION ${UNDOS_SDK_LIB}
@@ -80,6 +83,6 @@ install(PROGRAMS driver.py DESTINATION bin RENAME i686-undos-g++ COMPONENT SDK)
 add_custom_target(sdk
     COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --component SDK
         --prefix "${UNDOS_SDK_PREFIX}" --config $<CONFIG>
-    DEPENDS undoscrt undosgui undos_font_resource undos_sdk_crt0 undos_sdk_note undos_sdk_dso
+    DEPENDS undoscrt undosgui undos_font_resource_sdk undos_sdk_crt0 undos_sdk_note undos_sdk_dso
     COMMENT "Staging the UnDOS application SDK at ${UNDOS_SDK_PREFIX}"
     VERBATIM)

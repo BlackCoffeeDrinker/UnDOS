@@ -4,6 +4,7 @@
 
 namespace kernel {
 struct KThreadObject;
+struct KDispatcherHeader;
 }
 
 // Test-only control over the host's stand-in for KE_SCHED_GetCurrentThread
@@ -14,5 +15,7 @@ void SetCurrentThread(kernel::KObjectPtr<kernel::KThreadObject> thread) noexcept
 
 // One-shot cooperative scheduling at a contended kernel::Mutex.
 void SetYieldHook(void (*hook)()) noexcept;
+extern void (*blockHook)();
+extern void (*beforeWaitHook)(kernel::KDispatcherHeader &);
 
 }// namespace test_sched

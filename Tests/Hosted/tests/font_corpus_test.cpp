@@ -1,8 +1,8 @@
-#include "../../../Apps/Fontloader/decoder.hpp"
+#include "fontloader_test_support.hpp"
 #include "font_corpus.hpp"
 #include "gfx/font/vm.hpp"
 #include <catch2/catch_test_macros.hpp>
-#include <undos/font/scaler.hpp>
+#include "gfx/font/scaler.hpp"
 
 namespace {
 using namespace undos::font;
@@ -27,8 +27,8 @@ TEST_CASE("font loader decodes the licensed static TrueType corpus", "[fontloade
   };
   for (const auto &fixture : fixtures) {
     INFO(fixture.name);
-    kstd::vector<uint8_t> output;
-    const auto result = loader::decode(fixture.file, output);
+    loader::DecodeError result{};
+    const auto output = decode_to_kernel(fixture.file, result);
     INFO(loader::error_message(result));
     REQUIRE(result == loader::DecodeError::None);
     REQUIRE(validate({output.data(), output.size()}) == Error::None);

@@ -162,12 +162,12 @@ def prepare_existing_menu_candidate(args, helper, image, kernel_manifest,
         **provenance,
         "build_manifests": dict(provenance["build_manifests"]),
     }
-    task_root = (ROOT / "build/bios-chs-fallback").resolve()
+    task_root = (ROOT / "build/build-hddimg").resolve()
     output = args.output.resolve()
     if output.parent != task_root or output.exists():
         raise ValueError(
             "Refresh output must be a new directory directly under "
-            "build/bios-chs-fallback"
+            "build/build-hddimg"
         )
     if shutil.disk_usage(task_root).free < image.stat().st_size * 2:
         raise ValueError(
@@ -267,7 +267,14 @@ def prepare_existing_menu_candidate(args, helper, image, kernel_manifest,
         json.dumps(report, indent=2) + "\n"
     )
     report_path = output / "candidate-report.json"
-    if args.publish:
+    if args.publish and args.skip_boot_test:
+        if helper.sha256_file(candidate) != report["candidate_sha256"]:
+            raise ValueError("Candidate hash changed before publication")
+        staging = image.with_name(image.name + ".publish-tmp")
+        shutil.copy2(candidate, staging)
+        os.replace(staging, image)
+        print(f"Published {image} without boot test")
+    elif args.publish:
         boot_output = output / "candidate-boot"
         test = subprocess.run(
             [
@@ -449,6 +456,14 @@ def main():
         "--publish", action="store_true",
         help="boot-test the disposable candidate, then atomically replace HDD_IMG.IMG",
     )
+    parser.add_argument(
+        "--skip-boot-test", action="store_true", default=True,
+        help="with --publish, replace HDD_IMG.IMG without the QEMU boot test (default)",
+    )
+    parser.add_argument(
+        "--boot-test", dest="skip_boot_test", action="store_false",
+        help="with --publish, boot-test the candidate before replacing HDD_IMG.IMG",
+    )
     args = parser.parse_args()
     if args.publish and not args.refresh_existing:
         parser.error("--publish requires --refresh-existing")
@@ -461,7 +476,7 @@ def main():
     image = args.image.resolve(strict=True)
     output = args.output.resolve()
     task_root = (ROOT / (
-        "build/bios-chs-fallback" if args.refresh_existing
+        "build/build-hddimg" if args.refresh_existing
         else "build/kernel-console"
     )).resolve()
     if image != (ROOT / "HDD_IMG.IMG").resolve():

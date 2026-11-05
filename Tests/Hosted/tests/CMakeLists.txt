@@ -1,3 +1,8 @@
+if (UNDOS_SDK_TESTS_ONLY)
+    include(sdk_tests.cmake)
+    return()
+endif ()
+
 add_test(NAME libc_streams
         COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../../SDK/tests/check-libc.py
             --cc ${CMAKE_C_COMPILER} --cxx ${CMAKE_CXX_COMPILER})
@@ -7,6 +12,8 @@ add_test(NAME syscall_idl
 
 set(_validate_dispatch "${CMAKE_CURRENT_BINARY_DIR}/generated_validate_dispatch.inc")
 set(_commit_dispatch "${CMAKE_CURRENT_BINARY_DIR}/generated_commit_dispatch.inc")
+set(_task_snapshot_dispatch "${CMAKE_CURRENT_BINARY_DIR}/generated_task_snapshot_dispatch.inc")
+set(_invalidate_rect_dispatch "${CMAKE_CURRENT_BINARY_DIR}/generated_invalidate_rect_dispatch.inc")
 set(_targets_dispatch "${CMAKE_CURRENT_BINARY_DIR}/generated_targets_dispatch.inc")
 set(_enumeration_dispatches)
 foreach(_name EnumVideoPresentSourceModes EnumVideoPresentTargetModes EnumVideoPresentPaths)
@@ -36,12 +43,26 @@ add_custom_command(OUTPUT "${_validate_dispatch}"
             ValidateVideoPresentTopology_V1 "${_validate_dispatch}"
         DEPENDS undos-syscalls-gen "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py")
+add_custom_command(OUTPUT "${_task_snapshot_dispatch}"
+        COMMAND ${PYTHON3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py"
+            "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
+            GetTaskSnapshot_V1 "${_task_snapshot_dispatch}"
+        DEPENDS undos-syscalls-gen "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py")
+add_custom_command(OUTPUT "${_invalidate_rect_dispatch}"
+        COMMAND ${PYTHON3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py"
+            "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
+            InvalidateRect_V2 "${_invalidate_rect_dispatch}"
+        DEPENDS undos-syscalls-gen "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py")
 
 add_executable(KernelTests
         ${_enumeration_dispatches}
         "${_targets_dispatch}"
         "${_validate_dispatch}"
         "${_commit_dispatch}"
+        "${_task_snapshot_dispatch}"
+        "${_invalidate_rect_dispatch}"
         str_test.cpp
         array_test.cpp
         vector_test.cpp
@@ -64,12 +85,18 @@ add_executable(KernelTests
         scheduler_test.cpp
         cpu_context_test.cpp
         wait_test.cpp
-        user_test.cpp
+        production_wait_path.cpp
+        arena_wait_test.cpp
         progman_test.cpp
+        task_manager_model_test.cpp
+        task_manager_scheduler_production_test.cpp
+        ../../../Kernel/Source/src/scheduler/SchedulerSwitch.cpp
+        invalidate_rect_dispatch_test.cpp
+        sdk_invalidation_test.cpp
         process_startup_test.cpp
         application_abi_test.cpp
         standard_handles_test.cpp
-        font_resource_test.cpp
+
         font_loader_test.cpp
         font_config_test.cpp
         font_corpus_test.cpp
@@ -78,18 +105,20 @@ add_executable(KernelTests
         font_face_test.cpp
         font_scaler_test.cpp
         font_vm_test.cpp
-        ../../../Kernel/Source/src/gfx/font/glyph.cpp
-        ../../../Kernel/Source/src/gfx/font/raster.cpp
-        ../../../Kernel/Source/src/gfx/font/face.cpp
-        ../../../Kernel/Source/src/gfx/font/realization.cpp
-        ../../../Kernel/Source/src/gfx/font/default_font.cpp
-        ../../../Kernel/Source/src/gfx/font/text.cpp
-        ../../../Kernel/Source/src/gfx/font/font_system.cpp
-        ../../../Kernel/Source/src/gfx/font/vm.cpp
-        ../../../Kernel/Source/src/gfx/font/vm_executor.cpp
-        ../../../Kernel/Source/src/gfx/font/vm_points.cpp
-        ../../../Kernel/Source/src/gfx/font/vm_hints.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/scaler.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/glyph.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/raster.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/face.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/realization.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/default_font.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/text.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/font_system.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/vm.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/vm_executor.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/vm_points.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/vm_hints.cpp
         ../../../Apps/Fontloader/decoder.cpp
+        fontloader_heap_stubs.cpp
         percpu_test.cpp
         input_scancode_test.cpp
         mouse_packet_test.cpp
@@ -99,6 +128,8 @@ add_executable(KernelTests
         gamepad_state_test.cpp
         ../../../Kernel/Drivers/input_hid/hid_parser.cpp
         dispatch_interrupt_test.cpp
+        dpc_queue_test.cpp
+        elf_init_test.cpp
         event_broadcaster_test.cpp
 
         kernel_host_stubs.cpp
@@ -111,6 +142,7 @@ add_executable(KernelTests
         ../../../Kernel/Source/src/io.cpp
         ../../../Kernel/Source/src/vfs.cpp
         ../../../Kernel/Source/src/vmm.cpp
+        ../../../Kernel/Source/src/task_stats.cpp
         ../../../Kernel/Source/src/percpu.cpp
         ../../../Kernel/Source/src/scheduler/CpuContext.cpp
         ../../../Kernel/Source/src/memory/Allocator.cpp
@@ -122,30 +154,27 @@ add_executable(KernelTests
         ../../../Kernel/Source/src/configuration_manager_io.cpp
         ../../../Kernel/Source/src/event_broadcaster.cpp
         ../../../Kernel/Source/src/pnp_device_state.cpp
-        ../../../Kernel/Source/src/gfx/gfx_management.cpp
-        ../../../Kernel/Source/src/gfx/gfx_software_fallback.cpp
-        ../../../Kernel/Source/src/gfx/gfx_dc_table.cpp
-        ../../../Kernel/Source/src/gfx/font/font_resources.cpp
-        ../../../Kernel/Source/src/gfx/monitor_config.cpp
+        ../../../Kernel/Components/GFX/src/gfx/gfx_management.cpp
+        ../../../Kernel/Components/GFX/src/gfx/gfx_software_fallback.cpp
+        ../../../Kernel/Components/GFX/src/gfx/gfx_dc_table.cpp
+        ../../../Kernel/Components/GFX/src/gfx/process_state.cpp
+        ../../../Kernel/Components/GFX/src/gfx/font/font_resources.cpp
+        ../../../Kernel/Components/GFX/src/gfx/monitor_config.cpp
         ../../../Kernel/Source/src/tty/tty.cpp
         ../../../Kernel/Source/src/tty/tty_device.cpp
-        ../../../Kernel/Source/src/user/window.cpp
-        ../../../Kernel/Source/src/user/menu.cpp
-        ../../../Kernel/Source/src/user/msgqueue.cpp
-        ../../../Kernel/Source/src/user/paint.cpp
-        ../../../Kernel/Source/src/user/nonclient.cpp
-        ../../../Kernel/Source/src/user/rawinput.cpp
-        ../../../Kernel/Source/src/syscalls/GFX.cpp
+        ../../../Kernel/Components/User/src/user/window.cpp
+        ../../../Kernel/Components/User/src/user/menu.cpp
+        ../../../Kernel/Components/User/src/user/msgqueue.cpp
+        ../../../Kernel/Components/User/src/user/paint.cpp
+        ../../../Kernel/Components/User/src/user/nonclient.cpp
+        ../../../Kernel/Components/User/src/user/rawinput.cpp
+        ../../../Kernel/Components/User/src/syscalls/User.cpp
+        ../../../Kernel/Components/GFX/src/syscalls/GFX.cpp
 
         object_manager_test.cpp
         subsystem_object_test.cpp
-        vmm_test.cpp
-        object_creation_leak_test.cpp
         configuration_manager_test.cpp
-        gfx_test.cpp
         cirrus_timing_test.cpp
-        cirrus_backend_test.cpp
-        vga_backend_test.cpp
         gfx_bitmap_test.cpp
         tty_test.cpp
         io_object_test.cpp
@@ -155,15 +184,15 @@ add_executable(KernelTests
         ata_read_test.cpp
 
         vfs_test.cpp
+        vmm_user_copy_test.cpp
 
-        vfs_fat_integration_test.cpp
 )
 
-target_include_directories(KernelTests PRIVATE ../../../Kernel/Source/src ../../../Kernel/Drivers/disk_fake
+target_include_directories(KernelTests PRIVATE ../../../Kernel/Source/src ../../../Kernel/Components/GFX/src ../../../Kernel/Components/User/src ../../../Kernel/Drivers/disk_fake
         ../../../Kernel/Drivers/volmgr
         "${CMAKE_CURRENT_BINARY_DIR}"
-        "${UNDOS_SYSCALL_GENERATED_DIR}/kernel" "${UNDOS_SYSCALL_KERNEL_DIR}"
-        ../../../Apps/Fontloader
+        ../../../SDK/GUI/include
+        ../../../Apps/Fontloader ../../../CRT/include
         ../../../Kernel/Drivers/input_hid ../../../Kernel/Drivers/input_i8042 ../../../Kernel/Drivers/input_gameport)
 
 # object_manager.cpp/io.cpp/vfs.cpp already work around the hosted
@@ -174,6 +203,7 @@ target_compile_options(KernelTests PRIVATE -include new)
 
 target_link_libraries(KernelTests PRIVATE libkcpp KernelHeaders undos_warnings)
 target_link_libraries(KernelTests PRIVATE undos_font_resource)
+target_link_libraries(KernelTests PRIVATE KernelSyscallDispatch)
 target_link_libraries(KernelTests PRIVATE Catch2::Catch2WithMain)
 
 set(_font_corpus "#pragma once\n#include <stdint.h>\nnamespace font_fixture {\n")
@@ -216,6 +246,7 @@ set_target_properties(fake_volmgr_driver PROPERTIES CXX_VISIBILITY_PRESET defaul
 target_compile_definitions(KernelTests PRIVATE
         UNDOS_TOPOLOGY_TEST_HOOKS
         UNDOS_KE_MALLOC_TEST_HOOKS
+        UNDOS_TASK_STATS_TEST_HOOKS
         FS_FAT_DRIVER_PATH="$<TARGET_FILE:fake_fs_fat_driver>"
         VOLMGR_DRIVER_PATH="$<TARGET_FILE:fake_volmgr_driver>")
 target_link_libraries(KernelTests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
@@ -223,7 +254,9 @@ add_dependencies(KernelTests fake_fs_fat_driver fake_volmgr_driver)
 
 catch_discover_tests(KernelTests)
 
+
 add_executable(KernelPrintTests konsole_test.cpp)
+include(sdk_tests.cmake)
 target_compile_options(KernelPrintTests PRIVATE -include new)
 target_link_libraries(KernelPrintTests PRIVATE libkcpp KernelHeaders undos_warnings Catch2::Catch2WithMain)
 catch_discover_tests(KernelPrintTests)

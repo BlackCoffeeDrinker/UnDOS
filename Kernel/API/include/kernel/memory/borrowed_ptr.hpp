@@ -4,10 +4,13 @@
 #include <span.hpp>
 #include <string_view.hpp>
 #include <type_traits.hpp>
+#include <kernel/konsole.hpp>
 
 namespace kernel {
 /**
- * A borrowed pointer is a pointer that borrows a reference to an object from another address space.
+ * Owns one synchronous kernel alias and releases it exactly once.
+ * The source address space and pages must outlive this owner. Raw pointers
+ * must not escape its lifetime; stale releases after address reuse are unsupported.
  * 
  * @tparam T type
  */
@@ -18,11 +21,14 @@ class borrowed_ptr final {
 
   pointer _ptr;
   size_t _size;
-  vmm::AddressSpace _address_space;
+  vmm::AddressSpace *_address_space;
 
   public:
-  borrowed_ptr(nullptr_t) : _ptr(nullptr), _size(0), _address_space() {}
-  borrowed_ptr(pointer ptr, size_t size, vmm::AddressSpace address_space) : _ptr(ptr), _size(size), _address_space(address_space) {}
+  borrowed_ptr(nullptr_t) : _ptr(nullptr), _size(0), _address_space(nullptr) {}
+  borrowed_ptr(pointer ptr, size_t size, vmm::AddressSpace &address_space) : _ptr(ptr), _size(size), _address_space(&address_space) {}
+  // Non-owning view over kernel memory (e.g. a small syscall argument copied
+  // into the dispatch stub); releasing it unmaps nothing.
+  borrowed_ptr(pointer ptr, size_t size) : _ptr(ptr), _size(size), _address_space(nullptr) {}
   borrowed_ptr(borrowed_ptr &&other) noexcept : _ptr(other._ptr), _size(other._size), _address_space(other._address_space) {
     other._ptr = nullptr;
     other._size = 0;
@@ -58,7 +64,7 @@ class borrowed_ptr final {
   // memory); the borrowed_ptr itself keeps ownership/unmapping semantics.
   operator kstd::span<T>() const { return kstd::span<T>(_ptr, _size); }
 
-  // Release ownership without unmapping
+  // Transfer exactly-once unmapping responsibility to the caller.
   pointer release() {
     const pointer tmp = _ptr;
     _ptr = nullptr;
@@ -66,11 +72,12 @@ class borrowed_ptr final {
     return tmp;
   }
 
-  // Reset the borrowed pointer
+  // A replacement, if supplied, must belong to this same source address space.
   void reset(pointer ptr = nullptr, size_t size = 0) {
-    if (_ptr != nullptr) {
+    if (_ptr != nullptr && _address_space != nullptr) {
       // Unmap the borrowed memory from current address space
-      KE_VMM_UnmapBorrowed(_ptr, _size, _address_space);
+      if (const auto error = KE_VMM_UnmapBorrowed(_ptr, _size * sizeof(T), *_address_space))
+        KE_Print("VMM borrowed owner release failed: {}", error.message());
     }
     _ptr = ptr;
     _size = size;

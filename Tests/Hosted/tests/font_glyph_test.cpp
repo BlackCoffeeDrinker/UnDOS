@@ -1,5 +1,5 @@
 #include "font_storage_test_support.hpp"
-#include "../../../Apps/Fontloader/decoder.hpp"
+#include "fontloader_test_support.hpp"
 #include "font_corpus.hpp"
 #include "gfx/font/face.hpp"
 #include "gfx/font/glyph.hpp"
@@ -660,6 +660,7 @@ TEST_CASE("simple glyph failure rebuilds before a later realization program", "[
   REQUIRE_FALSE((*failed)->hinted);
   REQUIRE((*failed)->fallbacks == 1);
   REQUIRE_FALSE(RealizationTestAccess::state(**realization).ready);
+  const uint32_t fontRuns = face->fontProgram().runs();
 
   auto recovered = (*realization)->glyph(0);
   auto comparisonRecovered = (*comparison)->glyph(0);
@@ -671,6 +672,8 @@ TEST_CASE("simple glyph failure rebuilds before a later realization program", "[
   REQUIRE(RealizationTestAccess::state(**realization).ready);
   REQUIRE(RealizationTestAccess::state(**realization).storage.data()[0] == 12);
   REQUIRE(RealizationTestAccess::state(**comparison).storage.data()[0] == 12);
+  // Recovery restores the post-prep snapshot rather than rerunning fpgm.
+  REQUIRE(face->fontProgram().runs() == fontRuns);
 }
 
 TEST_CASE("parent failure restores assembled child output and rebuilds before the next program", "[font][glyph][face]") {
@@ -803,8 +806,9 @@ TEST_CASE("glyph loader loads every corpus glyph", "[font][glyph][fontloader]") 
       {font_fixture::SourceSans3_Bold, sizeof(font_fixture::SourceSans3_Bold)},
       {font_fixture::SourceCodePro_Regular, sizeof(font_fixture::SourceCodePro_Regular)}};
   for (const auto &file : files) {
-    kstd::vector<uint8_t> output;
-    REQUIRE(loader::decode(file, output) == loader::DecodeError::None);
+    loader::DecodeError decoded{};
+    auto output = decode_to_kernel(file, decoded);
+    REQUIRE(decoded == loader::DecodeError::None);
     Rig rig(static_cast<kstd::vector<uint8_t> &&>(output), MaxPointsPerGlyph + 4);
     const auto glyphs = read_u32(rig.bytes.data() + 20);
     for (const uint32_t ppem : {9u, 16u, 48u, 256u}) {
@@ -839,8 +843,9 @@ TEST_CASE("corpus outlines rasterize within bounded scratch", "[font][glyph][ras
       {font_fixture::SourceSans3_Bold, sizeof(font_fixture::SourceSans3_Bold)},
       {font_fixture::SourceCodePro_Regular, sizeof(font_fixture::SourceCodePro_Regular)}};
   for (const auto &file : files) {
-    kstd::vector<uint8_t> output;
-    REQUIRE(loader::decode(file, output) == loader::DecodeError::None);
+    loader::DecodeError decoded{};
+    auto output = decode_to_kernel(file, decoded);
+    REQUIRE(decoded == loader::DecodeError::None);
     Rig rig(static_cast<kstd::vector<uint8_t> &&>(output), MaxPointsPerGlyph + 4);
     const auto glyphs = read_u32(rig.bytes.data() + 20);
     kstd::vector<raster::Edge> edges(raster::edge_capacity(2048));

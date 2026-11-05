@@ -2,9 +2,9 @@
 
 namespace undos::font::loader {
 namespace {
-using Buffer = kstd::vector<uint8_t>;
+using Buffer = GrowableArray<uint8_t>;
 void resize_section(Buffer &buffer, size_t size) {
-  // kstd::vector::resize reserves exactly size. Growing sections geometrically
+  // GrowableArray::resize reserves exactly size. Growing sections geometrically
   // avoids retaining thousands of near-identical allocations in the CRT heap.
   if (size > buffer.capacity()) {
     const size_t doubled = buffer.capacity() ? buffer.capacity() * 2 : 64;
@@ -59,9 +59,9 @@ private:
   Bytes file, head{}, maxp{}, hhea{}, hmtx{}, loca{}, glyf{}, cmap{}, os2{}, post{};
   Bytes fpgm{}, prep{}, cvt{};
   uint32_t glyphCount{0}, total{PayloadStart}, graphWork{0}, limits[13]{};
-  kstd::vector<Glyph> glyphs;
-  kstd::vector<Component> components;
-  kstd::vector<Expansion> expansions;
+  GrowableArray<Glyph> glyphs;
+  GrowableArray<Component> components;
+  GrowableArray<Expansion> expansions;
   Buffer sections[SectionCount];
   DecodeError directory();
   DecodeError glyph(uint32_t index, Bytes bytes);
@@ -483,7 +483,7 @@ DecodeError Decoder::run(Buffer &out) {
 }
 } // namespace
 
-DecodeError decode(Bytes file, kstd::vector<uint8_t> &resource) {
+DecodeError decode(Bytes file, GrowableArray<uint8_t> &resource) {
   resource.clear();
   Decoder decoder(file);
   const auto error = decoder.run(resource);

@@ -64,6 +64,27 @@ void I8042_FlushOutputBuffer() {
   }
 }
 
+// Reads response bytes until an Ack (0xFA) arrives. Stray bytes (e.g.
+// scancodes the device had buffered before its clock was enabled) are
+// discarded and logged, bounded by kMaxStrayBytes. A Resend (0xFE) is
+// reported as Retry so the caller can re-send its command.
+constexpr int kMaxStrayBytes = 8;
+constexpr int kMaxCommandRetries = 3;
+
+kstd::error_code I8042_ReadAck(const char *what) {
+  for (int i = 0; i <= kMaxStrayBytes; ++i) {
+    uint8_t byte = 0;
+    if (const auto status = I8042_ReadData(byte); status) return status;
+    if (byte == i8042_regs::device::Ack) return kernel::KernelError::Success;
+    if (byte == i8042_regs::device::Resend) {
+      KE_Print("i8042: {} got resend", what);
+      return kernel::KernelError::Retry;
+    }
+    KE_Print("i8042: {} discarding stray byte 0x{x}", what, byte);
+  }
+  return kernel::KernelError::DeviceError;
+}
+
 // Runs the controller self-test, the keyboard interface test, programs the
 // command byte (keyboard IRQ enabled, set-1 translation, keyboard clock
 // enabled) and resets the keyboard. Every failure path logs and returns
@@ -141,20 +162,25 @@ kstd::error_code I8042_InitController() {
     return kernel::KernelError::Timeout;
   }
 
-  if (I8042_WriteData(i8042_regs::device::Reset)) {
-    KE_Print("i8042: keyboard reset write timed out");
-    return kernel::KernelError::Timeout;
+  // The keyboard may emit buffered bytes as soon as its clock is enabled;
+  // drop them before issuing the reset.
+  I8042_FlushOutputBuffer();
+
+  kstd::error_code ackStatus = kernel::KernelError::DeviceError;
+  for (int attempt = 0; attempt < kMaxCommandRetries; ++attempt) {
+    if (I8042_WriteData(i8042_regs::device::Reset)) {
+      KE_Print("i8042: keyboard reset write timed out");
+      return kernel::KernelError::Timeout;
+    }
+    ackStatus = I8042_ReadAck("keyboard reset");
+    if (ackStatus != kstd::error_code(kernel::KernelError::Retry)) break;
   }
-  uint8_t ack = 0;
-  if (I8042_ReadData(ack)) {
-    KE_Print("i8042: keyboard reset ack timed out");
-    return kernel::KernelError::Timeout;
+  if (ackStatus) {
+    KE_Print("i8042: keyboard reset not acknowledged: {}", ackStatus.message());
+    return ackStatus == kstd::error_code(kernel::KernelError::Timeout) ? kernel::KernelError::Timeout
+                                                                       : kernel::KernelError::DeviceError;
   }
-  KE_Print("i8042: reset ack=0x{x}", ack);
-  if (ack != i8042_regs::device::Ack) {
-    KE_Print("i8042: keyboard reset not acknowledged");
-    return kernel::KernelError::DeviceError;
-  }
+  KE_Print("i8042: reset ack=0x{x}", i8042_regs::device::Ack);
   uint8_t bat = 0;
   if (I8042_ReadData(bat)) {
     KE_Print("i8042: keyboard BAT timed out");
@@ -181,9 +207,9 @@ kstd::error_code I8042_WriteAuxCommand(uint8_t data) {
 // step, so a missing/wedged mouse times out here (bounded by
 // I8042_ReadData's WaitOutputFull spin) rather than hanging boot.
 kstd::error_code I8042_WaitAck() {
-  uint8_t ack = 0;
-  if (const auto status = I8042_ReadData(ack); status) return status;
-  return ack == i8042_regs::device::Ack ? kernel::KernelError::Success : kernel::KernelError::DeviceError;
+  const auto status = I8042_ReadAck("aux");
+  if (status == kstd::error_code(kernel::KernelError::Retry)) return kernel::KernelError::DeviceError;
+  return status;
 }
 
 // Sends the 0xF3 <rate> sample-rate command, used both for Task 14's mouse
@@ -565,13 +591,13 @@ void I8042_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   if (auto isr = KE_IO_ConnectInterrupt(fdo, ctx->irqKeyboard, I8042_KeyboardIsr, ctx)) {
     ctx->keyboardIsr = kstd::move(*isr);
   } else {
-    KE_Print("i8042: Failed to connect keyboard ISR to IRQ {}", ctx->irqKeyboard);
+    KE_Print("i8042: Failed to connect keyboard ISR to IRQ {}: {}", ctx->irqKeyboard, isr.error().message());
   }
 
   if (auto isr = KE_IO_ConnectInterrupt(fdo, ctx->irqMouse, I8042_AuxIsr, ctx)) {
     ctx->mouseIsr = kstd::move(*isr);
   } else {
-    KE_Print("i8042: Failed to connect aux ISR to IRQ {}", ctx->irqMouse);
+    KE_Print("i8042: Failed to connect aux ISR to IRQ {}: {}", ctx->irqMouse, isr.error().message());
   }
 }
 

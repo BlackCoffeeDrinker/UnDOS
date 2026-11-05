@@ -5,6 +5,7 @@
 #include <kernel/spinlock.hpp>
 
 #include "ReadyQueue.hpp"
+#include "ExecutionAccounting.hpp"
 
 namespace kernel::cpu {
 
@@ -26,6 +27,7 @@ struct CpuContext {
   KObjectPtr<KThreadObject> current;
   KObjectPtr<KThreadObject> idle;
   uint64_t ticks = 0;
+  sched::ExecutionAccounting accounting;
 
   // Guarded by ready_lock.
   sched::ReadyQueue ready;

@@ -863,8 +863,13 @@ relocate_one(udl_image *image, udl_u32 target_section,
   else if (symbol_index != 0)
     {
       udl_u32 resolved;
+      /* ELF semantics: an unresolved weak reference resolves to 0. */
       if (!export_by_name(exports, symbol_name, &resolved))
-        return UDL_UNRESOLVED_SYMBOL;
+        {
+          if ((symbol_info >> 4) != STB_WEAK)
+            return UDL_UNRESOLVED_SYMBOL;
+          resolved = 0;
+        }
       delta_symbol = resolved;
     }
 
@@ -929,7 +934,11 @@ relocate_one(udl_image *image, udl_u32 target_section,
         else if (symbol_section == SHN_UNDEF)
           {
             if (!export_by_name(exports, symbol_name, &got_value))
-              return UDL_UNRESOLVED_SYMBOL;
+              {
+                if ((symbol_info >> 4) != STB_WEAK)
+                  return UDL_UNRESOLVED_SYMBOL;
+                got_value = 0;
+              }
           }
         else
           return UDL_BAD_RELOCATION;

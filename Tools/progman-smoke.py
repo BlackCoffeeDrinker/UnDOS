@@ -119,6 +119,259 @@ def wait_for_markers(lines, first, markers, deadline):
     return False
 
 
+def read_ppm(path):
+    with path.open("rb") as image:
+        tokens = []
+        while len(tokens) < 4:
+            line = image.readline()
+            if not line:
+                raise RuntimeError(f"Incomplete PPM header: {path}")
+            tokens.extend(line.split(b"#", 1)[0].split())
+        magic, width, height, maximum = tokens[:4]
+        pixels = image.read()
+    if magic != b"P6" or maximum != b"255":
+        raise RuntimeError(f"Unsupported PPM format: {path}")
+    width, height = int(width), int(height)
+    if len(pixels) != width * height * 3:
+        raise RuntimeError(f"Invalid PPM pixel data length: {path}")
+    return width, height, pixels
+
+
+def count_rgb(image, bounds, color):
+    width, height, pixels = image
+    left, top, right, bottom = bounds
+    if left < 0 or top < 0 or right > width or bottom > height:
+        raise RuntimeError(f"Screenshot region is outside the image: {bounds}")
+    expected = bytes(color)
+    count = 0
+    for y in range(top, bottom):
+        offset = (y * width + left) * 3
+        for _ in range(left, right):
+            if pixels[offset:offset + 3] == expected:
+                count += 1
+            offset += 3
+    return count
+
+
+def count_green_pixels(image, bounds):
+    width, height, pixels = image
+    left, top, right, bottom = bounds
+    if left < 0 or top < 0 or right > width or bottom > height:
+        raise RuntimeError(f"Screenshot region is outside the image: {bounds}")
+    count = 0
+    for y in range(top, bottom):
+        offset = (y * width + left) * 3
+        for _ in range(left, right):
+            red, green, blue = pixels[offset:offset + 3]
+            if green > 40 and green > red * 2 and green > blue * 2:
+                count += 1
+            offset += 3
+    return count
+
+
+def count_bright_green_pixels(image, bounds):
+    width, height, pixels = image
+    left, top, right, bottom = bounds
+    if left < 0 or top < 0 or right > width or bottom > height:
+        raise RuntimeError(f"Screenshot region is outside the image: {bounds}")
+    count = 0
+    for y in range(top, bottom):
+        offset = (y * width + left) * 3
+        for _ in range(left, right):
+            red, green, blue = pixels[offset:offset + 3]
+            if green > 220 and red < 160 and blue < 160:
+                count += 1
+            offset += 3
+    return count
+
+
+def count_dark_pixels(image, bounds):
+    width, height, pixels = image
+    left, top, right, bottom = bounds
+    if left < 0 or top < 0 or right > width or bottom > height:
+        raise RuntimeError(f"Screenshot region is outside the image: {bounds}")
+    count = 0
+    for y in range(top, bottom):
+        offset = (y * width + left) * 3
+        for _ in range(left, right):
+            red, green, blue = pixels[offset:offset + 3]
+            if red < 64 and green < 64 and blue < 64:
+                count += 1
+            offset += 3
+    return count
+
+
+def assert_task_manager_views_rendered(processes, performance):
+    columns = {
+        "Image Name": ((48, 132, 378, 214), 50),
+        "PID": ((379, 132, 418, 214), 5),
+        "CPU": ((419, 132, 507, 214), 50),
+        "Memory": ((508, 132, 598, 214), 20),
+    }
+    image_name_ink = count_dark_pixels(processes, (55, 152, 365, 320))
+    missing = [
+        name for name, (bounds, minimum) in columns.items()
+        if count_rgb(processes, bounds, (0, 0, 0)) < minimum
+    ]
+    white_rows = count_rgb(processes, (42, 132, 599, 385), (255, 255, 255))
+    if missing or white_rows < 1000 or image_name_ink < 20:
+        raise RuntimeError(
+            "Processes capture lacks its white table, image-name text, or "
+            "visible column text: "
+            f"missing={missing}, white row pixels={white_rows}, "
+            f"image-name ink pixels={image_name_ink}"
+        )
+
+    graph_bounds = (41, 103, 599, 385)
+    black_graph = count_rgb(performance, graph_bounds, (0, 0, 0))
+    green_grid = count_green_pixels(performance, graph_bounds)
+    green_trace = count_bright_green_pixels(performance, graph_bounds)
+    white_labels = count_rgb(performance, graph_bounds, (255, 255, 255))
+    if (black_graph < 10000 or green_grid < 100 or green_trace < 2 or
+            white_labels < 500):
+        raise RuntimeError(
+            "Performance capture lacks a live graph trace or labels: "
+            f"black={black_graph}, grid={green_grid}, trace={green_trace}, "
+            f"white={white_labels}"
+        )
+
+
+def changed_pixels(left, right):
+    if left[:2] != right[:2]:
+        raise RuntimeError("Screenshots use different geometry")
+    return sum(
+        left[2][offset:offset + 3] != right[2][offset:offset + 3]
+        for offset in range(0, len(left[2]), 3)
+    )
+
+
+def assert_task_manager_views_differ(processes_path, performance_path):
+    left = read_ppm(processes_path)
+    right = read_ppm(performance_path)
+    if left[:2] != (640, 480) or right[:2] != (640, 480):
+        raise RuntimeError(
+            f"Task Manager screenshots must be 640x480, got {left[:2]} and {right[:2]}"
+        )
+    if left[:2] != right[:2]:
+        raise RuntimeError("Task Manager views use different screenshot geometry")
+    assert_task_manager_views_rendered(left, right)
+    changed = changed_pixels(left, right)
+    if changed < 1000:
+        raise RuntimeError(
+            f"Processes and Performance views are not visually distinct ({changed} pixels changed)"
+        )
+    print(f"Task Manager view comparison: 640x480, {changed} pixels changed")
+
+
+def assert_task_probe_numbers(lines, first=0):
+    fields = {
+        "allocated bytes observed",
+        "process bytes before allocation",
+        "process bytes after allocation",
+        "RAM used before allocation",
+        "RAM used after allocation",
+        "RAM free before allocation",
+        "RAM free after allocation",
+        "busy process cycles",
+        "busy total cycles denominator",
+        "blocked process cycles",
+        "blocked total cycles denominator",
+        "process bytes before free",
+        "process bytes after free",
+        "RAM used before free",
+        "RAM used after free",
+        "RAM free before free",
+        "RAM free after free",
+    }
+    values = {}
+    for line in lines[first:]:
+        if "TaskProbe: PASS real snapshot, busy, block, allocate/free" in line:
+            break
+        marker = "TaskProbe: "
+        if marker not in line or "=" not in line:
+            continue
+        name, value = line.split(marker, 1)[1].split("=", 1)
+        if name in fields:
+            try:
+                values[name] = int(value.strip())
+            except ValueError as error:
+                raise RuntimeError(f"TaskProbe emitted a non-numeric {name}") from error
+    missing = fields - values.keys()
+    if missing:
+        raise RuntimeError(f"TaskProbe omitted numeric results: {sorted(missing)}")
+    if (values["allocated bytes observed"] != 8192 or
+            values["process bytes after allocation"] -
+                values["process bytes before allocation"] != 8192 or
+            values["RAM used after allocation"] -
+                values["RAM used before allocation"] != 8192 or
+            values["RAM free before allocation"] -
+                values["RAM free after allocation"] != 8192 or
+            values["process bytes before free"] -
+                values["process bytes after free"] != 8192 or
+            values["RAM used before free"] -
+                values["RAM used after free"] != 8192 or
+            values["RAM free after free"] -
+                values["RAM free before free"] != 8192 or
+            values["process bytes after free"] !=
+                values["process bytes before allocation"]):
+        raise RuntimeError("TaskProbe allocation/free numeric deltas are inconsistent")
+    if (not values["busy process cycles"] or
+            not values["busy total cycles denominator"] or
+            values["busy process cycles"] >
+                values["busy total cycles denominator"] or
+            not values["blocked total cycles denominator"] or
+            values["blocked process cycles"] >=
+                values["blocked total cycles denominator"] // 2):
+        raise RuntimeError("TaskProbe busy/blocked CPU deltas are inconsistent")
+    print(
+        "Task Manager numeric probe: "
+        f"allocated={values['allocated bytes observed']} bytes; "
+        f"busy={values['busy process cycles']}/"
+        f"{values['busy total cycles denominator']} cycles; "
+        f"blocked={values['blocked process cycles']}/"
+        f"{values['blocked total cycles denominator']} cycles; "
+        f"RAM used={values['RAM used before allocation']} -> "
+        f"{values['RAM used after allocation']} -> "
+        f"{values['RAM used after free']} bytes"
+    )
+
+
+def run_task_manager_probe(monitor, lines, process, first=0):
+    monitor.key("f10")
+    for _ in range(6):
+        monitor.key("down")
+    monitor.key("ret")
+    monitor.type("/System/taskprob.elf")
+    monitor.key("ret")
+    expected = (
+        "TaskProbe: allocated bytes observed=8192",
+        "TaskProbe: busy execution observed",
+        "TaskProbe: blocking wait excluded",
+        "TaskProbe: physical free observed",
+        "TaskProbe: exit-owned allocation bytes=4096",
+        "TaskProbe: PASS real snapshot, busy, block, allocate/free",
+    )
+    deadline = time.monotonic() + 4
+    while not wait_for_markers(lines, first, expected, deadline):
+        if any("TaskProbe: FAIL" in line for line in lines[first:]):
+            raise RuntimeError("Task Manager accounting probe failed; inspect serial.log")
+        if process.poll() is not None or time.monotonic() >= deadline:
+            raise RuntimeError("Task Manager accounting probe did not complete; inspect serial.log")
+        time.sleep(0.02)
+    assert_task_probe_numbers(lines, first)
+    ram_baseline = next(
+        (int(line.rsplit("=", 1)[1]) for line in lines[first:]
+         if "TaskProbe: RAM used before allocation=" in line),
+        None)
+    process_baseline = next(
+        (int(line.rsplit("=", 1)[1]) for line in lines[first:]
+         if "TaskProbe: process bytes before allocation=" in line),
+        None)
+    if ram_baseline is None or process_baseline is None:
+        raise RuntimeError("TaskProbe did not report its initial memory usage")
+    return ram_baseline, process_baseline
+
+
 @contextmanager
 def qmp_socket_address(root):
     address = root / f"q-{os.getpid()}-{uuid.uuid4().hex[:8]}"
@@ -140,7 +393,8 @@ def main():
         "terminal-close", "multiple", "font", "font-default", "font-text",
         "font-desktop", "menu-font", "font-config", "font-config-missing",
         "font-config-invalid", "font-config-missing-face", "font-config-missing-bold",
-        "font-config-bitmap", "font-config-malformed", "font-upload-oom-safe", "abi", "sdk", "display"),
+        "font-config-bitmap", "font-config-malformed", "font-upload-oom-safe", "abi", "sdk", "display",
+        "task-manager", "task-manager-ui"),
         default="launch")
     args = parser.parse_args()
     output = args.output.resolve()
@@ -349,9 +603,17 @@ def main():
                 first_loader_line = len(lines)
                 monitor.key("ret", settle=0.06, hold_time=50)
                 deadline = time.monotonic() + 4
+                if not wait_for_markers(lines, first_loader_line, ["fontloader: start"], deadline):
+                    raise RuntimeError("Font Loader did not start the 24-ppem operation")
+                # Bound publication from the point the loader begins its work.
+                # The Run dialog's process launch is a separate phase.
+                deadline = time.monotonic() + 4
                 if not wait_for_markers(lines, first_loader_line, ["fontload: default font set"], deadline):
                     raise RuntimeError("Font Loader did not publish Source Sans 3 at 24 ppem")
-                # Program Manager reports once its queue drains after the font change.
+                # The publication and reflow are separate bounded phases. Reuse
+                # of the publication deadline can leave no time to observe the
+                # queue-drained marker when publication completes near its limit.
+                deadline = time.monotonic() + 4
                 if not wait_for_markers(lines, first_loader_line, ["progman: font reflow complete"], deadline):
                     raise RuntimeError("Program Manager did not finish reflowing for the 24-ppem font")
                 monitor.capture(output / "06-shell-24.ppm")
@@ -471,6 +733,134 @@ def main():
                         raise RuntimeError("Application ABI probe did not complete; inspect serial.log")
                     time.sleep(0.02)
                 monitor.capture(output / "02-abi-probe.ppm")
+            elif args.scenario == "task-manager-ui":
+                monitor.key("f10")
+                for _ in range(6):
+                    monitor.key("down")
+                monitor.key("ret")
+                monitor.type("/System/taskmgr.elf")
+                monitor.key("ret")
+                time.sleep(1.5)
+                monitor.click(80, 68)
+                time.sleep(0.5)
+                monitor.capture(output / "01-task-manager-processes.ppm")
+                monitor.key("tab")
+                monitor.key("ret")
+                time.sleep(2.5)
+                monitor.capture(output / "02-task-manager-performance.ppm")
+                assert_task_manager_views_differ(
+                    output / "01-task-manager-processes.ppm",
+                    output / "02-task-manager-performance.ppm",
+                )
+                monitor.key("pgdn")
+                monitor.key("left")
+                monitor.key("down")
+                monitor.key("pgdn")
+                time.sleep(0.5)
+                monitor.capture(output / "03-task-manager-keyboard-navigation.ppm")
+                navigation_delta = changed_pixels(
+                    read_ppm(output / "01-task-manager-processes.ppm"),
+                    read_ppm(output / "03-task-manager-keyboard-navigation.ppm"))
+                if navigation_delta < 1000:
+                    raise RuntimeError("Task Manager keyboard navigation did not change the view")
+                monitor.chord("alt", "f4")
+                time.sleep(0.4)
+                monitor.capture(output / "04-task-manager-closed.ppm")
+                close_delta = changed_pixels(
+                    read_ppm(output / "03-task-manager-keyboard-navigation.ppm"),
+                    read_ppm(output / "04-task-manager-closed.ppm"))
+                if close_delta < 1000:
+                    raise RuntimeError("Alt+F4 did not close the Task Manager window")
+                print(
+                    "Task Manager keyboard navigation and close: "
+                    f"{navigation_delta} and {close_delta} pixels changed"
+                )
+            elif args.scenario == "task-manager":
+                monitor.key("f10")
+                for _ in range(6):
+                    monitor.key("down")
+                monitor.key("ret")
+                monitor.type("/System/taskprob.elf")
+                monitor.key("ret")
+                expected = (
+                    "TaskProbe: allocated bytes observed=8192",
+                    "TaskProbe: busy execution observed",
+                    "TaskProbe: blocking wait excluded",
+                    "TaskProbe: physical free observed",
+                    "TaskProbe: exit-owned allocation bytes=4096",
+                    "TaskProbe: PASS real snapshot, busy, block, allocate/free",
+                )
+                deadline = time.monotonic() + 4
+                while not all(any(marker in line for line in lines) for marker in expected):
+                    if any("TaskProbe: FAIL" in line for line in lines):
+                        raise RuntimeError("Task Manager accounting probe failed; inspect serial.log")
+                    if process.poll() is not None or time.monotonic() >= deadline:
+                        raise RuntimeError("Task Manager accounting probe did not complete; inspect serial.log")
+                    time.sleep(0.02)
+                assert_task_probe_numbers(lines)
+                monitor.capture(output / "02-taskprobe-complete.ppm")
+
+                first_ram_baseline = [
+                    int(line.rsplit("=", 1)[1])
+                    for line in lines
+                    if "TaskProbe: RAM used before allocation=" in line
+                ]
+                first_process_baseline = [
+                    int(line.rsplit("=", 1)[1])
+                    for line in lines
+                    if "TaskProbe: process bytes before allocation=" in line
+                ]
+                if not first_ram_baseline or not first_process_baseline:
+                    raise RuntimeError("TaskProbe did not report its initial RAM usage")
+                time.sleep(0.3)
+                second_probe_line = len(lines)
+                monitor.key("f10")
+                for _ in range(6):
+                    monitor.key("down")
+                monitor.key("ret")
+                monitor.type("/System/taskprob.elf")
+                monitor.key("ret")
+                second_expected = (
+                    "TaskProbe: RAM used before allocation=",
+                    "TaskProbe: process bytes before allocation=",
+                    "TaskProbe: exit-owned allocation bytes=4096",
+                    "TaskProbe: PASS real snapshot, busy, block, allocate/free",
+                )
+                deadline = time.monotonic() + 4
+                while not wait_for_markers(lines, second_probe_line,
+                                           second_expected, deadline):
+                    if any("TaskProbe: FAIL" in line for line in lines[second_probe_line:]):
+                        raise RuntimeError("Second Task Manager accounting probe failed")
+                    if process.poll() is not None or time.monotonic() >= deadline:
+                        raise RuntimeError("Second Task Manager probe did not complete")
+                    time.sleep(0.02)
+                assert_task_probe_numbers(lines, second_probe_line)
+                second_ram_baseline = [
+                    int(line.rsplit("=", 1)[1])
+                    for line in lines[second_probe_line:]
+                    if "TaskProbe: RAM used before allocation=" in line
+                ]
+                second_process_baseline = [
+                    int(line.rsplit("=", 1)[1])
+                    for line in lines[second_probe_line:]
+                    if "TaskProbe: process bytes before allocation=" in line
+                ]
+                if (not second_process_baseline or
+                        second_process_baseline[0] != first_process_baseline[0]):
+                    raise RuntimeError(
+                        "Process exit did not restore the next probe's owned-frame baseline: "
+                        f"{first_process_baseline[0]} then "
+                        f"{second_process_baseline[0] if second_process_baseline else 'missing'}"
+                    )
+                print(
+                    "Task Manager process-exit owned-frame baseline: "
+                    f"{first_process_baseline[0]} bytes then "
+                    f"{second_process_baseline[0]} bytes; "
+                    "global RAM-used baselines: "
+                    f"{first_ram_baseline[0]} bytes then "
+                    f"{second_ram_baseline[0] if second_ram_baseline else 'missing'} bytes"
+                )
+                monitor.capture(output / "03-taskprobe-reaped.ppm")
             elif args.scenario == "font":
                 monitor.key("f10")
                 for _ in range(6):
@@ -560,7 +950,7 @@ def main():
                 for _ in range(4):
                     monitor.key("down")
                 monitor.key("ret")
-                time.sleep(0.2)
+                time.sleep(0.5)
                 monitor.capture(output / "04-maximized-group.ppm")
             elif args.scenario == "multiple":
                 monitor.key("right")

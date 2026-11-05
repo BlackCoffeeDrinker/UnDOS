@@ -4,11 +4,14 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tarfile
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -52,6 +55,81 @@ TOOLCHAIN_RECIPE = (
 TOOLCHAIN_IMAGE = "undos-grub-toolchain:" + hashlib.sha256(
     TOOLCHAIN_RECIPE.encode()
 ).hexdigest()[:16]
+# Prepare-only additions, each proven necessary by a failed run:
+# patch (autogen.sh applies libgcrypt patches), bison/flex (configure.ac
+# requires them), gettext-dev (autopoint for AM_GNU_GETTEXT), pkgconf
+# (PKG_CHECK_MODULES), font-unifont and freetype-dev (HAVE_FONT_SOURCE 1 in
+# the pinned config.h).
+PREPARE_PACKAGES = (
+    "patch",
+    "bison",
+    "flex",
+    "gettext-dev",
+    "pkgconf",
+    "font-unifont",
+    "freetype-dev",
+)
+PREPARE_RECIPE = (
+    f"FROM {PINNED_IMAGE}\n"
+    "RUN apk add --no-cache "
+    + " ".join(PACKAGES + GENERATOR_PACKAGES + PREPARE_PACKAGES) + "\n"
+)
+PREPARE_IMAGE = "undos-grub-prepare:" + hashlib.sha256(
+    PREPARE_RECIPE.encode()
+).hexdigest()[:16]
+APORTS_COMMIT = "507b6419f67731e13ad07794b80c23c9df70330d"
+APKBUILD_SHA256 = "882075f8c05479d0fc88c3b0b6554ad15e1419ee4e8f71011b4e1ba187bcb0af"
+APORTS_URL = (
+    "https://gitlab.alpinelinux.org/alpine/aports/-/raw/"
+    + APORTS_COMMIT + "/main/grub/"
+)
+GRUB_SOURCE_URL = "https://ftp.gnu.org/gnu/grub/grub-2.14.tar.xz"
+APK_URL = "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86/"
+STAGING_ROOT = ROOT / "build/.grub-direct-loader.staging"
+STAGING_MARKER = ".undos-prepare-staging"
+TREE_PARTS = ("downloads", "source", "recovered", "target")
+# APKBUILD build() for the bios flavor, with CFLAGS minus -fno-plt.
+# TARGET_CC=gcc makes grub_target_cc_version match the pinned compiler line.
+CONFIGURE_ARGS = (
+    "--build=i586-alpine-linux-musl",
+    "--host=i586-alpine-linux-musl",
+    "--prefix=/usr",
+    "--sysconfdir=/etc",
+    "--mandir=/usr/share/man",
+    "--localstatedir=/var",
+    "--disable-nls",
+    "--disable-werror",
+    "--with-platform=pc",
+    "TARGET_CC=gcc",
+    "CFLAGS=-Os -fstack-clash-protection -Wformat -Werror=format-security",
+    "LDFLAGS=-Wl,--as-needed,-O1,--sort-common -Wl,-z,pack-relative-relocs",
+)
+MODULE_STANZA = (
+    "\nmodule = {\n"
+    "  name = undos_direct;\n"
+    "  common = undos_direct/grub_adapter.c;\n"
+    "  common = undos_direct/core/loader_core.c;\n"
+    "  common = undos_direct/core/cpu_profile.c;\n"
+    "  common = undos_direct/core/diagnostics.c;\n"
+    "  common = undos_direct/transition.S;\n"
+    "  common = undos_direct/cpu_preflight.S;\n"
+    "  enable = i386_pc;\n"
+    "};\n"
+)
+MODULE_DEPENDENCY_LINE = "undos_direct: boot mmap relocator gzio"
+
+
+def missing_tree_hint(path, root=None):
+    root = BUILD_ROOT if root is None else root
+    try:
+        Path(path).relative_to(root)
+    except ValueError:
+        return ""
+    if Path(path).exists():
+        return ("\nDelete build/grub-direct-loader/{downloads,source,recovered,target} "
+                "and rerun ./build-hdd.sh --prepare-toolchain.")
+    return ("\nWith internet access, run ./build-hdd.sh --prepare-toolchain once "
+            "to recreate build/grub-direct-loader/.")
 
 
 def require_toolchain():
@@ -94,18 +172,21 @@ def verify_bootinfo_probe(probe_manifest_path, kernel_manifest_path):
     return evidence
 
 
-def verify_pinned_inputs():
-    downloads = BUILD_ROOT / "downloads"
+def verify_pinned_inputs(root=None):
+    root = BUILD_ROOT if root is None else root
+    downloads = root / "downloads"
     inputs = {}
     for name, (filename, expected) in PINNED_INPUTS.items():
         path = downloads / filename
         if not path.is_file() or digest(path) != expected:
-            raise ValueError(f"Missing or mismatched pinned input: {path}")
+            raise ValueError(f"Missing or mismatched pinned input: {path}"
+                             + missing_tree_hint(path, root))
         inputs[name] = {"path": path.relative_to(ROOT).as_posix(), "sha256": expected}
 
     source_archive = downloads / "grub-2.14.tar.xz"
     if not source_archive.is_file() or digest(source_archive, "sha512") != GRUB_SOURCE_SHA512:
-        raise ValueError(f"Missing or mismatched pinned GRUB source: {source_archive}")
+        raise ValueError(f"Missing or mismatched pinned GRUB source: {source_archive}"
+                         + missing_tree_hint(source_archive, root))
     inputs["grub_source"] = {
         "path": source_archive.relative_to(ROOT).as_posix(),
         "sha512": GRUB_SOURCE_SHA512,
@@ -113,7 +194,8 @@ def verify_pinned_inputs():
 
     recipe = downloads / "APKBUILD"
     if not recipe.is_file():
-        raise ValueError(f"Missing pinned Alpine recipe: {recipe}")
+        raise ValueError(f"Missing pinned Alpine recipe: {recipe}"
+                         + missing_tree_hint(recipe, root))
     recipe_text = recipe.read_text()
     sums_match = re.search(r'(?ms)^sha512sums="\s*(.*?)\s*"', recipe_text)
     if not sums_match:
@@ -127,7 +209,8 @@ def verify_pinned_inputs():
         if filename.endswith(".patch"):
             path = downloads / filename
             if not path.is_file() or digest(path, "sha512") != expected:
-                raise ValueError(f"Missing or mismatched Alpine patch: {path}")
+                raise ValueError(f"Missing or mismatched Alpine patch: {path}"
+                                 + missing_tree_hint(path, root))
             patches.append({"path": path.relative_to(ROOT).as_posix(),
                             "sha512": expected})
     if len(patches) != 12:
@@ -138,11 +221,12 @@ def verify_pinned_inputs():
     }
     inputs["patches"] = patches
 
-    recovered = BUILD_ROOT / "recovered/i386-pc/config.h"
-    target_config = BUILD_ROOT / "target/include/config.h"
+    recovered = root / "recovered/i386-pc/config.h"
+    target_config = root / "target/include/config.h"
     for path in (recovered, target_config):
         if not path.is_file() or digest(path) != CONFIG_SHA256:
-            raise ValueError(f"Missing or mismatched packaged GRUB configuration: {path}")
+            raise ValueError(f"Missing or mismatched packaged GRUB configuration: {path}"
+                             + missing_tree_hint(path, root))
     inputs["config"] = {
         "path": recovered.relative_to(ROOT).as_posix(),
         "sha256": CONFIG_SHA256,
@@ -313,6 +397,246 @@ def verify_imports(imports, direct_dependencies):
     }
 
 
+def required_tree_files(root=None):
+    root = BUILD_ROOT if root is None else root
+    target_root = root / "target/grub-core"
+    return (
+        root / "downloads/grub-2.14.tar.xz",
+        root / "downloads/APKBUILD",
+        root / "recovered/i386-pc/config.h",
+        root / "target/include/config.h",
+        target_root / "Makefile",
+        target_root / "modinfo.sh",
+        target_root / "moddep.lst",
+        target_root / "kernel_syms.lst",
+        target_root / "shipped-module-providers.txt",
+        target_root / "build-grub-module-verifier",
+        root / "source/COPYING",
+    )
+
+
+def apkbuild_patches(recipe_text):
+    source_match = re.search(r'(?ms)^source="(.*?)"', recipe_text)
+    sums_match = re.search(r'(?ms)^sha512sums="\s*(.*?)\s*"', recipe_text)
+    if not source_match or not sums_match:
+        raise ValueError("Alpine recipe has no source or sha512sums block")
+    order = [item for item in source_match.group(1).split() if item.endswith(".patch")]
+    sums = {}
+    for line in sums_match.group(1).splitlines():
+        match = re.fullmatch(r"\s*([0-9a-f]{128})\s+(\S+)\s*", line)
+        if not match:
+            raise ValueError("Alpine recipe has an invalid source checksum")
+        if match.group(2).endswith(".patch"):
+            sums[match.group(2)] = match.group(1)
+    if len(order) != len(set(order)) or set(order) != set(sums):
+        raise ValueError("Alpine recipe source= and sha512sums patch sets differ")
+    return [(name, sums[name]) for name in order]
+
+
+def download(url, target, algorithm, expected, opener=urllib.request.urlopen):
+    if not url.startswith("https://"):
+        raise ValueError(f"Refusing non-HTTPS download: {url}")
+    partial = target.with_name(target.name + ".part")
+    try:
+        with opener(url) as response, partial.open("wb") as output:
+            shutil.copyfileobj(response, output)
+        if digest(partial, algorithm) != expected:
+            raise ValueError(f"Downloaded file does not match its pin: {target.name}")
+        partial.rename(target)
+    finally:
+        partial.unlink(missing_ok=True)
+
+
+def insert_stanza(definition):
+    text = definition.read_text()
+    if "name = undos_direct;" in text:
+        raise ValueError("Module definition already contains undos_direct")
+    definition.write_text(text.rstrip("\n") + "\n" + MODULE_STANZA)
+
+
+def write_moddep(shipped, target):
+    text = shipped.read_text()
+    if any(line.startswith("undos_direct:") for line in text.splitlines()):
+        raise ValueError("Shipped moddep.lst already lists undos_direct")
+    if text and not text.endswith("\n"):
+        text += "\n"
+    target.write_text(text + MODULE_DEPENDENCY_LINE + "\n")
+
+
+def tree_state(root=None):
+    root = BUILD_ROOT if root is None else root
+    present = [name for name in TREE_PARTS if (root / name).exists()]
+    if not present:
+        return "absent", present
+    if len(present) == len(TREE_PARTS) and is_tree_complete(root):
+        return "complete", present
+    return "partial", present
+
+
+def is_tree_complete(root):
+    try:
+        verify_pinned_inputs(root)
+    except (OSError, ValueError, tarfile.TarError):
+        return False
+    if not all(path.is_file() for path in required_tree_files(root)):
+        return False
+    moddep = root / "target/grub-core/moddep.lst"
+    if MODULE_DEPENDENCY_LINE not in moddep.read_text().splitlines():
+        return False
+    definition = root / "source/grub-core/Makefile.core.def"
+    return definition.is_file() and "name = undos_direct;" in definition.read_text()
+
+
+def remove_staging(staging):
+    if staging.exists():
+        if not (staging / STAGING_MARKER).is_file():
+            raise ValueError(f"Refusing to delete unmarked directory: {staging}")
+        shutil.rmtree(staging)
+
+
+def prepare_tree(opener=urllib.request.urlopen, runner=subprocess.run):
+    state, present = tree_state()
+    if state == "complete":
+        print(f"GRUB direct-loader tree already prepared: {BUILD_ROOT.relative_to(ROOT)}")
+        return 0
+    if state == "partial":
+        raise ValueError(
+            "Partial GRUB direct-loader tree found: "
+            + ", ".join(f"build/grub-direct-loader/{name}" for name in present)
+            + "\nDelete exactly these and rerun ./build-hdd.sh --prepare-toolchain."
+        )
+    staging = STAGING_ROOT
+    remove_staging(staging)
+    staging.mkdir(parents=True)
+    (staging / STAGING_MARKER).write_text("owned by build-grub-direct.py --prepare-toolchain\n")
+    try:
+        log = prepare_staging(staging, opener, runner)
+        for name in TREE_PARTS:
+            if (BUILD_ROOT / name).exists():
+                raise ValueError(f"Refusing to overwrite {BUILD_ROOT / name}")
+        BUILD_ROOT.mkdir(parents=True, exist_ok=True)
+        (BUILD_ROOT / "logs").mkdir(exist_ok=True)
+        (BUILD_ROOT / "logs/prepare.json").write_text(json.dumps(log, indent=2) + "\n")
+        for name in TREE_PARTS:
+            os.rename(staging / name, BUILD_ROOT / name)
+    finally:
+        remove_staging(staging)
+    print(f"Prepared GRUB direct-loader tree: {BUILD_ROOT.relative_to(ROOT)}")
+    return 0
+
+
+def prepare_staging(staging, opener, runner):
+    downloads = staging / "downloads"
+    downloads.mkdir()
+    log = {"aports_commit": APORTS_COMMIT, "prepare_image": PREPARE_IMAGE,
+           "prepare_recipe": PREPARE_RECIPE, "downloads": []}
+    recipe = downloads / "APKBUILD"
+    download(APORTS_URL + "APKBUILD", recipe, "sha256", APKBUILD_SHA256, opener)
+    recipe_text = recipe.read_text()
+    if (not re.search(r"(?m)^pkgver=2\.14$", recipe_text)
+            or not re.search(r"(?m)^pkgrel=0$", recipe_text)):
+        raise ValueError("Alpine recipe is not grub 2.14-r0")
+    patches = apkbuild_patches(recipe_text)
+    if len(patches) != 12:
+        raise ValueError(f"Expected 12 Alpine patches, found {len(patches)}")
+    fetches = [(GRUB_SOURCE_URL, "grub-2.14.tar.xz", "sha512", GRUB_SOURCE_SHA512)]
+    fetches += [(APORTS_URL + name, name, "sha512", expected) for name, expected in patches]
+    fetches += [(APK_URL + filename, filename, "sha256", expected)
+                for filename, expected in PINNED_INPUTS.values()]
+    log["downloads"].append({"url": APORTS_URL + "APKBUILD", "sha256": APKBUILD_SHA256})
+    for url, name, algorithm, expected in fetches:
+        download(url, downloads / name, algorithm, expected, opener)
+        log["downloads"].append({"url": url, algorithm: expected})
+
+    source = staging / "source"
+    unpack = staging / "unpack"
+    with tarfile.open(downloads / "grub-2.14.tar.xz") as archive:
+        archive.extractall(unpack, filter="data")
+    os.rename(unpack / "grub-2.14", source)
+    unpack.rmdir()
+    if not (source / "COPYING").is_file():
+        raise ValueError("GRUB source has no COPYING")
+    insert_stanza(source / "grub-core/Makefile.core.def")
+    (source / "grub-core/undos_direct/core").mkdir(parents=True)
+    log["patch_order"] = [name for name, _ in patches]
+
+    recovered = staging / "recovered/i386-pc"
+    recovered.mkdir(parents=True)
+    with tarfile.open(downloads / PINNED_INPUTS["grub_dev_apk"][0], "r:gz") as archive:
+        members = [member for member in archive.getmembers()
+                   if member.isfile() and member.name.endswith("i386-pc/config.h")]
+        if len(members) != 1:
+            raise ValueError("grub-dev APK must contain exactly one i386-pc/config.h")
+        (recovered / "config.h").write_bytes(archive.extractfile(members[0]).read())
+    if digest(recovered / "config.h") != CONFIG_SHA256:
+        raise ValueError("Recovered config.h does not match CONFIG_SHA256")
+
+    (staging / "target").mkdir()
+    final = "/src/build/grub-direct-loader"
+    configure = " ".join(shlex.quote(arg) for arg in CONFIGURE_ARGS)
+    patch_steps = "".join(
+        f"patch -p1 -N --no-backup-if-mismatch -i ../downloads/{shlex.quote(name)}; "
+        for name, _ in patches
+    )
+    script = (
+        "set -e; "
+        f"cd {final}/source; {patch_steps}"
+        "PYTHON=python3 sh ./autogen.sh; "
+        f"cd {final}/target; ../source/configure {configure}; "
+        "cd grub-core; make kernel_syms.lst build-grub-module-verifier modinfo.sh; "
+        "cd /src/Image/BootTools/grub/i386-pc; "
+        "nm -A --defined-only *.mod | LC_ALL=C sort "
+        f"> {final}/target/grub-core/shipped-module-providers.txt; "
+        "apk info -v | sort; gcc --version | head -1"
+    )
+    command = [
+        "docker", "run", "--rm", "--pull=never", "--network=none",
+        "--platform", "linux/386",
+        "-v", f"{staging}:{final}",
+        "-v", f"{ROOT / 'Image'}:/src/Image:ro",
+        PREPARE_IMAGE, "sh", "-c", script,
+    ]
+    container_log = staging / "prepare-container.log"
+    with container_log.open("w") as output:
+        result = runner(command, stdout=output, stderr=subprocess.STDOUT)
+    if result.returncode:
+        tail = container_log.read_text().splitlines()[-20:]
+        raise ValueError("GRUB prepare container failed:\n" + "\n".join(tail))
+    log["configure_args"] = list(CONFIGURE_ARGS)
+    log["container_command"] = command
+
+    target = staging / "target"
+    write_moddep(ROOT / "Image/BootTools/grub/i386-pc/moddep.lst",
+                 target / "grub-core/moddep.lst")
+    configured = target / "config.h"
+    if not configured.is_file() or digest(configured) != CONFIG_SHA256:
+        raise ValueError("Configured config.h does not match CONFIG_SHA256")
+    shutil.copyfile(configured, target / "include/config.h")
+    log["config_h"] = "configured"
+    modinfo = (target / "grub-core/modinfo.sh").read_text()
+    shipped = (ROOT / "Image/BootTools/grub/i386-pc/modinfo.sh").read_text()
+    comparison = {}
+    for name in ("grub_target_cflags", "grub_target_cppflags",
+                 "grub_target_ccasflags", "grub_target_ldflags"):
+        pattern = rf"^{name}='([^']*)'$"
+        ours = re.search(pattern, modinfo, re.MULTILINE)
+        theirs = re.search(pattern, shipped, re.MULTILINE)
+        if not ours or not theirs or ours.group(1) != theirs.group(1):
+            raise ValueError(f"Configured {name} differs from shipped modinfo.sh")
+        comparison[name] = "equal"
+    log["modinfo_comparison"] = comparison
+    log["container_log_tail"] = container_log.read_text().splitlines()[-200:]
+    container_log.unlink()
+
+    if not is_tree_complete(staging):
+        raise ValueError("Prepared staging tree failed self-check")
+    for path in target.rglob("*"):
+        if path.is_file() and path.stat().st_size < 1024 * 1024:
+            if b".grub-direct-loader.staging" in path.read_bytes():
+                raise ValueError(f"Staging path leaked into {path}")
+    return log
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kernel-manifest", type=Path)
@@ -332,7 +656,16 @@ def main():
              "-t", TOOLCHAIN_IMAGE, "-"],
             input=TOOLCHAIN_RECIPE, text=True, check=True,
         )
-        return 0
+        subprocess.run(
+            ["docker", "build", "--platform", "linux/386",
+             "-t", PREPARE_IMAGE, "-"],
+            input=PREPARE_RECIPE, text=True, check=True,
+        )
+        try:
+            return prepare_tree()
+        except (OSError, ValueError, tarfile.TarError) as error:
+            print(f"GRUB direct-loader preparation failed: {error}", file=sys.stderr)
+            return 1
     if args.check_toolchain:
         require_toolchain()
         return 0
@@ -372,23 +705,13 @@ def main():
     for relative, source in direct_sources.items():
         target = source_root / relative
         if not target.parent.is_dir():
-            raise ValueError(f"Matching GRUB source preparation is missing: {target.parent}")
+            raise ValueError(f"Matching GRUB source preparation is missing: {target.parent}"
+                             + missing_tree_hint(target.parent))
         shutil.copy2(source, target)
-    for path in (
-        BUILD_ROOT / "downloads/grub-2.14.tar.xz",
-        BUILD_ROOT / "downloads/APKBUILD",
-        BUILD_ROOT / "recovered/i386-pc/config.h",
-        BUILD_ROOT / "target/include/config.h",
-        target_root / "Makefile",
-        target_root / "modinfo.sh",
-        target_root / "moddep.lst",
-        target_root / "kernel_syms.lst",
-        target_root / "shipped-module-providers.txt",
-        target_root / "build-grub-module-verifier",
-        BUILD_ROOT / "source/COPYING",
-    ):
+    for path in required_tree_files():
         if not path.is_file():
-            raise ValueError(f"Matching GRUB target preparation is missing: {path}")
+            raise ValueError(f"Matching GRUB target preparation is missing: {path}"
+                             + missing_tree_hint(path))
     module_definition = BUILD_ROOT / "source/grub-core/Makefile.core.def"
     definition_text = module_definition.read_text()
     module_start = definition_text.find("name = undos_direct;")
@@ -668,4 +991,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

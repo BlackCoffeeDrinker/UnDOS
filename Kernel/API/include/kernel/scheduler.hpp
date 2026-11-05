@@ -11,8 +11,15 @@
 
 namespace kernel {
 struct KEventObject;
+struct KProcessObject;
 using CreateThreadResult = kstd::expected<KObjectPtr<KThreadObject>, kstd::error_code>;
 using CreateEventResult = kstd::expected<KObjectPtr<KEventObject>, kstd::error_code>;
+
+/** Privilege mode of the code interrupted by a timer tick, decoded by the HAL. */
+enum class InterruptedMode : uint8_t {
+  Kernel,
+  User,
+};
 }
 
 // Platform-agnostic thread scheduler service. The core owns the policy (ready
@@ -43,7 +50,8 @@ UNDOS_KERNEL_PUBLIC_V1API(
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::CreateThreadResult,
     KE_SCHED_CreateUserThread,
-    const kernel::vmm::AddressSpace &as, kernel::VirtualAddress user_entry, kernel::VirtualAddress user_stack_top);
+    const kernel::vmm::AddressSpace &as, kernel::VirtualAddress user_entry,
+    kernel::VirtualAddress user_stack_top, kernel::KProcessObject *owner);
 
 /**
  * @ingroup SCHED
@@ -87,6 +95,12 @@ UNDOS_KERNEL_PUBLIC_V1API([[noreturn]] void, KE_SCHED_Terminate);
  *
  */
 UNDOS_KERNEL_PUBLIC_V1API(kernel::KObjectPtr<kernel::KThreadObject>, KE_SCHED_GetCurrentThread);
+
+/**
+ * Charge one periodic timer tick to the current thread before scheduling.
+ * The HAL decodes the interrupted context into `mode`.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(void, KE_SCHED_ChargeTimerTick, kernel::InterruptedMode mode);
 
 namespace kernel {
 struct KDispatcherHeader;

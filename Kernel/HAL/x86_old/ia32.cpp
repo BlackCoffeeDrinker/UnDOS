@@ -3,6 +3,7 @@
 
 #include "atomics.hpp"
 #include "cpuid.hpp"
+#include "debug_uart.hpp"
 #include "gdt.hpp"
 #include "intr.hpp"
 #include "pit.hpp"
@@ -13,7 +14,14 @@
 
 namespace {
 hal::x86::CPUID cpu_id{};
+void PanicSerialWrite(const char *text, size_t size) noexcept {
+  size_t transferred = 0;
+  (void)hal::x86::detail::WriteSerialConsoleEmergency(text, size, transferred);
+}
 }// namespace
+
+// Defined by the kernel only when built with UNDOS_PROFILE; null otherwise.
+extern "C" void KE_PROFILER_OnPanic(void (*write)(const char *, size_t) noexcept) noexcept __attribute__((weak));
 
 UNDOS_HAL_API_DEF void HAL_PLATFORM_Init(const kernel::BootInfoT &boot_info, kernel::vmm::AddressSpace &kernel_address_space) noexcept {
   // Stage 1.5 currently sets the page size to be 4096 bytes
@@ -124,6 +132,8 @@ UNDOS_HAL_API_DEF [[noreturn]] void HAL_PLATFORM_Panic(const kstd::string_view &
   KE_Print("PANIC: {} at {}:{}", message, file, line);
   KE_Print("System Halted");
 
+  if (KE_PROFILER_OnPanic) KE_PROFILER_OnPanic(&PanicSerialWrite);
+
   while (true) {
     __asm__ volatile("cli; hlt");
   }
@@ -157,17 +167,16 @@ bool HAL_PciPresent() noexcept {
 
 UNDOS_HAL_API_DEF void HAL_PLATFORM_AfterObjectManager() noexcept {
   if (HAL_PciPresent()) {
-    // TODO: A PCI bus is present. A future PCI bus driver would enumerate its
-    // configuration space, discover the PCI-to-ISA bridge, and spawn a bridge
-    // PDO for the ISA bus driver to attach to. Not implemented yet.
+    // TODO: a future PCI bus driver enumerates configuration space. It must
+    // leave legacy-decoded devices (e.g. IDE in compatibility mode) to ISA.
     KE_Print("HAL: PCI bus detected (PCI enumeration not implemented yet)");
-  } else {
-    // No PCI bus: spawn a legacy ISA root PDO so the ISA bus driver can bind.
-    KE_Print("HAL: No PCI bus; reporting legacy ISA root device");
-    if (const auto device = KE_PNP_ReportRootDevice("bus_isa"); !device) {
-      KE_Print("HAL: failed to report legacy ISA root: {}", device.error().message());
-      HAL_PLATFORM_Panic("Failed to report legacy ISA root", __FILE__, __LINE__);
-    }
+  }
+  // PC-compatible machines always have legacy ISA I/O (ISA slots, or the
+  // PCI-to-ISA/LPC bridge), so the ISA root is reported with or without PCI.
+  KE_Print("HAL: reporting legacy ISA root device");
+  if (const auto device = KE_PNP_ReportRootDevice("bus_isa"); !device) {
+    KE_Print("HAL: failed to report legacy ISA root: {}", device.error().message());
+    HAL_PLATFORM_Panic("Failed to report legacy ISA root", __FILE__, __LINE__);
   }
 }
 

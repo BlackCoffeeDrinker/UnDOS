@@ -97,7 +97,6 @@ The installed package provides:
 | `UnDOS::Shared` | PIC shared-library defaults, ABI note and DSO cleanup object; no application entry point |
 | `UnDOS::CRT` | Low-level runtime archive; normally use Application or GUI |
 | `UnDOS::FontResource` | Shared UFT1 font-resource validation helpers; link alongside Application/GUI |
-| `UnDOS::KStd` | Opt-in header-only `kstd` utilities; not a hosted C++ standard library |
 
 For a shared library, use `add_library(message SHARED message.cpp)` and link it
 to `UnDOS::Shared`; link the executable to `message` and `UnDOS::Application`.
@@ -114,65 +113,146 @@ directly inside the container.
 
 ### C GUI API
 
-`UnDOS::GUI` exposes a C API through `<windows.h>`. It follows familiar Win32
-names and callback patterns for the window, message-loop, and paint operations
-that UnDOS currently supports. The initial API includes class registration,
-window creation and management, message dispatch, paint lifecycle, and basic
-2D drawing.
+The installed `UnDOS::GUI` target provides a C11 API in `<windows.h>` and
+UnDOS-specific operations in `<undosgui/extensions.h>`. Both headers are
+self-contained and do not include generated syscall declarations. C++ callers
+can include them before or after the public native headers. The library exports
+unsuffixed C symbols. It does not provide A/W variants or a `UNICODE`-selected
+UTF-16 interface. Native applications still use the UnDOS i386 cdecl ABI; this
+surface does not provide Windows binary compatibility.
 
-The existing `<undosgui/gui.hpp>` helper remains available for current C++
-applications during migration. New GUI applications should use the C API.
+The current supported-feature matrix is:
 
-The C++ API uses `gui::Font` objects for metrics, measurement, and drawing.
-`gui::Font::acquire()` snapshots the published system font and its generation.
-`Font::metrics` and `Font::measure` query that retained object. `gui::TextLayout`
-provides measured prefix and suffix fitting. A `gui::Paint` selects the current
-SDK system-font object for its device context; `Paint::draw_text` and
-`Paint::button` use that selection.
+| Area | S1 behavior |
+|---|---|
+| Classes and windows | Class registration, creation, destruction, metadata, title, child-parent tracking and callback replacement for windows registered through this C API. Class names allow 31 UTF-8 bytes; titles allow 63. |
+| Styles and show commands | Explicit translation for `GWLP_WNDPROC`, `GWLP_USERDATA`, `GWL_STYLE`, and `SW_*`. Only documented child/visible/border/caption styles and the `WS_OVERLAPPEDWINDOW` decoration combination are accepted. Native USER does not preserve independent resize/menu policy bits. |
+| Messages | `GetMessage`, `PeekMessage`, `PostMessage`, callback dispatch and `WM_QUIT`. Queue filtering is unsupported. `TranslateMessage` returns `FALSE`; native input already supplies `WM_CHAR`. There is no S1 `SendMessage` or modal-loop guarantee. |
+| Menus | Existing native menus: menu bars, popup submenus, string commands, separators, disabled and grayed items. Native limits are 16 items and 63 label bytes. Unsupported flag combinations fail. |
+| Paint | One matched `BeginPaint`/`EndPaint` pair per native window, with the actual half-open paint rectangle, erase state, and a retained default font. There is no general `GetDC` or memory-DC API. |
+| Drawing and fonts | No Windows GDI object model is exposed. `Undos*` extensions provide palette-quantized colors, a solid filled rectangle, one-pixel lines, and the current font/measurement/drawing operations. `Ellipse`, Windows `Rectangle`, and Windows `DrawText` semantics are not implemented. |
+| Other Win32 areas | Controls, dialogs, accelerators, timers, clipboard, resources, common dialogs, scrolling and MDI are not implemented by S1. Their later milestones require shared implementations rather than application-local success-shaped substitutes. |
 
-The C API exposes the same operations through `AcquireFont`, `GetFontMetrics`,
-`MeasureText`, `SelectFont`, and `DrawText`. `BeginPaint` selects a retained
-system-font object for the paint device context. Applications can acquire and
-select another font object when they need an explicit snapshot. `EndPaint`
-releases the C wrapper's retained handle. `TextMetricsV2` and `TextExtentV2`
-include the font generation so callers can verify that layout and drawing use
-the same snapshot. Font objects remain valid after publication changes until
-their owning handles or device-context references are released.
+All strings use validated UTF-8 `char` sequences. S1 rejects malformed,
+truncated, overlong, surrogate, and out-of-range encodings before a supported
+text mutation or font call reaches the native service. Class and window titles,
+menu labels, and font text use byte limits; capacities include the NUL
+terminator where applicable. Text measurement and rendering accept at most
+1024 bytes. The renderer uses Unicode scalar fallback but does not promise
+normalization, grapheme-aware editing, bidirectional layout, shaping, kerning,
+or an input method. `WM_CHAR.wParam` represents one Unicode scalar. Filesystem
+path encoding and file-save behavior are unchanged.
 
-Both surfaces use the unified bitmap/TrueType contract. They do not expose a
-second fixed-cell text API or a bitmap-rendering alias. The shared font engine
-provides UTF-8 decoding, measurement, fallback, and glyph drawing. A font-change
-message causes `gui::dispatch` to refresh the C++ system-font snapshot before
-the application handles the message. Message loops that call the syscall
-directly must still pass font-change messages through the SDK dispatcher.
+`COLORREF` always uses Windows `0x00bbggrr` encoding. The SDK selects the
+nearest color in the canonical 16-color VGA palette using squared RGB distance;
+ties select the lowest palette index. High-byte/special palette encodings are
+rejected. `UndosPaletteColor(index)` converts a palette index to a real
+`COLORREF`, and accepts only indices 0 through 15. For class backgrounds,
+`NULL` retains palette index 7 and `UNDOS_PALETTE_BRUSH(index)` is a
+class-background token, not a general brush.
 
-This is a source-oriented subset, not a Win32 implementation. The API is
-ANSI-only and uses the UnDOS cdecl ABI. It accepts only unfiltered `GetMessage`
-and `PeekMessage` calls. `CW_USEDEFAULT` selects position `(0, 0)` and size
-`320 x 200`. Unsupported extended styles fail instead of being ignored. Only
-`WS_CHILD`, `WS_VISIBLE`, `WS_BORDER`, `WS_CAPTION`, and
-`WS_OVERLAPPEDWINDOW` style bits are accepted. Window-class backgrounds use
-the UnDOS palette; `NULL` selects palette index 7, and
-`UNDOS_PALETTE_BRUSH(index)` encodes an index from 0 through 15. Drawing accepts
-palette indices or packed RGB colors, which map to the canonical VGA palette.
-`WNDCLASSA` style, extra-byte, icon, and cursor fields have no effect.
+Use the `Undos*` API for the native font and drawing extensions. `UNDOS_FONT`
+is a 32-bit native token and is distinct from a future `HFONT`. A successful
+`UndosAcquireFont` makes every token value valid, including zero. A successful
+`UndosSelectFont` reports separately whether a previous selection existed;
+when `hadPrevious` is true, the returned previous token is owned and must be
+closed with `UndosCloseFont`. `BeginPaint` selects and retains its default font
+until paint cleanup. `UndosFillRectangle` is the current half-open,
+solid-filled operation. `UndosMoveTo` and `UndosLineTo` are native cursor and
+one-pixel line operations. These names do not claim Windows GDI object,
+selection, brush, pen, or text-flag semantics.
+
+`GetLastError` reports Windows-facing error values. It maps the native
+`SyscallReturnCode` while `UndosGetLastStatus` preserves the raw native status.
+Success does not clear either value. Empty `PeekMessage` returns `FALSE`
+without changing the message or either error slot. `GetMessage` returns a
+positive value for a message, zero for `WM_QUIT`, and -1 for an error.
+`ShowWindow` returns the pre-call visibility state, so `FALSE` can indicate a
+successful transition from hidden. Use `UndosShowWindow` when operation
+success is required. `SetLastError(0)` before a zero-valued metadata call
+disambiguates a valid zero result from failure.
+
+### Failed window creation recovery
+
+`CreateWindow` and `CreateWindowEx` return `NULL` when initial showing or menu
+attachment fails. They preserve that setup failure in `GetLastError` and
+`UndosGetLastStatus`. The SDK makes one native destroy attempt. If that attempt
+also fails, the native window remains in a bounded recovery-only record and
+creation still returns `NULL`. A visible residual may remain visible until
+cleanup succeeds or the process exits.
+
+Use `UndosGetWindowCreationRecovery` to inspect the first retained recovery
+record in SDK table order; the order is not chronological. The record contains
+the real `HWND`, the original setup error/status, and the latest cleanup
+error/status. The query does not consume the record, call native services, or
+change either global error value. A null output is an invalid parameter. If no
+record remains, the query returns `FALSE` without changing the output or error
+values. A null output sets `ERROR_INVALID_PARAMETER` and the matching raw
+invalid-argument status.
+
+Recovery-only handles are valid only for this query and `DestroyWindow`.
+Ordinary window operations, including `PostMessage`, and callback dispatch
+reject them before native calls. `DestroyWindow` makes one cleanup attempt
+without delivering `WM_DESTROY`; a failed attempt updates the cleanup
+diagnostic pair and global error slots, then retains the record. A successful
+attempt removes it. Normal parent destruction also removes retained child
+recovery records.
+
+After failed creation, query and explicitly destroy retained windows. Drain at
+most 64 records per pass. Stop the pass if cleanup fails; query again only
+after a later controlled recovery decision. The GUI example and Task Manager
+use this bounded cleanup path and report both setup and cleanup diagnostics
+when cleanup remains unsuccessful. A caller may instead take its controlled
+process-exit path. Recovery does not transfer menu ownership and does not
+guarantee that a failed creation left no visible window.
+
+All GUI windows use the public C callback registry and `DispatchMessage`.
+Callbacks use `LRESULT CALLBACK(HWND, UINT, WPARAM, LPARAM)` and return
+`DefWindowProc` for messages they do not handle. The SDK keeps bounded
+process-local records, rejects unsupported class fields, and retains callback
+records during reentrant dispatch and destruction. It does not provide Windows
+`WM_NCCREATE`/`WM_NCDESTROY` ordering, synchronous creation data, `WM_CREATE`
+veto, filtered queues, thread-local errors, or full nested-loop semantics.
 `MSG.pt` is zero because the native message ABI does not provide a point.
-Device contexts are available only during `BeginPaint`/`EndPaint`.
-`ShowWindow` returns operation success, not the previous visibility state.
-`InvalidateRect` ignores its erase argument. `MoveToEx` requires a null
-previous-point argument. `GetLastError` returns the last UnDOS syscall status.
-`HMENU` supports menu bars, popup submenus, string commands, separators, and
-disabled or grayed items. Each menu can contain up to 16 items, and each label
-can contain up to 63 bytes. Menus support mouse selection, arrow-key navigation,
-Enter or Space activation, Escape, F10, and Alt+Down. Selecting a command posts
-`WM_COMMAND` with the item ID in `wParam` and zero in `lParam`. `DestroyMenu`
-destroys the menu and its submenu tree, and detaches it from windows.
-Unicode APIs, common controls, and general `GetDC` access are not provided.
-Keyboard input already arrives as `WM_CHAR`; `TranslateMessage` does not
-synthesize messages.
 
-The installed `examples/gui` project builds as a C-only application. It is a
-small reference for the supported callback and paint pattern.
+`UNDOS_UI_CONTEXT` is zero-initialized caller-owned state. Initialize it with
+`UndosInitUi`, attach it to each window that uses shared UI behavior, then
+detach or destroy those windows before `UndosCloseUi`. A context owns its font
+and optional display-query DC. Its presence flags are authoritative because
+font and DC token zero can be valid. Do not copy an initialized context or
+close it while a window or helper borrows it. `UndosRefreshUi` publishes a
+new font snapshot only after its queries and resource transition succeed.
+
+`UndosRunDialog` supports a message and up to four editable UTF-8 fields. The
+title is limited to 63 bytes, the message to 4096 bytes, each label to 1024
+bytes, and each value capacity to 1025 bytes including NUL. The total copied
+storage is limited to 16384 bytes. It returns 1 for acceptance, 0 for cancel,
+and -1 for an error; callers must treat only 1 as acceptance. Field values are
+copied back only after acceptance and successful helper cleanup. The helper
+uses the shared unfiltered message pump and restores owner focus.
+
+Attached windows use the default system menu and keyboard geometry path from
+`DefWindowProc`. The supported menu subset is Restore, Move, Size, Minimize,
+Maximize, and Close. Close sends `WM_CLOSE` through the application callback.
+Context-less windows retain the no-op default behavior. This support does not
+add general controls, clipboard, or Windows GDI object semantics.
+
+`UndosGetUiCleanupRecovery` reports retained UI-helper cleanup records without
+consuming them. A retained recovery-only window accepts only the recovery query
+and `DestroyWindow`; ordinary operations and dispatch are rejected. After a
+failed helper operation, callers must query and explicitly retry cleanup. Drain
+at most 64 records per pass and stop when one cleanup attempt fails. The
+cleanup record preserves the primary operation error/status separately from
+the latest cleanup error/status.
+
+`InvalidateRect` forwards its erase request through USER InvalidateRect V2.
+A false request skips background erasure unless an earlier true request remains
+pending; V1 callers retain erase=true behavior. The installed `examples/gui`
+project is a strict C11 consumer with UTF-8 text, explicit font ownership, and
+the public C callback route. Task Manager uses the same unsuffixed API and the
+UnDOS drawing extensions. Progman, File Manager, Terminal, Demo, and Fontloader
+also use this single C route. The SDK does not install or build a parallel
+C++ GUI callback helper.
 
 ### In-repository programs as SDK applications
 
@@ -188,9 +268,10 @@ this migration changes their build boundary, not their behavior.
 | `term` | `Apps/Terminal` | `UnDOS::GUI` | `term.elf` |
 | `demo` | `Apps/Demo` | `UnDOS::GUI` | `demo.elf` |
 | `winfile` | `Apps/FileManager` | `UnDOS::GUI` | `winfile.elf` |
+| `taskmgr` | `Apps/TaskManager` | `UnDOS::GUI`, `UnDOS::Application` | `taskmgr.elf`, `taskprobe.elf` |
 | `init` | `Apps/Init` | `UnDOS::Application`, `UnDOS::Shared` | `init.elf`, `initlib.so` |
 | `abi_test` | `Tests/ABI` | `UnDOS::Application`, `UnDOS::Shared` | `abitest.elf`, `abitest.so`, `abinext.so`, `abimiss.elf` |
-| `fontloader` | `Apps/Fontloader` | `UnDOS::GUI`, `UnDOS::FontResource`, `UnDOS::KStd` | `fontload.elf` |
+| `fontloader` | `Apps/Fontloader` | `UnDOS::GUI`, `UnDOS::FontResource` | `fontload.elf` |
 
 `python3 Scripts/build.py apps --docker` first stages the SDK, then configures
 and builds each application in `<build>/apps/<name>/<configuration>/`.
@@ -198,6 +279,53 @@ The `image` command stages their manifest outputs under `/System`.
 The OS image build still stages configuration files and font fixtures.
 The ABI project retains its deliberately unmarked `abimiss.elf` rejection
 fixture and dependent-library lifecycle checks.
+
+`Apps/TaskManager` is a standalone C++ SDK project. It uses the public
+`userspace.h` syscall bindings and the C `<windows.h>` GUI surface. It does not
+include kernel-private headers. The `apps` command builds it with the other
+applications and includes `taskmgr.elf` and its `taskprobe.elf` accounting
+probe in the application artifact manifest. The probe checks the public task snapshot
+syscall, process execution accounting, blocking waits, and owned-page
+allocation/free behavior. It is a diagnostic utility, not a Program Manager
+launcher. FAT image paths use 8.3 names, so image assembly installs the probe
+as `/System/taskprob.elf`; its build artifact remains `taskprobe.elf`.
+Program Manager's Main group provides the app launcher.
+
+Syscall 209 V1 retains its binary layout and `*Cycles` field names, but CPU
+counters now count **serviced PIT0 interrupts**, not PIT2 oscillator cycles.
+`sampleCycles`, CPU `totalCycles`/`idleCycles`/`systemCycles`, and process
+`cpuCycles` are cumulative ticks. `clockHz` is 100 (rounded); the programmed
+rate is exactly 1,193,182 / 11,931 Hz and `clockResolutionCycles` is one tick.
+Tick elapsed time is `ticks * 11931 / 1193182` seconds. Executive wait-time
+increments are unchanged. Masked timer periods can coalesce or be lost;
+these counters do not reconstruct wall time.
+
+IRQ0 charges the interrupted process (including its synchronous kernel work),
+the exact idle thread, or unowned system work before scheduling can switch.
+Task Manager divides process/system/idle tick deltas by the total tick delta;
+busy is total minus idle. Approximately one-second samples have roughly
+one-percentage-point quantization, regardless of displayed decimal formatting.
+Process baselines use PID/incarnation and CPU baselines use CPU ID. A new
+baseline, zero denominator, decreased counter or changed reset epoch shows
+collecting rather than retaining stale percentages. Delayed refresh alone
+does not invalidate the clock. V1 `CpuCounterDiscontinuity` is retained for
+invalid/reset counters, not ordinary sampling. Current CPU accounting supports
+the single-CPU HAL; it does not establish SMP safety.
+
+The opt-in `UNDOS_TASK_MEMORY_DIAGNOSTICS` build emits `TMMEM R4` and
+`TMMEMPROC` serial records at most once per five seconds after successful
+snapshots, outside process/PMM locks and IRQ0. Records contain sample/tick,
+PMM total/used/free/System bytes and PID-owned frames/bytes, never names or
+paths. Heap live-byte statistics are unavailable. In this build, pressing
+`o` in Task Manager requests at most six `TMR4` numeric CPU observations;
+ordinary builds do not emit them. Serial output can perturb performance.
+
+Run the bounded QEMU scenario with
+`python3 Tools/progman-smoke.py --scenario task-manager --output build/taskmgr/runtime`.
+It launches the probe, checks its serial markers, then launches Task Manager
+and captures its Processes, Performance, and keyboard-navigation views. It
+uses the image selected by `run-qemu.sh`; set `UNDOS_IMAGE_DIR` to an isolated
+prepared image when the default image is not the intended test artifact.
 
 The font decoder remains app-local. It uses the SDK's opt-in `kstd` headers,
 installed under `sysroot/usr/include/kstd`; these headers are not added to

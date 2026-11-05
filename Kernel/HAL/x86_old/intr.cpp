@@ -5,6 +5,7 @@
 #include <kernel/hal_interface.hpp>
 #include <kernel/kobject/KInterruptServiceRoutineObject.hpp>
 #include <kernel/syscall.hpp>
+#include <kernel/scheduler.hpp>
 #include <kernel/time.hpp>
 #include <kernel/virtual_memory.hpp>
 
@@ -21,8 +22,14 @@ static ISR<256> idt;
 static constexpr uint16_t KERNEL_GDT_SELECTOR = 0x8;
 
 // An array of pointers to our KINTERRUPT-style objects for hardware lines (IRQs 0-15)
-// Remapped to vectors 32 through 47
+// Remapped to vectors 32 through 47. Only entry 0 (the PIT clock hook, invoked
+// directly by pit_irq_handler) ever stores an ISR pointer; non-timer lines are
+// dispatched through KE_DISPATCH_EnqueueInterrupt records, so for IRQ1-15 only
+// the occupancy flags below are kept -- storing a raw ISR pointer there would
+// dangle as soon as a shared line's first handler disconnects while others
+// remain (the HAL stays connected until the final handler leaves).
 static kstd::array<kernel::KInterruptServiceRoutineObject *, 16> g_hardware_interrupts;
+static kstd::array<bool, 16> g_hardware_interrupt_connected;
 
 // Helper to tell the PIC chips that we finished handling an interrupt
 inline void pic_send_eoi(uint8_t irq_line) noexcept {
@@ -66,7 +73,13 @@ void remap_pic() noexcept {
 
 // Vector 32: The System PIT Timer (IRQ 0)
 [[gnu::interrupt]] void pit_irq_handler(stack_frame *f) {
-  kstd::ignore = f;
+  begin_hardware_interrupt();
+  // Ring 3 and virtual-8086 code are both user mode; V86 frames carry a
+  // real-mode CS whose low bits are not a privilege level.
+  constexpr uint32_t kEflagsVm = 1u << 17;
+  const bool user = (f->eflags & kEflagsVm) || (f->cs & 3) == 3;
+  KE_SCHED_ChargeTimerTick(user ? kernel::InterruptedMode::User
+                                : kernel::InterruptedMode::Kernel);
 
   // 1. Acknowledge the hardware first. KE_TIME_UpdateSystemTime may perform a
   //    scheduler context switch and not return to this handler until this
@@ -83,6 +96,7 @@ void remap_pic() noexcept {
   // 3. Call the executive kernel timekeeper (drives preemption). This may switch
   //    away to another thread; control resumes here when we are scheduled again.
   KE_TIME_UpdateSystemTime();
+  end_hardware_interrupt();
 }
 
 // GCC interrupt gates cannot call aggregate-returning functions directly.
@@ -100,6 +114,7 @@ void remap_pic() noexcept {
 template<uint8_t IRQ>
 [[gnu::interrupt]] void hw_irq_handler(stack_frame *f) {
   kstd::ignore = f;
+  begin_hardware_interrupt();
   pic_send_eoi(IRQ);
 
   kernel::HalInterruptRecord record{};
@@ -108,6 +123,7 @@ template<uint8_t IRQ>
   record.timestamp = 0;
   record.flags = 0;
   enqueue_interrupt(record);
+  end_hardware_interrupt();
 }
 
 // [Exception and Page Fault Handlers remain exactly as you wrote them]
@@ -415,21 +431,27 @@ UNDOS_HAL_API_DEF void HAL_INTR_SetIrqMask(uint32_t irq, bool masked) noexcept {
   }
 }
 
-// HAL_INTR_ConnectInterrupt: bind an already-constructed
-// KInterruptServiceRoutineObject to `irq`. Rejects an already-occupied
-// line (returns false) so two drivers can never silently clobber each
-// other's ISR; the caller (KE_IO_ConnectInterrupt) is responsible for
-// keeping the KObjectPtr alive for as long as the line stays connected --
-// only the raw pointer is stored here, matching how g_hardware_interrupts
-// already held IRQ1's ISR before this task.
+// HAL_INTR_ConnectInterrupt: activate hardware line `irq`. Rejects an
+// already-occupied line (returns false) so two drivers can never silently
+// clobber each other's source. Only IRQ0 stores the ISR pointer (the PIT
+// handler dereferences it directly); the caller (the kernel dispatch
+// registry) keeps that KObjectPtr alive for as long as the line stays
+// connected. Non-timer lines keep only an occupancy flag -- their callbacks
+// live in the kernel registry's snapshot, never in the HAL, so no raw pointer
+// can dangle when a shared line's first handler disconnects.
 UNDOS_HAL_API_DEF bool HAL_INTR_ConnectInterrupt(
     uint32_t irq,
     const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
   if (irq >= 16 || !isr) return false;
-  if (hal::x86::g_hardware_interrupts[irq] != nullptr) return false;
+  if (irq == 0) {
+    if (hal::x86::g_hardware_interrupts[0] != nullptr) return false;
+    hal::x86::g_hardware_interrupts[0] = isr.get();
+  } else {
+    if (hal::x86::g_hardware_interrupt_connected[irq]) return false;
+    hal::x86::g_hardware_interrupt_connected[irq] = true;
+  }
 
   isr->vector = 32 + irq;
-  hal::x86::g_hardware_interrupts[irq] = isr.get();
   HAL_INTR_SetIrqMask(irq, false);
   return true;
 }
@@ -439,6 +461,20 @@ UNDOS_HAL_API_DEF bool HAL_INTR_ConnectInterrupt(
 UNDOS_HAL_API_DEF void HAL_INTR_DisconnectInterrupt(uint32_t irq) noexcept {
   if (irq >= 16) return;
 
-  hal::x86::g_hardware_interrupts[irq] = nullptr;
+  if (irq == 0) {
+    hal::x86::g_hardware_interrupts[0] = nullptr;
+  } else {
+    hal::x86::g_hardware_interrupt_connected[irq] = false;
+  }
   HAL_INTR_SetIrqMask(irq, true);
+}
+
+// HAL_INTR_CompleteInterrupt: deferred-service completion point, called by
+// the kernel dispatcher after every callback in a dequeue snapshot for `irq`
+// has returned. The 8259 PIC path is edge-triggered (hw_irq_handler already
+// sent the EOI in the gate and never masked the line), so there is nothing to
+// unmask here. A level-capable HAL must unmask the line it masked before EOI
+// so a still-asserted level is re-presented.
+UNDOS_HAL_API_DEF void HAL_INTR_CompleteInterrupt(uint32_t irq) noexcept {
+  (void) irq;
 }

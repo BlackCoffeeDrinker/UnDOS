@@ -108,14 +108,35 @@ UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KThreadObject>, k
   return kstd::unexpected(kernel::KernelError::NotImplemented);
 }
 
-UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForHeader(kernel::KDispatcherHeader &header, kstd::chrono::milliseconds) noexcept {
-  if (header.TryAcquire()) return kernel::KernelError::Success;
-  return kernel::KernelError::Timeout;
+namespace test_sched {
+void (*blockHook)() = nullptr;
+void (*beforeWaitHook)(kernel::KDispatcherHeader &) = nullptr;
 }
-
-UNDOS_KERNEL_API_DEF void KE_EVENT_Signal(kernel::KDispatcherHeader &header, bool wakeAll) noexcept {
-  auto wake = [](kernel::KThreadObject *) {};
-  header.Signal(wakeAll, wake);
+UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, HostedProductionWaitForHeader,
+    kernel::KDispatcherHeader &, kstd::chrono::milliseconds);
+UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForHeader(
+    kernel::KDispatcherHeader &header, kstd::chrono::milliseconds timeout) noexcept {
+  if (KE_SCHED_GetCurrentThread()) {
+    if (test_sched::beforeWaitHook) test_sched::beforeWaitHook(header);
+    return HostedProductionWaitForHeader(header, timeout);
+  }
+  // Legacy driver/scene fixtures have no scheduler thread and only perform
+  // uncontended header acquisition. They do not certify blocking behavior.
+  return header.TryAcquire() ? kernel::KernelError::Success : kernel::KernelError::Timeout;
+}
+namespace kernel::sched {
+void block_current_locked() noexcept {
+  const auto current = KE_SCHED_GetCurrentThread();
+  current->state = kernel::KThreadObject::State::Blocked;
+  if (test_sched::blockHook) test_sched::blockHook();
+  // Host continuation resumes here after the production wait/signal logic
+  // has made this thread Ready; no machine stack switch is emulated.
+  current->state = kernel::KThreadObject::State::Running;
+}
+void ready_locked(kernel::KThreadObject *thread) noexcept {
+  if (thread && thread->state == kernel::KThreadObject::State::Blocked)
+    thread->state = kernel::KThreadObject::State::Ready;
+}
 }
 
 // Settable rather than fixed at zero so dpc_test.cpp can walk simulated time
@@ -153,6 +174,14 @@ int to_builtin_memory_order(PlatformMemoryOrder order) noexcept {
 }
 }
 
+UNDOS_HAL_API_DEF uint32_t HAL_ATOMIC_Load32(kernel::VirtualAddress addr, PlatformMemoryOrder order) noexcept {
+  return __atomic_load_n(addr.as_ptr<uint32_t>(), to_builtin_memory_order(order));
+}
+
+UNDOS_HAL_API_DEF uint32_t HAL_ATOMIC_FetchAdd32(kernel::VirtualAddress addr, uint32_t delta, PlatformMemoryOrder order) noexcept {
+  return __atomic_fetch_add(addr.as_ptr<uint32_t>(), delta, to_builtin_memory_order(order));
+}
+
 UNDOS_HAL_API_DEF void HAL_ATOMIC_Store32(kernel::VirtualAddress addr, uint32_t value, PlatformMemoryOrder order) noexcept {
   auto *ptr = addr.as_ptr<uint32_t>();
   const uint32_t previous = __atomic_load_n(ptr, __ATOMIC_RELAXED);
@@ -171,79 +200,118 @@ UNDOS_HAL_API_DEF bool HAL_ATOMIC_CompareExchange32(kernel::VirtualAddress addr,
   return exchanged;
 }
 
-// Real hardware IRQ lines/PIC (intr.cpp) are out of scope for hosted tests;
-// KE_IO_ConnectInterrupt/KE_IO_DisconnectInterrupt (io.cpp) just need
-// something to link against here. These no-op stubs mirror the "no locking,
-// no real hardware" spirit of the other HAL stubs above.
-UNDOS_HAL_API_DEF bool HAL_INTR_ConnectInterrupt(
-    uint32_t irq,
-    const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
-  (void) irq;
-  (void) isr;
-  return true;
-}
-
-UNDOS_HAL_API_DEF void HAL_INTR_DisconnectInterrupt(uint32_t irq) noexcept {
-  (void) irq;
-}
-
 #include "dispatch_test_hooks.hpp"
 
 #include "dispatch.hpp"
 
 namespace {
-kernel::InterruptRecordRing g_testRing;
-kernel::dispatch::InterruptHandlerRegistry g_testHandlers;
+kernel::dispatch::DpcCore g_testCore;
+
+// Hosted tests drive the core from real std::threads, so thread identity for
+// the self-disconnect detection comes from a thread_local's address instead
+// of the (global, host-faked) KE_SCHED_GetCurrentThread.
+void *HostThreadId() noexcept {
+  static thread_local int marker;
+  return &marker;
+}
 }// namespace
+
+// Real hardware IRQ lines/PIC (intr.cpp) are out of scope for hosted tests;
+// KE_IO_ConnectInterrupt/KE_IO_DisconnectInterrupt (io.cpp) just need
+// something to link against here. These recording fakes mirror the "no
+// locking, no real hardware" spirit of the other HAL stubs above while
+// letting tests observe connect/disconnect/mask/complete ordering.
+UNDOS_HAL_API_DEF bool HAL_INTR_ConnectInterrupt(
+    uint32_t irq,
+    const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
+  (void) isr;
+  auto &hal = test_dispatch::FakeHal();
+  if (hal.failNextConnect) {
+    hal.failNextConnect = false;
+    return false;
+  }
+  ++hal.connectCount;
+  hal.lastConnectedIrq = irq;
+  return true;
+}
+
+UNDOS_HAL_API_DEF void HAL_INTR_DisconnectInterrupt(uint32_t irq) noexcept {
+  auto &hal = test_dispatch::FakeHal();
+  ++hal.disconnectCount;
+  hal.lastDisconnectedIrq = irq;
+}
+
+UNDOS_HAL_API_DEF void HAL_INTR_CompleteInterrupt(uint32_t irq) noexcept {
+  auto &hal = test_dispatch::FakeHal();
+  ++hal.completeCount;
+  hal.lastCompletedIrq = irq;
+  hal.events.push_back({test_dispatch::FakeHalEvent::Complete, irq});
+}
 
 namespace test_dispatch {
 
-kernel::InterruptRecordRing &GetRing() noexcept {
-  return g_testRing;
+FakeHalState &FakeHal() noexcept {
+  static FakeHalState state;
+  return state;
 }
 
-kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> GetHandler(uint32_t irq) noexcept {
-  kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject>
-      handlers[kernel::dispatch::InterruptHandlerRegistry::kMaxHandlersPerInterrupt]{};
-  size_t count = 0;
-  g_testHandlers.CopyHandlers(irq, handlers, count);
-  return count > 0 ? handlers[0] : nullptr;
+kernel::dispatch::DpcCore &Core() noexcept {
+  return g_testCore;
+}
+
+void RecordCallbackEvent(uint32_t irq) noexcept {
+  FakeHal().events.push_back({FakeHalEvent::Callback, irq});
 }
 
 void Reset() noexcept {
-  g_testRing.Reset();
-  g_testHandlers.Reset();
+  g_testCore.Reset();
+  g_testCore.SetThreadIdSource(&HostThreadId);
+  FakeHal() = FakeHalState{};
 }
 
 void Pump() noexcept {
-  kernel::HalInterruptRecord record{};
-  while (g_testRing.Pop(record)) {
-    kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject>
-        handlers[kernel::dispatch::InterruptHandlerRegistry::kMaxHandlersPerInterrupt]{};
-    size_t count = 0;
-    g_testHandlers.CopyHandlers(record.irq, handlers, count);
-    for (size_t i = 0; i < count; ++i) {
-      if (handlers[i] && handlers[i]->service_routine) {
-        handlers[i]->service_routine(handlers[i], handlers[i]->service_context);
-      }
-    }
+  while (g_testCore.DrainOne()) {
   }
 }
 
 }// namespace test_dispatch
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_EnqueueInterrupt(const kernel::HalInterruptRecord &record) noexcept {
-  return g_testRing.Push(record);
+  return g_testCore.EnqueueInterrupt(record);
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_RegisterHandler(
     uint32_t irq,
     const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
-  return g_testHandlers.Register(irq, isr);
+  return g_testCore.RegisterHandler(irq, isr);
 }
 
-UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_UnregisterHandler(uint32_t irq) noexcept {
-  return g_testHandlers.Unregister(irq);
+UNDOS_KERNEL_API_DEF kstd::error_code KE_DISPATCH_UnregisterHandler(
+    uint32_t irq,
+    const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr) noexcept {
+  return g_testCore.UnregisterHandler(irq, isr);
+}
+
+UNDOS_KERNEL_API_DEF size_t KE_DISPATCH_HandlerCount(uint32_t irq) noexcept {
+  return g_testCore.HandlerCount(irq);
+}
+
+UNDOS_KERNEL_API_DEF kstd::error_code KE_DPC_Register(kernel::KDpc &dpc) noexcept {
+  return g_testCore.RegisterDpc(dpc);
+}
+
+UNDOS_KERNEL_API_DEF kstd::error_code KE_DPC_Unregister(kernel::KDpc &dpc) noexcept {
+  return g_testCore.UnregisterDpc(dpc);
+}
+
+UNDOS_KERNEL_API_DEF kstd::error_code KE_DPC_Queue(
+    kernel::KDpc &dpc,
+    const kernel::HalInterruptRecord &args) noexcept {
+  return g_testCore.QueueDpc(dpc, args);
+}
+
+UNDOS_KERNEL_API_DEF bool KE_DPC_Cancel(kernel::KDpc &dpc) noexcept {
+  return g_testCore.CancelDpc(dpc);
 }
 #include <stdexcept>
 void HAL_PLATFORM_Panic(const kstd::string_view &message, const char *file, int line) noexcept {

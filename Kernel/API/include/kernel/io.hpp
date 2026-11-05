@@ -126,8 +126,11 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * KObjectPtr alive for as long as
  * the interrupt should stay connected -- e.g. by storing it in the
  * driver's device extension -- since dropping it frees a live ISR object.
- * Fails with OutOfMemory on allocation failure, or the registration error
- * (e.g. ResourceConflict) if `irq` is already connected.
+ * Lines may be shared: the first registration activates the HAL source and
+ * later compatible registrations join its callback snapshot. Fails with
+ * OutOfMemory on allocation failure, or the registration error (e.g.
+ * ResourceConflict) when the HAL rejects the source connection; a failed
+ * connection rolls back only the attempted registration.
  */
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::KInterruptRoutineResult,
@@ -140,11 +143,17 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * @ingroup IO
  * @brief Method KE_IO_DisconnectInterrupt
  *
- * Disconnects `irq` through HAL_INTR_DisconnectInterrupt.
+ * Removes one specific (irq, isr) registration; other handlers sharing the
+ * line are unaffected. The HAL source is disconnected through
+ * HAL_INTR_DisconnectInterrupt only when the final handler is removed.
  * Does not free the KObjectPtr itself -- that happens when the caller's
  * last reference to it is dropped.
  */
-UNDOS_KERNEL_PUBLIC_V1API(void, KE_IO_DisconnectInterrupt, uint32_t irq);
+UNDOS_KERNEL_PUBLIC_V1API(
+    void,
+    KE_IO_DisconnectInterrupt,
+    uint32_t irq,
+    const kernel::KObjectPtr<kernel::KInterruptServiceRoutineObject> &isr);
 
 
 template<typename T>

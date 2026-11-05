@@ -47,12 +47,29 @@ Program Manager uses the classic gray MDI workspace, white group interiors,
 bar. Main opens at startup; the other configured groups appear as minimized
 group icons. There is no taskbar or bottom status/help strip.
 
+The Main group includes Task Manager. Its Processes view lists process names,
+PIDs, CPU percentages, and uniquely owned physical-frame memory. Its
+Performance view shows aggregate and per-online-CPU execution utilization,
+plus total, used, and free firmware-usable RAM. Kernel activity appears as
+`System (kernel)`, and idle execution appears as `System Idle`; these are
+synthetic rows, not process-directory entries. Task Manager refreshes at
+approximately one-second intervals and reports first-sample, stale, and
+unavailable metrics explicitly. The current HAL supports one CPU; Task Manager
+does not invent additional CPUs. Routine process samples repaint changed visible
+rows; the Performance view redraws its changing graph panels and status strip.
+Structural list or layout changes request broader repainting.
+
 Init establishes the active display path before starting the shell. Program
 Manager starts maximized; restoring it uses its 600×400 default frame at
 (30, 30). Both Cirrus and the planar VGA fallback use Source Sans 3 and the
 classic palette.
 The VGA target advertises one 640x480 nominal-60-Hz mode with four one-bit
 planes. It does not advertise packed-pixel depths or other VGA timings.
+Paint DC operations and requested background erasure update the system-memory
+shadow. EndPaint sends the accumulated damage through one logical Present; this
+does not guarantee tear-free scanout. The planar VGA backend keeps palette
+indices in a 640-byte-stride shadow and converts presented damage to its four
+planes while retaining the public 80-byte hardware pitch.
 Program Manager icon labels, File Manager panes and toolbars, dialogs, and
 Terminal use the published font through the SDK font-object API. Text-dependent
 row, control, and cell geometry uses font metrics and measured runs. Editing
@@ -248,12 +265,15 @@ VGA path. Both use the bounded QEMU wrapper.
 
 The [split font implementation](../TTF_SPLIT_USER_KERNEL.md) has an
 UnDOS-owned user-mode TrueType decoder and kernel VM, rasterizer, and face
-registry. On `main`, each `Realization::glyph()` call serializes loading and
-rasterization under its realization mutex; the shared glyph cache remains on
-the `glyph-cache` branch. Default-font publication pins printable ASCII and
-replacement masks in `UiGlyphs`, so USER chrome can draw those masks without
-VM work under the scene lock. The kernel independently validates uploaded UFT1
-resources.
+registry. Default-font publication measures printable ASCII and replacement
+outlines and prepares font-metric summaries without rasterizing masks. `UiGlyphs`
+fills each per-generation mask on first use and retains it. USER chrome
+prewarms current titles and menu labels outside the scene lock. If any slot for
+a string is unready, chrome draws that whole string with the bitmap font. Each
+realization serializes glyph loading under its mutex and rasterizes only
+nonempty outlines; repeated glyph IDs in one text call reuse the first mask.
+The shared glyph-cache implementation remains on the `glyph-cache` branch. The
+kernel independently validates uploaded UFT1 resources.
 Process tables hold handles; the published default retains both faces after
 Font Loader exits. No FreeType dependency is used.
 

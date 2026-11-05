@@ -3,11 +3,15 @@
 #include "Slab.hpp"
 #include <Kernel.hpp>
 #include <kernel/adt/avl_tree.hpp>
+#include "ArenaMutex.hpp"
 
 namespace kernel::memory {
 class Cache;
 
 Slab *find_slab(void *ptr) noexcept;
+// Serializes the kernel virtual arena. Never acquire while holding a cache
+// or registry spinlock, or from hardware interrupt context.
+ArenaMutex &arena_mutex() noexcept;
 
 // Fallback allocator for objects that don't fit any fixed-size Cache. Backed
 // directly by page frames pulled from the same bump-allocated kernel heap

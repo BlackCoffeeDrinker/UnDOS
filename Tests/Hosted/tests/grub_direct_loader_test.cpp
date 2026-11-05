@@ -396,6 +396,18 @@ TEST_CASE("direct-loader rejects unresolved and unsupported relocations",
   CHECK(guarded_kernel.front() == 0xa5);
   CHECK(guarded_kernel.back() == 0x5a);
 
+  // An unresolved weak reference links and resolves to 0 (ELF semantics).
+  guarded_kernel.fill(0xee);
+  auto weak_unresolved =
+      make_image(UDL_KERNEL_BASE, "_start", "missing_weak", 1, 0);
+  weak_unresolved[0x1040 + 44] = 0x22;
+  link_fixture(weak_unresolved, hal_bytes, result, guarded_kernel.data());
+  CHECK(result == UDL_OK);
+  CHECK(guarded_kernel[1] == 0);
+  CHECK(guarded_kernel[2] == 0);
+  CHECK(guarded_kernel[3] == 0);
+  CHECK(guarded_kernel[4] == 0);
+
   guarded_kernel.fill(0);
   guarded_kernel.front() = 0xa5;
   guarded_kernel.back() = 0x5a;

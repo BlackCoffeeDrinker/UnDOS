@@ -1,7 +1,7 @@
 #pragma once
 
 #include <undos/font/resource.hpp>
-#include <vector.hpp>
+#include "growable_array.hpp"
 
 namespace undos::font::loader {
 
@@ -13,7 +13,7 @@ enum class DecodeError {
 };
 
 // Output is empty on failure; input and output must not alias.
-DecodeError decode(Bytes file, kstd::vector<uint8_t> &resource);
+DecodeError decode(Bytes file, GrowableArray<uint8_t> &resource);
 const char *error_message(DecodeError error);
 
 } // namespace undos::font::loader
