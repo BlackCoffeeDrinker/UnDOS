@@ -16,8 +16,9 @@ static int WriteStdout(const char *data, size_t length) {
   if (length > INT32_MAX ||
       crt_get_std_handle(StdHandleSelector_Stdout, &handle) != 0) return -1;
   if (length == 0) return 0;
-  const uint32_t rc = UD_SYS_WriteV1(handle, (const uint8_t *)data, (uint32_t)length);
-  return rc == SyscallReturnCode_OKAY ? (int)length : -1;
+  uint32_t transferred = 0;
+  const uint32_t rc = UD_SYS_WriteV1(handle, (const uint8_t *)data, (uint32_t)length, &transferred);
+  return rc == SyscallReturnCode_OKAY && transferred == length ? (int)length : -1;
 }
 
 // Renders `value` in `base` (10 or 16) into `out`, returns the number of

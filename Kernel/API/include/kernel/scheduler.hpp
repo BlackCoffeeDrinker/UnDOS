@@ -37,7 +37,7 @@ enum class InterruptedMode : uint8_t {
 UNDOS_KERNEL_PUBLIC_V1API(
     kernel::CreateThreadResult,
     KE_SCHED_CreateThread,
-    kernel::cfunc<void(void *)> entry, void *arg, uint8_t priority);
+    kernel::cfunc<void(void *)> entry, void *arg, kernel::ThreadPriority priority);
 
 /**
  * @ingroup SCHED
@@ -52,6 +52,25 @@ UNDOS_KERNEL_PUBLIC_V1API(
     KE_SCHED_CreateUserThread,
     const kernel::vmm::AddressSpace &as, kernel::VirtualAddress user_entry,
     kernel::VirtualAddress user_stack_top, kernel::KProcessObject *owner);
+
+/**
+ * @ingroup SCHED
+ * @brief Method KE_SCHED_RetireIfExiting
+ *
+ * Deferred kill: if the current thread's process is exiting, retire the
+ * thread (the last one out tears the process down). Called by the HAL on
+ * syscall entry/exit and on user-mode timer preemption. Returns otherwise.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(void, KE_SCHED_RetireIfExiting);
+
+/**
+ * @ingroup SCHED
+ * @brief Method KE_SCHED_IsExitPending
+ *
+ * True when the current thread belongs to an exiting process and has not
+ * started retiring yet.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(bool, KE_SCHED_IsExitPending);
 
 /**
  * @ingroup SCHED
@@ -143,6 +162,14 @@ UNDOS_KERNEL_PUBLIC_V1API(
  * preserved.
  */
 UNDOS_KERNEL_PUBLIC_V1API(void, KE_EVENT_Signal, kernel::KDispatcherHeader &header, bool wakeAll);
+
+/**
+ * @ingroup SCHED
+ * @brief Method KE_EVENT_Reset
+ *
+ * Return a dispatcher header to the non-signalled state.
+ */
+UNDOS_KERNEL_PUBLIC_V1API(void, KE_EVENT_Reset, kernel::KDispatcherHeader &header);
 
 /**
  * @ingroup SCHED

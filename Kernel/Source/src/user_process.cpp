@@ -13,7 +13,7 @@
 
 namespace {
 // User stack size for the process's single (main) thread.
-constexpr size_t USER_STACK_SIZE = 0x4000;// 16 KB
+constexpr size_t USER_STACK_SIZE = 0x10000;// 64 KB, as for CreateThread
 constexpr size_t PROCESS_NAME_TAIL = 48;
 
 // \Processes names are "<basename>#<serial>" so repeated launches of one

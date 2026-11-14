@@ -139,7 +139,8 @@ kstd::error_code handle_ReadDirectory_V1(__KRN_IO_READDIRECTORY_V1 &&args) {
   const size_t required = length + 1;
   args.name_len = required;
   args.found = 1;
-  args.information = {.size = entry.size, .attributes = entry.attributes};
+  args.information = {.size = entry.size, .attributes = entry.attributes, .creationTime = entry.creationTime,
+                      .lastAccessTime = entry.lastAccessTime, .lastWriteTime = entry.lastWriteTime};
   if (!args.name || capacity == 0) return {};
   if (capacity < required) return kernel::KernelError::BufferTooSmall;
   for (size_t i = 0; i < required; ++i) args.name.get()[i] = entry.name[i];
@@ -153,8 +154,68 @@ kstd::error_code handle_GetFileInformation_V1(__KRN_IO_GETFILEINFORMATION_V1 &&a
   const auto &file = *resolved;
   if (file->ops != &kernel::io::FileOps) return kernel::KernelError::WrongObjectType;
   if (file->isClosed || !file->vfsNode) return kernel::KernelError::InvalidState;
-  args.information = {.size = file->vfsNode->size, .attributes = file->vfsNode->attributes};
+  const auto &node = *file->vfsNode;
+  args.information = {.size = node.size, .attributes = node.attributes, .creationTime = node.creationTime,
+                      .lastAccessTime = node.lastAccessTime, .lastWriteTime = node.lastWriteTime};
   return {};
+}
+
+kstd::error_code handle_SetFileAttributes_V1(__KRN_IO_SETFILEATTRIBUTES_V1 &&args) {
+  return KE_VFS_SetAttributes(args.path, args.attributes);
+}
+
+kstd::error_code handle_QueryMount_V1(__KRN_IO_QUERYMOUNT_V1 &&args) {
+  args.found = 0;
+  const size_t capacity = args.mountPoint_len;
+  args.mountPoint_len = 0;
+  kstd::static_string<255> name;
+  const auto result = KE_VFS_QueryMount(args.index, name);
+  if (!result) return result.error();
+  if (!*result) return {};
+  const size_t required = name.size() + 1;
+  args.mountPoint_len = required;
+  args.found = 1;
+  if (!args.mountPoint || capacity == 0) return {};
+  if (capacity < required) return kernel::KernelError::BufferTooSmall;
+  for (size_t i = 0; i < name.size(); ++i) args.mountPoint.get()[i] = name[i];
+  args.mountPoint.get()[name.size()] = 0;
+  return {};
+}
+
+namespace {
+// Query-length-then-fill for a NUL-terminated kernel string.
+kstd::error_code fill_string(kernel::borrowed_ptr<char> &out, size_t &length, const char *text) {
+  const size_t capacity = length;
+  size_t size = 0;
+  while (text[size]) ++size;
+  length = size + 1;
+  if (!out || capacity == 0) return {};
+  if (capacity < length) return kernel::KernelError::BufferTooSmall;
+  for (size_t i = 0; i < length; ++i) out.get()[i] = text[i];
+  return {};
+}
+}// namespace
+
+kstd::error_code handle_GetVolumeInformation_V1(__KRN_IO_GETVOLUMEINFORMATION_V1 &&args) {
+  const size_t labelCapacity = args.label_len, fileSystemCapacity = args.fileSystem_len;
+  args.label_len = args.fileSystem_len = 0;
+  args.serialNumber = 0;
+  args.maxComponentLength = 0;
+  args.flags = static_cast<VolumeFlags>(0);
+  kernel::KVFSVolumeInformation information{};
+  if (const auto status = KE_VFS_GetVolumeInformation(args.mountPoint, information); status) return status;
+  information.label[sizeof(information.label) - 1] = 0;
+  information.fileSystem[sizeof(information.fileSystem) - 1] = 0;
+  args.serialNumber = information.serialNumber;
+  args.maxComponentLength = information.maxComponentLength;
+  uint32_t flags = 0;
+  if (information.readOnly) flags |= VolumeFlags_ReadOnly;
+  if (information.casePreserved) flags |= VolumeFlags_CasePreserved;
+  args.flags = static_cast<VolumeFlags>(flags);
+  args.label_len = labelCapacity;
+  args.fileSystem_len = fileSystemCapacity;
+  if (const auto status = fill_string(args.label, args.label_len, information.label); status) return status;
+  return fill_string(args.fileSystem, args.fileSystem_len, information.fileSystem);
 }
 
 kstd::error_code handle_CopyFile_V1(__KRN_IO_COPYFILE_V1 &&args) {
@@ -187,22 +248,8 @@ kstd::error_code handle_Read_V1(__KRN_IO_READ_V1 &&args) {
   return {};
 }
 
-/** Writes data from `data` to an open handle. */
+/** Writes data from `data` to an open handle and reports the bytes accepted. */
 kstd::error_code handle_Write_V1(__KRN_IO_WRITE_V1 &&args) {
-  const auto resolved = resolve_io(args.handle, kernel::ProcessHandleTable::HandleAccess::Write);
-  if (!resolved) return resolved.error();
-
-  size_t transferred = 0;
-  const auto status = (*resolved)->Write(kstd::span<const uint8_t>(args.data.get(), args.data.size()), transferred);
-  if (status) return status;
-  if (transferred > args.data.size()) return kernel::KernelError::IoError;
-
-  args.data_len = static_cast<decltype(args.data_len)>(transferred);
-  return {};
-}
-
-/** Versioned byte-counting write, preserving the V1 ABI. */
-kstd::error_code handle_Write_V2(__KRN_IO_WRITE_V2 &&args) {
   args.transferred = 0;
   const auto resolved = resolve_io(args.handle, kernel::ProcessHandleTable::HandleAccess::Write);
   if (!resolved) return resolved.error();

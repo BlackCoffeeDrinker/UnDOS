@@ -205,7 +205,7 @@ void message(const char *title, const char *text) {
 bool launch(const char *path, const char *arguments) {
   crt_printf("progman: launching %s\n", path);
   HANDLE process = 0;
-  const auto result = UD_SYS_CreateProcessV1(path, arguments, ProcessFlags_None, &process);
+  const auto result = UD_SYS_CreateProcessV1(path, arguments, ProcessFlags_None, UINT32_MAX, UINT32_MAX, UINT32_MAX, &process);
   if (!syscall_ok(result, "CreateProcess")) {
     message("Cannot run program", "Executable or its loader failed. See serial log.");
     return false;

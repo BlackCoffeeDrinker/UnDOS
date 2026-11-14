@@ -162,8 +162,10 @@ syscall V1 PROC CreateProcess [200] {
 };
 ```
 
-- `V1` — the syscall's version. Bump the version (`V2`, `V3`, ...) instead of breaking an existing
-  ABI when a syscall needs to change shape; both versions can coexist (see `PROC GetInfo` V1/V2).
+- `V1` — the syscall's version. UnDOS is unreleased and every application is
+  built from this repository, so syscalls change shape in place and stay `V1`;
+  update all callers in the same change. Bump the version (`V2`, ...) only once
+  the ABI has been released and old binaries must keep working.
 - `PROC` — a free-form category name, used as part of the generated struct/function names
   (`__SYS_PROC_CREATEPROCESS_V1`, `UD_SYS_CreateProcessV1`, ...).
 - `CreateProcess` — the syscall name.

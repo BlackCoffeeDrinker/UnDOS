@@ -127,11 +127,14 @@ The current supported-feature matrix is:
 |---|---|
 | Classes and windows | Class registration, creation, destruction, metadata, title, child-parent tracking and callback replacement for windows registered through this C API. Class names allow 31 UTF-8 bytes; titles allow 63. |
 | Styles and show commands | Explicit translation for `GWLP_WNDPROC`, `GWLP_USERDATA`, `GWL_STYLE`, and `SW_*`. Only documented child/visible/border/caption styles and the `WS_OVERLAPPEDWINDOW` decoration combination are accepted. Native USER does not preserve independent resize/menu policy bits. |
-| Messages | `GetMessage`, `PeekMessage`, `PostMessage`, callback dispatch and `WM_QUIT`. Queue filtering is unsupported. `TranslateMessage` returns `FALSE`; native input already supplies `WM_CHAR`. There is no S1 `SendMessage` or modal-loop guarantee. |
-| Menus | Existing native menus: menu bars, popup submenus, string commands, separators, disabled and grayed items. Native limits are 16 items and 63 label bytes. Unsupported flag combinations fail. |
-| Paint | One matched `BeginPaint`/`EndPaint` pair per native window, with the actual half-open paint rectangle, erase state, and a retained default font. There is no general `GetDC` or memory-DC API. |
-| Drawing and fonts | No Windows GDI object model is exposed. `Undos*` extensions provide palette-quantized colors, a solid filled rectangle, one-pixel lines, and the current font/measurement/drawing operations. `Ellipse`, Windows `Rectangle`, and Windows `DrawText` semantics are not implemented. |
-| Other Win32 areas | Controls, dialogs, accelerators, timers, clipboard, resources, common dialogs, scrolling and MDI are not implemented by S1. Their later milestones require shared implementations rather than application-local success-shaped substitutes. |
+| Messages | `GetMessage`, `PeekMessage`, `PostMessage`, callback dispatch and `WM_QUIT`. `SendMessage` calls the window procedure synchronously. `GetKeyState` tracks keys as messages leave the queue. Queue filtering is unsupported. `TranslateMessage` returns `FALSE`; native input already supplies `WM_CHAR`. |
+| Menus | Menu bars, popups, separators, check marks, and disabled and grayed items. `CheckMenuItem`, `EnableMenuItem`, `GetMenuState`, `GetSubMenu`, `RemoveMenu`, `DeleteMenu` and accelerator tables (`CreateAcceleratorTable`, `LoadAccelerators`, `TranslateAccelerator`). Native limits are 32 items and 63 label bytes. |
+| Paint and GDI | `BeginPaint`/`EndPaint`, then `TextOut`, `ExtTextOut`, `DrawText`, `GetTextExtentPoint32`, `GetTextMetrics`, pens, solid brushes, `MoveToEx`/`LineTo`, `FillRect`, `PatBlt`, `SelectObject`, `DeleteObject` and `GetStockObject`. Memory DCs, bitmaps, `SetDIBits` and `BitBlt` (`SRCCOPY` and solid fills). Colors are quantized to the 16-color palette. Dashed pens draw solid, and invert raster operations fail with `ERROR_CALL_NOT_IMPLEMENTED`. |
+| Resources | Apps register in-memory tables with `UndosRegisterResources`. `FindResource`, `LoadResource`, `LoadBitmap`, `LoadString`, `LoadAccelerators` and `RT_DIALOG` templates read from them. There is no PE or `.rc` loader. |
+| Controls and dialogs | `BUTTON`, single-line `EDIT`, `STATIC`, `LISTBOX` (including owner-draw) and `SCROLLBAR` classes, declared in `<winuser.h>`. The dialog manager reads `DLGTEMPLATE`/`DLGTEMPLATEEX` data and provides `DialogBoxParam`, `CreateDialogParam`, `EndDialog`, `IsDialogMessage` and the `*DlgItem*` helpers. Not provided: combo boxes, multi-line edit boxes and `WM_CTLCOLOR*`. |
+| Input and MDI | `SetTimer`/`KillTimer` (10 ms resolution), `SetCapture`/`ReleaseCapture`, `LoadCursor`/`SetCursor` (the selection is recorded, but the on-screen pointer does not change), `DragDetect`, and `GetSystemMetrics`. The `MDIClient` class, `DefFrameProc`, `DefMDIChildProc`, the `WM_MDI*` messages and the Window menu list. |
+| Files and shell | See [File and shell API](#file-and-shell-api). |
+| Other Win32 areas | Clipboard, common dialogs, the profile API, printing and Unicode (`W`) entry points are not implemented. |
 
 All strings use validated UTF-8 `char` sequences. S1 rejects malformed,
 truncated, overlong, surrogate, and out-of-range encodings before a supported
@@ -171,6 +174,52 @@ positive value for a message, zero for `WM_QUIT`, and -1 for an error.
 successful transition from hidden. Use `UndosShowWindow` when operation
 success is required. `SetLastError(0)` before a zero-valued metadata call
 disambiguates a valid zero result from failure.
+
+### File and shell API
+
+`<winbase.h>`, which `<windows.h>` includes, provides a kernel32-style file layer
+over the UnDOS IO syscalls. UnDOS has a single Unix-style root, so paths
+are absolute (`/DIR/FILE`); `\` is accepted as a separator, names containing `:`
+fail with `ERROR_INVALID_NAME`, and paths are
+limited to 255 bytes with FAT short names. `HANDLE` is the same 32-bit type as
+in the native syscall headers, so both can be included together.
+
+| Call | Behavior |
+|---|---|
+| `FindFirstFile`, `FindNextFile`, `FindClose` | DOS wildcards (`*`, `?`, `*.*` also matches names without an extension), case-insensitive. At most 8 searches can be open at once. `WIN32_FIND_DATA` carries the FAT creation, last-access (date only) and last-write times. |
+| `GetFileAttributes` | Returns the FAT attribute bits, or `FILE_ATTRIBUTE_NORMAL` when none are set. |
+| `GetFileAttributesEx` | `GetFileExInfoStandard` only: attributes, size and the three FAT times. |
+| `SetFileAttributes` | Sets the read-only, hidden, system and archive bits; other bits are ignored. Fails with `ERROR_ACCESS_DENIED` for `/`, mount points, open entries and read-only volumes. |
+| `CopyFile`, `MoveFile`, `MoveFileEx` | Copy one file, or move within one volume. Replacing an existing target deletes it first. Folder copies and moves of a folder to another parent fail with `ERROR_ACCESS_DENIED`. |
+| `DeleteFile`, `CreateDirectory`, `RemoveDirectory` | Report `ERROR_FILE_NOT_FOUND`/`ERROR_PATH_NOT_FOUND`, `ERROR_ACCESS_DENIED` for read-only entries, `ERROR_ALREADY_EXISTS` and `ERROR_DIR_NOT_EMPTY`, checked before the syscall. |
+| `GetLogicalDriveStrings` | Lists the mount points, such as `/` and `/MNT/CD`, as a double-NUL-terminated list. `GetLogicalDrives` is not provided. |
+| `GetDriveType` | Takes a mount point, not a drive root: `DRIVE_FIXED` for a mount point, otherwise `DRIVE_NO_ROOT_DIR`. The kernel does not report the device kind, so removable media also report `DRIVE_FIXED`. |
+| `GetVolumeInformation` | Takes a mount point. Reports the boot-sector label, serial number, file-system name (`FAT12`, `FAT16`, `FAT32`), a 255-byte name limit, `FILE_CASE_PRESERVED_NAMES` and `FILE_READ_ONLY_VOLUME`. A buffer that is too small fails with `ERROR_BAD_LENGTH`. |
+| `FileTimeToSystemTime`, `SystemTimeToFileTime`, `FileTimeToLocalFileTime`, `CompareFileTime`, `DosDateTimeToFileTime`, `FileTimeToDosDateTime` | Full Gregorian conversion. Local time equals UTC, so FAT's local times pass through unchanged. |
+| `ShellExecute`, `FindExecutable` | Only the `open` verb (or `NULL`). `.ELF` files start directly; other extensions start the program registered with `UndosSetAssociation`, which receives the file path as its first argument. Codes of 32 or below are the `SE_ERR_*` errors. |
+
+These calls use the IO syscalls `ReadDirectoryV1` (227),
+`GetFileInformationV1` (229), `SetFileAttributesV1` (236), `QueryMountV1` (237)
+and `GetVolumeInformationV1` (238). Setting file times and volume labels is not
+supported.
+
+### Threads and window DCs
+
+| Call | Behavior |
+|---|---|
+| `CreateThread`, `ExitThread`, `GetExitCodeThread`, `GetCurrentThreadId` | A user thread in the calling process (PROC CreateThread 208, ExitThread 214, GetExitCodeThread 215, GetCurrentThreadId 217). Default stack 64 KiB, at most 4 MiB, 32 threads per process. `CREATE_SUSPENDED` fails with `ERROR_CALL_NOT_IMPLEMENTED`. The last thread to exit ends the process with its code. |
+| `WaitForSingleObject`, `CloseHandle` | Work on thread, event and process handles. A thread handle is signalled when the thread exits. |
+| `CreateEvent`, `SetEvent`, `ResetEvent` | Unnamed events only (ResetEvent is PROC 216). |
+| `*CriticalSection`, `Interlocked*` | Critical sections are recursive and sleep on an auto-reset event when contended. |
+| `GetDC`, `ReleaseDC` | A client-area DC outside `WM_PAINT` (USER GetDC 428, ReleaseDC 429), clipped to the visible client area; drawing reaches the screen at `ReleaseDC`. One per window at a time; `GetDC(NULL)` is not supported. |
+
+Process exit uses a deferred kill: `ExitProcess` marks the process exiting,
+and each other thread retires itself the next time it makes a syscall, is
+preempted in user mode, or wakes from a wait in `WaitForSingleObject` or the
+message queue. The last thread out releases the process's memory. The SDK's
+window, GDI and error state are not locked and `GetLastError` is per process:
+use windows only from the thread that created them and post messages from the
+others. The CRT heap is locked.
 
 ### Failed window creation recovery
 
@@ -245,7 +294,7 @@ at most 64 records per pass and stop when one cleanup attempt fails. The
 cleanup record preserves the primary operation error/status separately from
 the latest cleanup error/status.
 
-`InvalidateRect` forwards its erase request through USER InvalidateRect V2.
+`InvalidateRect` forwards its erase request through USER InvalidateRect V1.
 A false request skips background erasure unless an earlier true request remains
 pending; V1 callers retain erase=true behavior. The installed `examples/gui`
 project is a strict C11 consumer with UTF-8 text, explicit font ownership, and

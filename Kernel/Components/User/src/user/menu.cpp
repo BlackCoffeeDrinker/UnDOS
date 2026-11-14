@@ -81,7 +81,7 @@ uint32_t menu_handle_locked(const MenuRecord &menu) noexcept {
 
 int32_t menu_entry_width(const UiText &ui, const MenuEntry &entry) noexcept {
   if (entry.flags & kMenuItemSeparator) return 8;
-  return ui.width(entry.text.data(), entry.text.size(), false) + 16;
+  return ui.label_width(entry.text.data(), entry.text.size()) + 16;
 }
 
 bool menu_contains_locked(uint32_t root, uint32_t target, uint32_t depth = 0) noexcept {
@@ -130,9 +130,9 @@ bool menu_item_locked(uint32_t handle, uint32_t index, MenuItemView &item) noexc
 }
 
 namespace {
-void menu_draw_text(int32_t x, int32_t y, const kstd::string_view &text,
+void menu_draw_text(int32_t x, int32_t y, int32_t accelRight, const kstd::string_view &text,
                     uint32_t foreground, uint32_t background, const URect &limit) noexcept {
-  UiText::of(g_menuFont).draw(x, y, text.data(), text.size(), false, foreground, background, true,
+  UiText::of(g_menuFont).draw_label(x, y, text.data(), text.size(), foreground, background, true, accelRight,
                          [&](int64_t left, int64_t top, int64_t right, int64_t bottom, uint32_t color) {
                            fill_screen_locked(URect{static_cast<int32_t>(left), static_cast<int32_t>(top),
                                                    static_cast<int32_t>(right), static_cast<int32_t>(bottom)}
@@ -178,7 +178,7 @@ void open_popup_locked(uint32_t ownerWindow, uint32_t menuHandle, int32_t x, int
   const UiText ui = UiText::of(g_menuFont);
   int32_t width = 48;
   for (uint32_t i = 0; i < menu->count; ++i) {
-    const auto itemWidth = ui.width(menu->entries[i].text.data(), menu->entries[i].text.size(), false) + 24;
+    const auto itemWidth = ui.label_width(menu->entries[i].text.data(), menu->entries[i].text.size()) + 30;
     if (itemWidth > width) width = itemWidth;
   }
   const auto bounds = screen_rect();
@@ -370,7 +370,14 @@ void draw_popup_locked(const OpenMenu &popup, const URect &limit) noexcept {
       fill_popup({popup.x + 7, top + rowHeight / 2,
                   popup.x + popup.width - 7, top + rowHeight / 2 + 1}, 8);
     } else {
-      menu_draw_text(popup.x + 8, top + 2,
+      if (entry.flags & kMenuItemChecked) {
+        const int32_t markY = top + rowHeight / 2;
+        fill_popup({popup.x + 4, markY - 1, popup.x + 6, markY + 1}, foreground);
+        fill_popup({popup.x + 6, markY, popup.x + 8, markY + 2}, foreground);
+        fill_popup({popup.x + 8, markY - 2, popup.x + 10, markY}, foreground);
+        fill_popup({popup.x + 10, markY - 4, popup.x + 12, markY - 2}, foreground);
+      }
+      menu_draw_text(popup.x + 14, top + 2, popup.x + popup.width - 12,
                      {entry.text.data(), entry.text.size()}, foreground, background,
                      clipped);
       if (entry.flags & kMenuItemPopup) {
@@ -615,12 +622,13 @@ kstd::error_code destroy_menu(KProcessObject &caller, uint32_t handle) noexcept 
 
 kstd::error_code append_menu(KProcessObject &caller, uint32_t handle, uint32_t flags, uint32_t item,
                              const kstd::string_view &text) noexcept {
-  const uint32_t supportedFlags = kMenuItemGrayed | kMenuItemDisabled |
+  const uint32_t supportedFlags = kMenuItemGrayed | kMenuItemDisabled | kMenuItemChecked |
                                   kMenuItemPopup | kMenuItemSeparator;
   if (flags & ~supportedFlags) return KernelError::InvalidArgument;
   const bool separator = (flags & kMenuItemSeparator) != 0;
   const bool popup = (flags & kMenuItemPopup) != 0;
-  if (separator && (popup || (flags & (kMenuItemGrayed | kMenuItemDisabled))))
+  if (separator &&
+      (popup || (flags & (kMenuItemGrayed | kMenuItemDisabled | kMenuItemChecked))))
     return KernelError::InvalidArgument;
   if (text.size() >= kMenuTextLen) return KernelError::InvalidSize;
   if (!separator && text.empty()) return KernelError::InvalidArgument;
@@ -660,6 +668,102 @@ kstd::error_code append_menu(KProcessObject &caller, uint32_t handle, uint32_t f
   if (g_openMenu.visible &&
       (g_openMenu.menu == handle || menu_contains_locked(g_openMenu.menu, handle)))
     expose_locked(popup_visible_bounds(g_openMenu));
+  return {};
+}
+
+namespace {
+MenuEntry *find_menu_command_locked(uint32_t handle, uint32_t command, uint32_t &owner,
+                                    uint32_t depth = 0) noexcept {
+  auto *menu = lookup_menu_locked(handle);
+  if (!menu || depth > kMaxMenus) return nullptr;
+  for (uint32_t i = 0; i < menu->count; ++i) {
+    auto &entry = menu->entries[i];
+    if (entry.flags & kMenuItemSeparator) continue;
+    if (entry.flags & kMenuItemPopup) {
+      if (auto *found = find_menu_command_locked(entry.item, command, owner, depth + 1))
+        return found;
+    } else if (entry.item == command) {
+      owner = handle;
+      return &entry;
+    }
+  }
+  return nullptr;
+}
+} // namespace
+
+kstd::error_code modify_menu_state(KProcessObject &caller, uint32_t handle, uint32_t item,
+                                   bool byPosition, uint32_t mask, uint32_t flags,
+                                   uint32_t &previous, uint32_t &itemId) noexcept {
+  previous = 0;
+  itemId = 0;
+  const uint32_t changeable = kMenuItemGrayed | kMenuItemDisabled | kMenuItemChecked;
+  if ((mask & ~changeable) || (flags & ~mask)) return KernelError::InvalidArgument;
+  Guard guard;
+  auto *menu = lookup_menu_locked(handle);
+  if (!menu) return KernelError::InvalidHandle;
+  if (menu->owner != &caller) return KernelError::AccessDenied;
+  uint32_t owner = handle;
+  MenuEntry *entry = nullptr;
+  if (byPosition) {
+    if (item >= menu->count) return KernelError::NotFound;
+    entry = &menu->entries[item];
+  } else {
+    entry = find_menu_command_locked(handle, item, owner);
+    if (!entry) return KernelError::NotFound;
+  }
+  previous = entry->flags;
+  itemId = entry->item;
+  if (!mask) return {};
+  if (entry->flags & kMenuItemSeparator) return KernelError::InvalidArgument;
+  const uint32_t updated = (entry->flags & ~mask) | flags;
+  if (updated == entry->flags) return {};
+  entry->flags = updated;
+  refresh_attached_menu_locked(owner);
+  if (g_openMenu.visible) {
+    for (uint32_t i = 0; i < g_menuDepth; ++i) {
+      if (g_menuStack[i].menu == owner) expose_locked(popup_visible_bounds(g_menuStack[i]));
+    }
+    if (g_openMenu.menu == owner) {
+      if (g_openMenu.selected >= 0 &&
+          !menu_item_enabled(lookup_menu_locked(owner)->entries[g_openMenu.selected]))
+        g_openMenu.selected = -1;
+      expose_locked(popup_visible_bounds(g_openMenu));
+    }
+  }
+  return {};
+}
+
+kstd::error_code remove_menu_item(KProcessObject &caller, uint32_t handle, uint32_t item,
+                                  bool byPosition, uint32_t &itemId) noexcept {
+  itemId = 0;
+  Guard guard;
+  auto *menu = lookup_menu_locked(handle);
+  if (!menu) return KernelError::InvalidHandle;
+  if (menu->owner != &caller) return KernelError::AccessDenied;
+  uint32_t owner = handle;
+  MenuEntry *entry = nullptr;
+  if (byPosition) {
+    if (item >= menu->count) return KernelError::NotFound;
+    entry = &menu->entries[item];
+  } else {
+    entry = find_menu_command_locked(handle, item, owner);
+    if (!entry) return KernelError::NotFound;
+  }
+  auto *container = lookup_menu_locked(owner);
+  if (g_openMenu.visible) {
+    bool affected = g_openMenu.menu == owner;
+    for (uint32_t i = 0; i < g_menuDepth; ++i) affected = affected || g_menuStack[i].menu == owner;
+    if (affected || menu_contains_locked(g_openMenu.menu, owner)) close_menu_locked();
+  }
+  itemId = entry->item;
+  if (entry->flags & kMenuItemPopup) {
+    if (auto *submenu = lookup_menu_locked(entry->item)) submenu->parent = 0;
+  }
+  const auto index = static_cast<uint32_t>(entry - container->entries);
+  for (uint32_t i = index; i + 1 < container->count; ++i)
+    container->entries[i] = container->entries[i + 1];
+  --container->count;
+  refresh_attached_menu_locked(owner);
   return {};
 }
 

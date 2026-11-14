@@ -151,6 +151,7 @@ def main():
             directory = cmake(source, "apps/" + name,
                               f"-DUnDOS_DIR={sdk_prefix / 'share/cmake/UnDOS'}",
                               f"-DUNDOS_SDK_ROOT={sdk_prefix}",
+                              "-DFILEMANAGER_BUILD_WINFILE_PORT=ON",
                               f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=$<1:{output}>",
                               f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=$<1:{output}>")
             for filename in outputs:

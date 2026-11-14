@@ -151,12 +151,17 @@ struct FAT_EntryLocation {
   uint32_t directorySector{0};
   uint32_t slot{0};
   bool longName{false};
+  bool hasLongName{false};// longNameText holds a validated VFAT name
+  kstd::static_string<256> longNameText;
 };
 
 // name=nullptr enumerates visible entries, empty name finds a reusable slot.
+// Otherwise name is an 11-byte 8.3 form (11 spaces when the name has none)
+// and an entry matches by that short form, or by its
+// validated VFAT name when `longNameQuery` is non-empty.
 kstd::expected<bool, kstd::error_code> FAT_FindEntry(
     const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount, const kernel::KVFSNode &parent,
-    const char *name, uint32_t ordinal, FAT_EntryLocation &out) {
+    const char *name, uint32_t ordinal, FAT_EntryLocation &out, kstd::string_view longNameQuery = {}) {
   const auto &vol = *mount->driverExtension.as<FAT_Volume>();
   if (vol.type == FAT_Type::ExFAT) return kstd::unexpected(kernel::KernelError::Unsupported);
   if (parent.type != kernel::VFSNodeType::Directory) return kstd::unexpected(kernel::KernelError::NotDirectory);
@@ -181,8 +186,11 @@ kstd::expected<bool, kstd::error_code> FAT_FindEntry(
   uint32_t sectorIndex = 0;
   uint32_t firstSlot = 0;
   FAT_ChainCheckpoint chain = {};
+  FAT_LfnAccumulator lfn;
   if (enumerate && !vol.traversalReuseDisabled && dir.directoryOrdinal.valid &&
-      dir.directoryOrdinal.generation == generation && dir.directoryOrdinal.ordinal <= ordinal) {
+      dir.directoryOrdinal.generation == generation && dir.directoryOrdinal.ordinal < ordinal) {
+    // Resume at the previously returned short entry; strictly earlier so the
+    // requested entry's LFN fragments are scanned again.
     sectorIndex = dir.directoryOrdinal.sector;
     firstSlot = dir.directoryOrdinal.slot;
     seen = dir.directoryOrdinal.ordinal;
@@ -221,12 +229,19 @@ kstd::expected<bool, kstd::error_code> FAT_FindEntry(
         }
         return false;
       }
-      if (!unused && entry.attr == kAttrLongName) { longName = true; continue; }
+      if (!unused && entry.attr == kAttrLongName) {
+        longName = true;
+        lfn.Feed(*reinterpret_cast<const FAT_LfnEntry *>(&entry));
+        continue;
+      }
       if (!unused && !(entry.attr & kAttrVolumeId) && entry.name[0] != '.') {
+        kstd::static_string<256> decoded;
+        const bool hasLong = lfn.Complete(entry.name, decoded);
         if (enumerate) {
           if (seen == ordinal) {
             out = {.entry = entry, .address = static_cast<uint64_t>(*sector) * vol.bytesPerSector + slot * sizeof(FAT_DirEntry),
-                   .directorySector = sectorIndex, .slot = slot, .longName = longName};
+                   .directorySector = sectorIndex, .slot = slot, .longName = longName,
+                   .hasLongName = hasLong, .longNameText = decoded};
             if (!vol.traversalReuseDisabled) {
               dir.directoryOrdinal = {
                   .valid = true,
@@ -246,16 +261,26 @@ kstd::expected<bool, kstd::error_code> FAT_FindEntry(
             return true;
           }
           ++seen;
-        } else {
-          match = name[0] && kstd::string_view(entry.name, 11) == kstd::string_view(name, 11);
+        } else if (name[0]) {
+          match = kstd::string_view(entry.name, 11) == kstd::string_view(name, 11) ||
+                  (hasLong && !longNameQuery.empty() &&
+                   FAT_LongNameEquals(kstd::string_view(decoded.data(), decoded.size()), longNameQuery));
+          if (match) {
+            out = {.entry = entry, .address = static_cast<uint64_t>(*sector) * vol.bytesPerSector + slot * sizeof(FAT_DirEntry),
+                   .directorySector = sectorIndex, .slot = slot, .longName = longName,
+                   .hasLongName = hasLong, .longNameText = decoded};
+            return true;
+          }
         }
       }
       if (match) {
         out = {.entry = entry, .address = static_cast<uint64_t>(*sector) * vol.bytesPerSector + slot * sizeof(FAT_DirEntry),
-               .directorySector = sectorIndex, .slot = slot, .longName = longName};
+               .directorySector = sectorIndex, .slot = slot, .longName = longName,
+               .hasLongName = false, .longNameText = {}};
         return true;
       }
       longName = false;
+      lfn.Reset();
     }
     firstSlot = 0;
     if (sectorIndex == UINT32_MAX) return kstd::unexpected(kernel::KernelError::InvalidFormat);
@@ -289,6 +314,18 @@ kstd::expected<bool, kstd::error_code> FAT_ReadDirectory(
   if (!found || !*found) return found;
   out = {};
   size_t n = 0;
+  // A long name with unmappable characters ('?') could not be opened by that
+  // name, so such entries are listed by their 8.3 name instead.
+  if (location.hasLongName && location.longNameText.size() < sizeof(out.name) &&
+      FAT_LongNameListable(kstd::string_view(location.longNameText.data(), location.longNameText.size()))) {
+    for (size_t i = 0; i < location.longNameText.size(); ++i) out.name[i] = location.longNameText[i];
+    out.size = location.entry.fileSize;
+    out.attributes = location.entry.attr;
+    out.creationTime = (static_cast<uint32_t>(location.entry.createDate) << 16) | location.entry.createTime;
+    out.lastAccessTime = static_cast<uint32_t>(location.entry.lastAccessDate) << 16;
+    out.lastWriteTime = (static_cast<uint32_t>(location.entry.writeDate) << 16) | location.entry.writeTime;
+    return true;
+  }
   for (size_t i = 0; i < 8 && location.entry.name[i] != ' '; ++i) out.name[n++] = location.entry.name[i];
   if (location.entry.name[8] != ' ') {
     out.name[n++] = '.';
@@ -296,6 +333,9 @@ kstd::expected<bool, kstd::error_code> FAT_ReadDirectory(
   }
   out.size = location.entry.fileSize;
   out.attributes = location.entry.attr;
+  out.creationTime = (static_cast<uint32_t>(location.entry.createDate) << 16) | location.entry.createTime;
+  out.lastAccessTime = static_cast<uint32_t>(location.entry.lastAccessDate) << 16;
+  out.lastWriteTime = (static_cast<uint32_t>(location.entry.writeDate) << 16) | location.entry.writeTime;
   return true;
 }
 
@@ -364,9 +404,18 @@ kstd::error_code FAT_OperateFile(const kernel::KObjectPtr<kernel::KVolumeMountOb
   if ((parent.attributes & kAttrReadOnly) || (destinationParent && (destinationParent->attributes & kAttrReadOnly)))
     return KernelError::AccessDenied;
   char shortName[12]{}, targetName[12]{};
-  if (const auto status = FAT_ShortName(name, shortName); status) return status;
+  if (const auto status = FAT_ShortName(name, shortName); status) {
+    // Not an 8.3 name: it may still name an existing VFAT entry, which this
+    // driver cannot modify (long-name entries are read-only).
+    char noShortForm[12] = "           ";
+    FAT_EntryLocation existing;
+    const auto found = FAT_FindEntry(mount, parent, noShortForm, 0, existing, name);
+    if (!found) return found.error();
+    if (*found) return operation == VFSFileOperation::CreateDirectory ? KernelError::AlreadyExists : KernelError::Unsupported;
+    return status;
+  }
   FAT_EntryLocation source;
-  const auto found = FAT_FindEntry(mount, parent, shortName, 0, source);
+  const auto found = FAT_FindEntry(mount, parent, shortName, 0, source, name);
   if (!found) return found.error();
   if (operation == VFSFileOperation::CreateDirectory) {
     if (*found) return KernelError::AlreadyExists;
@@ -394,7 +443,7 @@ kstd::error_code FAT_OperateFile(const kernel::KObjectPtr<kernel::KVolumeMountOb
   if (destinationParent) {
     if (const auto status = FAT_ShortName(destinationName, targetName); status) return status;
     FAT_EntryLocation existing;
-    const auto exists = FAT_FindEntry(mount, targetParent, targetName, 0, existing);
+    const auto exists = FAT_FindEntry(mount, targetParent, targetName, 0, existing, destinationName);
     if (!exists) return exists.error();
     if (*exists) return KernelError::AlreadyExists;
   } else {
@@ -482,4 +531,41 @@ kstd::error_code FAT_OperateFile(const kernel::KObjectPtr<kernel::KVolumeMountOb
   // Once publication is attempted, a short device write may have made the entry
   // reachable. Never free its chain on that uncertain result.
   return FAT_WriteEntry(mount, *slot, created);
+}
+
+kstd::error_code FAT_SetAttributes(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount,
+    const kernel::KVFSNode &parent, kstd::string_view name, uint32_t attributes) {
+  using kernel::KernelError;
+  const auto &vol = *mount->driverExtension.as<FAT_Volume>();
+  if (vol.type == FAT_Type::ExFAT || !vol.writable) return KernelError::Unsupported;
+  constexpr uint32_t settable = kAttrReadOnly | kAttrHidden | kAttrSystem | kAttrArchive;
+  if (attributes & ~settable) return KernelError::InvalidArgument;
+  char shortName[12] = "           ";
+  // Only the attribute byte of the short entry changes, so entries reached
+  // through a VFAT name (whose checksum covers the name only) stay valid.
+  if (FAT_ShortName(name, shortName)) {
+    for (size_t i = 0; i < 11; ++i) shortName[i] = ' ';
+  }
+  FAT_EntryLocation location;
+  const auto found = FAT_FindEntry(mount, parent, shortName, 0, location, name);
+  if (!found) return found.error();
+  if (!*found) return KernelError::NotFound;
+  auto changed = location.entry;
+  changed.attr = static_cast<uint8_t>((changed.attr & ~settable) | attributes);
+  if (changed.attr == location.entry.attr) return {};
+  return FAT_WriteEntry(mount, location, changed);
+}
+
+kstd::error_code FAT_GetVolumeInformation(const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount,
+    kernel::KVFSVolumeInformation &information) {
+  const auto &vol = *mount->driverExtension.as<FAT_Volume>();
+  const char *name = vol.type == FAT_Type::FAT12 ? "FAT12" : vol.type == FAT_Type::FAT16 ? "FAT16"
+      : vol.type == FAT_Type::FAT32 ? "FAT32" : "EXFAT";
+  size_t i = 0;
+  for (; name[i]; ++i) information.fileSystem[i] = name[i];
+  information.fileSystem[i] = 0;
+  information.maxComponentLength = kLfnMaxName;
+  information.readOnly = !vol.writable || vol.type == FAT_Type::ExFAT;
+  information.casePreserved = true;
+  return {};
 }

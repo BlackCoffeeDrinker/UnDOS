@@ -36,6 +36,7 @@ set(artifacts "")
 foreach (entry IN ITEMS
         "kernel|boot/kernel.elf" "hal_x86_old|boot/hal_x86_old.elf"
         "native_elf_loader|System/ELoader.elf"
+        "bus_pci|System/Drivers/bus_pci.elf"
         "bus_isa|System/Drivers/bus_isa.elf" "disk_ata|System/Drivers/disk_ata.elf"
         "volmgr|System/Drivers/volmgr.elf" "fs_fat|System/Drivers/fs_fat.elf"
         "gfx_vga|System/Drivers/gfx_vga.elf" "gfx_cirrus|System/Drivers/gfxcirr.elf"

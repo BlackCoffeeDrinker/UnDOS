@@ -204,7 +204,7 @@ public:
 void init() {
   s_pumpWake.manualReset = false;
   s_pumpWake.signalled = false;
-  auto thread = KE_SCHED_CreateThread(&EventThread, nullptr, 0);
+  auto thread = KE_SCHED_CreateThread(&EventThread, nullptr, kernel::ThreadPriority::Idle);
   if (!thread) {
     KE_Print("Failed to initialize events: {}", thread.error().message());
     HAL_PLATFORM_Panic("Failed to initialize events", __FILE__, __LINE__);

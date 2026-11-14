@@ -7,6 +7,7 @@
 #include "KernelStackCleanup.hpp"
 #include "ReadyQueue.hpp"
 #include "ScheduleNext.hpp"
+#include "../process.hpp"
 #include <percpu.hpp>
 
 // Page size published by the boot path (see kernel/src/main.cpp).
@@ -69,7 +70,7 @@ void idle_entry(void *) {
 // Create an idle thread pinned to `cpu_id`: lowest priority, so it is only
 // picked when that CPU's queue holds nothing else.
 kstd::expected<KObjectPtr<KThreadObject>, kstd::error_code> create_idle_thread(const uint32_t cpu_id) noexcept {
-  auto idle = KE_SCHED_CreateThread(cfunc<void(void *)>(&idle_entry), nullptr, 0);
+  auto idle = KE_SCHED_CreateThread(cfunc<void(void *)>(&idle_entry), nullptr, ThreadPriority::Idle);
   if (!idle) {
     KE_Print("Failed to create thread idle: {}", idle.error().message());
     return kstd::unexpected(idle.error());
@@ -207,7 +208,7 @@ void init_bsp() noexcept {
   // so no stack needs to be framed here.
   if (const auto boot = CreateKObject<KThreadObject>("thread0")) {
     (*boot)->state = KThreadObject::State::Running;
-    (*boot)->priority = 1;
+    (*boot)->priority = ThreadPriority::Normal;
     (*boot)->quantum_ticks = DEFAULT_QUANTUM;
     (*boot)->translation_root = PhysicalAddress(0);
     ctx.current = *boot;
@@ -240,7 +241,7 @@ void init_ap(const uint32_t cpu_id) noexcept {
   kstd::format(name, "cpu{}boot", cpu_id);
   if (const auto boot = CreateKObject<KThreadObject>(name)) {
     (*boot)->state = KThreadObject::State::Running;
-    (*boot)->priority = 1;
+    (*boot)->priority = ThreadPriority::Normal;
     (*boot)->quantum_ticks = DEFAULT_QUANTUM;
     (*boot)->translation_root = PhysicalAddress(0);
     ctx.current = *boot;
@@ -289,7 +290,7 @@ void ready_locked(KThreadObject *thread) noexcept {
 using namespace kernel;
 
 UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KThreadObject>, kstd::error_code>
-KE_SCHED_CreateThread(cfunc<void(void *)> entry, void *arg, uint8_t priority) noexcept {
+KE_SCHED_CreateThread(cfunc<void(void *)> entry, void *arg, ThreadPriority priority) noexcept {
   kstd::static_string<64> name;
   kstd::format(name, "thread{}", sched::next_thread_id());
 
@@ -333,10 +334,12 @@ UNDOS_KERNEL_API_DEF kstd::expected<KObjectPtr<KThreadObject>, kstd::error_code>
 KE_SCHED_CreateUserThread(const vmm::AddressSpace &as, VirtualAddress user_entry,
                           VirtualAddress user_stack_top, KProcessObject *owner) noexcept {
   kstd::static_string<64> name;
-  kstd::format(name, "uthread{}", sched::next_thread_id());
+  const uint32_t tid = sched::next_thread_id();
+  kstd::format(name, "uthread{}", tid);
 
   auto t = CreateKObject<KThreadObject>(name);
   if (!t) return kstd::unexpected(t.error());
+  t.value()->tid = tid;
 
   // The thread still needs its own kernel stack: ring-3 -> ring-0 transitions
   // (syscalls, IRQs, exceptions) land on it via the TSS's esp0.
@@ -346,7 +349,7 @@ KE_SCHED_CreateUserThread(const vmm::AddressSpace &as, VirtualAddress user_entry
 
   const VirtualAddress top = base + sched::KERNEL_STACK_SIZE;
 
-  t.value()->priority = 1;
+  t.value()->priority = ThreadPriority::Normal;
   t.value()->state = KThreadObject::State::Ready;
   t.value()->translation_root = as.translation_root;
   t.value()->owner_process = owner;
@@ -359,6 +362,15 @@ KE_SCHED_CreateUserThread(const vmm::AddressSpace &as, VirtualAddress user_entry
       [&] { sched::free_kernel_stack(base, "user thread stack region release"); });
   if (status) {
     return kstd::unexpected(status);
+  }
+
+  // Count the thread before it can run, so an exit never misses it.
+  if (owner) {
+    if (const auto attached = process::attach_thread(*owner, *t->get())) {
+      sched::log_cleanup_failure("user thread removal", KE_OB_RemoveObject(KE_OB_GetThreadsDirectory(), KObjectPtr<KObject>(t->get())));
+      sched::free_kernel_stack(base, "user thread stack region release");
+      return kstd::unexpected(attached);
+    }
   }
 
   sched::enqueue_on(sched::pick_target_cpu(), t->get());

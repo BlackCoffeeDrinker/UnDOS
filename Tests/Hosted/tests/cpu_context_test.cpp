@@ -39,8 +39,8 @@ TEST_CASE("each CPU sees its own ready queue and current thread", "[cpu_context]
 
   kernel::KThreadObject on_cpu0;
   kernel::KThreadObject on_cpu1;
-  on_cpu0.priority = 1;
-  on_cpu1.priority = 1;
+  on_cpu0.priority = kernel::ThreadPriority::Normal;
+  on_cpu1.priority = kernel::ThreadPriority::Normal;
 
   current_context().ready.enqueue(&on_cpu0);
 

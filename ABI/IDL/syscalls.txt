@@ -58,22 +58,15 @@ syscall V1 PROC CreateProcess [200] {
     argument: IN string;
     /** Only ProcessFlags_None (zero) is supported; all other flags reject. */
     flags: IN c<uint32_t>;
-    /** Handle to the new process (waitable with WaitProcess). */
-    handle: OUT HANDLE;
-};
-
-/** Creates a process with explicit standard streams. Same path, argument,
- * flags, readiness and handle ownership contract as CreateProcessV1.
- * Only these streams are inherited; unrelated handles are not inherited.
- * Handles are caller-local open I/O objects, stdin requires read access,
- * stdout/stderr require write access. Child handles are independent copies. */
-syscall V2 PROC CreateProcess [208] {
-    path: IN string;
-    argument: IN string;
-    flags: IN c<uint32_t>;
+    /** Standard streams for the child. Pass UINT32_MAX for all three to give
+     * the child the default streams; otherwise each must be a caller-local
+     * open I/O object (stdin readable, stdout/stderr writable) and only these
+     * are inherited, as independent copies. Mixing UINT32_MAX with real
+     * handles rejects. */
     stdinHandle: IN HANDLE;
     stdoutHandle: IN HANDLE;
     stderrHandle: IN HANDLE;
+    /** Handle to the new process (waitable with WaitProcess). */
     handle: OUT HANDLE;
 };
 
@@ -218,6 +211,52 @@ syscall V1 PROC Exit [202] {
     exitCode: IN c<uint32_t>;
 };
 
+/** Starts a new user thread in the current process. It begins at `entry`
+ * on a fresh stack of `stackSize` bytes (0 = 64 KiB), with `parameter` as its
+ * only cdecl argument and a zero return address: the entry must end with
+ * ExitThread. The handle is waitable and is signalled when the thread exits. */
+syscall V1 PROC CreateThread [208] {
+    /** User-mode start address. */
+    entry: IN c<uint32_t>;
+    /** Value passed as the first stack argument. */
+    parameter: IN c<uint32_t>;
+    /** Stack size in bytes, rounded up to pages; 0 selects the default. */
+    stackSize: IN c<uint32_t>;
+    /** Handle to the new thread. */
+    handle: OUT HANDLE;
+    /** Kernel thread id. */
+    threadId: OUT c<uint32_t>;
+};
+
+/** Ends the calling thread. The last thread to exit ends the process with
+ * the same code. When the process is exiting (PROC Exit from any thread),
+ * every other thread is retired the next time it enters or leaves the kernel
+ * or is preempted, and alertable waits return early. */
+syscall V1 PROC ExitThread [214] {
+    /** Thread exit code. */
+    exitCode: IN c<uint32_t>;
+};
+
+/** Reads a thread's exit code; fails with WOULD_BLOCK while it still runs. */
+syscall V1 PROC GetExitCodeThread [215] {
+    /** Thread handle from CreateThread. */
+    handle: IN HANDLE;
+    /** Exit code once the thread has exited. */
+    exitCode: OUT c<uint32_t>;
+};
+
+/** Resets an event to non-signalled. */
+syscall V1 PROC ResetEvent [216] {
+    /** Event handle. */
+    handle: IN HANDLE;
+};
+
+/** Returns the calling thread's id (the same id CreateThread reports). */
+syscall V1 PROC GetCurrentThreadId [217] {
+    /** Kernel thread id. */
+    threadId: OUT c<uint32_t>;
+};
+
 /** Timeout value meaning "wait forever". */
 enum WaitTimeout {
     Infinite = 0xFFFFFFFF,
@@ -346,16 +385,8 @@ syscall V1 IO Read [222] {
     data: OUT buffer<c<uint8_t>>;
 };
 
-/** Writes data from `data` to an open object handle. */
+/** Writes bytes to an open object handle and reports short writes. */
 syscall V1 IO Write [223] {
-    /** Open handle to write to. */
-    handle: IN HANDLE;
-    /** Buffer containing the data to write. */
-    data: IN buffer<c<uint8_t>>;
-};
-
-/** Writes bytes and reports short writes. V1 remains available unchanged. */
-syscall V2 IO Write [226] {
     /** Open handle with write access. */
     handle: IN HANDLE;
     /** Bytes to write. The dispatcher rejects lengths above
@@ -369,10 +400,15 @@ syscall V2 IO Write [226] {
 
 /** File or directory information. Attributes use the FAT attribute bits:
  * read-only=1, hidden=2, system=4, directory=16, archive=32.
- * Timestamps and long filenames are not supplied by this interface. */
+ * Times are packed FAT/DOS stamps, (date << 16) | time, local time with 2 s
+ * resolution; 0 means unknown. lastAccessTime only carries a date.
+ * Long filenames are not supplied by this interface. */
 struct FileInformation {
     size: c<uint64_t>;
     attributes: c<uint32_t>;
+    creationTime: c<uint32_t>;
+    lastAccessTime: c<uint32_t>;
+    lastWriteTime: c<uint32_t>;
 };
 
 /** Enumerates one directory entry by zero-based index, excluding . and ...
@@ -430,6 +466,42 @@ syscall V1 IO DeleteFile [232] {
  * Device failures can leave partial changes; no crash consistency is promised. */
 syscall V1 IO CreateDirectory [233] {
     path: IN string;
+};
+
+/** Sets the read-only, hidden, system and archive bits (1, 2, 4, 32) of a
+ * file or directory at an absolute path of at most 255 bytes. Other bits
+ * reject with INVALID_ARGUMENT. Roots cannot be changed. Entries that are
+ * open (other than through read-only directory handles) block the change. */
+syscall V1 IO SetFileAttributes [236] {
+    path: IN string;
+    attributes: IN c<uint32_t>;
+};
+
+/** Enumerates mounted volumes by zero-based index, in mount order.
+ * Internal mounts (names starting with "//") are skipped. found=0 means end.
+ * mountPoint uses query-length-then-fill, including its terminating NUL. */
+syscall V1 IO QueryMount [237] {
+    index: IN c<uint32_t>;
+    mountPoint: OUT string;
+    found: OUT c<uint32_t>;
+};
+
+flags VolumeFlags : uint32_t {
+    ReadOnly;
+    CasePreserved;
+};
+
+/** Returns information for the volume mounted exactly at `mountPoint`.
+ * label and fileSystem use query-length-then-fill, including the terminating
+ * NUL; label is "" when the volume has none. Either buffer may be null.
+ * NOT_FOUND when nothing is mounted at that path. */
+syscall V1 IO GetVolumeInformation [238] {
+    mountPoint: IN string;
+    label: OUT string;
+    fileSystem: OUT string;
+    serialNumber: OUT c<uint32_t>;
+    maxComponentLength: OUT c<uint32_t>;
+    flags: OUT flags<VolumeFlags>;
 };
 
 /** Device control codes understood by IO Control. */

@@ -251,7 +251,7 @@ void Gameport_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
 
   ctx->idle.manualReset = false;
   ctx->idle.signalled = false;
-  auto thread = KE_SCHED_CreateThread(&Gameport_PollThread, ctx, 0);
+  auto thread = KE_SCHED_CreateThread(&Gameport_PollThread, ctx, kernel::ThreadPriority::Idle);
   if (!thread) {
     KE_Print("gameport: Failed to create poll thread; joystick inactive");
     return;

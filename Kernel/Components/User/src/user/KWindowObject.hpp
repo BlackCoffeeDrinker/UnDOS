@@ -63,9 +63,12 @@ struct KWindowObject : KObjectT<KWindowObject, 1, TYPE_WINDOW> {
   bool erasePending{false};
   user::URegion paintClip;// screen coordinates, referenced by the BeginPaint DC
   HDC paintDC{0};
+  user::URegion windowClip;// screen coordinates, referenced by the GetDC DC
+  HDC windowDC{0};
   // Owners of the paint DC closed by destroy_window_locked; dropped with the
   // retired window after the scene lock is released.
   DetachedDC retiredDC;
+  DetachedDC retiredWindowDC;// same, for the GetDC DC
   bool paintActive{false};
   bool paintingErase{false};
   user::URect painting{};// validated client damage, restored if painting is interrupted

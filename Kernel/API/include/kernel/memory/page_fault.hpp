@@ -11,5 +11,6 @@ struct PageFaultInfo {
   bool user;           // user-mode fault
   bool exec;           // attempted instruction fetch (if arch supports)
   VirtualAddress ip;   // faulting instruction pointer
+  VirtualAddress sp;   // user stack pointer for user-mode faults (0 otherwise)
 };
 }

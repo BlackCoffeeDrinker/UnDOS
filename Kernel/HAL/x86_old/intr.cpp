@@ -87,6 +87,14 @@ void remap_pic() noexcept {
   //    already happened.
   pic_send_eoi(0);
 
+  // Deferred kill: a user thread of an exiting process retires here instead
+  // of returning to ring 3. The interrupt frame is abandoned, so the IRQ
+  // depth is closed first.
+  if (user && KE_SCHED_IsExitPending()) {
+    end_hardware_interrupt();
+    KE_SCHED_RetireIfExiting();
+  }
+
   // 2. Clear down any registered drivers listening to the clock via kinterrupt_t
   if (g_hardware_interrupts[0]) {
     auto *intro_obj = g_hardware_interrupts[0];
@@ -169,6 +177,8 @@ static void set_vector_handlers(kstd::integer_sequence<uint8_t, V...>) {
       .user = (error_code & 0x4) != 0,
       .exec = (error_code & 0x10) != 0,
       .ip = kernel::VirtualAddress(static_cast<VirtualAddressT>(frame->eip)),
+      // A ring-3 fault pushes the user ESP and SS after EFLAGS.
+      .sp = kernel::VirtualAddress((error_code & 0x4) ? reinterpret_cast<const uword_t *>(frame)[3] : 0),
   };
 
   KE_VMM_HandlePagefault(info);
@@ -300,8 +310,12 @@ __asm__(
     "    pushl %ecx\n\t"// pointer to __SYS_CALL_DATA
     "    pushl %ebx\n\t"// size
     "    pushl %eax\n\t"// number
+    "    call KE_SCHED_RetireIfExiting\n\t"// deferred kill on entry
     "    call KE_SYSCALL_Dispatch\n\t"
     "    addl $16, %esp\n\t"
+    "    pushl %eax\n\t"
+    "    call KE_SCHED_RetireIfExiting\n\t"// ...and on the way back out
+    "    popl %eax\n\t"
     "    popl %ebp\n\t"
     "    popl %edi\n\t"
     "    popl %esi\n\t"

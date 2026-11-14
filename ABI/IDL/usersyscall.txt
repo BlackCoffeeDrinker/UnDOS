@@ -92,6 +92,7 @@ enum MenuItemFlags {
     String    = 0,
     Grayed    = 0x0001,
     Disabled  = 0x0002,
+    Checked   = 0x0008,
     Popup     = 0x0010,
     Separator = 0x0800,
 };
@@ -102,6 +103,9 @@ struct Msg {
     wParam:  c<uint32_t>;
     lParam:  c<uint32_t>;
     time:    c<uint32_t>;
+    /** Keyboard modifier mask when the message was posted: Shift 1|2,
+     * Control 4|8, Alt 16|32, CapsLock 64, NumLock 128, ScrollLock 256. */
+    keyState: c<uint32_t>;
 };
 
 struct PaintInfo {
@@ -169,17 +173,11 @@ syscall V1 USER GetWindowRect [405] {
     rect: OUT RECT;
 };
 
-/** Adds rect (client coordinates) to the invalid area; whole != 0 invalidates the client. */
-syscall V1 USER InvalidateRect [406] {
-    hwnd:  IN c<uint32_t>;
-    rect:  IN RECT;
-    whole: IN c<uint32_t>;
-};
-
-/** Adds rect (client coordinates) to the invalid area. erase must be 0 or 1;
- * any true request remains pending until BeginPaint consumes the update region.
+/** Adds rect (client coordinates) to the invalid area; whole != 0 invalidates
+ * the client. erase must be 0 or 1; any true request remains pending until
+ * BeginPaint consumes the update region.
  */
-syscall V2 USER InvalidateRect [424] {
+syscall V1 USER InvalidateRect [406] {
     hwnd:  IN c<uint32_t>;
     rect:  IN RECT;
     whole: IN c<uint32_t>;
@@ -307,6 +305,57 @@ syscall V1 USER SetMenu [422] {
 syscall V1 USER GetMenu [423] {
     hwnd: IN c<uint32_t>;
     menu: OUT c<uint32_t>;
+};
+
+/** Reads and optionally changes the state of one item of a menu owned by the
+ * caller. byPosition selects item as a zero-based index; otherwise item is a
+ * command identifier searched depth-first through submenus. Only the Grayed,
+ * Disabled and Checked bits in mask change; they are set from flags. A zero
+ * mask is a query. previous receives the item's flags before the change and
+ * itemId its command identifier or submenu handle. Separators cannot change.
+ */
+syscall V1 USER ModifyMenuState [425] {
+    menu:       IN c<uint32_t>;
+    item:       IN c<uint32_t>;
+    byPosition: IN c<uint32_t>;
+    mask:       IN c<uint32_t>;
+    flags:      IN c<uint32_t>;
+    previous:   OUT c<uint32_t>;
+    itemId:     OUT c<uint32_t>;
+};
+
+/** Removes one item from a menu owned by the caller, selected as in
+ * ModifyMenuState. A removed submenu is detached, not destroyed. itemId
+ * receives the removed command identifier or submenu handle. Any open menu
+ * showing the changed popup is closed.
+ */
+syscall V1 USER RemoveMenuItem [426] {
+    menu:       IN c<uint32_t>;
+    item:       IN c<uint32_t>;
+    byPosition: IN c<uint32_t>;
+    itemId:     OUT c<uint32_t>;
+};
+
+/** Blocks until the caller's queue has a message (paint, geometry and font
+ * messages included), without removing it. Returns TIMEOUT after timeoutMs
+ * milliseconds; 0xFFFFFFFF waits forever and 0 only checks.
+ */
+syscall V1 USER WaitMessage [427] {
+    timeoutMs: IN c<uint32_t>;
+};
+
+/** Returns a DC for drawing in the window's client area outside BeginPaint:
+ * clipped to the visible client, origin at the client, no update region is
+ * consumed. One such DC per window; ReleaseDC presents what was drawn.
+ */
+syscall V1 USER GetDC [428] {
+    hwnd: IN c<uint32_t>;
+    dc:   OUT c<uint32_t>;
+};
+
+syscall V1 USER ReleaseDC [429] {
+    hwnd: IN c<uint32_t>;
+    dc:   IN c<uint32_t>;
 };
 
 // endregion

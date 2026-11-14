@@ -94,7 +94,7 @@ kstd::expected<kernel::font::Ref<kernel::font::GlyphMask>, kstd::error_code> Pin
   return kernel::font::Ref<kernel::font::GlyphMask>{};
 }
 
-void BitmapMetrics(uint32_t generation, uint32_t repertoire, TextMetricsV2 &metrics) {
+void BitmapMetrics(uint32_t generation, uint32_t repertoire, TextMetrics &metrics) {
   metrics = {};
   int32_t left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
   auto include = [&](uint32_t codepoint) {
@@ -144,7 +144,7 @@ bool use_bitmap_fallback(const kernel::font::FontObject &font, uint32_t codepoin
 }
 
 kstd::error_code FontMetrics(const kernel::font::FontObject &font, uint32_t style,
-                             uint32_t repertoire, TextMetricsV2 &metrics) {
+                             uint32_t repertoire, TextMetrics &metrics) {
   if (style > 1) return kernel::KernelError::InvalidArgument;
   if (repertoire != TextRepertoire_RepertoireBasic &&
       repertoire != TextRepertoire_RepertoireTerminal)
@@ -241,8 +241,8 @@ kstd::error_code LayoutFontText(const kernel::font::FontObject &font, uint32_t s
 kstd::error_code PrepareFontText(const kernel::font::FontObject &font, uint32_t style,
                                  uint32_t layout, uint32_t repertoire,
                                  const char *text, size_t size,
-                                 kernel::font::TextRun &run, TextMetricsV2 &metrics,
-                                 TextExtentV2 &extent) {
+                                 kernel::font::TextRun &run, TextMetrics &metrics,
+                                 TextExtent &extent) {
   extent = {};
   if (size > kernel::font::MaxTextBytes) return kernel::KernelError::InvalidSize;
   if (size && !text) return kernel::KernelError::InvalidArgument;
@@ -659,8 +659,8 @@ struct TextCursor {
 // units, so neither scanning nor submitted fill work can exceed the limit.
 kstd::error_code CommitTextSlice(
     kernel::KDeviceContextSlot &slot, const kernel::font::FontObject &font,
-    const kernel::font::TextRun &run, const TextMetricsV2 &metrics,
-    const TextExtentV2 &extent, const char *text, size_t size,
+    const kernel::font::TextRun &run, const TextMetrics &metrics,
+    const TextExtent &extent, const char *text, size_t size,
     uint32_t layout, int64_t x, int64_t y, TextCursor &cursor,
     bool &done, uint32_t &processed, uint32_t &runs, DirtyRect &dirty) {
   constexpr uint32_t PixelLimit = 256, RunLimit = 32;
@@ -958,7 +958,7 @@ kstd::error_code handle_MeasureText_V1(__KRN_GFX_MEASURETEXT_V1 &&args) {
   {
     TextInterruptWindow window;
     kernel::font::TextRun run;
-    TextMetricsV2 metrics{};
+    TextMetrics metrics{};
     result = PrepareFontText(*font, static_cast<uint32_t>(args.style),
                              static_cast<uint32_t>(args.layout),
                              static_cast<uint32_t>(args.repertoire), text,
@@ -1210,6 +1210,10 @@ kstd::error_code handle_DeleteDC_V1(__KRN_GFX_DELETEDC_V1 &&args) {
   for (auto *window = kernel::user::topmost_locked(); window; window = window->below) {
     if (window->process == proc && window->paintDC == args.dc) {
       kernel::user::abandon_paint_locked(*window);
+      break;
+    }
+    if (window->process == proc && window->windowDC == args.dc) {
+      kernel::user::abandon_window_dc_locked(*window);
       break;
     }
   }
@@ -1491,8 +1495,8 @@ kstd::error_code handle_DrawText_V1(__KRN_GFX_DRAWTEXT_V1 &&args) {
     }
   } cleanup{run, state, font};
   if (!font) return kernel::KernelError::InvalidState;
-  TextMetricsV2 metrics{};
-  TextExtentV2 extent{};
+  TextMetrics metrics{};
+  TextExtent extent{};
   {
     TextInterruptWindow window;
     if (const auto error = PrepareFontText(*font, args.style, args.layout,

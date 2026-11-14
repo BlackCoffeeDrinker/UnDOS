@@ -79,9 +79,9 @@ TEST_CASE("Production IRQ0 charging precedes switches and preserves interrupted 
   (*threadB)->owner_process = processB->get();
   (*threadC)->owner_process = processC->get();
   (*threadA)->state = kernel::KThreadObject::State::Running;
-  (*threadA)->priority = 1;
-  (*threadB)->priority = 2;
-  (*threadC)->priority = 2;
+  (*threadA)->priority = kernel::ThreadPriority::Normal;
+  (*threadB)->priority = kernel::ThreadPriority::High;
+  (*threadC)->priority = kernel::ThreadPriority::High;
   (*threadA)->translation_root = kernel::PhysicalAddress(0x1000);
   (*threadB)->translation_root = kernel::PhysicalAddress(0x2000);
   (*threadC)->translation_root = kernel::PhysicalAddress(0x3000);
@@ -306,11 +306,11 @@ TEST_CASE("Scheduler hands off from a terminated thread to idle accounting", "[t
   REQUIRE(idle);
 
   (*bootstrap)->state = kernel::KThreadObject::State::Running;
-  (*bootstrap)->priority = 1;
+  (*bootstrap)->priority = kernel::ThreadPriority::Normal;
   (*bootstrap)->translation_root = kernel::PhysicalAddress(0);
   (*bootstrap)->kernel_stack_top = kernel::VirtualAddress(0x5100);
   (*idle)->state = kernel::KThreadObject::State::Ready;
-  (*idle)->priority = 0;
+  (*idle)->priority = kernel::ThreadPriority::Idle;
   (*idle)->translation_root = kernel::PhysicalAddress(0);
   (*idle)->kernel_stack_top = kernel::VirtualAddress(0x6100);
 

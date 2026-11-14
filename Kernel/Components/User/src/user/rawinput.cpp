@@ -241,12 +241,23 @@ void keyboard_locked(const input::KeyboardInputEvent &event) noexcept {
     window = active_window_locked();
   if (!window || !window->queue || !effectively_visible_locked(*window) || window->state == KWindowObject::State::Minimized)
     return;
-  const uint32_t metadata = event.scanCode | ((event.keyFlags & 7u) << 8) | ((event.modifiers & 0x1FF) << 16);
-  post_locked(*window->queue, window->hwnd, released ? kMsgKeyUp : kMsgKeyDown,
-              event.virtualKey, metadata);
-  if (event.character && !released && !alt && !control)
-    post_locked(*window->queue, window->hwnd, kMsgChar,
-                static_cast<uint8_t>(event.character), metadata);
+  // Win32 keystroke lParam: repeat count, scan code, extended, context (Alt),
+  // previous state and transition. Modifiers travel in the message keyState.
+  const bool repeat = (event.keyFlags & input::key_flags::Repeat) != 0;
+  const uint32_t metadata = 1u | ((static_cast<uint32_t>(event.scanCode) & 0xFFu) << 16) |
+                            ((event.keyFlags & input::key_flags::Extended) ? 1u << 24 : 0u) |
+                            (alt ? 1u << 29 : 0u) | (released || repeat ? 1u << 30 : 0u) |
+                            (released ? 1u << 31 : 0u);
+  const uint32_t keyState = event.modifiers & 0x1FF;
+  // Alt+key (without Ctrl, which is AltGr-like) becomes a system keystroke;
+  // releasing Alt itself is a system key-up, as in Win32.
+  const bool system = (alt && !control) || (released && (event.virtualKey == 0x12 || event.virtualKey == 0xA4 || event.virtualKey == 0xA5) && !control);
+  post_locked(*window->queue, window->hwnd,
+              system ? (released ? kMsgSysKeyUp : kMsgSysKeyDown) : (released ? kMsgKeyUp : kMsgKeyDown),
+              event.virtualKey, metadata, keyState);
+  if (event.character && !released && !control)
+    post_locked(*window->queue, window->hwnd, alt ? kMsgSysChar : kMsgChar,
+                static_cast<uint8_t>(event.character), metadata, keyState);
 }
 
 void raw_input_thread(void *) {
@@ -307,7 +318,7 @@ kstd::error_code init() noexcept {
 }
 
 void init_raw_input() noexcept {
-  if (const auto worker = KE_SCHED_CreateThread(raw_input_thread, nullptr, 2); !worker)
+  if (const auto worker = KE_SCHED_CreateThread(raw_input_thread, nullptr, kernel::ThreadPriority::High); !worker)
     KE_Print("USER: cannot create raw input worker: {}", worker.error().message());
 }
 

@@ -52,7 +52,7 @@ add_custom_command(OUTPUT "${_task_snapshot_dispatch}"
 add_custom_command(OUTPUT "${_invalidate_rect_dispatch}"
         COMMAND ${PYTHON3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py"
             "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
-            InvalidateRect_V2 "${_invalidate_rect_dispatch}"
+            InvalidateRect_V1 "${_invalidate_rect_dispatch}"
         DEPENDS undos-syscalls-gen "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/../extract_dispatch.py")
 
@@ -81,6 +81,7 @@ add_executable(KernelTests
         volume_manager_test.cpp
         root_volume_selector_test.cpp
         fat_short_name_test.cpp
+        fat_long_name_test.cpp
         mini_fat16_test.cpp
         scheduler_test.cpp
         cpu_context_test.cpp

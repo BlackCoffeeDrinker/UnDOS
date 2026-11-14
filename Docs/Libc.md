@@ -80,12 +80,11 @@ requested process exit status. `fclose` attempts flush and closes even on error.
 Standard handles come from the startup runtime queries, never assumed handles
 0/1/2. Missing handles fail with `EBADF`; errors returned by the current
 kernel I/O API generally map to `EIO` because it does not distinguish all
-filesystem failure reasons. `WriteV2` (syscall 226) preserves `WriteV1` and
+filesystem failure reasons. `WriteV1` (syscall 223)
 reports actual bytes accepted, so stdio retries short writes and fails on
-zero-progress writes. The dispatcher accepts `WriteV2` buffers up to
+zero-progress writes. The dispatcher accepts `WriteV1` buffers up to
 `UNDOS_MAX_MAPPED_BUFFER_SIZE` (64 MiB); the target may accept fewer bytes.
-Bulk stdio still splits transfers into requests of at most 4096 bytes. This SDK requires a kernel
-with that additive syscall.
+Bulk stdio still splits transfers into requests of at most 4096 bytes.
 The original `crt_*` APIs remain available and unchanged.
 
 `fread`/`fwrite` return complete element counts and reject multiplication

@@ -36,7 +36,7 @@ void tty_pump_thread(void *) {
 namespace kernel::tty::detail {
 kstd::error_code StartPumpThread() noexcept {
   const auto worker = KE_SCHED_CreateThread(
-      kernel::cfunc<void(void *)>(&tty_pump_thread), nullptr, 1);
+      kernel::cfunc<void(void *)>(&tty_pump_thread), nullptr, kernel::ThreadPriority::Normal);
   return worker ? kernel::KernelError::Success : worker.error();
 }
 }// namespace kernel::tty::detail

@@ -340,7 +340,7 @@ void prof_dump(WriteFn write) noexcept {
 void prof_schedule_dump(uint32_t seconds) noexcept {
   if (!seconds) return;
   g_dump_every_seconds = seconds;
-  if (auto thread = KE_SCHED_CreateThread(cfunc<void(void *)>(&DumpThread), nullptr, 0); !thread) {
+  if (auto thread = KE_SCHED_CreateThread(cfunc<void(void *)>(&DumpThread), nullptr, ThreadPriority::Idle); !thread) {
     KE_Print("Profiler: failed to start dump thread: {}", thread.error().message());
   }
 }

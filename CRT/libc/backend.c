@@ -25,7 +25,7 @@ int undos_libc_read(HANDLE handle, void *buffer, size_t *size) {
 }
 int undos_libc_write(HANDLE handle, const void *buffer, size_t *size) {
   uint32_t length = 0;
-  const int error = status(UD_SYS_WriteV2(handle, buffer, (uint32_t)*size, &length));
+  const int error = status(UD_SYS_WriteV1(handle, buffer, (uint32_t)*size, &length));
   *size = error ? 0 : length;
   return error;
 }

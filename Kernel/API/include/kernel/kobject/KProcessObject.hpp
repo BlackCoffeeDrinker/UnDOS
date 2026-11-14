@@ -228,6 +228,12 @@ struct KProcessObject : KObjectT<KProcessObject, 1, TYPE_PROCESS> {
   uint64_t userTicks{0};
   uint64_t kernelTicks{0};
   KObjectPtr<KThreadObject> main_thread;
+  // Live user threads (guarded by the process-directory lock). On exit the
+  // process is marked Exiting; every thread retires itself the next time it
+  // enters or leaves the kernel, and the last one out tears the process down.
+  static constexpr uint32_t MaxThreads = 32;
+  KThreadObject *threads[MaxThreads]{};
+  uint32_t live_threads{0};
   KObjectPtr<KSubsystemObject> subsystem;
   int32_t exit_code{0};
   State state{State::Running};

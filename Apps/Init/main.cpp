@@ -91,7 +91,7 @@ bool init_fonts() {
   }
   HANDLE loader = 0;
   const auto created = UD_SYS_CreateProcessV1("/System/fontload.elf",
-      arguments, ProcessFlags_None, &loader);
+      arguments, ProcessFlags_None, UINT32_MAX, UINT32_MAX, UINT32_MAX, &loader);
   if (created != SyscallReturnCode_OKAY) {
     (void)UD_SYS_PrintV1("init: cannot start default font loader");
     return false;
@@ -279,7 +279,7 @@ void init_probe_wait() {
   }
 
   HANDLE term = 0;
-  const auto created = UD_SYS_CreateProcessV1("/System/term.elf", "", ProcessFlags_None, &term);
+  const auto created = UD_SYS_CreateProcessV1("/System/term.elf", "", ProcessFlags_None, UINT32_MAX, UINT32_MAX, UINT32_MAX, &term);
   if (created != SyscallReturnCode_OKAY) {
     crt_printf("init: CreateProcess term.elf ret=%x\n", created);
     return;
@@ -349,7 +349,7 @@ extern "C" int main(int argc, char **argv) {
   if (argc == 2 && !strcmp(argv[1], "--abi-test")) {
     HANDLE child = 0;
     if (UD_SYS_CreateProcessV1("/System/abitest.elf", "\"two words\" \"\" last",
-                              ProcessFlags_None, &child) != SyscallReturnCode_OKAY) {
+                              ProcessFlags_None, UINT32_MAX, UINT32_MAX, UINT32_MAX, &child) != SyscallReturnCode_OKAY) {
       (void) UD_SYS_PrintV1("ABI probe: child creation FAIL");
       return 1;
     }
@@ -361,7 +361,7 @@ extern "C" int main(int argc, char **argv) {
       return 1;
     }
     if (UD_SYS_CreateProcessV1("/System/abitest.elf", "--immediate",
-                              ProcessFlags_None, &child) != SyscallReturnCode_OKAY) {
+                              ProcessFlags_None, UINT32_MAX, UINT32_MAX, UINT32_MAX, &child) != SyscallReturnCode_OKAY) {
       (void) UD_SYS_PrintV1("ABI probe: immediate child creation FAIL");
       return 1;
     }
@@ -371,7 +371,7 @@ extern "C" int main(int argc, char **argv) {
       (void) UD_SYS_PrintV1("ABI probe: immediate exit status FAIL");
       return 1;
     }
-    if (UD_SYS_CreateProcessV1("/System/abimiss.elf", "", ProcessFlags_None, &child) ==
+    if (UD_SYS_CreateProcessV1("/System/abimiss.elf", "", ProcessFlags_None, UINT32_MAX, UINT32_MAX, UINT32_MAX, &child) ==
         SyscallReturnCode_OKAY) {
       (void) UD_SYS_CloseV1(child);
       (void) UD_SYS_PrintV1("ABI probe: missing note accepted FAIL");
@@ -387,7 +387,7 @@ extern "C" int main(int argc, char **argv) {
     if (!init_fonts()) return 1;
     for (unsigned attempt = 0; attempt < 3; ++attempt) {
       HANDLE shell = 0;
-      const auto created = UD_SYS_CreateProcessV1("/System/progman.elf", "", ProcessFlags_None, &shell);
+      const auto created = UD_SYS_CreateProcessV1("/System/progman.elf", "", ProcessFlags_None, UINT32_MAX, UINT32_MAX, UINT32_MAX, &shell);
       if (created != SyscallReturnCode_OKAY) {
         crt_printf("init: Program Manager startup failed (%x), attempt %u/3\n", created, attempt + 1);
         continue;

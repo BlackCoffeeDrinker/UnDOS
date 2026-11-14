@@ -14,8 +14,8 @@ extern "C" {
 #endif
 
 // Returns bytes submitted on success, or -1 for an invalid argument,
-// unavailable stdout, syscall failure, or formatting overflow. WriteV1 does
-// not expose partial-write counts; success reports the submitted byte count.
+// unavailable stdout, syscall failure, or formatting overflow. A short write
+// (fewer bytes accepted than submitted) is a failure.
 int crt_puts(const char *message);
 int crt_printf(const char *fmt, ...);
 int crt_vprintf(const char *fmt, va_list args);

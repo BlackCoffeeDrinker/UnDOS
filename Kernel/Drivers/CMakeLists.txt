@@ -1,5 +1,6 @@
 
 add_subdirectory(bus_isa)
+add_subdirectory(bus_pci)
 add_subdirectory(disk_ata)
 add_subdirectory(disk_fake)
 add_subdirectory(volmgr)

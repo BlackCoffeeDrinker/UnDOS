@@ -194,7 +194,7 @@ enum TextRepertoire {
     RepertoireTerminal = 1,
 };
 
-struct TextMetricsV2 {
+struct TextMetrics {
     generation: c<uint32_t>;
     ascent: c<uint32_t>;
     descent: c<uint32_t>;
@@ -209,7 +209,7 @@ struct TextMetricsV2 {
     inkBottom: c<int32_t>;
 };
 
-struct TextExtentV2 {
+struct TextExtent {
     generation: c<uint32_t>;
     advanceWidth: c<uint32_t>;
     lineHeight: c<uint32_t>;
@@ -561,7 +561,7 @@ syscall V1 GFX GetFontMetrics [360] {
     font: IN c<uint32_t>;
     style: IN enum<TextStyle>;
     repertoire: IN enum<TextRepertoire>;
-    metrics: OUT struct<TextMetricsV2>;
+    metrics: OUT struct<TextMetrics>;
 };
 
 syscall V1 GFX MeasureText [361] {
@@ -570,7 +570,7 @@ syscall V1 GFX MeasureText [361] {
     layout: IN enum<TextLayoutMode>;
     repertoire: IN enum<TextRepertoire>;
     text: IN string;
-    extent: OUT struct<TextExtentV2>;
+    extent: OUT struct<TextExtent>;
 };
 
 syscall V1 GFX DrawText [362] {

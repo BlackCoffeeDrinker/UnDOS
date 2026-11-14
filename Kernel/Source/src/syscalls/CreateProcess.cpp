@@ -17,9 +17,17 @@ kstd::chrono::milliseconds to_timeout(uint32_t ms) {
   return ms == WaitTimeout_Infinite ? kernel::WAIT_INFINITE : kstd::chrono::milliseconds(ms);
 }
 
+// User-facing waits are alertable: a process exit ends them early.
 kstd::error_code wait_handle(const kernel::KObjectPtr<kernel::KObject> &object, uint32_t timeoutMs) {
-  return KE_SCHED_WaitForObject(object, to_timeout(timeoutMs));
+  const auto self = KE_SCHED_GetCurrentThread();
+  if (self) self->alertable = true;
+  const auto status = KE_SCHED_WaitForObject(object, to_timeout(timeoutMs));
+  if (self) self->alertable = false;
+  return status;
 }
+
+constexpr uint32_t kDefaultThreadStack = 64 * 1024;
+constexpr uint32_t kMaxThreadStack = 4 * 1024 * 1024;
 } // namespace
 
 namespace {
@@ -59,11 +67,11 @@ kstd::error_code create(Arguments &args, const kernel::ProcessStreams *streams) 
 }
 
 kstd::error_code handle_CreateProcess_V1(__KRN_PROC_CREATEPROCESS_V1 &&args) {
-  return create(args, nullptr);
-}
-
-kstd::error_code handle_CreateProcess_V2(__KRN_PROC_CREATEPROCESS_V2 &&args) {
   args.handle = UINT32_MAX;
+  // All three UINT32_MAX: the child gets the default streams.
+  if (args.stdinHandle == UINT32_MAX && args.stdoutHandle == UINT32_MAX &&
+      args.stderrHandle == UINT32_MAX)
+    return create(args, nullptr);
   const auto proc = current_process();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   if (args.flags != 0) return kernel::KernelError::InvalidArgument;
@@ -160,6 +168,86 @@ kstd::error_code handle_Exit_V1(__KRN_PROC_EXIT_V1 &&args) {
     KE_EVENT_Signal(proc->startupEvent->header, true);
   kernel::process::terminate_current(static_cast<int32_t>(args.exitCode));
 }
+/** Starts a user thread in the current process. */
+kstd::error_code handle_CreateThread_V1(__KRN_PROC_CREATETHREAD_V1 &&args) {
+  args.handle = UINT32_MAX;
+  args.threadId = 0;
+  const auto proc = current_process();
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
+  if (!args.entry || args.stackSize > kMaxThreadStack) return kernel::KernelError::InvalidArgument;
+  const uint32_t size = ((args.stackSize ? args.stackSize : kDefaultThreadStack) + 4095u) & ~4095u;
+
+  const auto reserved = proc->handles.Reserve(
+      kernel::ProcessHandleTable::HandleAccess::Read,
+      kernel::ProcessHandleTable::HandleFlags::None);
+  if (!reserved) return reserved.error();
+
+  // The stack lives until the process exits, like the main thread's.
+  const auto stack = kernel::vmm::allocate_memory(
+      proc->address_space, size, kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE);
+  if (!stack) {
+    (void) proc->handles.Cancel(*reserved);
+    return stack.error();
+  }
+  // The caller's address space is current: frame a cdecl call with a zero
+  // return address and the parameter as the first argument.
+  auto *top = reinterpret_cast<uint32_t *>(static_cast<uint8_t *>(*stack) + size);
+  top[-1] = 0;
+  top[-2] = args.parameter;
+  top[-3] = 0;
+
+  const auto thread = KE_SCHED_CreateUserThread(
+      proc->address_space, kernel::VirtualAddress(args.entry),
+      kernel::VirtualAddress::from_ptr(top - 3), proc);
+  if (!thread) {
+    (void) proc->handles.Cancel(*reserved);
+    return thread.error();
+  }
+  const auto bound = proc->handles.Bind(*reserved, kernel::KObjectPtr<kernel::KObject>(thread->get()));
+  if (!bound) return bound.error();
+  args.handle = static_cast<uint32_t>(*bound);
+  args.threadId = (*thread)->tid;
+  return {};
+}
+
+/** Ends the calling thread; the last one out ends the process. */
+kstd::error_code handle_ExitThread_V1(__KRN_PROC_EXITTHREAD_V1 &&args) {
+  kernel::process::exit_current_thread(args.exitCode);
+}
+
+kstd::error_code handle_GetCurrentThreadId_V1(__KRN_PROC_GETCURRENTTHREADID_V1 &&args) {
+  const auto self = KE_SCHED_GetCurrentThread();
+  if (!self) return kernel::KernelError::NoCurrentThread;
+  args.threadId = self->tid;
+  return {};
+}
+
+/** Resets an event to non-signalled. */
+kstd::error_code handle_ResetEvent_V1(__KRN_PROC_RESETEVENT_V1 &&args) {
+  const auto proc = current_process();
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
+  const auto entry = proc->handles.Lookup(static_cast<kernel::KHandle>(args.handle));
+  if (!entry) return kernel::KernelError::InvalidHandle;
+  const auto event = entry->object.As<kernel::KEventObject>();
+  if (!event) return kernel::KernelError::WrongObjectType;
+  KE_EVENT_Reset(event->header);
+  return {};
+}
+
+/** Reads the exit code of an exited thread. */
+kstd::error_code handle_GetExitCodeThread_V1(__KRN_PROC_GETEXITCODETHREAD_V1 &&args) {
+  args.exitCode = 0;
+  const auto proc = current_process();
+  if (!proc) return kernel::KernelError::NoCurrentProcess;
+  const auto entry = proc->handles.Lookup(static_cast<kernel::KHandle>(args.handle));
+  if (!entry) return kernel::KernelError::InvalidHandle;
+  const auto thread = entry->object.As<kernel::KThreadObject>();
+  if (!thread) return kernel::KernelError::WrongObjectType;
+  if (!thread->exitHeader.signalled) return kernel::KernelError::WouldBlock;
+  args.exitCode = thread->exit_code;
+  return {};
+}
+
 /** Allocates `size` bytes of pages with the given protection. */
 kstd::error_code handle_AllocatePages_V1(__KRN_MEM_ALLOCATEPAGES_V1 &&args) {
   args.address = 0;

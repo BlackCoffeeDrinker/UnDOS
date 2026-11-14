@@ -66,9 +66,9 @@ TEST_CASE("Generated InvalidateRect V2 dispatch rejects invalid erase values",
   } reset;
 
   for (const uint32_t erase : {2u, UINT32_MAX}) {
-    __SYS_USER_INVALIDATERECT_V2 wire{};
+    __SYS_USER_INVALIDATERECT_V1 wire{};
     wire.erase = erase;
-    REQUIRE(Dispatch_InvalidateRect_V2(&wire, sizeof(wire), 0) ==
+    REQUIRE(Dispatch_InvalidateRect_V1(&wire, sizeof(wire), 0) ==
             kernel::KernelError::InvalidArgument);
   }
 }

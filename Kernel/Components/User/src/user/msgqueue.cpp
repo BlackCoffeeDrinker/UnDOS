@@ -8,6 +8,14 @@
 
 namespace kernel::user {
 namespace {
+// Message waits are alertable: a process exit ends them so the thread retires.
+kstd::error_code alertable_wait(KDispatcherHeader &header, kstd::chrono::milliseconds timeout) noexcept {
+  const auto self = KE_SCHED_GetCurrentThread();
+  if (self) self->alertable = true;
+  const auto status = KE_SCHED_WaitForHeader(header, timeout);
+  if (self) self->alertable = false;
+  return status;
+}
 MessageQueue *g_queues{nullptr};
 
 // First visible window of this queue with a pending invalid area; WM_PAINT is
@@ -73,9 +81,11 @@ void wake_locked(MessageQueue &queue) noexcept {
   KE_EVENT_Signal(queue.header, true);
 }
 
-kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept {
+kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam,
+                             uint32_t keyState) noexcept {
   const QueuedMessage m{.hwnd = hwnd, .message = message, .wParam = wParam, .lParam = lParam,
-                        .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
+                        .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000),
+                        .keyState = keyState};
   if (const kstd::error_code pushed = queue.ring.Push(m); pushed) return pushed;
   wake_locked(queue);
   return {};
@@ -170,9 +180,27 @@ kstd::expected<QueuedMessage, kstd::error_code> get_message(bool block, bool rem
     reset_header(*q);
     unlock();
     if (!block) return kstd::unexpected(KernelError::WouldBlock);
-    if (const kstd::error_code waited = KE_SCHED_WaitForHeader(q->header, kstd::chrono::milliseconds(-1));
+    if (const kstd::error_code waited = alertable_wait(q->header, kstd::chrono::milliseconds(-1));
         waited) return kstd::unexpected(waited);
   }
+}
+
+kstd::error_code wait_message(uint32_t timeoutMs) noexcept {
+  const auto pending = get_message(false, false);
+  if (pending) return {};
+  if (pending.error() != KernelError::WouldBlock) return pending.error();
+  // get_message reset the header under the lock, so a post after that point
+  // sets it again and the wait below returns at once.
+  lock();
+  const auto queue = queue_for_current_locked();
+  if (!queue) {
+    unlock();
+    return queue.error();
+  }
+  MessageQueue *q = *queue;
+  unlock();
+  const int64_t ms = timeoutMs == UINT32_MAX ? -1 : static_cast<int64_t>(timeoutMs);
+  return alertable_wait(q->header, kstd::chrono::milliseconds(ms));
 }
 
 MessageQueue *free_queues_locked(KProcessObject &proc) noexcept {

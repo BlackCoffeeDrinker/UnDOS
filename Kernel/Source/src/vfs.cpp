@@ -453,6 +453,83 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_OperateFile(kernel::VFSFileOperatio
   return status ? status : closed;
 }
 
+UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_SetAttributes(const kstd::string_view &path, uint32_t attributes) noexcept {
+  using kernel::KernelError;
+  constexpr uint32_t settable = 0x01 | 0x02 | 0x04 | 0x20;
+  if (attributes & ~settable) return KernelError::InvalidArgument;
+  if (path.size() < 2 || path.size() > 255 || path[0] != '/' || path.back() == '/') return KernelError::InvalidArgument;
+  const auto cut = path.rfind('/');
+  const auto name = path.substr(cut + 1);
+  if (name == "." || name == "..") return KernelError::InvalidArgument;
+  if (const auto mount = findMountPoint(path); mount && mount->name == path) return KernelError::InvalidArgument;
+  auto opened = KE_VFS_OpenFile(path.substr(0, cut ? cut : 1), kernel::KIOObject::OpenMode::Read);
+  if (!opened) return opened.error();
+  const auto parent = *opened;
+  kstd::error_code status;
+  {
+    kstd::unique_lock lock(parent->mountPoint->fileMutex);
+    auto relative = path.substr(parent->mountPoint->name.size());
+    if (relative.starts_with("/")) relative = relative.substr(1);
+    const auto upper = [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c; };
+    bool busy = false;
+    for (auto *file = parent->mountPoint->openFiles; file && !busy; file = file->vfsNext) {
+      if (file == parent.get()) continue;
+      const kstd::string_view actual = file->actualPath;
+      if (actual.size() != relative.size()) continue;
+      size_t i = 0;
+      while (i < actual.size() && upper(actual[i]) == upper(relative[i])) ++i;
+      busy = i == actual.size();
+    }
+    if (findMountPoint(path) != parent->mountPoint) status = KernelError::Unsupported;
+    else if (parent->vfsNode->type != kernel::VFSNodeType::Directory) status = KernelError::NotDirectory;
+    else if (busy) status = KernelError::ResourceConflict;
+    else if (!parent->FileSystem()->SetAttributes) status = KernelError::Unsupported;
+    else status = parent->FileSystem()->SetAttributes(parent->mountPoint, *parent->vfsNode, name, attributes);
+  }
+  const auto closed = KE_VFS_CloseFile(parent);
+  return status ? status : closed;
+}
+
+UNDOS_KERNEL_API_DEF kernel::KBoolResult KE_VFS_QueryMount(uint32_t index, kstd::static_string<255> &name) noexcept {
+  name.clear();
+  const auto vfsRoot = KE_OB_GetVFSDirectory();
+  if (!vfsRoot) return kstd::unexpected(kernel::KernelError::NotInitialized);
+  uint32_t seen = 0;
+  bool found = false;
+  vfsRoot->Each<kernel::KVolumeMountObject>([&](const kernel::KObjectPtr<kernel::KVolumeMountObject> &mount) {
+    if (found || !mount->isMounted) return;
+    const kstd::string_view mountName = mount->name;
+    if (mountName.starts_with("//")) return;
+    if (seen++ != index) return;
+    name.append(mountName);
+    found = true;
+  });
+  return found;
+}
+
+UNDOS_KERNEL_API_DEF kstd::error_code KE_VFS_GetVolumeInformation(const kstd::string_view &mountPoint,
+                                                                  kernel::KVFSVolumeInformation &information) noexcept {
+  information = {};
+  const auto vfsRoot = KE_OB_GetVFSDirectory();
+  if (!vfsRoot) return kernel::KernelError::NotInitialized;
+  if (mountPoint.starts_with("//")) return kernel::KernelError::NotFound;
+  const auto mount = KE_OB_FindDirectChildOfType<kernel::KVolumeMountObject>(vfsRoot, mountPoint);
+  if (!mount || mount->name != mountPoint) return kernel::KernelError::NotFound;
+  kstd::unique_lock lock(mount->fileMutex);
+  if (!mount->isMounted || !mount->fileSystem) return kernel::KernelError::DeviceNotReady;
+  const auto copy = [](char *out, size_t capacity, kstd::string_view text) {
+    size_t i = 0;
+    for (; i + 1 < capacity && i < text.size(); ++i) out[i] = text[i];
+    out[i] = 0;
+  };
+  copy(information.fileSystem, sizeof(information.fileSystem), mount->fileSystem->name);
+  copy(information.label, sizeof(information.label), mount->volumeLabel);
+  information.serialNumber = mount->serialNumber;
+  information.maxComponentLength = 255;
+  if (mount->fileSystem->GetVolumeInformation) return mount->fileSystem->GetVolumeInformation(mount, information);
+  return {};
+}
+
 UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kstd::error_code> KE_VFS_ReadFile(const kernel::KObjectPtr<kernel::KIOObject> &file, const kstd::span<uint8_t> &readInto) noexcept {
   if (!file) [[unlikely]] { return kstd::unexpected(kernel::KernelError::InvalidHandle); }
   if (file->ops != &kernel::io::FileOps) [[unlikely]] { return kstd::unexpected(kernel::KernelError::WrongObjectType); }

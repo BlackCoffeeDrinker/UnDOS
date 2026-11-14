@@ -14,7 +14,7 @@ namespace {
 // KThreadObject is non-copyable (it embeds an atomic refcount), so it must be
 // constructed in place and configured by reference.
 void init_thread(KThreadObject &t, uint8_t priority) {
-  t.priority = priority;
+  t.priority = static_cast<kernel::ThreadPriority>(priority);
   t.state = KThreadObject::State::Ready;
 }
 } // namespace

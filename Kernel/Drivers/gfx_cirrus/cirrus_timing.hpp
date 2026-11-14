@@ -35,18 +35,42 @@ constexpr uint32_t kMaximumPllErrorPpm = 5000;
 constexpr uint32_t kGd5434MaxPixelClockSoftwareHz = 80000000;
 constexpr uint32_t kGd5434MaxMemoryClockSoftwareHz = 135000000;
 
-enum class Chip : uint8_t { Unknown, Gd5430, Gd5434 };
+// GD5446/GD5480 limits come from Xorg xf86-video-cirrus alp_driver.c
+// (gd5446_MaxClocks / gd5480_MaxClocks), capped at the clocks above which
+// Xorg halves the CRTC timings (AlpSetMode: 5446 > 85500, 5480 > 135100);
+// this driver does not implement that clock-doubling mode.
+constexpr uint32_t kGd5446MaxClockHz = 85500000;
+constexpr uint32_t kGd5480MaxClockHz = 135100000;
+
+enum class Chip : uint8_t { Unknown, Gd5430, Gd5434, Gd5446, Gd5480 };
 
 inline Chip IdentifyChip(uint8_t cr27) {
   switch ((cr27 >> 2) & 0x3f) {
     case 0x28: return Chip::Gd5430;
     case 0x2a: return Chip::Gd5434;
+    case 0x2e: return Chip::Gd5446;
+    case 0x2f: return Chip::Gd5480;
     default: return Chip::Unknown;
+  }
+}
+
+inline const char *ChipName(Chip chip) {
+  switch (chip) {
+    case Chip::Gd5430: return "GD5430";
+    case Chip::Gd5434: return "GD5434";
+    case Chip::Gd5446: return "GD5446";
+    case Chip::Gd5480: return "GD5480";
+    default: return "unknown";
   }
 }
 
 inline uint32_t MaximumPixelClock(Chip chip, uint32_t bpp) {
   if (chip == Chip::Gd5434) return kGd5434MaxPixelClockSoftwareHz;
+  if (chip == Chip::Gd5446) // Xorg table has no 32-bpp entry for GD5446.
+    return bpp == 8 || bpp == 15 || bpp == 16 || bpp == 24 ? kGd5446MaxClockHz : 0;
+  if (chip == Chip::Gd5480)
+    return bpp == 8 || bpp == 15 || bpp == 16 || bpp == 24 || bpp == 32
+               ? kGd5480MaxClockHz : 0;
   if (chip != Chip::Gd5430) return 0;
   // Xorg's GD5430 table, with a stricter 80-MHz software limit at 8 bpp.
   switch (bpp) {
@@ -60,11 +84,35 @@ inline uint32_t MaximumPixelClock(Chip chip, uint32_t bpp) {
 
 inline uint32_t MaximumHardwareClock(Chip chip) {
   return chip == Chip::Gd5430 ? 85500000 :
-         chip == Chip::Gd5434 ? kGd5434MaxMemoryClockSoftwareHz : 0;
+         chip == Chip::Gd5434 ? kGd5434MaxMemoryClockSoftwareHz :
+         chip == Chip::Gd5446 ? kGd5446MaxClockHz :
+         chip == Chip::Gd5480 ? kGd5480MaxClockHz : 0;
 }
 
-inline bool DecodeVram(Chip chip, uint8_t sr0f, uint32_t &outBytes) {
+inline bool DecodeVram(Chip chip, uint8_t sr0f, uint32_t &outBytes,
+                       uint8_t sr17 = 0) {
   if (chip == Chip::Unknown) return false;
+  // GD5446/GD5480 follow Xorg alp_driver.c AlpCountRam (SR0F + SR17).
+  if (chip == Chip::Gd5446) {
+    uint32_t kib = 1024;
+    if ((sr0f & 0x18) == 0x18) {
+      if (sr0f & 0x80)
+        kib = (sr17 & 0x80) ? 2048 : (sr17 & 0x02) ? 3072 : 4096;
+      // Xorg writes the decimal literal `sr17 & 80` (0x50); bit 7 is assumed
+      // here. NOT_YET_VERIFIED against the GD5446 data sheet.
+      else if ((sr17 & 0x80) == 0)
+        kib = 2048;
+    }
+    outBytes = kib * 1024;
+    return true;
+  }
+  if (chip == Chip::Gd5480) {
+    uint32_t kib = 1024;
+    if ((sr0f & 0x18) == 0x18) kib = (sr0f & 0x80) ? 4096 : 2048;
+    if (sr17 & 0x80) kib <<= 1;
+    outBytes = kib * 1024;
+    return true;
+  }
   // GD5430's SR0F bit 7 is not the GD5434 capacity multiplier.
   uint32_t bytes = 0;
   switch (sr0f & 0x18) {

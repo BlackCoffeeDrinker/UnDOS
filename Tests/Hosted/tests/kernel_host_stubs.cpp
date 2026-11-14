@@ -101,7 +101,7 @@ UNDOS_KERNEL_API_DEF void KE_SCHED_Yield() noexcept {
 // (kernel::event::detail::pump_once()). This stub only needs to satisfy the
 // linker.
 UNDOS_KERNEL_API_DEF kstd::expected<kernel::KObjectPtr<kernel::KThreadObject>, kstd::error_code> KE_SCHED_CreateThread(
-    kernel::cfunc<void(void *)> entry, void *arg, uint8_t priority) noexcept {
+    kernel::cfunc<void(void *)> entry, void *arg, kernel::ThreadPriority priority) noexcept {
   (void) entry;
   (void) arg;
   (void) priority;

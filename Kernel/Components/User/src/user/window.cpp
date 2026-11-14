@@ -429,6 +429,9 @@ void destroy_window_locked(KWindowObject &window) noexcept {
   const HDC paintDC = window.paintDC;
   if (window.paintActive) abandon_paint_locked(window);
   if (paintDC && window.process) (void) gfx::CloseDC(window.process, paintDC, window.retiredDC);
+  const HDC windowDC = window.windowDC;
+  abandon_window_dc_locked(window);
+  if (windowDC && window.process) (void) gfx::CloseDC(window.process, windowDC, window.retiredWindowDC);
   const auto keep = g_windows[index];
   window.retiredNext = kstd::move(g_retiredWindows);
   g_retiredWindows = kstd::move(g_windows[index]);
@@ -908,6 +911,40 @@ kstd::error_code end_paint(KProcessObject &caller, uint32_t hwnd, HDC dc) noexce
   return end_paint_locked(caller, **w, dc, released);
 }
 
+kstd::expected<HDC, kstd::error_code> get_window_dc(KProcessObject &caller, uint32_t hwnd) noexcept {
+  {
+    Guard guard;
+    const auto window = owned_window_locked(caller, hwnd);
+    if (!window) return kstd::unexpected(window.error());
+    if ((*window)->windowDC && gfx::FindDC(&caller, (*window)->windowDC))
+      return kstd::unexpected(KernelError::InvalidState);
+  }
+  const auto allocated = gfx::CreateDC(&caller);
+  if (!allocated) return kstd::unexpected(allocated.error());
+  struct Reservation {
+    KProcessObject &caller;
+    uint32_t handle;
+    ~Reservation() {
+      if (handle) (void) gfx::CloseDC(&caller, handle);
+    }
+  } reservation{caller, allocated->second};
+  Guard guard;
+  const auto w = owned_window_locked(caller, hwnd);
+  if (!w) return kstd::unexpected(w.error());
+  if (const auto bound = bind_window_dc_locked(caller, **w, reservation.handle)) return kstd::unexpected(bound);
+  const HDC handle = reservation.handle;
+  reservation.handle = 0;
+  return handle;
+}
+
+kstd::error_code release_window_dc(KProcessObject &caller, uint32_t hwnd, HDC dc) noexcept {
+  DetachedDC released;// dropped after the scene lock
+  Guard guard;
+  const auto w = owned_window_locked(caller, hwnd);
+  if (!w) return w.error();
+  return release_window_dc_locked(caller, **w, dc, released);
+}
+
 kstd::expected<uint32_t, kstd::error_code> get_window_long(uint32_t hwnd, uint32_t index) noexcept {
   Guard guard;
   const auto *w = lookup_locked(hwnd);
@@ -1250,6 +1287,7 @@ kstd::error_code apply_default_font(void *, font::DefaultFont &defaults,
           slot->hwnd = window->hwnd;
         }
       }
+      rebind_window_dc_locked(*window);
       if (window->queue && window->process) {
         window->pendingFontGeneration = generation;
         wake_locked(*window->queue);

@@ -129,8 +129,14 @@ embedded NULs, and overflow reject rather than truncate.
 
 `ReadDirectoryV1` (227) enumerates short-name directory entries through a readable
 VFS directory handle. Its output name uses query-length-then-fill, including the
-terminating NUL. `GetFileInformationV1` (229) returns the byte size and FAT
-attribute bits for an open file or directory.
+terminating NUL. `GetFileInformationV1` (229) returns the byte size, FAT
+attribute bits and FAT creation, last-access and last-write times for an open
+file or directory. Both report times as packed DOS stamps,
+`(date << 16) | time`, with 0 for unknown. `SetFileAttributesV1` (236) changes the read-only, hidden,
+system and archive bits of one entry; open entries block it. `QueryMountV1`
+(237) enumerates public mount points by index, skipping internal `//` mounts,
+and `GetVolumeInformationV1` (238) reports the label, file-system name, serial
+number, name limit and read-only/case-preserving flags of one mount point.
 
 `CopyFileV1` (230), `MoveFileV1` (231), `DeleteFileV1` (232) and
 `CreateDirectoryV1` (233) provide separate file-management operations.
@@ -187,10 +193,11 @@ The CRT caches these queries at startup; unavailable streams do not prevent
 GUI applications from starting. CRT output functions return `-1` on missing
 streams, write failures, or formatting overflow; they do not silently fall
 back to debug output. Explicit diagnostic output can use the debug syscall.
-The terminal uses `UD_SYS_CreateProcessV2` (208) to supply explicit caller-local
-stdin/stdout/stderr handles. It validates read/write access before launch and
+`CreateProcessV1` (200) takes stdin/stdout/stderr handles; passing
+`UINT32_MAX` for all three gives the child the default streams. The terminal
+uses it to supply explicit caller-local handles. It validates read/write access before launch and
 creates independent child handles without inheriting unrelated handles.
-`CreateProcessV1` keeps its existing inheritance behavior. TTY stdin waits for
+TTY stdin waits for
 committed input or EOF rather than treating an empty input queue as EOF.
 
 ### Graphics and text rendering

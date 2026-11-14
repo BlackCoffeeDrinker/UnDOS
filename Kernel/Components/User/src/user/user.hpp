@@ -26,11 +26,12 @@ class UiText;
 constexpr uint32_t kMaxWindows = 64;
 constexpr uint32_t kMaxClasses = 16;
 constexpr uint32_t kMaxMenus = 32;
-constexpr uint32_t kMaxMenuItems = 16;
+constexpr uint32_t kMaxMenuItems = 32;
 constexpr uint32_t kMenuTextLen = 64;
 
 constexpr uint32_t kMenuItemGrayed = 0x0001;
 constexpr uint32_t kMenuItemDisabled = 0x0002;
+constexpr uint32_t kMenuItemChecked = 0x0008;
 constexpr uint32_t kMenuItemPopup = 0x0010;
 constexpr uint32_t kMenuItemSeparator = 0x0800;
 
@@ -204,12 +205,16 @@ void display_input_changed_locked(bool firstActivation) noexcept;
 kstd::expected<MessageQueue *, kstd::error_code> queue_for_current_locked() noexcept;
 kstd::error_code ensure_current_queue() noexcept;
 // Errors: QueueFull (message dropped).
-kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept;
+kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam,
+                             uint32_t keyState = 0) noexcept;
 void wake_locked(MessageQueue &queue) noexcept;
 bool should_serve_paint_before_input_locked(const MessageQueue &queue) noexcept;
 // Self-locking. Errors: WouldBlock (nothing pending and !block), the
 // queue_for_current_locked errors, or the scheduler's wait error.
 kstd::expected<QueuedMessage, kstd::error_code> get_message(bool block, bool remove) noexcept;
+// Self-locking. Returns once a message is pending (without removing it), or
+// the scheduler's Timeout after timeoutMs; UINT32_MAX waits forever.
+kstd::error_code wait_message(uint32_t timeoutMs) noexcept;
 bool geometry_message_locked(const MessageQueue &queue, QueuedMessage &out, bool remove) noexcept;
 MessageQueue *free_queues_locked(KProcessObject &proc) noexcept;
 void release_queues(MessageQueue *queue) noexcept;
@@ -235,6 +240,16 @@ kstd::expected<PaintBegin, kstd::error_code> begin_paint_locked(KProcessObject &
 // The closed DC's owners go to `released`; the caller drops it after the scene lock.
 kstd::error_code end_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t hdc, DetachedDC &released) noexcept;
 void abandon_paint_locked(KWindowObject &window) noexcept;
+// GetDC/ReleaseDC: a client-area DC outside BeginPaint. Errors: InvalidState
+// (the window already has a live GetDC DC), InvalidHandle, DeviceNotReady.
+kstd::expected<HDC, kstd::error_code> get_window_dc(KProcessObject &caller, uint32_t hwnd) noexcept;
+kstd::error_code release_window_dc(KProcessObject &caller, uint32_t hwnd, HDC dc) noexcept;
+kstd::error_code bind_window_dc_locked(KProcessObject &proc, KWindowObject &window, HDC handle) noexcept;
+kstd::error_code release_window_dc_locked(KProcessObject &proc, KWindowObject &window, HDC dc, DetachedDC &released) noexcept;
+// Re-clips a window's GetDC DC after the scene changed.
+void rebind_window_dc_locked(KWindowObject &window) noexcept;
+// Forgets a GetDC DC the owner deleted with DeleteDC.
+void abandon_window_dc_locked(KWindowObject &window) noexcept;
 // Hands the damaged screen rectangles to the adapter; one call per paint cycle.
 void present_locked(const URegion &region) noexcept;
 void present_locked(const URect &r) noexcept;
@@ -317,5 +332,10 @@ kstd::error_code append_menu(KProcessObject &caller, uint32_t menu, uint32_t fla
                              const kstd::string_view &text) noexcept;
 kstd::error_code set_menu(KProcessObject &caller, uint32_t hwnd, uint32_t menu) noexcept;
 kstd::expected<uint32_t, kstd::error_code> get_menu(uint32_t hwnd) noexcept;
+kstd::error_code modify_menu_state(KProcessObject &caller, uint32_t menu, uint32_t item,
+                                   bool byPosition, uint32_t mask, uint32_t flags,
+                                   uint32_t &previous, uint32_t &itemId) noexcept;
+kstd::error_code remove_menu_item(KProcessObject &caller, uint32_t menu, uint32_t item,
+                                  bool byPosition, uint32_t &itemId) noexcept;
 
 }// namespace kernel::user

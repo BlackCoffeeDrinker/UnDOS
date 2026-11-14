@@ -137,7 +137,73 @@ public:
     }
   }
 
+  // Menu labels (Win32 style): "&x" underlines x, "&&" is a literal '&', and
+  // a '\t' starts the accelerator column, drawn right-aligned at `right`.
+  static constexpr int32_t kLabelAcceleratorGap = 16;
+
+  // Copies the visible characters of [text, length) without '&' prefixes into
+  // out (up to cap); returns the count and, through mnemonic, the index in
+  // out of the underlined character (or -1).
+  static size_t strip_label(const char *text, size_t length, char *out, size_t cap, int32_t &mnemonic) {
+    size_t n = 0;
+    mnemonic = -1;
+    for (size_t i = 0; i < length && n < cap; ++i) {
+      if (text[i] == '&' && i + 1 < length) {
+        ++i;
+        if (text[i] != '&' && mnemonic < 0) mnemonic = static_cast<int32_t>(n);
+      }
+      out[n++] = text[i];
+    }
+    return n;
+  }
+
+  static size_t label_tab(const char *text, size_t length) {
+    for (size_t i = 0; i < length; ++i)
+      if (text[i] == '\t') return i;
+    return length;
+  }
+
+  int32_t label_part_width(const char *text, size_t length) const {
+    char buf[128];
+    int32_t mnemonic;
+    const size_t n = strip_label(text, length, buf, sizeof buf, mnemonic);
+    return width(buf, n, false);
+  }
+
+  int32_t label_width(const char *text, size_t length) const {
+    const size_t tab = label_tab(text, length);
+    int32_t total = label_part_width(text, tab);
+    if (tab < length) total += kLabelAcceleratorGap + label_part_width(text + tab + 1, length - tab - 1);
+    return total;
+  }
+
+  template <typename Fill>
+  void draw_label(int32_t x, int32_t y, const char *text, size_t length, uint32_t foreground,
+                  uint32_t background, bool opaque, int32_t right, Fill &&fill) const {
+    const size_t tab = label_tab(text, length);
+    draw_label_part(x, y, text, tab, foreground, background, opaque, fill);
+    if (tab >= length) return;
+    const char *accel = text + tab + 1;
+    const size_t accelLength = length - tab - 1;
+    draw_label_part(right - label_part_width(accel, accelLength), y, accel, accelLength, foreground,
+                    background, opaque, fill);
+  }
+
 private:
+  template <typename Fill>
+  void draw_label_part(int32_t x, int32_t y, const char *text, size_t length, uint32_t foreground,
+                       uint32_t background, bool opaque, Fill &fill) const {
+    char buf[128];
+    int32_t mnemonic;
+    const size_t n = strip_label(text, length, buf, sizeof buf, mnemonic);
+    draw(x, y, buf, n, false, foreground, background, opaque, fill);
+    if (mnemonic < 0) return;
+    const int32_t left = x + width(buf, static_cast<size_t>(mnemonic), false);
+    const int32_t charWidth = width(buf + mnemonic, 1, false);
+    const int32_t underline = y + text_above(false) + 1;
+    fill(left, underline, left + charWidth, underline + 1, foreground);
+  }
+
   UiText() = default;
   bool owns() const { return font_ == &own_; }
 

@@ -5,6 +5,7 @@
 
 #include "memory/Cache.hpp"
 #include "vmm_owner_lifecycle.hpp"
+#include "process.hpp"
 
 extern uint32_t g_page_size;
 
@@ -843,6 +844,36 @@ UNDOS_KERNEL_API_DEF void KE_VMM_HandlePagefault(const kernel::PageFaultInfo &in
   // exclusively. Kernel-mode faults on the kernel space take no lock.
   // TODO(SMP): two CPUs faulting on one page may both map it; re-check the
   // PTE under an exclusive lock once demand paging is used for user memory.
+  // A bad access from user mode is the program's bug, not the kernel's: end
+  // that process instead of halting the system. The VAD lock is released
+  // first, because terminating tears down the address space.
+  if (info.user) {
+    const char *invalid = nullptr;
+    {
+      kernel::SharedGuard check(as->lock, true);
+      const auto *v = as->vads.find(info.fault_addr);
+      if (!v) invalid = "access to unmapped/invalid address";
+      else if (v->kind != kernel::vmm::VadKind::Ordinary) invalid = "access to reserved borrowed alias";
+      else if (info.write && !kernel::vmm::has_flag(v->flags, kernel::vmm::ProtectFlags::WRITE)) invalid = "write to non-writable region";
+      else if (info.exec && !kernel::vmm::has_flag(v->flags, kernel::vmm::ProtectFlags::EXECUTE)) invalid = "exec of non-executable region";
+      else if (!kernel::vmm::has_flag(v->flags, kernel::vmm::ProtectFlags::USER)) invalid = "access to kernel-only region";
+    }
+    if (invalid) {
+      KE_Print("Page Fault: {} addr={} ip={} write={} exec={}; terminating process", invalid,
+               info.fault_addr.as_ptr<>(), info.ip.as_ptr<>(), info.write, info.exec);
+      // The top stack words usually hold the caller's return address, which
+      // names the code that passed the bad pointer to a leaf like strcat.
+      uint32_t words[8] = {};
+      if (!KE_VMM_CopyFromUser(*as, words, info.sp.as_ptr<>(), sizeof words))
+        KE_Print("Page Fault: sp={} stack {} {} {} {} {} {} {} {}", info.sp.as_ptr<>(),
+                 reinterpret_cast<void *>(words[0]), reinterpret_cast<void *>(words[1]),
+                 reinterpret_cast<void *>(words[2]), reinterpret_cast<void *>(words[3]),
+                 reinterpret_cast<void *>(words[4]), reinterpret_cast<void *>(words[5]),
+                 reinterpret_cast<void *>(words[6]), reinterpret_cast<void *>(words[7]));
+      kernel::process::terminate_current(-1);
+    }
+  }
+
   kernel::SharedGuard guard(as->lock, info.user);
 
   // 2. Look up the VAD covering the faulting address in that address space.

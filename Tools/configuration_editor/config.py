@@ -34,6 +34,7 @@ def author_localmachine_hive(filename: str, subsystems: list[str] | None = None)
     # early-boot BootDeviceVolume mount, before it gets replaced by the
     # real root filesystem.
     boot_drivers = [
+        ("bus_pci", "/System/Drivers/bus_pci.elf"),
         ("bus_isa", "/System/Drivers/bus_isa.elf"),
         ("disk_ata", "/System/Drivers/disk_ata.elf"),
         ("volmgr", "/System/Drivers/volmgr.elf"),
@@ -47,7 +48,6 @@ def author_localmachine_hive(filename: str, subsystems: list[str] | None = None)
         # ImagePath's filename base must be <=8 chars: fs_fat's short-name
         # lookup (Kernel/Drivers/fs_fat/fat_short_name.hpp) has no truncation/tilde
         # fallback for longer names, so "input_i8042.elf" would never resolve.
-        ("gfx_cirrus", "/System/Drivers/gfxcirr.elf"),
         ("input_i8042", "/System/Drivers/i8042.elf"),
         ("input_gameport", "/System/Drivers/gameport.elf"),
         ("serial_uart", "/System/Drivers/serial.elf"),
@@ -64,6 +64,16 @@ def author_localmachine_hive(filename: str, subsystems: list[str] | None = None)
     for name, image in boot_drivers:
         cfg.ensure_key(f"/Drivers/{name}")
         cfg.set(f"/Drivers/{name}/Start", "Boot", Config.VALUE_STRING)
+        cfg.set(f"/Drivers/{name}/ImagePath", image, Config.VALUE_STRING)
+
+    # Demand-start drivers are never loaded by a start pass: PnP loads one
+    # when a device's hardware ID maps to it in CriticalDeviceDatabase.
+    demand_drivers = [
+        ("gfx_cirrus", "/System/Drivers/gfxcirr.elf"),
+    ]
+    for name, image in demand_drivers:
+        cfg.ensure_key(f"/Drivers/{name}")
+        cfg.set(f"/Drivers/{name}/Start", "Demand", Config.VALUE_STRING)
         cfg.set(f"/Drivers/{name}/ImagePath", image, Config.VALUE_STRING)
 
     for name, image in automatic_drivers:
@@ -101,7 +111,6 @@ def author_localmachine_hive(filename: str, subsystems: list[str] | None = None)
     # aux/mouse line) is hardcoded in the driver instead (see
     # Kernel/Drivers/input_i8042/i8042_registers.hpp).
     legacy_isa_devices = [
-        ("CIRRUS", {"HwID": "gfx_cirrus", "IoPorts": "0x3C0-0x3DF", "Memory": "0xA0000-0xAFFFF"}),
         ("VGA", {"HwID": "gfx_vga", "IoPorts": "0x3C0-0x3DF", "Memory": "0xA0000-0xAFFFF",
                  "Start": "LastResort"}),
         ("i8042", {"HwID": "input_i8042", "IoPorts": "0x60-0x64", "Irq": "1"}),
@@ -148,6 +157,29 @@ def author_localmachine_hive(filename: str, subsystems: list[str] | None = None)
     cfg.ensure_key("/System/Monitors/Default/Modes")
     for index, timing in enumerate(default_monitor_modes):
         cfg.set(f"/System/Monitors/Default/Modes/{index}", timing, Config.VALUE_STRING)
+
+    # Enum/Root (Windows 2000 Enum\Root): one subkey per ROOT child, reported
+    # in order. HardwareId names the bus driver bound to it. bus_pci goes
+    # first; bus_isa follows and still boots a machine with no PCI.
+    root_bus_drivers = ["bus_pci", "bus_isa"]
+    cfg.ensure_key("/Enum")
+    cfg.ensure_key("/Enum/Root")
+    for index, hwid in enumerate(root_bus_drivers):
+        cfg.ensure_key(f"/Enum/Root/{index:04d}")
+        cfg.set(f"/Enum/Root/{index:04d}/HardwareId", hwid, Config.VALUE_STRING)
+
+    # CriticalDeviceDatabase (Windows 2000 analogue): hardware ID -> driver
+    # for IDs that are not driver names. Key names store '\' and '&' as '#'
+    # and are uppercase, matching the kernel lookup in pnp_manager.cpp.
+    critical_devices = [
+        ("PCI\\VEN_1013&DEV_00B8", "gfx_cirrus"),  # Cirrus GD5446
+        ("PCI\\VEN_1013&DEV_00BC", "gfx_cirrus"),  # Cirrus GD5480
+    ]
+    cfg.ensure_key("/CriticalDeviceDatabase")
+    for hwid, service in critical_devices:
+        key = hwid.replace("\\", "#").replace("&", "#").upper()
+        cfg.ensure_key(f"/CriticalDeviceDatabase/{key}")
+        cfg.set(f"/CriticalDeviceDatabase/{key}/Service", service, Config.VALUE_STRING)
 
     cfg.ensure_key("/LegacyISAReservations")
     for name, values in legacy_isa_devices:

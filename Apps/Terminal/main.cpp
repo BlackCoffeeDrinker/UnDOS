@@ -353,9 +353,10 @@ void drain_output() {
 }
 
 void output(const char *text) {
+  uint32_t transferred = 0;
   if (!syscall_ok(UD_SYS_WriteV1(s_term.sinkHandle,
           reinterpret_cast<const uint8_t *>(text),
-          static_cast<uint32_t>(strlen(text))), "Write terminal"))
+          static_cast<uint32_t>(strlen(text)), &transferred), "Write terminal"))
     s_term.running = false;
 }
 
@@ -375,7 +376,7 @@ void command(char *line) {
     char *args = strchr(path, ' ');
     if (args) *args++ = 0;
     HANDLE handle = 0;
-    if (UD_SYS_CreateProcessV2(path, args ? args : "", ProcessFlags_None,
+    if (UD_SYS_CreateProcessV1(path, args ? args : "", ProcessFlags_None,
                               s_term.sinkHandle, s_term.sinkHandle, s_term.sinkHandle,
                               &handle) != SyscallReturnCode_OKAY)
       output("Cannot launch program. Check absolute path and serial log.\n");
@@ -401,7 +402,8 @@ void terminal_input(uint8_t ch) {
   if (ch == '\n' || ch == 0x15) s_term.commandLength = 0;
   else if (ch == '\b') { if (s_term.commandLength) --s_term.commandLength; }
   else ++s_term.commandLength;
-  if (!syscall_ok(UD_SYS_WriteV1(s_term.sourceHandle, &ch, 1),
+  uint32_t transferred = 0;
+  if (!syscall_ok(UD_SYS_WriteV1(s_term.sourceHandle, &ch, 1, &transferred),
                   "Terminal input")) {
     s_term.running = false;
     return;
@@ -455,7 +457,7 @@ LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM wParam,
     return 0;
   }
   else if (message == WM_KEYDOWN || message == WM_KEYUP) {
-    s_term.modifiers = static_cast<uint32_t>(lParam >> 16);
+    s_term.modifiers = (GetKeyState(VK_CONTROL) < 0 ? 0x0cu : 0u) | (GetKeyState(VK_MENU) < 0 ? 0x30u : 0u);
     if (message == WM_KEYUP) return 0;
     if (wParam == VK_RETURN) terminal_input('\n');
     else if (wParam == 8) terminal_input('\b');

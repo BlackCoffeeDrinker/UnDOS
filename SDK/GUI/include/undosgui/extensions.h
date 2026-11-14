@@ -33,6 +33,16 @@ typedef struct UNDOS_DIALOG_FIELD {
   UINT capacity;
 } UNDOS_DIALOG_FIELD;
 
+/* One linked-in resource. Bitmaps are packed DIBs (a .bmp with or without
+   its BITMAPFILEHEADER); strings are one NUL-terminated string per ID;
+   accelerators are ACCEL arrays. */
+typedef struct UNDOS_RESOURCE {
+  LPCSTR type;
+  LPCSTR name;
+  const void *data;
+  DWORD size;
+} UNDOS_RESOURCE;
+
 enum UndosFontSource {
   UNDOS_FONT_SYSTEM_DEFAULT = 0,
   UNDOS_FONT_BUILTIN_BITMAP = 1
@@ -106,6 +116,7 @@ typedef struct UNDOS_UI_CONTEXT {
 } UNDOS_UI_CONTEXT;
 
 DWORD UndosGetLastStatus(void);
+BOOL UndosRegisterResources(const UNDOS_RESOURCE *table, UINT count);
 BOOL UndosGetWindowCreationRecovery(
     UNDOS_WINDOW_CREATION_RECOVERY *recovery);
 BOOL UndosGetUiCleanupRecovery(UNDOS_UI_CLEANUP_RECOVERY *recovery);

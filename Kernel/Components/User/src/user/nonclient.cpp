@@ -224,14 +224,14 @@ void draw_nonclient_locked(KWindowObject &window, const URect &limit) noexcept {
     for (uint32_t i = 0; i < menu_item_count_locked(window.menu); ++i) {
       MenuItemView item{};
       if (!menu_item_locked(window.menu, i, item)) break;
-      const int32_t width = item.text.empty() ? 8 : ui.width(item.text.data(), item.text.size(), false) + 16;
+      const int32_t width = item.text.empty() ? 8 : ui.label_width(item.text.data(), item.text.size()) + 16;
       if (x + width > menuLeft + menuWidth) break;
       const uint32_t foreground = item.flags & (kMenuItemDisabled | kMenuItemGrayed) ? 8 : 0;
       if (item.flags & kMenuItemSeparator) {
         draw_rect(x + width / 2, menuTop + 4, 1, menuHeight > 8 ? menuHeight - 8 : 1, 8);
       } else {
-        ui.draw(x + 8, menuTop + 2, item.text.data(), item.text.size(), false, foreground,
-                kWindowFaceColor, true,
+        ui.draw_label(x + 8, menuTop + 2, item.text.data(), item.text.size(), foreground,
+                kWindowFaceColor, true, x + width - 8,
                 [&](int64_t left, int64_t top, int64_t right, int64_t bottom, uint32_t color) {
                   draw_rect(static_cast<int32_t>(left), static_cast<int32_t>(top),
                             static_cast<int32_t>(right - left), static_cast<int32_t>(bottom - top), color);

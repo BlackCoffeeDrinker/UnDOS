@@ -13,6 +13,7 @@ namespace kernel {
 struct KVolumeMountObject;
 struct KVFSNode;
 struct KVFSDirectoryEntry;
+struct KVFSVolumeInformation;
 enum class VFSFileOperation : uint32_t;
 
 using KVolumeIdProbeResult = kstd::expected<bool, kstd::error_code>;
@@ -40,6 +41,12 @@ struct KFilesystemObject : KObjectT<KFilesystemObject, 1, TYPE_FILE_SYSTEM> {
   cfunc<kstd::error_code(const KObjectPtr<KVolumeMountObject> &, VFSFileOperation,
       const KVFSNode &parent, kstd::string_view name,
       const KVFSNode *destinationParent, kstd::string_view destinationName)> OperateFile;
+  // Sets the attribute bits of `name` inside `parent`. Can be null (Unsupported).
+  cfunc<kstd::error_code(const KObjectPtr<KVolumeMountObject> &, const KVFSNode &parent,
+      kstd::string_view name, uint32_t attributes)> SetAttributes;
+  // Fills in label, serial and limits. Can be null; the VFS then reports the
+  // mount's serialNumber/volumeLabel and the filesystem name.
+  cfunc<kstd::error_code(const KObjectPtr<KVolumeMountObject> &, KVFSVolumeInformation &)> GetVolumeInformation;
 
   // Create a handle for a vnode
   cfunc<kstd::error_code(const KObjectPtr<KVolumeMountObject> &, const KVFSNode &, KIOObject::OpenMode)> CreateHandle;

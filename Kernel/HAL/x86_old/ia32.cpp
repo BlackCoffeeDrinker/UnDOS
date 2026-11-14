@@ -150,34 +150,9 @@ UNDOS_HAL_API_DEF [[noreturn]] void HAL_PLATFORM_Shutdown() noexcept {
   }
 }
 
-namespace {
-// Probes for the PCI configuration mechanism #1 via ports 0xCF8/0xCFC. On a
-// machine with a PCI host bridge, the enable bit (0x80000000) written to the
-// address port reads back unchanged; on a PCI-less machine (e.g. QEMU's
-// `isapc`) it does not.
-bool HAL_PciPresent() noexcept {
-  constexpr uint16_t PCI_CONFIG_ADDRESS = 0xCF8;
-  constexpr uint32_t PCI_ENABLE_BIT = 0x80000000u;
-
-  HAL_IO_Out32(PCI_CONFIG_ADDRESS, PCI_ENABLE_BIT);
-  const uint32_t readback = HAL_IO_In32(PCI_CONFIG_ADDRESS);
-  return readback == PCI_ENABLE_BIT;
-}
-}// namespace
-
 UNDOS_HAL_API_DEF void HAL_PLATFORM_AfterObjectManager() noexcept {
-  if (HAL_PciPresent()) {
-    // TODO: a future PCI bus driver enumerates configuration space. It must
-    // leave legacy-decoded devices (e.g. IDE in compatibility mode) to ISA.
-    KE_Print("HAL: PCI bus detected (PCI enumeration not implemented yet)");
-  }
-  // PC-compatible machines always have legacy ISA I/O (ISA slots, or the
-  // PCI-to-ISA/LPC bridge), so the ISA root is reported with or without PCI.
-  KE_Print("HAL: reporting legacy ISA root device");
-  if (const auto device = KE_PNP_ReportRootDevice("bus_isa"); !device) {
-    KE_Print("HAL: failed to report legacy ISA root: {}", device.error().message());
-    HAL_PLATFORM_Panic("Failed to report legacy ISA root", __FILE__, __LINE__);
-  }
+  // Bus drivers (bus_pci, bus_isa) are listed in the HIVE under Enum/Root and
+  // reported by the kernel's ROOT enumerator; the HAL reports none itself.
 }
 
 namespace std {

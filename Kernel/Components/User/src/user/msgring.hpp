@@ -12,6 +12,7 @@ struct QueuedMessage {
   uint32_t wParam{0};
   uint32_t lParam{0};
   uint32_t time{0};
+  uint32_t keyState{0};
 };
 
 // Fixed-size FIFO of messages for one thread. Not synchronised: the caller

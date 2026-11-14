@@ -27,4 +27,12 @@ void LoadAutomaticStartDrivers();
 // else took (today: the VGA display driver), so the caller decides whether
 // the pass is needed at all, once the normal passes have settled.
 void LoadLastResortDrivers();
+
+// Loads the Start == "Demand" driver `service` (its /Drivers/<service>/
+// ImagePath) because PnP found a device mapped to it. Requests made before
+// the root filesystem is mounted are queued and run by
+// LoadAutomaticStartDrivers(). Each service is attempted at most once; a
+// failure is logged and never retried. Must not be called with PnP's bind
+// lock held.
+void RequestDemandLoad(const kstd::string_view &service);
 }// namespace kernel::driver

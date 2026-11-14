@@ -51,8 +51,8 @@ void init() noexcept {
       []() noexcept -> void * { return KE_SCHED_GetCurrentThread().get(); });
   g_recordAvailable.manualReset = false;
   g_recordAvailable.signalled = false;
-  // Spawn dispatch thread at elevated priority (10), running ahead of normal threads (priority 1)
-  auto thread = KE_SCHED_CreateThread(cfunc<void(void *)>(&InterruptDispatchThread), nullptr, 10);
+  // Spawn dispatch thread at Realtime priority, ahead of Normal threads
+  auto thread = KE_SCHED_CreateThread(cfunc<void(void *)>(&InterruptDispatchThread), nullptr, ThreadPriority::Realtime);
   if (!thread) {
     KE_Print("Failed to initialize dispatch: {}", thread.error().message());
     HAL_PLATFORM_Panic("Failed to initialize dispatch", __FILE__, __LINE__);

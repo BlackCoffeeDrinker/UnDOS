@@ -3,6 +3,7 @@
 #include <stdkrn.hpp>
 
 #include <kernel/gfx/video_present.hpp>
+#include <kernel/pci.hpp>
 
 #include "cirrus_registers.hpp"
 #include "cirrus_timing.hpp"
@@ -50,6 +51,7 @@ struct CirrusContext {
   uint8_t chipId{};
   cirrus_timing::Chip chip{cirrus_timing::Chip::Unknown};
   uint32_t vramBytes{};
+  volatile uint8_t *bltMmio{};// BitBLT MMIO block (BAR1+0x100); null = port I/O
   bool modeKnown{false};
   bool enabled{false};
   size_t modeIndex{};
@@ -60,10 +62,18 @@ struct CirrusContext {
   // Offscreen VRAM starts after the scanout area of the active mode.
   uint32_t vramBase{};
   CirrusVramBlock vramBlocks[kMaxVramBlocks]{};
+  // PCI binding only (bus_pci answered GetDeviceInfo). ISA bindings keep
+  // isPci false, lfb/mmio null, and use the banked window and port I/O.
+  bool isPci{false};
+  kernel::pci::DeviceInfo pciInfo{};
+  kernel::VirtualAddress lfb; // mapped BAR0 linear framebuffer
+  uint32_t lfbBytes{};
+  kernel::VirtualAddress mmio;// mapped BAR1 registers (BitBLT at +0x100)
+  uint32_t mmioBytes{};
+  uint8_t savedSr17{};
+  bool sr17Changed{false};
 
-  ~CirrusContext() {
-    KE_Free(modeCatalog);
-  }
+  ~CirrusContext();
 };
 
 struct CirrusReservationData {
@@ -107,6 +117,33 @@ void WriteGraphics(uint8_t index, uint8_t value) {
   HAL_IO_Out8(cirrus_regs::kGraphicsControllerData, value);
 }
 
+// Memory-mapped BitBLT registers (GD5436 and later), set once a PCI binding
+// maps BAR1. Null means port I/O. The block starts at BAR1+0x100; this
+// layout follows QEMU's cirrus_vga.c (CIRRUS_MMIO_*), which models the
+// GD5446. The pointer lives in CirrusContext::bltMmio.
+
+// Returns the MMIO offset of a BLT-related GR register, or -1.
+int BltMmioOffset(uint8_t gr) {
+  switch (gr) {
+    case 0x00: return 0x00; case 0x10: return 0x01; case 0x12: return 0x02; case 0x14: return 0x03;
+    case 0x01: return 0x04; case 0x11: return 0x05; case 0x13: return 0x06; case 0x15: return 0x07;
+    case cirrus_regs::kGrBltStatus: return 0x40;
+    case cirrus_regs::kGrBltRop: return 0x1A;
+    case cirrus_regs::kGrBltModeExtension: return 0x1B;
+    default: return gr >= 0x20 && gr <= 0x30 ? gr - 0x20 + 0x08 : -1;
+  }
+}
+
+void WriteBlt(const CirrusContext *const ctx_cirrus, uint8_t index, uint8_t value) {
+  if (ctx_cirrus->bltMmio) {
+    if (const int offset = BltMmioOffset(index); offset >= 0) {
+      ctx_cirrus->bltMmio[offset] = value;
+      return;
+    }
+  }
+  WriteGraphics(index, value);
+}
+
 // The "hidden DAC" register shares port 0x3C6 with the pixel mask: it is
 // selected by four consecutive reads of 0x3C6, after which a single write
 // lands in the hidden register instead.
@@ -136,7 +173,10 @@ kstd::error_code Cirrus_DetectHardware(CirrusContext &ctx) {
     return kernel::KernelError::Unsupported;
   }
   const uint8_t sr0f = ReadSequencer(cirrus_regs::kSrMemoryConfiguration);
-  if (!cirrus_timing::DecodeVram(ctx.chip, sr0f, ctx.vramBytes)) {
+  const bool needsSr17 = ctx.chip == cirrus_timing::Chip::Gd5446 ||
+                         ctx.chip == cirrus_timing::Chip::Gd5480;
+  const uint8_t sr17 = needsSr17 ? ReadSequencer(0x17) : 0;
+  if (!cirrus_timing::DecodeVram(ctx.chip, sr0f, ctx.vramBytes, sr17)) {
     KE_Print("gfx_cirrus: chip 0x{x} reports an unknown SR0F memory encoding 0x{x}",
              ctx.chipId, sr0f);
     return kernel::KernelError::Unsupported;
@@ -184,7 +224,17 @@ kstd::error_code Cirrus_ProgramMode(CirrusContext *const ctx_cirrus) {
   WriteSequencer(0x03, 0x00);
   WriteSequencer(0x04, 0x0E);
 
-  WriteSequencer(cirrus_regs::kSrExtendedSequencerMode, depth.sr07);
+  if (ctx_cirrus->lfb) {
+    // PCI linear framebuffer: as Xorg alp_driver.c AlpModeInit, keep SR07
+    // bits 7:5, set bit 4 (linear addressing) and the depth bits.
+    const auto before = ReadSequencer(cirrus_regs::kSrExtendedSequencerMode);
+    const auto sr07 = static_cast<uint8_t>((before & 0xE0) | 0x10 | depth.sr07);
+    WriteSequencer(cirrus_regs::kSrExtendedSequencerMode, sr07);
+    KE_Print("gfx_cirrus: SR07 0x{:x} -> 0x{:x} (linear), read back 0x{:x}", before, sr07,
+             ReadSequencer(cirrus_regs::kSrExtendedSequencerMode));
+  } else {
+    WriteSequencer(cirrus_regs::kSrExtendedSequencerMode, depth.sr07);
+  }
   WriteSequencer(cirrus_regs::kSrVclk0Numerator, timing.vclkNumerator);
   WriteSequencer(cirrus_regs::kSrVclk0Denominator, timing.vclkDenominator);
 
@@ -285,6 +335,11 @@ void Cirrus_CopyToWindow(volatile uint8_t *dst, const uint8_t *src, size_t lengt
 // Copies `length` bytes into VRAM through the bank window, switching banks
 // whenever the run crosses the end of the currently mapped 64 KiB view.
 void Cirrus_WriteVram(CirrusContext *const ctx_cirrus, uint32_t vramOffset, const uint8_t *src, size_t length) {
+  if (ctx_cirrus->lfb && vramOffset <= ctx_cirrus->lfbBytes && length <= ctx_cirrus->lfbBytes - vramOffset) {
+    // PCI linear framebuffer: no GR09 bank switching.
+    Cirrus_CopyToWindow(ctx_cirrus->lfb.as_ptr<volatile uint8_t>() + vramOffset, src, length);
+    return;
+  }
   auto *window = ctx_cirrus->window.as_ptr<volatile uint8_t>();
   while (length) {
     const uint32_t windowOffset = Cirrus_SetBank(ctx_cirrus, vramOffset);
@@ -298,6 +353,11 @@ void Cirrus_WriteVram(CirrusContext *const ctx_cirrus, uint32_t vramOffset, cons
 }
 
 void Cirrus_ReadVram(CirrusContext *const ctx_cirrus, uint32_t vramOffset, uint8_t *dst, size_t length) {
+  if (ctx_cirrus->lfb && vramOffset <= ctx_cirrus->lfbBytes && length <= ctx_cirrus->lfbBytes - vramOffset) {
+    const auto *lfb = ctx_cirrus->lfb.as_ptr<volatile uint8_t>() + vramOffset;
+    for (size_t i = 0; i < length; ++i) dst[i] = lfb[i];
+    return;
+  }
   const auto *window = ctx_cirrus->window.as_ptr<volatile uint8_t>();
   while (length) {
     const uint32_t windowOffset = Cirrus_SetBank(ctx_cirrus, vramOffset);
@@ -313,35 +373,41 @@ void Cirrus_ReadVram(CirrusContext *const ctx_cirrus, uint32_t vramOffset, uint8
 // Aborts whatever the engine is doing and disarms it. The reset is only
 // acted on when the bit falls again, so both writes are required: leaving
 // the engine armed would make it swallow every later window write.
-void Cirrus_ResetBlitter() {
-  WriteGraphics(cirrus_regs::kGrBltStatus, cirrus_regs::kBltStatusReset);
-  WriteGraphics(cirrus_regs::kGrBltStatus, 0x00);
+void Cirrus_ResetBlitter(const CirrusContext *const ctx_cirrus) {
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltStatus, cirrus_regs::kBltStatusReset);
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltStatus, 0x00);
 }
 
 // The engine must be idle before it is reprogrammed. Returns false on
 // timeout, in which case the caller takes the CPU path instead.
-bool Cirrus_WaitForBlitter() {
+bool Cirrus_WaitForBlitter(const CirrusContext *const ctx_cirrus) {
   for (uint32_t spin = 0; spin < 100000; ++spin) {
-    HAL_IO_Out8(cirrus_regs::kGraphicsControllerIndex, cirrus_regs::kGrBltStatus);
-    if ((HAL_IO_In8(cirrus_regs::kGraphicsControllerData) & cirrus_regs::kBltStatusBusy) == 0) {
+    uint8_t status;
+    if (ctx_cirrus->bltMmio) {
+      status = ctx_cirrus->bltMmio[0x40];
+    } else {
+      HAL_IO_Out8(cirrus_regs::kGraphicsControllerIndex, cirrus_regs::kGrBltStatus);
+      status = HAL_IO_In8(cirrus_regs::kGraphicsControllerData);
+    }
+    if ((status & cirrus_regs::kBltStatusBusy) == 0) {
       return true;
     }
   }
   return false;
 }
 
-void Cirrus_ProgramBlitGeometry(uint32_t widthBytes, uint32_t height, uint32_t dstPitch, uint32_t srcPitch, uint32_t dstAddress) {
-  WriteGraphics(cirrus_regs::kGrBltWidthLow, static_cast<uint8_t>((widthBytes - 1) & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltWidthHigh, static_cast<uint8_t>(((widthBytes - 1) >> 8) & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltHeightLow, static_cast<uint8_t>((height - 1) & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltHeightHigh, static_cast<uint8_t>(((height - 1) >> 8) & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltDstPitchLow, static_cast<uint8_t>(dstPitch & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltDstPitchHigh, static_cast<uint8_t>((dstPitch >> 8) & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltSrcPitchLow, static_cast<uint8_t>(srcPitch & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltSrcPitchHigh, static_cast<uint8_t>((srcPitch >> 8) & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltDstAddrLow, static_cast<uint8_t>(dstAddress & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltDstAddrMid, static_cast<uint8_t>((dstAddress >> 8) & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltDstAddrHigh, static_cast<uint8_t>((dstAddress >> 16) & 0x3F));
+void Cirrus_ProgramBlitGeometry(const CirrusContext *const ctx_cirrus, uint32_t widthBytes, uint32_t height, uint32_t dstPitch, uint32_t srcPitch, uint32_t dstAddress) {
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltWidthLow, static_cast<uint8_t>((widthBytes - 1) & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltWidthHigh, static_cast<uint8_t>(((widthBytes - 1) >> 8) & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltHeightLow, static_cast<uint8_t>((height - 1) & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltHeightHigh, static_cast<uint8_t>(((height - 1) >> 8) & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltDstPitchLow, static_cast<uint8_t>(dstPitch & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltDstPitchHigh, static_cast<uint8_t>((dstPitch >> 8) & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltSrcPitchLow, static_cast<uint8_t>(srcPitch & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltSrcPitchHigh, static_cast<uint8_t>((srcPitch >> 8) & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltDstAddrLow, static_cast<uint8_t>(dstAddress & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltDstAddrMid, static_cast<uint8_t>((dstAddress >> 8) & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltDstAddrHigh, static_cast<uint8_t>((dstAddress >> 16) & 0x3F));
 }
 
 // Copies one rectangle of the shadow buffer into VRAM with the CPU. The
@@ -466,7 +532,7 @@ void Cirrus_ProgramFillColour(CirrusContext *const ctx_cirrus, uint32_t colour) 
       cirrus_regs::kGrForegroundColourByte3,
   };
   for (uint32_t i = 0; i < bytesPerPixel && i < 4; ++i) {
-    WriteGraphics(kColourRegisters[i], bytes[i]);
+    WriteBlt(ctx_cirrus, kColourRegisters[i], bytes[i]);
   }
 }
 
@@ -509,8 +575,8 @@ kstd::error_code Cirrus_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapt
   if (y + h > static_cast<int>(place.height)) h = static_cast<int>(place.height) - y;
   if (w <= 0 || h <= 0) return kernel::KernelError::Success;
 
-  if (!Cirrus_WaitForBlitter()) {
-    Cirrus_ResetBlitter();
+  if (!Cirrus_WaitForBlitter(ctx_cirrus)) {
+    Cirrus_ResetBlitter(ctx_cirrus);
     return kernel::KernelError::Timeout;
   }
 
@@ -519,20 +585,20 @@ kstd::error_code Cirrus_FillRect(const kernel::KObjectPtr<kernel::KGraphicsAdapt
   const uint32_t dstAddress = place.offset + static_cast<uint32_t>(y) * place.pitch + static_cast<uint32_t>(x) * bytesPerPixel;
 
   Cirrus_ProgramFillColour(ctx_cirrus, colour);
-  Cirrus_ProgramBlitGeometry(widthBytes, static_cast<uint32_t>(h), place.pitch, 0, dstAddress);
-  WriteGraphics(cirrus_regs::kGrBltRop, cirrus_regs::kBltRopSrcCopy);
-  WriteGraphics(cirrus_regs::kGrBltModeExtension, cirrus_regs::kBltModeExtSolidFill);
-  WriteGraphics(cirrus_regs::kGrBltMode,
+  Cirrus_ProgramBlitGeometry(ctx_cirrus, widthBytes, static_cast<uint32_t>(h), place.pitch, 0, dstAddress);
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltRop, cirrus_regs::kBltRopSrcCopy);
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltModeExtension, cirrus_regs::kBltModeExtSolidFill);
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltMode,
                 static_cast<uint8_t>(cirrus_regs::kBltModePatternCopy | cirrus_regs::kBltModeColourExpand |
                                      ctx_cirrus->depth->bltPixelWidth));
-  WriteGraphics(cirrus_regs::kGrBltStatus, cirrus_regs::kBltStatusStart);
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltStatus, cirrus_regs::kBltStatusStart);
 
-  if (!Cirrus_WaitForBlitter()) {
-    Cirrus_ResetBlitter();
-    WriteGraphics(cirrus_regs::kGrBltModeExtension, 0x00);
+  if (!Cirrus_WaitForBlitter(ctx_cirrus)) {
+    Cirrus_ResetBlitter(ctx_cirrus);
+    WriteBlt(ctx_cirrus, cirrus_regs::kGrBltModeExtension, 0x00);
     return kernel::KernelError::Timeout;
   }
-  WriteGraphics(cirrus_regs::kGrBltModeExtension, 0x00);
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltModeExtension, 0x00);
 
   // VRAM is already correct, so this produces no transfer: only the shadow
   // still needs the same pixels. Offscreen surfaces are VRAM-only.
@@ -567,8 +633,8 @@ kstd::error_code Cirrus_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter
     return kernel::KernelError::Unsupported;
   }
 
-  if (!Cirrus_WaitForBlitter()) {
-    Cirrus_ResetBlitter();
+  if (!Cirrus_WaitForBlitter(ctx_cirrus)) {
+    Cirrus_ResetBlitter(ctx_cirrus);
     return kernel::KernelError::Timeout;
   }
 
@@ -590,18 +656,18 @@ kstd::error_code Cirrus_BitBlt(const kernel::KObjectPtr<kernel::KGraphicsAdapter
     srcAddress += (height - 1) * sp.pitch + widthBytes - 1;
   }
 
-  Cirrus_ProgramBlitGeometry(widthBytes, height, dp.pitch, sp.pitch, dstAddress);
-  WriteGraphics(cirrus_regs::kGrBltSrcAddrLow, static_cast<uint8_t>(srcAddress & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltSrcAddrMid, static_cast<uint8_t>((srcAddress >> 8) & 0xFF));
-  WriteGraphics(cirrus_regs::kGrBltSrcAddrHigh, static_cast<uint8_t>((srcAddress >> 16) & 0x3F));
-  WriteGraphics(cirrus_regs::kGrBltRop, cirrus_regs::kBltRopSrcCopy);
-  WriteGraphics(cirrus_regs::kGrBltModeExtension, 0x00);
-  WriteGraphics(cirrus_regs::kGrBltMode,
+  Cirrus_ProgramBlitGeometry(ctx_cirrus, widthBytes, height, dp.pitch, sp.pitch, dstAddress);
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltSrcAddrLow, static_cast<uint8_t>(srcAddress & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltSrcAddrMid, static_cast<uint8_t>((srcAddress >> 8) & 0xFF));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltSrcAddrHigh, static_cast<uint8_t>((srcAddress >> 16) & 0x3F));
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltRop, cirrus_regs::kBltRopSrcCopy);
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltModeExtension, 0x00);
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltMode,
                 static_cast<uint8_t>(ctx_cirrus->depth->bltPixelWidth | (backwards ? cirrus_regs::kBltModeBackwards : 0)));
-  WriteGraphics(cirrus_regs::kGrBltStatus, cirrus_regs::kBltStatusStart);
+  WriteBlt(ctx_cirrus, cirrus_regs::kGrBltStatus, cirrus_regs::kBltStatusStart);
 
-  if (!Cirrus_WaitForBlitter()) {
-    Cirrus_ResetBlitter();
+  if (!Cirrus_WaitForBlitter(ctx_cirrus)) {
+    Cirrus_ResetBlitter(ctx_cirrus);
     return kernel::KernelError::Timeout;
   }
 
@@ -1403,6 +1469,26 @@ kstd::error_code Cirrus_ConfigureDisplay(const kernel::KObjectPtr<kernel::KGraph
 }
 // endregion
 
+// Detects a bus_pci binding and logs every bus_pci query, as an exercise of
+// the PCI bus driver. Any failure means a non-PCI (ISA/legacy) binding, and
+// the context is left untouched so the existing paths run unchanged.
+void Cirrus_ProbePciBus(const kernel::KDevicePtr<kernel::KDevice> &pdo, CirrusContext &ctx) {
+  kernel::pci::DeviceInfo info{};
+  if (const auto status = kernel::pci::GetDeviceInfo(pdo, info); status) {
+    KE_Print("gfx_cirrus: GetDeviceInfo -> {}: not a PCI binding, using ISA paths", status.message());
+    return;
+  }
+  if (info.vendorId != 0x1013) {
+    KE_Print("gfx_cirrus: GetDeviceInfo returned vendor 0x{x}, not Cirrus: using ISA paths", info.vendorId);
+    return;
+  }
+  ctx.isPci = true;
+  ctx.pciInfo = info;
+  KE_Print("gfx_cirrus: PCI {}:{}.{} {x:04}:{x:04} rev {x:02} BAR0 0x{x}/0x{x} BAR1 0x{x}/0x{x}",
+           info.bus, info.dev, info.fn, info.vendorId, info.deviceId, info.revision,
+           info.bars[0].base, info.bars[0].size, info.bars[1].base, info.bars[1].size);
+}
+
 kstd::error_code Cirrus_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   // The generic ISA presence check also sees standard VGA at these ports.
   // Reject it before PnP reserves the shared VGA aperture for this driver,
@@ -1424,7 +1510,95 @@ kstd::error_code Cirrus_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject
     KE_Print("gfx_cirrus: Failed to attach Cirrus device: {}", attached.error().message());
     return attached.error();
   }
+  // The bus queries must run here: after AddDevice, PnP rebinds
+  // pdo->driverObject to this driver and they no longer reach bus_pci.
+  if (auto *ctx = (*fdo)->deviceExtension.as<CirrusContext>()) Cirrus_ProbePciBus(pdo, *ctx);
   return kernel::KernelError::Success;
+}
+
+// Unmaps and releases a range mapped by Cirrus_MapPhysicalRange.
+void Cirrus_UnmapPhysicalRange(kernel::VirtualAddress virt, size_t length, const char *what) {
+  if (!virt) return;
+  for (size_t i = 0; i < length / kPageSize; ++i) {
+    HAL_VMM_UnmapPage(virt + (i * kPageSize));
+    HAL_VMM_Flush(virt + (i * kPageSize));
+  }
+  if (const auto freed = KE_VMM_FreeRegion(KE_VMM_GetKernelAddressSpace(), virt.as_ptr()); freed)
+    KE_Print("gfx_cirrus: cannot release {} region: {}", what, freed.message());
+}
+
+CirrusContext::~CirrusContext() {
+  KE_Free(modeCatalog);
+  if (sr17Changed) WriteSequencer(0x17, savedSr17);
+  bltMmio = nullptr;
+  Cirrus_UnmapPhysicalRange(mmio, mmioBytes, "BAR1 MMIO registers");
+  Cirrus_UnmapPhysicalRange(lfb, lfbBytes, "BAR0 linear framebuffer");
+}
+
+// Maps `length` bytes of device memory (page aligned) read/write and
+// uncached into the kernel address space: 486/Pentium have no MTRRs to force
+// PCI apertures uncached, and BitBLT status polling must see the device.
+// Returns a null address on failure.
+kernel::VirtualAddress Cirrus_MapPhysicalRange(uint32_t physical, size_t length, const char *what) {
+  constexpr auto kFlags = kernel::vmm::ProtectFlags::READ | kernel::vmm::ProtectFlags::WRITE |
+                          kernel::vmm::ProtectFlags::NOCACHE;
+  auto &as = KE_VMM_GetKernelAddressSpace();
+  const auto region = KE_VMM_AllocateRegion(as, length, kFlags);
+  if (!region) {
+    KE_Print("gfx_cirrus: cannot reserve address space for {}: {}", what, region.error().message());
+    return {};
+  }
+  const auto virt = kernel::VirtualAddress::from_ptr(*region);
+  for (size_t i = 0; i < length / kPageSize; ++i) {
+    if (const auto mapped = KE_VMM_MapPhysical(as, virt + (i * kPageSize), kernel::PhysicalAddress(physical) + (i * kPageSize),
+                                               kFlags);
+        mapped) {
+      KE_Print("gfx_cirrus: cannot map {}: {}", what, mapped.message());
+      // Undo the pages already mapped, then release the reservation.
+      for (size_t j = 0; j < i; ++j) {
+        HAL_VMM_UnmapPage(virt + (j * kPageSize));
+        HAL_VMM_Flush(virt + (j * kPageSize));
+      }
+      if (const auto freed = KE_VMM_FreeRegion(as, virt.as_ptr()); freed)
+        KE_Print("gfx_cirrus: cannot release {} region: {}", what, freed.message());
+      return {};
+    }
+  }
+  return virt;
+}
+
+// PCI only: maps BAR0 as the linear framebuffer and BAR1 as the MMIO
+// register block. Any failure leaves the banked window / port I/O in use.
+void Cirrus_MapPciApertures(CirrusContext &ctx) {
+  const auto &info = ctx.pciInfo;
+  const auto &bar0 = info.bars[0];
+  if (info.barCount > 0 && !bar0.io && bar0.base && bar0.size) {
+    // Only the first vramBytes of BAR0 are plain linear VRAM (higher
+    // quarters select byte-swapping apertures on the GD5446).
+    uint32_t length = ctx.vramBytes < bar0.size ? ctx.vramBytes : bar0.size;
+    length &= ~uint32_t{kPageSize - 1};
+    if (length) {
+      ctx.lfb = Cirrus_MapPhysicalRange(bar0.base, length, "BAR0 linear framebuffer");
+      if (ctx.lfb) ctx.lfbBytes = length;
+    }
+  }
+  KE_Print("gfx_cirrus: PCI linear framebuffer: {}", ctx.lfb ? "BAR0 mapped" : "unavailable, using the banked window");
+
+  const auto &bar1 = info.bars[1];
+  if (info.barCount > 1 && !bar1.io && bar1.base && bar1.size >= 0x200) {
+    ctx.mmio = Cirrus_MapPhysicalRange(bar1.base, kPageSize, "BAR1 MMIO registers");
+    if (ctx.mmio) {
+      // SR17 bit 2 enables memory-mapped I/O, bit 6 selects the PCI BAR
+      // instead of the 0xB8000 window (Cirrus GD5446 TRM; QEMU maps the
+      // legacy window only for bits == 0x04). NOT_YET_VERIFIED on hardware.
+      ctx.mmioBytes = kPageSize;
+      ctx.savedSr17 = ReadSequencer(0x17);
+      ctx.sr17Changed = true;
+      WriteSequencer(0x17, static_cast<uint8_t>(ctx.savedSr17 | 0x44));
+      ctx.bltMmio = ctx.mmio.as_ptr<volatile uint8_t>() + 0x100;
+    }
+  }
+  KE_Print("gfx_cirrus: BitBLT registers: {}", ctx.bltMmio ? "MMIO (BAR1+0x100)" : "port I/O");
 }
 
 kstd::error_code Cirrus_DeviceControl(const kernel::KDevicePtr<kernel::KDevice> &device, uint32_t code,
@@ -1507,9 +1681,10 @@ void Cirrus_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   }
   ctx_cirrus->window = virt;
   ctx_cirrus->activeBank = 0;
+  if (ctx_cirrus->isPci) Cirrus_MapPciApertures(*ctx_cirrus);
 
   KE_Print("gfx_cirrus: {} id 0x{x}, SR0F-decoded {}KiB, {}KiB aperture mapped",
-           ctx_cirrus->chip == cirrus_timing::Chip::Gd5430 ? "GD5430" : "GD5434",
+           cirrus_timing::ChipName(ctx_cirrus->chip),
            ctx_cirrus->chipId, ctx_cirrus->vramBytes / 1024,
            windowRes->length / 1024);
 

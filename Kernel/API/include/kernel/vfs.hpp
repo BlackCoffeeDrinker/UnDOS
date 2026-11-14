@@ -133,3 +133,22 @@ UNDOS_KERNEL_PUBLIC_V1API(
   kstd::error_code,
   KE_VFS_OperateFile,
   kernel::VFSFileOperation operation, const kstd::string_view &source, const kstd::string_view &destination);
+
+/** Sets the read-only/hidden/system/archive bits of an absolute path. */
+UNDOS_KERNEL_PUBLIC_V1API(
+  kstd::error_code,
+  KE_VFS_SetAttributes,
+  const kstd::string_view &path, uint32_t attributes);
+
+/** Copies the name of the index-th public mount (internal "//" mounts are
+ * skipped) into `name`. False is end of the mount list. */
+UNDOS_KERNEL_PUBLIC_V1API(
+  kernel::KBoolResult,
+  KE_VFS_QueryMount,
+  uint32_t index, kstd::static_string<255> &name);
+
+/** Reports the volume mounted exactly at `mountPoint`. */
+UNDOS_KERNEL_PUBLIC_V1API(
+  kstd::error_code,
+  KE_VFS_GetVolumeInformation,
+  const kstd::string_view &mountPoint, kernel::KVFSVolumeInformation &information);

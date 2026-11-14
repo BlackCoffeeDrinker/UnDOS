@@ -374,6 +374,7 @@ void expose_locked(const URect &screenRect) noexcept {
         slot->originY = origin.top;
       }
     }
+    rebind_window_dc_locked(*w);
     if (!effectively_visible_locked(*w)) continue;
     URegion visible;
     visible_region_locked(*w, visible);
@@ -418,6 +419,33 @@ void abandon_paint_locked(KWindowObject &window) noexcept {
   window.paintClip.Clear();
   if (g_activePaints) --g_activePaints;
   if (window.queue && effectively_visible_locked(window)) wake_locked(*window.queue);
+}
+
+void rebind_window_dc_locked(KWindowObject &window) noexcept {
+  if (!window.windowDC || !window.process) return;
+  auto *slot = gfx::FindDC(window.process, window.windowDC);
+  if (!slot) return;
+  visible_region_locked(window, window.windowClip);
+  if (effectively_visible_locked(window))
+    window.windowClip.Intersect(client_to_screen_locked(window, client_rect_locked(window)));
+  else
+    window.windowClip.Clear();
+  const URect origin = client_to_screen_locked(window, {});
+  (void) slot->ChangeRenderState();
+  slot->originX = origin.left;
+  slot->originY = origin.top;
+  slot->clipRects = reinterpret_cast<const KClipRect *>(window.windowClip.rects);
+  slot->clipCount = window.windowClip.count;
+  slot->clipped = true;
+  slot->hwnd = window.hwnd;
+}
+
+void abandon_window_dc_locked(KWindowObject &window) noexcept {
+  if (!window.windowDC) return;
+  window.windowDC = 0;
+  window.windowClip.Clear();
+  if (g_activePaints) --g_activePaints;
+  cursor_show_locked();
 }
 
 kstd::expected<PaintBegin, kstd::error_code> begin_paint_locked(KProcessObject &proc, KWindowObject &window, uint32_t reservedDC) noexcept {
@@ -501,6 +529,45 @@ kstd::error_code end_paint_locked(KProcessObject &proc, KWindowObject &window, u
   window.painting = {};
   window.paintErase = {};
   window.paintClip.Clear();
+  if (g_activePaints) --g_activePaints;
+  damage = damage.Intersect(screen_rect());
+  if (!damage.Empty()) present_locked(damage);
+  else
+    cursor_show_locked();
+  return {};
+}
+
+kstd::error_code bind_window_dc_locked(KProcessObject &proc, KWindowObject &window, HDC handle) noexcept {
+  const auto display = primary_display();
+  if (!display) return KernelError::DeviceNotReady;
+  if (window.windowDC) {
+    if (gfx::FindDC(&proc, window.windowDC)) return KernelError::InvalidState;
+    abandon_window_dc_locked(window);
+  }
+  auto *slot = gfx::FindDC(&proc, handle);
+  if (!slot) return KernelError::InvalidHandle;
+  slot->target = display->surface;
+  slot->noAccel = true;
+  window.windowDC = handle;
+  rebind_window_dc_locked(window);
+  // Drawing goes to the surface shadow; keep the cursor out of it until release.
+  ++g_activePaints;
+  cursor_hide_locked();
+  return {};
+}
+
+kstd::error_code release_window_dc_locked(KProcessObject &proc, KWindowObject &window, HDC dc, DetachedDC &released) noexcept {
+  if (!dc || window.windowDC != dc) return KernelError::InvalidHandle;
+  auto *slot = gfx::FindDC(&proc, dc);
+  if (!slot) return KernelError::InvalidHandle;
+  URect damage{};
+  if (slot->presentationDirty) {
+    const auto &r = slot->presentationBounds;
+    damage = {.left = r.left, .top = r.top, .right = r.right, .bottom = r.bottom};
+  }
+  if (const kstd::error_code closed = gfx::CloseDC(&proc, dc, released); closed) return closed;
+  window.windowDC = 0;
+  window.windowClip.Clear();
   if (g_activePaints) --g_activePaints;
   damage = damage.Intersect(screen_rect());
   if (!damage.Empty()) present_locked(damage);

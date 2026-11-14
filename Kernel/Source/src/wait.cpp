@@ -23,6 +23,7 @@ SpinLock g_lock;
 KDispatcherHeader *header_of(const KObjectPtr<KObject> &object) noexcept {
   if (const auto event = object.As<KEventObject>()) return &event->header;
   if (const auto process = object.As<KProcessObject>()) return &process->exitHeader;
+  if (const auto thread = object.As<KThreadObject>()) return &thread->exitHeader;
   if (const auto io = object.As<KIOObject>()) return io->waitable;
   return nullptr;
 }
@@ -66,7 +67,12 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForHeader(KDispatcherHeader &
     kernel::wait::g_timed.Add(wb);
   }
 
-  while (!wb.satisfied && !wb.timed_out) {
+  // Alertable waits end early once the owning process exits (deferred kill).
+  const auto cancelled = [&self] {
+    return self->alertable && !self->retiring && self->owner_process &&
+           self->owner_process->state != KProcessObject::State::Running;
+  };
+  while (!wb.satisfied && !wb.timed_out && !cancelled()) {
     // The lock must not be held across the context switch: the CPU that
     // signals us needs it. Interrupts stay masked throughout, so nothing on
     // this CPU can observe the gap; a remote signaller sees the thread marked
@@ -79,7 +85,8 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForHeader(KDispatcherHeader &
   if (timed) kernel::wait::g_timed.Remove(wb);
   if (!wb.satisfied) header.RemoveWaiter(wb);
   kernel::wait::lock().unlock_irqrestore(irq_state);
-  return wb.satisfied ? KernelError::Success : KernelError::Timeout;
+  if (wb.satisfied) return KernelError::Success;
+  return wb.timed_out ? KernelError::Timeout : KernelError::NoCurrentProcess;
 }
 
 UNDOS_KERNEL_API_DEF kstd::error_code KE_SCHED_WaitForObject(const KObjectPtr<KObject> &object,
@@ -97,6 +104,12 @@ UNDOS_KERNEL_API_DEF void KE_EVENT_Signal(KDispatcherHeader &header, bool wakeAl
   // restores whatever state the caller had.
   const uintptr_t state = kernel::wait::lock().lock_irqsave();
   header.Signal(wakeAll, kernel::wait::wake);
+  kernel::wait::lock().unlock_irqrestore(state);
+}
+
+UNDOS_KERNEL_API_DEF void KE_EVENT_Reset(KDispatcherHeader &header) noexcept {
+  const uintptr_t state = kernel::wait::lock().lock_irqsave();
+  header.signalled = false;
   kernel::wait::lock().unlock_irqrestore(state);
 }
 

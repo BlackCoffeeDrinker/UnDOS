@@ -3,6 +3,7 @@
 #include <array.hpp>
 #include <new.hpp>
 
+#include "fat_long_name.hpp"
 #include "fat_short_name.hpp"
 
 namespace {
@@ -281,6 +282,18 @@ kstd::error_code FAT_MountVolume(const kernel::KObjectPtr<kernel::KVolumeMountOb
   const auto vol = mountPoint->driverExtension.as<FAT_Volume>();
   *vol = parsedVolume;
 
+  // NOT_YET_VERIFIED: DOS LABEL writes the root-directory volume entry; the
+  // boot-sector copy read here can be stale on such volumes.
+  mountPoint->serialNumber = hasSerial ? serial : 0;
+  mountPoint->volumeLabel.clear();
+  if (hasSerial && *parsed != FAT_Type::ExFAT) {
+    const char *label = reinterpret_cast<const char *>(sector + (*parsed == FAT_Type::FAT32 ? 71 : 43));
+    size_t length = 11;
+    while (length && label[length - 1] == ' ') --length;
+    const kstd::string_view text(label, length);
+    if (text != "NO NAME") mountPoint->volumeLabel.append(text);
+  }
+
   switch (*parsed) {
     case FAT_Type::FAT12: KE_Print("FS_FAT: FAT12 Detected"); break;
     case FAT_Type::FAT16: KE_Print("FS_FAT: FAT16 Detected"); break;
@@ -451,6 +464,9 @@ kstd::error_code FAT_FillNode(const FAT_DirEntry &entry, kernel::KVFSNode &out) 
   out.type = (entry.attr & kAttrDirectory) ? kernel::VFSNodeType::Directory : kernel::VFSNodeType::File;
   out.size = (entry.attr & kAttrDirectory) ? 0 : entry.fileSize;
   out.attributes = entry.attr;
+  out.creationTime = (static_cast<uint32_t>(entry.createDate) << 16) | entry.createTime;
+  out.lastAccessTime = static_cast<uint32_t>(entry.lastAccessDate) << 16;
+  out.lastWriteTime = (static_cast<uint32_t>(entry.writeDate) << 16) | entry.writeTime;
   out.fsPrivate = kernel::DataBuffer::Create<FAT_VFSNode>();
   if (!out.fsPrivate) return kernel::KernelError::OutOfMemory;
   auto *node = out.fsPrivate.as<FAT_VFSNode>();
@@ -609,11 +625,15 @@ kstd::error_code FAT_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject>
                                kernel::KVFSNode &out) {
   if (parent.type != kernel::VFSNodeType::Directory) { return kernel::KernelError::NotDirectory; }
 
+  if (name.empty()) return kernel::KernelError::InvalidArgument;
+  if (name.size() > kLfnMaxName) return kernel::KernelError::NameTooLong;
+
   kstd::static_string<12> shortName;
   shortName.append("           ");// 11 spaces, will be overwritten below
-  if (const auto status = FAT_ToShortName(name, shortName); status) {
-    return status;
-  }
+  // Names that do not fit 8.3 can still match a long name.
+  const bool hasShortForm = !FAT_ToShortName(name, shortName);
+  FAT_LfnAccumulator lfn;
+  kstd::static_string<256> longName;
 
   const auto *vol = mountPoint->driverExtension.as<FAT_Volume>();
   const auto *dirNode = parent.fsPrivate.as<FAT_VFSNode>();
@@ -643,11 +663,24 @@ kstd::error_code FAT_Lookup(const kernel::KObjectPtr<kernel::KVolumeMountObject>
       // (that would read past the field into the following struct members). Build an
       // explicit fixed-length view instead.
       const kstd::string_view entryName(entry.name, sizeof(entry.name));
-      if (static_cast<uint8_t>(entry.name[0]) == 0xE5) continue;  // Deleted entry
-      if ((entry.attr & kAttrLongName) == kAttrLongName) continue;// Long-name fragment
-      if (entry.attr & kAttrVolumeId) continue;                   // Volume label
+      if (static_cast<uint8_t>(entry.name[0]) == 0xE5) {// Deleted entry
+        lfn.Reset();
+        continue;
+      }
+      if ((entry.attr & kAttrLongName) == kAttrLongName) {// Long-name fragment
+        lfn.Feed(*reinterpret_cast<const FAT_LfnEntry *>(&entry));
+        continue;
+      }
+      if (entry.attr & kAttrVolumeId) {// Volume label
+        lfn.Reset();
+        continue;
+      }
 
-      if (entryName == shortName) {
+      if (lfn.Complete(entry.name, longName) &&
+          FAT_LongNameEquals(kstd::string_view(longName.data(), longName.size()), name)) {
+        return FAT_FillNode(entry, out);
+      }
+      if (hasShortForm && entryName == shortName) {
         return FAT_FillNode(entry, out);
       }
     }
@@ -697,6 +730,8 @@ UNDOS_DRIVER_ENTRY {
     (*fs)->ReadHandle = FAT_ReadHandle;
     (*fs)->ReadDirectory = FAT_ReadDirectory;
     (*fs)->OperateFile = FAT_OperateFile;
+    (*fs)->SetAttributes = FAT_SetAttributes;
+    (*fs)->GetVolumeInformation = FAT_GetVolumeInformation;
   } else {
     KE_Print("FS_FAT: Failed to register filesystem driver");
   }

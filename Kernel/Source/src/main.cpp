@@ -235,11 +235,12 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   kernel::driver::LoadBootDrivers();
 
   // Tell the HAL the Object Manager is ready.
-  // HAL can now safely allocate object handles for PCI/PCIe buses and drivers.
-  // When no PCI bus is present, the HAL reports a legacy ISA root device, which
-  // cascades through the PnP manager: bind bus_isa -> create IsaBusFdo ->
-  // StartDevice -> auto-enumerate children -> bind disk_ata.
   HAL_PLATFORM_AfterObjectManager();
+
+  // The HIVE decides which bus drivers hang off ROOT (LocalMachine/Enum/Root,
+  // e.g. bus_pci then bus_isa). Each report cascades through the PnP manager:
+  // bind bus driver -> StartDevice -> enumerate children -> bind their drivers.
+  kernel::pnp::EnumerateRootFromHive();
 
   // Device processing (bind/start/enumerate/class-trigger) now happens
   // asynchronously on the PnP worker thread; wait for the queue to fully

@@ -10,12 +10,12 @@
 _Static_assert(sizeof(int) == 4 && sizeof(long) == 4 && sizeof(void *) == 4, "ILP32");
 _Static_assert(sizeof(int64_t) == 8 && CHAR_BIT == 8 && SIZE_MAX == UINT32_MAX, "C types");
 _Static_assert(sizeof(HANDLE) == 4 && _Alignof(HANDLE) == 4, "handle ABI");
-_Static_assert(sizeof(struct __SYS_PROC_CREATEPROCESS_V2) == 36 &&
-               offsetof(struct __SYS_PROC_CREATEPROCESS_V2, stdinHandle) == 20 &&
-               offsetof(struct __SYS_PROC_CREATEPROCESS_V2, stdoutHandle) == 24 &&
-               offsetof(struct __SYS_PROC_CREATEPROCESS_V2, stderrHandle) == 28 &&
-               offsetof(struct __SYS_PROC_CREATEPROCESS_V2, handle) == 32,
-               "CreateProcessV2 wire ABI");
+_Static_assert(sizeof(struct __SYS_PROC_CREATEPROCESS_V1) == 36 &&
+               offsetof(struct __SYS_PROC_CREATEPROCESS_V1, stdinHandle) == 20 &&
+               offsetof(struct __SYS_PROC_CREATEPROCESS_V1, stdoutHandle) == 24 &&
+               offsetof(struct __SYS_PROC_CREATEPROCESS_V1, stderrHandle) == 28 &&
+               offsetof(struct __SYS_PROC_CREATEPROCESS_V1, handle) == 32,
+               "CreateProcessV1 wire ABI");
 
 static int failed(int line) {
   char message[64];
@@ -42,38 +42,38 @@ int sdk_libc_from_c(void) {
 
   HANDLE handle = 0;
   uint32_t transferred = 99;
-  if (UD_SYS_WriteV2(UINT32_MAX, (const uint8_t *)"x", 1, &transferred) ==
+  if (UD_SYS_WriteV1(UINT32_MAX, (const uint8_t *)"x", 1, &transferred) ==
       SyscallReturnCode_OKAY || transferred != 0) { FAIL(); }
   if (UD_SYS_OpenV1("/System/libcin.txt", FileOpenMode_Read, &handle) !=
           SyscallReturnCode_OKAY ||
-      UD_SYS_WriteV2(handle, (const uint8_t *)"x", 1, &transferred) !=
+      UD_SYS_WriteV1(handle, (const uint8_t *)"x", 1, &transferred) !=
           SyscallReturnCode_UNKNOWN || transferred != 0 ||
       UD_SYS_CloseV1(handle) != SyscallReturnCode_OKAY) { FAIL(); }
   HANDLE source = 0, sink = 0;
   if (UD_SYS_CreateV1(&source, &sink) != SyscallReturnCode_OKAY ||
-      UD_SYS_WriteV2(sink, NULL, 0, &transferred) != SyscallReturnCode_OKAY ||
+      UD_SYS_WriteV1(sink, NULL, 0, &transferred) != SyscallReturnCode_OKAY ||
       transferred != 0 ||
-      UD_SYS_WriteV2(sink, (const uint8_t *)"short write", 11, &transferred) !=
+      UD_SYS_WriteV1(sink, (const uint8_t *)"short write", 11, &transferred) !=
           SyscallReturnCode_OKAY || transferred != 11) { FAIL(); }
-  // WriteV2 accepts mapped buffers up to UNDOS_MAX_MAPPED_BUFFER_SIZE (64 MiB);
+  // WriteV1 accepts mapped buffers up to UNDOS_MAX_MAPPED_BUFFER_SIZE (64 MiB);
   // the TTY sink holds 4096 bytes, so larger writes are short, not rejected.
   enum { TtyCapacity = 4096, BulkSize = TtyCapacity + 1 };
   const uint32_t mappedLimit = 64u * 1024u * 1024u;
   uint8_t *bulk = malloc(BulkSize);
   if (!bulk) { FAIL(); }
   memset(bulk, 'B', BulkSize);
-  if (UD_SYS_WriteV2(sink, bulk, mappedLimit + 1, &transferred) !=
+  if (UD_SYS_WriteV1(sink, bulk, mappedLimit + 1, &transferred) !=
           SyscallReturnCode_INVALID_SIZE ||
-      UD_SYS_WriteV2(sink, bulk, BulkSize, &transferred) != SyscallReturnCode_OKAY ||
+      UD_SYS_WriteV1(sink, bulk, BulkSize, &transferred) != SyscallReturnCode_OKAY ||
       transferred != TtyCapacity - 11 ||
-      UD_SYS_WriteV2(sink, bulk, 1, &transferred) != SyscallReturnCode_OKAY ||
+      UD_SYS_WriteV1(sink, bulk, 1, &transferred) != SyscallReturnCode_OKAY ||
       transferred != 0) { free(bulk); FAIL(); }
   uint32_t length = TtyCapacity;
   if (UD_SYS_ReadV1(source, bulk, &length) != SyscallReturnCode_OKAY ||
       length != TtyCapacity || memcmp(bulk, "short write", 11) ||
       bulk[11] != 'B' || bulk[TtyCapacity - 1] != 'B') { free(bulk); FAIL(); }
   memset(bulk, 'C', BulkSize);
-  if (UD_SYS_WriteV2(sink, bulk, BulkSize, &transferred) != SyscallReturnCode_OKAY ||
+  if (UD_SYS_WriteV1(sink, bulk, BulkSize, &transferred) != SyscallReturnCode_OKAY ||
       transferred != TtyCapacity) { free(bulk); FAIL(); }
   length = BulkSize;
   if (UD_SYS_ReadV1(source, bulk, &length) != SyscallReturnCode_OKAY ||
@@ -87,7 +87,7 @@ int sdk_libc_from_c(void) {
     (void) UD_SYS_PrintV1("SDK probe: standard C output/input/errors PASS");
     return 1;
   }
-  if (UD_SYS_WriteV2(handle, NULL, 0, &transferred) != SyscallReturnCode_OKAY ||
+  if (UD_SYS_WriteV1(handle, NULL, 0, &transferred) != SyscallReturnCode_OKAY ||
       transferred != 0) { FAIL(); }
   if (setvbuf(stdout, NULL, _IOLBF, BUFSIZ) ||
       puts("Hello from UnDOS!") == EOF || printf("C stdio: %d\n", 73) != 12 ||

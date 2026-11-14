@@ -7,11 +7,11 @@
 #include <undosgui/extensions.h>
 
 static_assert(sizeof(HANDLE) == 4 && alignof(HANDLE) == 4);
-static_assert(sizeof(__SYS_PROC_CREATEPROCESS_V2) == 36 &&
-              offsetof(__SYS_PROC_CREATEPROCESS_V2, stdinHandle) == 20 &&
-              offsetof(__SYS_PROC_CREATEPROCESS_V2, stdoutHandle) == 24 &&
-              offsetof(__SYS_PROC_CREATEPROCESS_V2, stderrHandle) == 28 &&
-              offsetof(__SYS_PROC_CREATEPROCESS_V2, handle) == 32);
+static_assert(sizeof(__SYS_PROC_CREATEPROCESS_V1) == 36 &&
+              offsetof(__SYS_PROC_CREATEPROCESS_V1, stdinHandle) == 20 &&
+              offsetof(__SYS_PROC_CREATEPROCESS_V1, stdoutHandle) == 24 &&
+              offsetof(__SYS_PROC_CREATEPROCESS_V1, stderrHandle) == 28 &&
+              offsetof(__SYS_PROC_CREATEPROCESS_V1, handle) == 32);
 
 extern "C" int sdk_value();
 extern "C" int sdk_query_from_c();

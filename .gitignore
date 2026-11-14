@@ -27,3 +27,6 @@ bin/fat32.img
 AGENTS.md
 CLAUDE.md
 .ai-local
+/examples/
+/HDD_IMG.IMG
+/SERIAL_*.txt

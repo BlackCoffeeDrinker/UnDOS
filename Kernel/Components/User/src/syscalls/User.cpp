@@ -19,6 +19,7 @@ void to_msg(const QueuedMessage &message, Msg &out) {
   out.wParam = message.wParam;
   out.lParam = message.lParam;
   out.time = message.time;
+  out.keyState = message.keyState;
 }
 }// namespace
 
@@ -79,13 +80,6 @@ kstd::error_code handle_GetWindowRect_V1(__KRN_USER_GETWINDOWRECT_V1 &&args) {
 }
 
 kstd::error_code handle_InvalidateRect_V1(__KRN_USER_INVALIDATERECT_V1 &&args) {
-  const auto process = caller_process();
-  if (!process) return process.error();
-  const auto rect = to_urect(args.rect);
-  return invalidate_rect(**process, args.hwnd, args.whole ? nullptr : &rect, true);
-}
-
-kstd::error_code handle_InvalidateRect_V2(__KRN_USER_INVALIDATERECT_V2 &&args) {
   if (args.erase > 1) return kernel::KernelError::InvalidArgument;
   const auto process = caller_process();
   if (!process) return process.error();
@@ -113,6 +107,22 @@ kstd::error_code handle_EndPaint_V1(__KRN_USER_ENDPAINT_V1 &&args) {
   return end_paint(**process, args.hwnd, args.dc);
 }
 
+kstd::error_code handle_GetDC_V1(__KRN_USER_GETDC_V1 &&args) {
+  args.dc = 0;
+  const auto process = caller_process();
+  if (!process) return process.error();
+  const auto dc = get_window_dc(**process, args.hwnd);
+  if (!dc) return dc.error();
+  args.dc = *dc;
+  return {};
+}
+
+kstd::error_code handle_ReleaseDC_V1(__KRN_USER_RELEASEDC_V1 &&args) {
+  const auto process = caller_process();
+  if (!process) return process.error();
+  return release_window_dc(**process, args.hwnd, args.dc);
+}
+
 kstd::error_code handle_GetMessage_V1(__KRN_USER_GETMESSAGE_V1 &&args) {
   args.msg = {};
   const auto message = get_message(true, true);
@@ -130,6 +140,10 @@ kstd::error_code handle_PeekMessage_V1(__KRN_USER_PEEKMESSAGE_V1 &&args) {
   }
   to_msg(*message, args.msg);
   return {};
+}
+
+kstd::error_code handle_WaitMessage_V1(__KRN_USER_WAITMESSAGE_V1 &&args) {
+  return wait_message(args.timeoutMs);
 }
 
 kstd::error_code handle_PostMessage_V1(__KRN_USER_POSTMESSAGE_V1 &&args) {
@@ -208,6 +222,32 @@ kstd::error_code handle_SetMenu_V1(__KRN_USER_SETMENU_V1 &&args) {
   const auto process = caller_process();
   if (!process) return process.error();
   return set_menu(**process, args.hwnd, args.menu);
+}
+
+kstd::error_code handle_ModifyMenuState_V1(__KRN_USER_MODIFYMENUSTATE_V1 &&args) {
+  args.previous = 0;
+  args.itemId = 0;
+  if (args.byPosition > 1) return kernel::KernelError::InvalidArgument;
+  const auto process = caller_process();
+  if (!process) return process.error();
+  uint32_t previous = 0, itemId = 0;
+  const auto status = modify_menu_state(**process, args.menu, args.item, args.byPosition != 0,
+                                        args.mask, args.flags, previous, itemId);
+  args.previous = previous;
+  args.itemId = itemId;
+  return status;
+}
+
+kstd::error_code handle_RemoveMenuItem_V1(__KRN_USER_REMOVEMENUITEM_V1 &&args) {
+  args.itemId = 0;
+  if (args.byPosition > 1) return kernel::KernelError::InvalidArgument;
+  const auto process = caller_process();
+  if (!process) return process.error();
+  uint32_t itemId = 0;
+  const auto status =
+      remove_menu_item(**process, args.menu, args.item, args.byPosition != 0, itemId);
+  args.itemId = itemId;
+  return status;
 }
 
 kstd::error_code handle_GetMenu_V1(__KRN_USER_GETMENU_V1 &&args) {

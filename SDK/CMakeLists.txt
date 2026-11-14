@@ -60,7 +60,7 @@ install(DIRECTORY ../CRT/include/undoscrt
 install(DIRECTORY GUI/include/undosgui
     DESTINATION ${UNDOS_SDK_INCLUDE} COMPONENT SDK
     FILES_MATCHING PATTERN "*.h")
-install(FILES GUI/include/windows.h DESTINATION ${UNDOS_SDK_INCLUDE} COMPONENT SDK)
+install(FILES GUI/include/windows.h GUI/include/windowsx.h GUI/include/winuser.h GUI/include/winbase.h DESTINATION ${UNDOS_SDK_INCLUDE} COMPONENT SDK)
 install(DIRECTORY ../CRT/libc/include/ DESTINATION ${UNDOS_SDK_INCLUDE}
     COMPONENT SDK FILES_MATCHING PATTERN "*.h")
 install(FILES application.ld DESTINATION ${UNDOS_SDK_LIB}

@@ -563,7 +563,7 @@ void I8042_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   ctx->wake.manualReset = false;
   ctx->wake.signalled = false;
   // Input decoding must not compete at idle priority with a polling application.
-  auto thread = KE_SCHED_CreateThread(&ps2::I8042_PumpThread, ctx, 2);
+  auto thread = KE_SCHED_CreateThread(&ps2::I8042_PumpThread, ctx, kernel::ThreadPriority::High);
   if (!thread) {
     KE_Print("i8042: Failed to create pump thread; no input will be decoded");
     return;

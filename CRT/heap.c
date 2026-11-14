@@ -23,6 +23,18 @@ static uintptr_t g_arena_end = 0;
 
 static BlockHeader *g_free_list = NULL;
 
+// Threads of one process share the heap. A short spin lock is enough: the
+// critical sections never block, and a preempted holder runs again soon.
+static volatile int g_heap_lock = 0;
+
+static void heap_lock(void) {
+  while (__atomic_exchange_n(&g_heap_lock, 1, __ATOMIC_ACQUIRE)) {
+    while (__atomic_load_n(&g_heap_lock, __ATOMIC_RELAXED)) __builtin_ia32_pause();
+  }
+}
+
+static void heap_unlock(void) { __atomic_store_n(&g_heap_lock, 0, __ATOMIC_RELEASE); }
+
 static bool GrowArena(size_t min_size) {
   if (min_size > SIZE_MAX - (PAGE_SIZE - 1)) return false;
   const size_t chunk_size = align_up(min_size > ARENA_CHUNK_SIZE ? min_size : ARENA_CHUNK_SIZE, PAGE_SIZE);
@@ -34,9 +46,7 @@ static bool GrowArena(size_t min_size) {
   return true;
 }
 
-void *crt_malloc(size_t size) {
-  if (size == 0 || size > SIZE_MAX - sizeof(BlockHeader) - (_Alignof(BlockHeader) - 1)) return NULL;
-
+static void *malloc_locked(size_t size) {
   const size_t aligned_size = align_up(size, _Alignof(BlockHeader));
 
   // 1. First-fit search through the free list before touching the arena.
@@ -65,12 +75,22 @@ void *crt_malloc(size_t size) {
   return header + 1;
 }
 
+void *crt_malloc(size_t size) {
+  if (size == 0 || size > SIZE_MAX - sizeof(BlockHeader) - (_Alignof(BlockHeader) - 1)) return NULL;
+  heap_lock();
+  void *result = malloc_locked(size);
+  heap_unlock();
+  return result;
+}
+
 void crt_free(void *ptr) {
   if (!ptr) return;
 
   BlockHeader *header = (BlockHeader *)ptr - 1;
+  heap_lock();
   header->next = g_free_list;
   g_free_list = header;
+  heap_unlock();
 }
 
 void *crt_calloc(size_t count, size_t size) {
