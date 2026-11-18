@@ -221,7 +221,7 @@ LRESULT call_window_procedure(HWND window, UINT message, WPARAM wParam,
   if (message == WM_DISPLAYCHANGE && record->uiContext &&
       record->uiContext->hasDisplayDc)
     record->uiContext->displayDcStale = TRUE;
-  uint32_t ignored;
+  uintptr_t ignored;
   if (!backend_ok(ui_backend_get_window_long(record->handle,
                                               UI_WINDOW_USERDATA, &ignored)))
     return 0;

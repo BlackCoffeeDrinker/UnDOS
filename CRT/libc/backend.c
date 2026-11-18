@@ -34,9 +34,9 @@ int undos_libc_open(const char *path, HANDLE *handle) {
 }
 int undos_libc_close(HANDLE handle) { return status(UD_SYS_CloseV1(handle)); }
 void *undos_libc_allocate_pages(size_t size) {
-  uint32_t address = 0;
+  uintptr_t address = 0;
   if (UD_SYS_AllocatePagesV1((uint32_t)size,
       MemoryProtectFlags_Read | MemoryProtectFlags_Write,
       &address) != SyscallReturnCode_OKAY) return NULL;
-  return (void *)(uintptr_t)address;
+  return (void *)address;
 }

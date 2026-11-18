@@ -15,6 +15,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--list-outputs", action="store_true",
                         help="List output paths for CMake without generating files")
+    parser.add_argument("--host", action="store_true",
+                        help="Userspace wrappers call undos_host_syscall() instead of int 0x80")
     parser.add_argument("idl_path")
     parser.add_argument("out_h_dir")
     parser.add_argument("out_userspace_h_dir")
@@ -61,7 +63,7 @@ def main():
 
     # Generate .h files
     generate_headers(module, out_h_dir)
-    generate_userspace(module, out_userspace_h_dir)
+    generate_userspace(module, out_userspace_h_dir, host=args.host)
     generate_kernel(module, out_kernel_h_dir, "undos/syscalls")
 
     print(f"Generated {len(module.syscalls)} syscalls, "

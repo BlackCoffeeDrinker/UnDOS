@@ -164,7 +164,7 @@ int main() {
   const uint64_t initialRamUsed = before.header.physicalUsedBytes;
   const uint64_t initialRamFree = before.header.physicalFreeBytes;
 
-  uint32_t allocation = 0;
+  uintptr_t allocation = 0;
   if (UD_SYS_AllocatePagesV1(
           8192, static_cast<MemoryProtectFlags>(MemoryProtectFlags_Read |
                                                 MemoryProtectFlags_Write),
@@ -281,7 +281,7 @@ int main() {
   free(before.cpus);
   free(before.processes);
   free(before.names);
-  uint32_t exitOwnedAllocation = 0;
+  uintptr_t exitOwnedAllocation = 0;
   if (UD_SYS_AllocatePagesV1(
           4096, static_cast<MemoryProtectFlags>(MemoryProtectFlags_Read |
                                                 MemoryProtectFlags_Write),

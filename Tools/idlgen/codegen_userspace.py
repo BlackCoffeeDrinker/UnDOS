@@ -16,12 +16,17 @@ from .ast_nodes import (
 from .codegen_common import c_type_for, generate_file_header, write_doc_comment
 
 
-def generate_userspace(module: IDLModule, out_h_dir: str):
+def generate_userspace(module: IDLModule, out_h_dir: str, host: bool = False):
+    """With host=True, wrappers call undos_host_syscall() instead of trapping."""
     filename = os.path.join(out_h_dir, "userspace.h")
     with open(filename, "w", encoding="utf-8") as f:
         generate_file_header(f)
         f.write("#include <undos/syscalls.h>\n")
         f.write("\n")
+        if host:
+            # Hosted builds: the host runtime dispatches the wire struct in-process.
+            f.write("#ifdef __cplusplus\nextern \"C\"\n#endif\n")
+            f.write("uint32_t undos_host_syscall(uint32_t number, uint32_t size, void* wire);\n\n")
         
         # No libc (<string.h>) here: userspace wrappers must also work in
         # freestanding/nostdlib callers (e.g. the ELF loader), so string
@@ -122,12 +127,14 @@ def generate_userspace(module: IDLModule, out_h_dir: str):
                     f.write(f"    __wire.{field.name}Length = {field.name}Length;\n")
 
             # Syscall assembly
-            size_arg = "__size" if inline_fields else f"sizeof(struct {struct_name})"
-            f.write("\n    asm volatile(\n")
-            f.write('        "int $0x80"\n')
-            f.write("        : \"=a\"(ret)\n")
-            f.write(f"        : \"a\"({sc.number}), \"b\"(sizeof __wire), \"c\"(&__wire), \"d\"(0)\n")
-            f.write("        : \"memory\");\n\n")
+            if host:
+                f.write(f"\n    ret = undos_host_syscall({sc.number}, (uint32_t)sizeof __wire, &__wire);\n\n")
+            else:
+                f.write("\n    asm volatile(\n")
+                f.write('        "int $0x80"\n')
+                f.write("        : \"=a\"(ret)\n")
+                f.write(f"        : \"a\"({sc.number}), \"b\"(sizeof __wire), \"c\"(&__wire), \"d\"(0)\n")
+                f.write("        : \"memory\");\n\n")
 
             # Copy back OUT fields
             for field in sc.fields:

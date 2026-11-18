@@ -335,3 +335,9 @@ struct VmmInitListener : Catch::EventListenerBase {
   }
 };
 CATCH_REGISTER_LISTENER(VmmInitListener)
+
+// USER/GFX components call this to retire a faulting process; the hosted
+// tests never reach it.
+namespace kernel::process {
+[[noreturn]] void terminate_current(int32_t) noexcept { std::abort(); }
+}// namespace kernel::process

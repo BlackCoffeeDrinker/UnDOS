@@ -10,7 +10,7 @@ include "netsyscall.txt";
  * Zero is a valid handle. Passing a handle to another process requires an
  * explicit inheritance or duplication operation; its numeric value may change.
  * Syscall status determines whether an output handle is valid. */
-using HANDLE = c<uint32_t>;
+using HANDLE = c<uintptr_t>;
 
 enum SyscallReturnCode {
     OKAY = 0,
@@ -217,9 +217,9 @@ syscall V1 PROC Exit [202] {
  * ExitThread. The handle is waitable and is signalled when the thread exits. */
 syscall V1 PROC CreateThread [208] {
     /** User-mode start address. */
-    entry: IN c<uint32_t>;
+    entry: IN c<uintptr_t>;
     /** Value passed as the first stack argument. */
-    parameter: IN c<uint32_t>;
+    parameter: IN c<uintptr_t>;
     /** Stack size in bytes, rounded up to pages; 0 selects the default. */
     stackSize: IN c<uint32_t>;
     /** Handle to the new thread. */
@@ -319,14 +319,14 @@ syscall V1 MEM AllocatePages [210] {
     /** Protection to apply to the newly allocated pages. */
     flags: IN enum<MemoryProtectFlags>;
     /** Base address of the allocated region. */
-    address: OUT c<uint32_t>;
+    address: OUT c<uintptr_t>;
 };
 
 /** Frees a whole eager anonymous region; base must be page aligned and size,
  * rounded up to 4096, must equal the region size. No partial frees or aliases. */
 syscall V1 MEM FreePages [211] {
     /** Base address of the region to free. */
-    address: IN c<uint32_t>;
+    address: IN c<uintptr_t>;
     /** Size in bytes of the region to free. */
     size: IN c<uint32_t>;
 };
@@ -334,7 +334,7 @@ syscall V1 MEM FreePages [211] {
 /** Reserved: currently rejects with INVALID_ARGUMENT (no partial VAD updates). */
 syscall V1 MEM Protect [212] {
     /** Base address of the region to reprotect. */
-    address: IN c<uint32_t>;
+    address: IN c<uintptr_t>;
     /** Size in bytes of the region to reprotect. */
     size: IN c<uint32_t>;
     /** New protection to apply. */
@@ -345,7 +345,7 @@ syscall V1 MEM Protect [212] {
  * caller. Read is required; unknown flags and no-access/write-only mappings
  * reject. i386 does not enforce NX. */
 syscall V1 MEM MapFixedPages [213] {
-    address: IN c<uint32_t>;
+    address: IN c<uintptr_t>;
     size: IN c<uint32_t>;
     flags: IN enum<MemoryProtectFlags>;
 };

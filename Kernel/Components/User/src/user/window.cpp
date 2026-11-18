@@ -364,7 +364,7 @@ WindowClass *class_at_locked(uint32_t index) noexcept {
  * @param background The background identifier for the window class.
  * @return           Success, or ResourceLimitExceeded when the table is full.
  */
-kstd::error_code register_class_locked(KProcessObject &proc, const kstd::string_view &name, uint32_t wndProc, uint32_t background) noexcept {
+kstd::error_code register_class_locked(KProcessObject &proc, const kstd::string_view &name, uintptr_t wndProc, uint32_t background) noexcept {
   auto index = find_class_locked(name, &proc);
 
   if (index < 0) {
@@ -755,7 +755,7 @@ kstd::expected<KProcessObject *, kstd::error_code> caller_process() noexcept {
   return thread->owner_process;
 }
 
-kstd::error_code register_class(KProcessObject &caller, const kstd::string_view &name, uint32_t wndProc,
+kstd::error_code register_class(KProcessObject &caller, const kstd::string_view &name, uintptr_t wndProc,
                                 uint32_t background) noexcept {
   if (name.empty()) return KernelError::InvalidArgument;
   if (name.size() >= kWindowClassNameLen) return KernelError::NameTooLong;
@@ -945,7 +945,7 @@ kstd::error_code release_window_dc(KProcessObject &caller, uint32_t hwnd, HDC dc
   return release_window_dc_locked(caller, **w, dc, released);
 }
 
-kstd::expected<uint32_t, kstd::error_code> get_window_long(uint32_t hwnd, uint32_t index) noexcept {
+kstd::expected<uintptr_t, kstd::error_code> get_window_long(uint32_t hwnd, uint32_t index) noexcept {
   Guard guard;
   const auto *w = lookup_locked(hwnd);
   if (!w) return kstd::unexpected(KernelError::InvalidHandle);
@@ -992,13 +992,13 @@ kstd::expected<uint32_t, kstd::error_code> set_style_locked(KWindowObject &w, ui
 }
 }// namespace
 
-kstd::expected<uint32_t, kstd::error_code> set_window_long(KProcessObject &caller, uint32_t hwnd, uint32_t index,
-                                                           uint32_t value) noexcept {
+kstd::expected<uintptr_t, kstd::error_code> set_window_long(KProcessObject &caller, uint32_t hwnd, uint32_t index,
+                                                           uintptr_t value) noexcept {
   Guard guard;
   const auto owned = owned_window_locked(caller, hwnd);
   if (!owned) return kstd::unexpected(owned.error());
   KWindowObject &w = **owned;
-  uint32_t previous = 0;
+  uintptr_t previous = 0;
   switch (index) {
     case WindowLongIndex_WndProc:
       previous = w.wndProc;
@@ -1009,7 +1009,11 @@ kstd::expected<uint32_t, kstd::error_code> set_window_long(KProcessObject &calle
       w.userData = value;
       return previous;
     case WindowLongIndex_Style:
-      return set_style_locked(w, value);
+    {
+      const auto style = set_style_locked(w, static_cast<uint32_t>(value));
+      if (!style) return kstd::unexpected(style.error());
+      return static_cast<uintptr_t>(*style);
+    }
     default:// WindowLongIndex_Parent is read-only.
       return kstd::unexpected(KernelError::InvalidArgument);
   }

@@ -108,7 +108,7 @@ class ScalarAliasTests(unittest.TestCase):
             """)
             (root / "probe.cpp").write_text(
                 '#include <undos/syscalls/__aliases.h>\n'
-                'static_assert(sizeof(HANDLE) == 4);\nint main() { return 0; }\n')
+                'static_assert(sizeof(HANDLE) == sizeof(void *));\nint main() { return 0; }\n')
             build = root / "build with spaces"
 
             def run(*args):

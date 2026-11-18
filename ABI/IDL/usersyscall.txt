@@ -100,8 +100,8 @@ enum MenuItemFlags {
 struct Msg {
     hwnd:    c<uint32_t>;
     message: c<uint32_t>;
-    wParam:  c<uint32_t>;
-    lParam:  c<uint32_t>;
+    wParam:  c<uintptr_t>;
+    lParam:  c<uintptr_t>;
     time:    c<uint32_t>;
     /** Keyboard modifier mask when the message was posted: Shift 1|2,
      * Control 4|8, Alt 16|32, CapsLock 64, NumLock 128, ScrollLock 256. */
@@ -118,7 +118,7 @@ struct PaintInfo {
 /** Registers a process-scoped window class; wndProc is opaque and called by userland. */
 syscall V1 USER RegisterClass [400] {
     name:       IN string;
-    wndProc:    IN c<uint32_t>;
+    wndProc:    IN c<uintptr_t>;
     background: IN COLORREF;
 };
 
@@ -135,7 +135,7 @@ syscall V1 USER CreateWindow [401] {
     width:     IN c<int32_t>;
     height:    IN c<int32_t>;
     parent:    IN c<uint32_t>;
-    userData:  IN c<uint32_t>;
+    userData:  IN c<uintptr_t>;
     hwnd:      OUT c<uint32_t>;
 };
 
@@ -213,22 +213,22 @@ syscall V1 USER PeekMessage [410] {
 syscall V1 USER PostMessage [411] {
     hwnd:    IN c<uint32_t>;
     message: IN c<uint32_t>;
-    wParam:  IN c<uint32_t>;
-    lParam:  IN c<uint32_t>;
+    wParam:  IN c<uintptr_t>;
+    lParam:  IN c<uintptr_t>;
 };
 
 /** One of WindowLongIndex. */
 syscall V1 USER GetWindowLongPtr [412] {
     hwnd:  IN c<uint32_t>;
     index: IN c<uint32_t>;
-    value: OUT c<uint32_t>;
+    value: OUT c<uintptr_t>;
 };
 
 syscall V1 USER SetWindowLongPtr [413] {
     hwnd:     IN c<uint32_t>;
     index:    IN c<uint32_t>;
-    value:    IN c<uint32_t>;
-    previous: OUT c<uint32_t>;
+    value:    IN c<uintptr_t>;
+    previous: OUT c<uintptr_t>;
 };
 
 syscall V1 USER SetCapture [414] {

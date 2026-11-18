@@ -55,7 +55,7 @@
 #define UI_DC_LIMIT 16
 #define UI_CLASS_NAME_BYTES 31
 #define UI_TITLE_BYTES 63
-#define UI_WND_EXTRA_BYTES 64
+#define UI_WND_EXTRA_BYTES ((int)(16 * sizeof(uintptr_t))) /* 64 on i386 */
 #define UI_MENU_NAME_BYTES 31
 #define UI_FONT_TEXT_BYTES 1024
 #define WS_SUPPORTED_CHROME \

@@ -29,7 +29,13 @@ static volatile int g_heap_lock = 0;
 
 static void heap_lock(void) {
   while (__atomic_exchange_n(&g_heap_lock, 1, __ATOMIC_ACQUIRE)) {
-    while (__atomic_load_n(&g_heap_lock, __ATOMIC_RELAXED)) __builtin_ia32_pause();
+    while (__atomic_load_n(&g_heap_lock, __ATOMIC_RELAXED)) {
+#if defined(__i386__) || defined(__x86_64__)
+      __builtin_ia32_pause();
+#elif defined(__aarch64__)
+      __asm__ volatile("yield");
+#endif
+    }
   }
 }
 

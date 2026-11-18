@@ -569,7 +569,7 @@ uint32_t ui_backend_get_rect(uint32_t, uint32_t client, UiRect *rect) {
   return UI_STATUS_OK;
 }
 
-uint32_t ui_backend_get_window_long(uint32_t window, uint32_t index, uint32_t *value) {
+uint32_t ui_backend_get_window_long(uint32_t window, uint32_t index, uintptr_t *value) {
   longRequest[0] = index;
   auto found = nativeWindows.find(window);
   if (found == nativeWindows.end()) return UI_STATUS_INVALID_ARGUMENT;
@@ -577,16 +577,16 @@ uint32_t ui_backend_get_window_long(uint32_t window, uint32_t index, uint32_t *v
   return UI_STATUS_OK;
 }
 
-uint32_t ui_backend_set_window_long(uint32_t window, uint32_t index, uint32_t value,
-                                    uint32_t *previous) {
+uint32_t ui_backend_set_window_long(uint32_t window, uint32_t index, uintptr_t value,
+                                    uintptr_t *previous) {
   uint32_t result = status(Operation::SetLong);
   if (result != UI_STATUS_OK) return result;
-  longRequest = {index, value, 0, 0};
+  longRequest = {index, static_cast<uint32_t>(value), 0, 0};
   auto found = nativeWindows.find(window);
   if (found == nativeWindows.end()) return UI_STATUS_INVALID_ARGUMENT;
   if (index == UI_WINDOW_STYLE) {
     *previous = found->second.style;
-    found->second.style = value;
+    found->second.style = static_cast<uint32_t>(value);
   } else {
     *previous = found->second.userData;
     found->second.userData = value;
@@ -705,12 +705,13 @@ std::map<uint32_t, FakeEvent> fakeEvents;
 std::map<uint32_t, uint32_t> fakeThreadExit;// handle -> exit code (absent: running)
 std::set<uint32_t> fakeThreads;
 uint32_t fakeNextKernelHandle = 0x500;
-uint32_t lastThreadEntry = 0, lastThreadParameter = 0, lastThreadStack = 0;
+uintptr_t lastThreadEntry = 0, lastThreadParameter = 0;
+uint32_t lastThreadStack = 0;
 uint32_t fakeThreadId = 7;
 uint32_t windowDcCalls = 0, windowDcReleases = 0, lastReleasedDc = 0;
 uint32_t windowDcStatus = UI_STATUS_OK;
 
-uint32_t ui_backend_create_thread(uint32_t entry, uint32_t parameter, uint32_t stackSize,
+uint32_t ui_backend_create_thread(uintptr_t entry, uintptr_t parameter, uint32_t stackSize,
                                   uint32_t *handle, uint32_t *threadId) {
   if (stackSize > 0x100000u) return UI_STATUS_OUT_OF_MEMORY;
   lastThreadEntry = entry;
@@ -4995,7 +4996,7 @@ TEST_CASE("C UI RegisterClass accepts WINFILE-style class fields and window extr
   REQUIRE(DestroyWindow(defaulted));
 
   klass = test_class("too-much-extra");
-  klass.cbWndExtra = 65;
+  klass.cbWndExtra = static_cast<int>(16 * sizeof(LONG_PTR)) + 1;  // UI_WND_EXTRA_BYTES + 1
   REQUIRE(RegisterClass(&klass) == 0);
   REQUIRE(GetLastError() == ERROR_INVALID_PARAMETER);
 }

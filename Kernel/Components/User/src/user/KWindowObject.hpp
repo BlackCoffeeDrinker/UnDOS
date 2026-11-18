@@ -28,7 +28,7 @@ struct MessageQueue {
 struct WindowClass {
   bool used{false};
   kstd::static_string<kWindowClassNameLen> name;
-  uint32_t wndProc{0};
+  uintptr_t wndProc{0};
   uint32_t background{0};
   KProcessObject *process{nullptr};
 };
@@ -51,9 +51,9 @@ struct KWindowObject : KObjectT<KWindowObject, 1, TYPE_WINDOW> {
   State state{State::Restored};
   uint32_t iconOrder{0};// minimize sequence; arranges sibling icons stably
   uint32_t parent{0};
-  uint32_t userData{0};
+  uintptr_t userData{0};
   uint32_t menu{0};
-  uint32_t wndProc{0};
+  uintptr_t wndProc{0};
   uint32_t background{0};
 
   KProcessObject *process{nullptr};

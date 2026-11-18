@@ -6,6 +6,11 @@ file(GLOB _syscall_inputs CONFIGURE_DEPENDS
 list(APPEND _syscall_inputs "${UNDOS_ROOT}/Tools/create-syscalls.py")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_syscall_inputs})
 
+# Hosted builds (UNDOS_SYSCALL_HOST) get wrappers that call undos_host_syscall().
+set(_syscall_mode_args)
+if (UNDOS_SYSCALL_HOST)
+    set(_syscall_mode_args --host)
+endif ()
 set(_syscall_generator_args
         "${CMAKE_CURRENT_SOURCE_DIR}/IDL/syscalls.txt"
         "${_syscall_include_dir}/undos/syscalls"
@@ -21,7 +26,7 @@ string(REPLACE "\n" ";" _syscall_outputs "${_syscall_outputs}")
 
 add_custom_command(OUTPUT ${_syscall_outputs}
         COMMAND "${Python3_EXECUTABLE}" "${UNDOS_ROOT}/Tools/create-syscalls.py"
-        ${_syscall_generator_args}
+        ${_syscall_mode_args} ${_syscall_generator_args}
         DEPENDS ${_syscall_inputs}
         COMMENT "Generating the shared syscall ABI"
         VERBATIM)

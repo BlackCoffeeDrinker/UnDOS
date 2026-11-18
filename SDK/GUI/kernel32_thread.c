@@ -51,8 +51,8 @@ HANDLE CreateThread(LPSECURITY_ATTRIBUTES attributes, SIZE_T stackSize,
   start->routine = routine;
   start->parameter = parameter;
   uint32_t handle = 0, id = 0;
-  if (!ok(ui_backend_create_thread((uint32_t)(uintptr_t)&thread_start,
-                                   (uint32_t)(uintptr_t)start, (uint32_t)stackSize,
+  if (!ok(ui_backend_create_thread((uintptr_t)&thread_start,
+                                   (uintptr_t)start, (uint32_t)stackSize,
                                    &handle, &id))) {
     crt_free(start);
     return 0;

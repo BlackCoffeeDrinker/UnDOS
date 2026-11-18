@@ -81,7 +81,7 @@ void wake_locked(MessageQueue &queue) noexcept {
   KE_EVENT_Signal(queue.header, true);
 }
 
-kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam,
+kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uintptr_t wParam, uintptr_t lParam,
                              uint32_t keyState) noexcept {
   const QueuedMessage m{.hwnd = hwnd, .message = message, .wParam = wParam, .lParam = lParam,
                         .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000),
@@ -91,7 +91,7 @@ kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t messag
   return {};
 }
 
-kstd::error_code post_message(uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept {
+kstd::error_code post_message(uint32_t hwnd, uint32_t message, uintptr_t wParam, uintptr_t lParam) noexcept {
   if (!hwnd) {
     if (const auto error = ensure_current_queue(); error) return error;
   }

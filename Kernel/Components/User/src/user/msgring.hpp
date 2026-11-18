@@ -9,8 +9,8 @@ namespace kernel::user {
 struct QueuedMessage {
   uint32_t hwnd{0};
   uint32_t message{0};
-  uint32_t wParam{0};
-  uint32_t lParam{0};
+  uintptr_t wParam{0};
+  uintptr_t lParam{0};
   uint32_t time{0};
   uint32_t keyState{0};
 };

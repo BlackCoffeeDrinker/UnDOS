@@ -411,6 +411,8 @@ DecodeError Decoder::run(Buffer &out) {
       loca.size != (glyphCount + 1) * (locFormat ? 4 : 2))
     return DecodeError::InvalidMetrics;
   for (uint32_t i = 0; i < 13; ++i) limits[i] = u16(maxp.data + 6 + i * 2);
+  // Unhinted fonts often store maxZones = 0; treat it as 1, as FreeType does.
+  if (!limits[4]) limits[4] = 1;
   if (limits[0] > MaxPointsPerGlyph || limits[1] > MaxContoursPerGlyph ||
       limits[2] > MaxPointsPerGlyph || limits[3] > MaxContoursPerGlyph ||
       limits[4] < 1 || limits[4] > 2 || limits[10] > MaxProgramBytes ||

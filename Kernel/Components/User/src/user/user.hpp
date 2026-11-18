@@ -128,7 +128,7 @@ KWindowObject *mouse_target_locked(int32_t x, int32_t y) noexcept;
 int32_t find_class_locked(const kstd::string_view &name, const KProcessObject *process = nullptr) noexcept;
 WindowClass *class_at_locked(uint32_t index) noexcept;
 // Errors: ResourceLimitExceeded (class table full).
-kstd::error_code register_class_locked(KProcessObject &proc, const kstd::string_view &name, uint32_t wndProc, uint32_t background) noexcept;
+kstd::error_code register_class_locked(KProcessObject &proc, const kstd::string_view &name, uintptr_t wndProc, uint32_t background) noexcept;
 // Returns the new hwnd. Errors: ResourceLimitExceeded (window table full).
 kstd::expected<uint32_t, kstd::error_code> insert_window_locked(const KObjectPtr<KWindowObject> &window) noexcept;
 void destroy_window_locked(KWindowObject &window) noexcept;
@@ -205,7 +205,7 @@ void display_input_changed_locked(bool firstActivation) noexcept;
 kstd::expected<MessageQueue *, kstd::error_code> queue_for_current_locked() noexcept;
 kstd::error_code ensure_current_queue() noexcept;
 // Errors: QueueFull (message dropped).
-kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam,
+kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uintptr_t wParam, uintptr_t lParam,
                              uint32_t keyState = 0) noexcept;
 void wake_locked(MessageQueue &queue) noexcept;
 bool should_serve_paint_before_input_locked(const MessageQueue &queue) noexcept;
@@ -271,7 +271,7 @@ kstd::error_code set_builtin_default_font(font::DefaultFont &defaults) noexcept;
 kstd::expected<KProcessObject *, kstd::error_code> caller_process() noexcept;
 
 // Errors: InvalidArgument (empty name), NameTooLong, ResourceLimitExceeded.
-kstd::error_code register_class(KProcessObject &caller, const kstd::string_view &name, uint32_t wndProc,
+kstd::error_code register_class(KProcessObject &caller, const kstd::string_view &name, uintptr_t wndProc,
                            uint32_t background) noexcept;
 
 struct CreateWindowParams {
@@ -283,7 +283,7 @@ struct CreateWindowParams {
   int32_t y{0};
   int32_t width{0};
   int32_t height{0};
-  uint32_t userData{0};
+  uintptr_t userData{0};
 };
 // Returns the new hwnd. Errors: InvalidSize (extent, title too long),
 // NameTooLong (class name), ParentMismatch (child style vs parent handle),
@@ -309,14 +309,14 @@ kstd::expected<PaintBegin, kstd::error_code> begin_paint(KProcessObject &caller,
 kstd::error_code end_paint(KProcessObject &caller, uint32_t hwnd, HDC dc) noexcept;
 // hwnd 0 posts to the calling thread's queue. Errors: InvalidState (target
 // window has no queue), QueueFull, plus queue_for_current_locked errors.
-kstd::error_code post_message(uint32_t hwnd, uint32_t message, uint32_t wParam, uint32_t lParam) noexcept;
+kstd::error_code post_message(uint32_t hwnd, uint32_t message, uintptr_t wParam, uintptr_t lParam) noexcept;
 // `index` is a WindowLongIndex. Errors: InvalidArgument (unknown index).
-kstd::expected<uint32_t, kstd::error_code> get_window_long(uint32_t hwnd, uint32_t index) noexcept;
+kstd::expected<uintptr_t, kstd::error_code> get_window_long(uint32_t hwnd, uint32_t index) noexcept;
 // Returns the previous value. Errors: InvalidArgument (unknown or read-only
 // index, or toggling the child style), OutOfRange (a descendant would leave
 // the coordinate space after a frame change).
-kstd::expected<uint32_t, kstd::error_code> set_window_long(KProcessObject &caller, uint32_t hwnd, uint32_t index,
-                                                      uint32_t value) noexcept;
+kstd::expected<uintptr_t, kstd::error_code> set_window_long(KProcessObject &caller, uint32_t hwnd, uint32_t index,
+                                                      uintptr_t value) noexcept;
 // Errors: InvalidState (window hidden or minimized).
 kstd::error_code set_capture(KProcessObject &caller, uint32_t hwnd) noexcept;
 // Releases the capture only when it is held by one of the caller's windows.

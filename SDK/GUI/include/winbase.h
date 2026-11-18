@@ -12,9 +12,9 @@
 extern "C" {
 #endif
 
-/* HANDLE matches the UnDOS syscall headers (a 32-bit object handle) so
-   both can be included together; Win32 code treats it as opaque. */
-typedef uint32_t HANDLE;
+/* HANDLE matches the UnDOS syscall headers (a pointer-sized object handle:
+   32-bit on i386, 64-bit on hosted builds); Win32 code treats it as opaque. */
+typedef uintptr_t HANDLE;
 typedef HANDLE *LPHANDLE, *PHANDLE;
 #define INVALID_HANDLE_VALUE ((HANDLE)0xFFFFFFFFu)
 #define MAX_PATH 260

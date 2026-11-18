@@ -43,9 +43,8 @@ static int native_show_command(uint32_t command, enum ShowCommand *native) {
 
 uint32_t ui_backend_register_class(const char *name, uintptr_t procedure,
                                   uint32_t background, uint32_t *atom) {
-  if (procedure > UINT32_MAX) return SyscallReturnCode_INVALID_ARGUMENT;
   *atom = 0;
-  return UD_SYS_RegisterClassV1(name, (uint32_t)procedure, background);
+  return UD_SYS_RegisterClassV1(name, procedure, background);
 }
 
 uint32_t ui_backend_create_window(const char *className, const char *title,
@@ -103,31 +102,31 @@ uint32_t ui_backend_get_rect(uint32_t window, uint32_t client, UiRect *rect) {
 }
 
 uint32_t ui_backend_get_window_long(uint32_t window, uint32_t index,
-                                    uint32_t *value) {
+                                    uintptr_t *value) {
   enum WindowLongIndex nativeIndex;
   if (!native_window_long(index, &nativeIndex))
     return SyscallReturnCode_INVALID_ARGUMENT;
-  uint32_t result = 0;
+  uintptr_t result = 0;
   uint32_t status = UD_SYS_GetWindowLongPtrV1(window, nativeIndex, &result);
   if (status == SyscallReturnCode_OKAY) {
-    if (index == UI_WINDOW_STYLE) result = public_window_style(result);
+    if (index == UI_WINDOW_STYLE) result = public_window_style((uint32_t)result);
     *value = result;
   }
   return status;
 }
 
 uint32_t ui_backend_set_window_long(uint32_t window, uint32_t index,
-                                    uint32_t value, uint32_t *previous) {
+                                    uintptr_t value, uintptr_t *previous) {
   enum WindowLongIndex nativeIndex;
   if (!native_window_long(index, &nativeIndex))
     return SyscallReturnCode_INVALID_ARGUMENT;
-  uint32_t nativeValue = index == UI_WINDOW_STYLE
-      ? native_window_style(value) : value;
-  uint32_t result = 0;
+  uintptr_t nativeValue = index == UI_WINDOW_STYLE
+      ? native_window_style((uint32_t)value) : value;
+  uintptr_t result = 0;
   uint32_t status = UD_SYS_SetWindowLongPtrV1(window, nativeIndex, nativeValue,
                                                &result);
   if (status == SyscallReturnCode_OKAY) {
-    if (index == UI_WINDOW_STYLE) result = public_window_style(result);
+    if (index == UI_WINDOW_STYLE) result = public_window_style((uint32_t)result);
     *previous = result;
   }
   return status;
@@ -262,7 +261,7 @@ uint32_t ui_backend_file_open(const char *path, uint32_t *handle) {
 
 uint32_t ui_backend_file_close(uint32_t handle) { return UD_SYS_CloseV1(handle); }
 
-uint32_t ui_backend_create_thread(uint32_t entry, uint32_t parameter, uint32_t stackSize,
+uint32_t ui_backend_create_thread(uintptr_t entry, uintptr_t parameter, uint32_t stackSize,
                                   uint32_t *handle, uint32_t *threadId) {
   HANDLE created = 0;
   uint32_t id = 0;

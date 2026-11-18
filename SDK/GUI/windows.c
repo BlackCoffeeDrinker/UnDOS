@@ -339,7 +339,7 @@ BOOL UndosSetFocus(HWND window) {
 BOOL ShowWindow(HWND window, int command) {
   uint32_t handle = hwnd_value(window);
   uint32_t native;
-  uint32_t oldStyle = 0;
+  uintptr_t oldStyle = 0;
   if (!window_by_handle(handle)) {
     local_failure(UI_STATUS_INVALID_ARGUMENT, ERROR_INVALID_WINDOW_HANDLE);
     return FALSE;
@@ -422,7 +422,7 @@ BOOL GetWindowRect(HWND window, RECT *rect) {
   return get_rect(window, rect, 0);
 }
 
-LONG_PTR GetWindowLongPtr(HWND window, int index) {
+static LONG_PTR get_window_long(HWND window, int index, int width) {
   uint32_t handle = hwnd_value(window);
   WindowRecord *record = window_by_handle(handle);
   if (!record || !record->alive) {
@@ -435,16 +435,21 @@ LONG_PTR GetWindowLongPtr(HWND window, int index) {
   LONG_PTR dialogValue;
   if (index >= 0 && ui_dialog_window_long(handle, index, FALSE, 0, &dialogValue))
     return dialogValue;
-  if (index >= 0 && index + (int)sizeof(LONG) <= record->extraBytes) {
-    LONG value;
+  if (index >= 0 && index + width <= record->extraBytes) {
+    if (width == (int)sizeof(LONG)) {
+      LONG value;
+      memcpy(&value, record->extra + index, sizeof(value));
+      return (LONG_PTR)value;
+    }
+    LONG_PTR value;
     memcpy(&value, record->extra + index, sizeof(value));
-    return (LONG_PTR)value;
+    return value;
   }
   if (index == GWL_STYLE) {
-    uint32_t native = 0;
+    uintptr_t native = 0;
     if (!backend_ok(ui_backend_get_window_long(handle, UI_WINDOW_STYLE, &native)))
       return 0;
-    DWORD style = style_from_native(native);
+    DWORD style = style_from_native((uint32_t)native);
     if (style & WS_CHILD) style |= record->style & WS_CHILD_EXTRA;
     if (record->disabled) style |= WS_DISABLED;
     else style &= ~WS_DISABLED;
@@ -454,7 +459,7 @@ LONG_PTR GetWindowLongPtr(HWND window, int index) {
   return 0;
 }
 
-LONG_PTR SetWindowLongPtr(HWND window, int index, LONG_PTR value) {
+static LONG_PTR set_window_long(HWND window, int index, LONG_PTR value, int width) {
   uint32_t handle = hwnd_value(window);
   WindowRecord *record = window_by_handle(handle);
   if (!record || !record->alive) {
@@ -480,25 +485,27 @@ LONG_PTR SetWindowLongPtr(HWND window, int index, LONG_PTR value) {
   if (index >= 0 &&
       ui_dialog_window_long(handle, index, TRUE, value, &dialogPrevious))
     return dialogPrevious;
-  if (index >= 0 && index + (int)sizeof(LONG) <= record->extraBytes) {
-    LONG previous, stored = (LONG)value;
+  if (index >= 0 && index + width <= record->extraBytes) {
+    if (width == (int)sizeof(LONG)) {
+      LONG previous, stored = (LONG)value;
+      memcpy(&previous, record->extra + index, sizeof(previous));
+      memcpy(record->extra + index, &stored, sizeof(stored));
+      return (LONG_PTR)previous;
+    }
+    LONG_PTR previous;
     memcpy(&previous, record->extra + index, sizeof(previous));
-    memcpy(record->extra + index, &stored, sizeof(stored));
-    return (LONG_PTR)previous;
+    memcpy(record->extra + index, &value, sizeof(value));
+    return previous;
   }
   if (index >= 0) {
     local_failure(UI_STATUS_INVALID_ARGUMENT, ERROR_INVALID_INDEX);
     return 0;
   }
-  uint32_t nativeIndex, nativeValue;
+  uint32_t nativeIndex;
+  uintptr_t nativeValue;
   if (index == GWLP_USERDATA) {
-    if (value < INT32_MIN ||
-        (value > 0 && (uint64_t)value > UINT32_MAX)) {
-      local_failure(UI_STATUS_INVALID_ARGUMENT, ERROR_INVALID_PARAMETER);
-      return 0;
-    }
     nativeIndex = UI_WINDOW_USERDATA;
-    nativeValue = (uint32_t)value;
+    nativeValue = (uintptr_t)value;
   } else if (index == GWL_STYLE) {
     DWORD style = (DWORD)value;
     if (!valid_window_style(style)) {
@@ -515,15 +522,15 @@ LONG_PTR SetWindowLongPtr(HWND window, int index, LONG_PTR value) {
     local_failure(UI_STATUS_UNSUPPORTED, ERROR_CALL_NOT_IMPLEMENTED);
     return 0;
   }
-  uint32_t previous = 0;
+  uintptr_t previous = 0;
   if (!backend_ok(ui_backend_set_window_long(handle, nativeIndex, nativeValue,
                                                &previous)))
     return 0;
   if (index == GWLP_USERDATA) {
     record->userData = value;
-    return (LONG_PTR)(uint32_t)previous;
+    return (LONG_PTR)previous;
   }
-  DWORD previousStyle = style_from_native(previous);
+  DWORD previousStyle = style_from_native((uint32_t)previous);
   if (record->style & WS_CHILD) {
     previousStyle |= record->style & WS_CHILD_EXTRA;
     record->style = (record->style & ~WS_CHILD_EXTRA) |
@@ -534,12 +541,22 @@ LONG_PTR SetWindowLongPtr(HWND window, int index, LONG_PTR value) {
   return (LONG_PTR)previousStyle;
 }
 
+/* Extra bytes follow Win32: the Ptr forms access sizeof(LONG_PTR) bytes,
+   the plain forms sizeof(LONG). Both are 4 bytes on i386. */
+LONG_PTR GetWindowLongPtr(HWND window, int index) {
+  return get_window_long(window, index, (int)sizeof(LONG_PTR));
+}
+
+LONG_PTR SetWindowLongPtr(HWND window, int index, LONG_PTR value) {
+  return set_window_long(window, index, value, (int)sizeof(LONG_PTR));
+}
+
 LONG GetWindowLong(HWND window, int index) {
-  return (LONG)GetWindowLongPtr(window, index);
+  return (LONG)get_window_long(window, index, (int)sizeof(LONG));
 }
 
 LONG SetWindowLong(HWND window, int index, LONG value) {
-  return (LONG)SetWindowLongPtr(window, index, value);
+  return (LONG)set_window_long(window, index, value, (int)sizeof(LONG));
 }
 
 BOOL SetWindowText(HWND window, LPCSTR text) {

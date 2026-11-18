@@ -92,9 +92,9 @@ uint32_t ui_backend_invalidate(uint32_t window, const UiRect *rect,
                                uint32_t erase);
 uint32_t ui_backend_get_rect(uint32_t window, uint32_t client, UiRect *rect);
 uint32_t ui_backend_get_window_long(uint32_t window, uint32_t index,
-                                    uint32_t *value);
+                                    uintptr_t *value);
 uint32_t ui_backend_set_window_long(uint32_t window, uint32_t index,
-                                    uint32_t value, uint32_t *previous);
+                                    uintptr_t value, uintptr_t *previous);
 uint32_t ui_backend_set_window_text(uint32_t window, const char *text);
 uint32_t ui_backend_create_menu(uint32_t popup, uint32_t *menu);
 uint32_t ui_backend_destroy_menu(uint32_t menu);
@@ -123,7 +123,7 @@ uint32_t ui_backend_tick_ms(void);
 void ui_backend_sleep(uint32_t ms);
 
 /* Threads and kernel wait objects (PROC syscalls). */
-uint32_t ui_backend_create_thread(uint32_t entry, uint32_t parameter, uint32_t stackSize,
+uint32_t ui_backend_create_thread(uintptr_t entry, uintptr_t parameter, uint32_t stackSize,
                                   uint32_t *handle, uint32_t *threadId);
 __attribute__((noreturn)) void ui_backend_exit_thread(uint32_t code);
 uint32_t ui_backend_thread_exit_code(uint32_t handle, uint32_t *code);

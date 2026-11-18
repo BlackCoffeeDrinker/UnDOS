@@ -139,6 +139,7 @@ add_executable(KernelTests
         ../../../Kernel/Source/src/initial/root_volume_selector.cpp
         ../../../Kernel/Source/src/initial/mini_fat16.cpp
         ../../../Kernel/Source/src/kerror.cpp
+        ../../../Kernel/Source/src/process_notify.cpp
         ../../../Kernel/Source/src/syscalls/KErrorToSysReturnCode.cpp
         ../../../Kernel/Source/src/io.cpp
         ../../../Kernel/Source/src/vfs.cpp
