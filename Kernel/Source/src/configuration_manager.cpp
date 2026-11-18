@@ -535,6 +535,118 @@ UNDOS_KERNEL_API_DEF kstd::expected<size_t, kstd::error_code> KE_CM_GetKeyValueS
 
 // endregion
 
+// region Configuration Get Value By Path
+namespace {
+constexpr bool IsPathSeparator(char c) { return c == '/' || c == '\\'; }
+
+// Empty, or a leading, trailing or doubled separator.
+bool IsMalformedPath(const kstd::string_view &path) {
+  if (path.empty() || IsPathSeparator(path[0]) || IsPathSeparator(path[path.size() - 1])) return true;
+  for (size_t i = 1; i < path.size(); ++i) {
+    if (IsPathSeparator(path[i]) && IsPathSeparator(path[i - 1])) return true;
+  }
+  return false;
+}
+
+// Walks `path` one segment at a time. Every intermediate handle is a local
+// KConfigurationKeyPtr, so it is released on every return path; the caller's
+// `parent` is only ever borrowed.
+kernel::KConfigurationKeyResult OpenPathKey(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path) {
+  // TODO(UNDOS-40): assert Passive level
+  if (IsMalformedPath(path)) return kstd::unexpected(kernel::KernelError::InvalidArgument);
+
+  kernel::KConfigurationKeyPtr current = parent;
+  size_t start = 0;
+  while (start < path.size()) {
+    size_t end = start;
+    while (end < path.size() && !IsPathSeparator(path[end])) ++end;
+    const auto segment = path.substr(start, end - start);
+
+    auto next = current ? KE_CM_OpenKey(current, segment) : KE_CM_OpenRoot(segment);
+    if (!next) return kstd::unexpected(next.error());
+    current = kstd::move(*next);
+    start = end + 1;
+  }
+  return current;
+}
+
+template<typename T, typename Getter>
+kstd::expected<T, kstd::error_code> GetPathValue(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, Getter getter) {
+  const auto key = OpenPathKey(parent, path);
+  if (!key) return kstd::unexpected(key.error());
+  return getter(*key);
+}
+
+template<typename T, typename Getter>
+T GetPathValueOr(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, T fallback, Getter getter) {
+  if (IsMalformedPath(path)) {
+    KE_Print("CM: malformed configuration path '{}'", path);
+    return fallback;
+  }
+  const auto key = OpenPathKey(parent, path);
+  if (!key) return fallback;
+  const auto value = getter(*key);
+  return value ? static_cast<T>(*value) : fallback;
+}
+}// namespace
+
+UNDOS_KERNEL_API_DEF kstd::expected<bool, kstd::error_code> KE_CM_GetPathValueBool(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path) noexcept {
+  return GetPathValue<bool>(parent, path, [](const auto &key) { return KE_CM_GetKeyValueBool(key); });
+}
+
+UNDOS_KERNEL_API_DEF kstd::expected<uint32_t, kstd::error_code> KE_CM_GetPathValueUInt32(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path) noexcept {
+  return GetPathValue<uint32_t>(parent, path, [](const auto &key) { return KE_CM_GetKeyValueUInt32(key); });
+}
+
+UNDOS_KERNEL_API_DEF kstd::expected<uint64_t, kstd::error_code> KE_CM_GetPathValueUInt64(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path) noexcept {
+  return GetPathValue<uint64_t>(parent, path, [](const auto &key) { return KE_CM_GetKeyValueUInt64(key); });
+}
+
+UNDOS_KERNEL_API_DEF kstd::expected<int32_t, kstd::error_code> KE_CM_GetPathValueSInt32(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path) noexcept {
+  return GetPathValue<int32_t>(parent, path, [](const auto &key) { return KE_CM_GetKeyValueSInt32(key); });
+}
+
+UNDOS_KERNEL_API_DEF kstd::expected<int64_t, kstd::error_code> KE_CM_GetPathValueSInt64(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path) noexcept {
+  return GetPathValue<int64_t>(parent, path, [](const auto &key) { return KE_CM_GetKeyValueSInt64(key); });
+}
+
+UNDOS_KERNEL_API_DEF kstd::expected<size_t, kstd::error_code> KE_CM_GetPathValueString(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, kstd::span<char> outValue) noexcept {
+  return GetPathValue<size_t>(parent, path, [outValue](const auto &key) { return KE_CM_GetKeyValueString(key, outValue); });
+}
+
+UNDOS_KERNEL_API_DEF kstd::expected<size_t, kstd::error_code> KE_CM_GetPathValueStringSize(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path) noexcept {
+  return GetPathValue<size_t>(parent, path, [](const auto &key) { return KE_CM_GetKeyValueStringSize(key); });
+}
+
+UNDOS_KERNEL_API_DEF bool KE_CM_GetPathValueBoolOr(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, bool fallback) noexcept {
+  return GetPathValueOr<bool>(parent, path, fallback, [](const auto &key) { return KE_CM_GetKeyValueBool(key); });
+}
+
+UNDOS_KERNEL_API_DEF uint32_t KE_CM_GetPathValueUInt32Or(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, uint32_t fallback) noexcept {
+  return GetPathValueOr<uint32_t>(parent, path, fallback, [](const auto &key) { return KE_CM_GetKeyValueUInt32(key); });
+}
+
+UNDOS_KERNEL_API_DEF uint64_t KE_CM_GetPathValueUInt64Or(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, uint64_t fallback) noexcept {
+  return GetPathValueOr<uint64_t>(parent, path, fallback, [](const auto &key) { return KE_CM_GetKeyValueUInt64(key); });
+}
+
+UNDOS_KERNEL_API_DEF int32_t KE_CM_GetPathValueSInt32Or(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, int32_t fallback) noexcept {
+  return GetPathValueOr<int32_t>(parent, path, fallback, [](const auto &key) { return KE_CM_GetKeyValueSInt32(key); });
+}
+
+UNDOS_KERNEL_API_DEF int64_t KE_CM_GetPathValueSInt64Or(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, int64_t fallback) noexcept {
+  return GetPathValueOr<int64_t>(parent, path, fallback, [](const auto &key) { return KE_CM_GetKeyValueSInt64(key); });
+}
+
+UNDOS_KERNEL_API_DEF size_t KE_CM_GetPathValueStringOr(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, kstd::span<char> outValue, size_t fallback) noexcept {
+  return GetPathValueOr<size_t>(parent, path, fallback, [outValue](const auto &key) { return KE_CM_GetKeyValueString(key, outValue); });
+}
+
+UNDOS_KERNEL_API_DEF size_t KE_CM_GetPathValueStringSizeOr(const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, size_t fallback) noexcept {
+  return GetPathValueOr<size_t>(parent, path, fallback, [](const auto &key) { return KE_CM_GetKeyValueStringSize(key); });
+}
+// endregion
+
 // region Configuration Set Value
 UNDOS_KERNEL_API_DEF kstd::error_code KE_CM_SetKeyValueBool(const kernel::KConfigurationKeyPtr &key, bool outValue) noexcept {
   const uint8_t raw = outValue ? 1 : 0;

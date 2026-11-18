@@ -99,6 +99,29 @@ UNDOS_KERNEL_PUBLIC_V1API(kernel::KSizeResult, KE_CM_GetKeyValueString, const ke
 UNDOS_KERNEL_PUBLIC_V1API(kernel::KSizeResult, KE_CM_GetKeyValueStringSize, const kernel::KConfigurationKeyPtr &key);
 // endregion
 
+// region Configuration Get Value By Path
+// Read-only, Passive level only. `path` is split on '/' or '\' (mixable). A null `parent` means `path` is absolute and its
+// first segment is the hive (e.g. "LocalMachine\\IoManager\\UserBufferCopyLimitPages"); otherwise `path` is relative to
+// `parent`, which is never released. Every intermediate handle is released before returning.
+// Malformed paths (empty, leading, trailing or doubled separator) return InvalidArgument; other errors pass through.
+// The ...Or variants return `fallback` on any error; a malformed path also prints one diagnostic line.
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KBoolResult, KE_CM_GetPathValueBool, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KUInt32Result, KE_CM_GetPathValueUInt32, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KUInt64Result, KE_CM_GetPathValueUInt64, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KSInt32Result, KE_CM_GetPathValueSInt32, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KSInt64Result, KE_CM_GetPathValueSInt64, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KSizeResult, KE_CM_GetPathValueString, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, kstd::span<char> outValue);
+UNDOS_KERNEL_PUBLIC_V1API(kernel::KSizeResult, KE_CM_GetPathValueStringSize, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path);
+
+UNDOS_KERNEL_PUBLIC_V1API(bool, KE_CM_GetPathValueBoolOr, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, bool fallback);
+UNDOS_KERNEL_PUBLIC_V1API(uint32_t, KE_CM_GetPathValueUInt32Or, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, uint32_t fallback);
+UNDOS_KERNEL_PUBLIC_V1API(uint64_t, KE_CM_GetPathValueUInt64Or, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, uint64_t fallback);
+UNDOS_KERNEL_PUBLIC_V1API(int32_t, KE_CM_GetPathValueSInt32Or, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, int32_t fallback);
+UNDOS_KERNEL_PUBLIC_V1API(int64_t, KE_CM_GetPathValueSInt64Or, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, int64_t fallback);
+UNDOS_KERNEL_PUBLIC_V1API(size_t, KE_CM_GetPathValueStringOr, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, kstd::span<char> outValue, size_t fallback);
+UNDOS_KERNEL_PUBLIC_V1API(size_t, KE_CM_GetPathValueStringSizeOr, const kernel::KConfigurationKeyPtr &parent, const kstd::string_view &path, size_t fallback);
+// endregion
+
 // region Configuration Set Value
 UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_CM_SetKeyValueBool, const kernel::KConfigurationKeyPtr &key, bool outValue);
 UNDOS_KERNEL_PUBLIC_V1API(kstd::error_code, KE_CM_SetKeyValueUInt32, const kernel::KConfigurationKeyPtr &key, uint32_t outValue);
