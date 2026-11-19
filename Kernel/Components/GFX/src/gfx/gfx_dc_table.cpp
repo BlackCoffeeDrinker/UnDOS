@@ -1,5 +1,6 @@
 #include "gfx/KDeviceContextTable.hpp"
 #include "stdkrn.hpp"
+#include "gfx/screen_internal.hpp"
 
 namespace kernel::gfx {
 namespace {
@@ -26,6 +27,7 @@ void close_locked(uint32_t index, DetachedDC &released) noexcept {
   slot.clipCount = 0;
   slot.clipped = false;
   slot.hwnd = 0;
+  slot.incompleteDraw = false;
   slot.owner = {};
   
   if (!slot.renderRetired) {
@@ -62,6 +64,7 @@ kstd::expected<kstd::pair<KDeviceContextSlot *, HDC>, kstd::error_code> Allocate
   slot.clipRects = nullptr;
   slot.clipCount = 0;
   slot.hwnd = 0;
+  slot.incompleteDraw = false;
   const HDC hdc = (static_cast<uint32_t>(slot.generation) << 16) | index;
   return kstd::make_pair(&slot, hdc);
 }
@@ -92,7 +95,8 @@ size_t CloseAllOwnedBy(ProcessKey owner) noexcept {
     return 0;
   size_t closed = 0;
   for (uint32_t index = 0;;) {
-    DetachedDC released;// declared first: dropped after the lock is released
+    DetachedDC released;// declared first: dropped after the locks are released
+    SceneGuard scene;
     kstd::lock_guard guard(g_lock);
     while (index < g_next_index && !(g_slots[index].used && g_slots[index].owner == owner))
       ++index;

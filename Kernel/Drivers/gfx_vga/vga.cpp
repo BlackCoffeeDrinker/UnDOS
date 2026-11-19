@@ -29,10 +29,15 @@ struct VgaContext {
   bool modeKnown{false};
   bool enabled{false};
   size_t modeIndex{};
+  // Last palette from GFX (SetPalette); replayed on every mode program.
+  kernel::KPalette palette{kernel::KDefaultPalette()};
 };
 
+// Planar mode 12h addresses DAC entries 0..15 only.
+constexpr uint32_t kPlanarColors = 16;
+
 // region Low-level register programming
-void Vga_ProgramMode12h() {
+void Vga_ProgramMode12h(const VgaContext &context) {
   HAL_IO_Out8(vga_regs::kMiscOutputWrite, vga_regs::kMiscOutput);
 
   for (uint8_t i = 0; i < vga_regs::kSequencer.size(); ++i) {
@@ -64,7 +69,8 @@ void Vga_ProgramMode12h() {
     HAL_IO_Out8(vga_regs::kAttributeControllerIndexData, vga_regs::kAttributeController[i]);
   }
 
-  vga_regs::ProgramPalette16([](uint16_t port, uint8_t value) { HAL_IO_Out8(port, value); });
+  vga_regs::ProgramDac([](uint16_t port, uint8_t value) { HAL_IO_Out8(port, value); },
+                       context.palette, 0, kPlanarColors);
 }
 
 struct VgaModeData {
@@ -246,7 +252,7 @@ kstd::error_code Vga_ProgramMode(const kernel::KObjectPtr<kernel::KDisplay> &dis
       reservation.binding.surfaceStride != kShadowStride)
     return kernel::KernelError::InvalidArgument;
 
-  Vga_ProgramMode12h();
+  Vga_ProgramMode12h(*context);
   transaction->previous = context->shadow;
   context->shadow = transaction->candidate;
   transaction->installed = true;
@@ -273,7 +279,7 @@ void Vga_FinishMode(const kernel::KObjectPtr<kernel::KDisplay> &display,
     if (transaction->installed && context && context->shadow == transaction->candidate) {
       context->shadow = transaction->previous;
       if (context->shadow) {
-        Vga_ProgramMode12h();
+        Vga_ProgramMode12h(*context);
         kernel::KClipRect full{0, 0, static_cast<int32_t>(kModeWidth),
                                static_cast<int32_t>(kModeHeight)};
         Vga_PresentShadow(context->shadow,
@@ -294,7 +300,7 @@ kstd::error_code Vga_RestoreMode(const kernel::KObjectPtr<kernel::KDisplay> &dis
   auto *transaction = static_cast<VgaModeData *>(reservation.driverData);
   if (!context || !context->framebuffer || !transaction || !transaction->previous)
     return kernel::KernelError::DeviceNotReady;
-  Vga_ProgramMode12h();
+  Vga_ProgramMode12h(*context);
   context->shadow = transaction->previous;
   const kernel::KClipRect full{0, 0, static_cast<int32_t>(kModeWidth),
                                static_cast<int32_t>(kModeHeight)};
@@ -471,6 +477,19 @@ void Vga_Present(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
   Vga_PresentShadow(surface->backing->directAddress.as_ptr<uint8_t>(),
                     context->framebuffer.as_ptr<volatile uint8_t>(), rects, count);
 }
+
+void Vga_SetPalette(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter,
+                    const kernel::KObjectPtr<kernel::KSurface> & /*surface*/,
+                    const kernel::KPalette &palette, uint32_t first, uint32_t count) {
+  auto *context = adapter ? adapter->GetDeviceExtensionAs<VgaContext>() : nullptr;
+  if (!context || first >= kernel::KPalette::kSize) return;
+  if (count > kernel::KPalette::kSize - first) count = kernel::KPalette::kSize - first;
+  for (uint32_t i = first; i < first + count; ++i) context->palette.rgb[i] = palette.rgb[i];
+  if (!context->modeKnown || first >= kPlanarColors) return;
+  const uint32_t visible = first + count > kPlanarColors ? kPlanarColors - first : count;
+  vga_regs::ProgramDac([](uint16_t port, uint8_t value) { HAL_IO_Out8(port, value); },
+                       context->palette, first, visible);
+}
 // endregion
 
 kstd::error_code Vga_AddDevice(const kernel::KObjectPtr<kernel::KDriverObject> &driver, const kernel::KDevicePtr<kernel::KDevice> &pdo) {
@@ -562,6 +581,7 @@ void Vga_StartDevice(const kernel::KDevicePtr<kernel::KDevice> &pdo) {
   ctx_vga->adapter->DrawLine = Vga_DrawLine;
   ctx_vga->adapter->BitBlt = Vga_BitBlt;
   ctx_vga->adapter->Present = Vga_Present;
+  ctx_vga->adapter->SetPalette = Vga_SetPalette;
 
   KE_Print("gfx_vga: VGA16 (640x480x16) adapter registered");
 }

@@ -583,12 +583,5 @@ syscall V1 GFX DrawText [362] {
     text: IN string;
 };
 
-syscall V1 GFX SetSystemFont [363] {
-    backend: IN enum<FontBackend>;
-    regularFace: IN c<uint32_t>;
-    boldFace: IN c<uint32_t>;
-    ppem: IN c<uint32_t>;
-    generation: OUT c<uint32_t>;
-};
 
 // endregion

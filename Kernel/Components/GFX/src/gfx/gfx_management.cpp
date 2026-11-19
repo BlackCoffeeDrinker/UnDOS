@@ -1,9 +1,9 @@
 
 #include "stdkrn.hpp"
 
-#include "gfx/gfx.hpp"
+#include <kernel/gfx/gfx.hpp>
 
-#include "user/user.hpp"
+#include "gfx/screen_internal.hpp"
 #include <kernel/mutex.hpp>
 
 namespace kernel::gfx {
@@ -263,7 +263,8 @@ void FindAdaptersForDevice(const kernel::KDevicePtr<kernel::KDevice> &device, Fu
   });
 }
 
-// PnP events run on the event-pump thread, outside USER/topology locks.
+// PnP events run outside USER/topology locks: Removing on the thread reporting
+// the removal (before hardware teardown), the others on the event-pump thread.
 void OnBackingDeviceEvent(const kernel::event::Source &source,
                           const kernel::event::Code &code,
                           const kernel::DataBuffer &userBuffer) {
@@ -277,9 +278,11 @@ void OnBackingDeviceEvent(const kernel::event::Source &source,
         else
           kernel::gfx::start_adapter(adapter);
       });
-    } else if (code.is(KE_PNP_EventCategory(), kernel::pnp::DeviceEvent::Stopped)) {
+    } else if (code.is(KE_PNP_EventCategory(), kernel::pnp::DeviceEvent::Removing) ||
+               code.is(KE_PNP_EventCategory(), kernel::pnp::DeviceEvent::Stopped)) {
       FindAdaptersForDevice(gfx, [](const auto &adapter) {
-        KE_GFX_RemoveAdapter(adapter);
+        if (adapter->state != kernel::KGraphicsAdapter::State::Terminated)
+          KE_GFX_RemoveAdapter(adapter);
       });
     } else if (code.is(KE_PNP_EventCategory(), kernel::pnp::DeviceEvent::Changed)) {
       FindAdaptersForDevice(gfx, [](const auto &adapter) {
@@ -1107,8 +1110,8 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_RefreshAdapter(
     }
   }
   {
-    kernel::user::Guard scene;
-    kernel::user::SceneDrawGuard drawing;
+    kernel::gfx::SceneGuard scene;
+    kernel::gfx::ScreenDrawHold drawing;
     {
       DriverLock drivers;
       {
@@ -1145,8 +1148,10 @@ UNDOS_KERNEL_API_DEF kstd::error_code KE_GFX_RefreshAdapter(
         kernel::gfx::refresh_observed_topology();
       }
     }
+  }
+  {
     const auto active = kernel::gfx::active_video_present_target();
-    kernel::user::display_changed_locked(active ? active->currentMode.bpp : 0);
+    kernel::gfx::notify_display_changed({.active = active, .bpp = active ? active->currentMode.bpp : 0});
   }
   {
     DriverLock drivers;
@@ -1172,42 +1177,21 @@ void RetireAdapterLocked(const kernel::KObjectPtr<kernel::KGraphicsAdapter> &ada
 }
 }// namespace
 
-void kernel::gfx::remove_device(const KDevicePtr<KDevice> &base) noexcept {
-  user::Guard scene;
-  user::SceneDrawGuard drawing;
-  {
-    DriverLock drivers;
-    TopologyLock lock;
-    // Drain USER drawing and exclude transactions before marking any stack
-    // member removed. Queries never perform desktop retirement themselves.
-    KE_OB_GetGfxDirectory()->Each<KGraphicsAdapter>([&](const auto &adapter) {
-      for (auto current = base; current; current = current->attachedDevice)
-        if (adapter->device == current) {
-          RetireAdapterLocked(adapter);
-          break;
-        }
-    });
-    for (auto current = base; current; current = current->attachedDevice)
-      current->pnpState = KPnpState::Removed;
-  }
-  user::cursor_reset_locked();
-  const auto active = active_video_present_target();
-  user::display_changed_locked(active ? active->currentMode.bpp : 0);
-}
-
 UNDOS_KERNEL_API_DEF void KE_GFX_RemoveAdapter(
     const kernel::KObjectPtr<kernel::KGraphicsAdapter> &adapter) noexcept {
   if (!adapter) return;
-  kernel::user::Guard scene;
-  kernel::user::SceneDrawGuard drawing;
   {
-    DriverLock drivers;
-    TopologyLock lock;
-    RetireAdapterLocked(adapter);
+    kernel::gfx::SceneGuard scene;
+    kernel::gfx::ScreenDrawHold drawing;
+    {
+      DriverLock drivers;
+      TopologyLock lock;
+      RetireAdapterLocked(adapter);
+    }
+    kernel::gfx::cursor_reset_locked();
   }
-  kernel::user::cursor_reset_locked();
   const auto active = kernel::gfx::active_video_present_target();
-  kernel::user::display_changed_locked(active ? active->currentMode.bpp : 0);
+  kernel::gfx::notify_display_changed({.active = active, .bpp = active ? active->currentMode.bpp : 0});
 }
 
 UNDOS_KERNEL_API_DEF kernel::KGraphicsAdapterResult KE_GFX_RegisterGraphicsAdapter(
@@ -1368,6 +1352,8 @@ kstd::error_code ProgramDisplayMode(
   surface->pixelFormat = reservation.mode.pixelFormat;
   surface->sizeInBytes =
       static_cast<size_t>(surfaceStride) * reservation.mode.height;
+  if (display->adapter && display->adapter->SetPalette)
+    display->adapter->SetPalette(display->adapter, surface, surface->palette, 0, kernel::KPalette::kSize);
   display->currentMode = reservation.mode;
   display->isAttachedToDesktop = true;
   display->topologyDegraded = false;
@@ -1414,8 +1400,8 @@ commit_video_present_path(uint32_t generation, const VideoPresentPathInfo &path,
   const auto preparedSurface = CreateKObject<KSurface>(surfaceName);
   if (!preparedSurface) return kstd::unexpected(preparedSurface.error());
   VideoPresentSnapshotLease retired;
-  user::Guard scene;
-  user::SceneDrawGuard drawing;
+  SceneGuard scene;
+  ScreenDrawHold drawing;
   DriverLock drivers;
   ModeReservationGuard reservationGuard(expectedTarget, reservation);
   {

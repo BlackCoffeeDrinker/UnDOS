@@ -1,7 +1,6 @@
 #pragma once
 
-#include "gfx/font/font_system.hpp"
-#include "gfx/bitmap_font.hpp"
+#include <kernel/gfx/ui_font.hpp>
 
 namespace kernel::user {
 
@@ -11,70 +10,62 @@ public:
   // prewarm). Under the USER lock use menu_text_locked(), which borrows.
   static UiText snapshot_default() {
     UiText text;
-    if (auto *system = font::font_system_if_ready()) text.own_ = system->defaults.snapshot();
+    text.own_ = font::UiFontHandle::snapshot_default();
     return text;
   }
 
   // Borrows `font` without copying it; it must outlive this UiText (USER
   // fonts such as g_menuFont are only replaced under the USER lock).
-  static UiText of(const font::UiFont &font) {
+  static UiText of(const font::UiFontHandle &font) {
     UiText text;
     text.font_ = &font;
     return text;
   }
 
   // Temporaries are owned, never borrowed.
-  static UiText of(font::UiFont &&font) {
+  static UiText of(font::UiFontHandle &&font) {
     UiText text;
-    text.own_ = static_cast<font::UiFont &&>(font);
+    text.own_ = static_cast<font::UiFontHandle &&>(font);
     return text;
   }
 
   UiText(const UiText &other) : own_(other.own_), font_(other.owns() ? &own_ : other.font_) {}
   UiText(UiText &&other) noexcept
-      : own_(static_cast<font::UiFont &&>(other.own_)), font_(other.owns() ? &own_ : other.font_) {}
+      : own_(static_cast<font::UiFontHandle &&>(other.own_)), font_(other.owns() ? &own_ : other.font_) {}
   UiText &operator=(const UiText &) = delete;
   UiText &operator=(UiText &&) = delete;
 
   void prewarm(const char *text, size_t length, bool bold = false) const {
-    if (font_->ascii) (void)font_->ascii->prewarm(text, length, bold ? 1 : 0);
+    font_->prewarm(text, length, bold ? 1 : 0);
   }
 
-  int32_t text_height(bool bold = false) const {
-    const int32_t bitmapHeight = static_cast<int32_t>(gfx::kFontCellHeight);
-    if (!font_->ascii) return bitmapHeight;
-    const int32_t height = font_->ascii->textHeight[bold ? 1 : 0];
-    return height > bitmapHeight ? height : bitmapHeight;
-  }
+  int32_t text_height(bool bold = false) const { return font_->text_height(bold ? 1 : 0); }
 
-  int32_t text_above(bool bold = false) const {
-    if (!font_->ascii) return static_cast<int32_t>(gfx::kFontAscent);
-    return font_->ascii->textAbove[bold ? 1 : 0];
-  }
+  int32_t text_above(bool bold = false) const { return font_->text_above(bold ? 1 : 0); }
 
   int32_t row_height(bool bold = false) const {
-    return text_height(bold) + 2 * font::UiGlyphs::MenuVerticalPadding;
+    return text_height(bold) + 2 * font::kUiMenuVerticalPadding;
   }
 
   bool uses_default_font(const char *text, size_t length, bool bold) const {
-    if (!*font_ || !font_->ascii) return false;
+    if (!*font_ || !font_->has_glyphs()) return false;
     for (size_t i = 0; i < length; ++i) {
       const auto ch = static_cast<uint8_t>(text[i]);
-      if (ch < font::UiGlyphs::FirstCodepoint ||
-          ch >= font::UiGlyphs::FirstCodepoint + font::UiGlyphs::Count)
+      if (ch < font::kUiFirstCodepoint ||
+          ch >= font::kUiFirstCodepoint + font::kUiCodepointCount)
         return false;
     }
-    return font_->ascii->all_ready(text, length, bold ? 1 : 0);
+    return font_->all_ready(text, length, bold ? 1 : 0);
   }
 
   int32_t width(const char *text, size_t length, bool bold) const {
     int32_t total = 0;
-    const font::GlyphMask *masks[kRun];
+    font::UiGlyph masks[kRun];
+    const bool vector = length <= kRun || uses_default_font(text, length, bold);
     for (size_t at = 0; at < length; at += kRun) {
       const size_t n = length - at < kRun ? length - at : kRun;
-      if (!resolve(text + at, n, bold, masks))
-        return static_cast<int32_t>(length) * static_cast<int32_t>(gfx::kFontCellWidth);
-      for (size_t i = 0; i < n; ++i) total += masks[i]->advance;
+      resolve(text + at, n, bold, masks, vector);
+      for (size_t i = 0; i < n; ++i) total += masks[i].advance;
     }
     return total;
   }
@@ -91,34 +82,29 @@ public:
             uint32_t foreground, uint32_t background, bool opaque, Fill &&fill) const {
     if (!length) return;
     const int32_t lineHeight = text_height(bold);
-    const font::GlyphMask *masks[kRun];
+    font::UiGlyph masks[kRun];
     // Short runs (the common case) resolve once, under one glyph-table lock.
+    // Long runs pick vector or bitmap glyphs once, so chunks never mix.
     const bool shortRun = length <= kRun;
-    if (shortRun ? !resolve(text, length, bold, masks) : !uses_default_font(text, length, bold)) {
-      const int32_t bitmapY = y + (lineHeight - static_cast<int32_t>(gfx::kFontCellHeight)) / 2;
-      if (opaque) fill(x, y, x + width(text, length, bold), y + lineHeight, background);
-      gfx::DrawBitmapText(x, bitmapY, text, length, foreground, background, false, fill);
-      return;
-    }
+    const bool vector = shortRun ? resolve(text, length, bold, masks, true) : uses_default_font(text, length, bold);
     const int32_t baseline = y + text_above(bold);
-    if (shortRun) {
-      if (opaque) {
-        int32_t total = 0;
-        for (size_t i = 0; i < length; ++i) total += masks[i]->advance;
-        fill(x, y, x + total, y + lineHeight, background);
-      }
-    } else if (opaque) {
-      fill(x, y, x + width(text, length, bold), y + lineHeight, background);
+    if (opaque) {
+      int32_t total = 0;
+      if (shortRun)
+        for (size_t i = 0; i < length; ++i) total += masks[i].advance;
+      else
+        total = width(text, length, bold);
+      fill(x, y, x + total, y + lineHeight, background);
     }
     int32_t pen = x;
     for (size_t at = 0; at < length; at += kRun) {
       const size_t n = length - at < kRun ? length - at : kRun;
-      if (length > kRun && !resolve(text + at, n, bold, masks)) return;
+      if (!shortRun) resolve(text + at, n, bold, masks, vector);
       for (size_t i = 0; i < n; ++i) {
-        const font::GlyphMask *glyph = masks[i];
+        const font::UiGlyph *glyph = &masks[i];
         for (uint32_t row = 0; row < glyph->height; ++row) {
           const int32_t top = baseline - glyph->top + static_cast<int32_t>(row);
-          const uint8_t *bits = glyph->bits.data() + static_cast<size_t>(row) * glyph->stride;
+          const uint8_t *bits = glyph->bits + static_cast<size_t>(row) * glyph->stride;
           for (uint32_t col = 0; col < glyph->width;) {
             if (!(bits[col / 8] & (0x80u >> (col % 8)))) {
               ++col;
@@ -207,15 +193,15 @@ private:
   UiText() = default;
   bool owns() const { return font_ == &own_; }
 
-  static constexpr size_t kRun = 64;
+  static constexpr size_t kRun = 16;
 
-  bool resolve(const char *text, size_t length, bool bold, const font::GlyphMask **out) const {
-    if (!*font_ || !font_->ascii) return false;
-    return font_->ascii->ready_masks(bold ? 1 : 0, text, length, out);
+  // Always fills out; returns true when vector glyphs were used.
+  bool resolve(const char *text, size_t length, bool bold, font::UiGlyph *out, bool vector) const {
+    return font_->ready_glyphs(text, length, bold ? 1 : 0, out, vector);
   }
 
-  font::UiFont own_;
-  const font::UiFont *font_{&own_};
+  font::UiFontHandle own_;
+  const font::UiFontHandle *font_{&own_};
 };
 
 } // namespace kernel::user

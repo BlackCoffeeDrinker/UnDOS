@@ -16,18 +16,24 @@ function(undos_kernel_compile_settings target)
         target_compile_definitions(${target} PRIVATE UNDOS_PROFILE=1)
         target_compile_options(${target} PRIVATE -finstrument-functions
                 # percpu.hpp / KPtr.hpp: header inlines reached from the hooks
-                "-finstrument-functions-exclude-file-list=src/profiler/,src/strlen.cpp,src/memchr.cpp,src/crt_init.cpp,src/atexit.cpp,src/guard/,src/scheduler/SchedulerSwitch.cpp,src/scheduler/CpuContext.cpp,src/percpu.cpp,src/percpu.hpp,kernel/fwd/KPtr.hpp"
+                "-finstrument-functions-exclude-file-list=profiler/,src/strlen.cpp,src/memchr.cpp,src/crt_init.cpp,src/atexit.cpp,src/guard/,src/scheduler/SchedulerSwitch.cpp,src/scheduler/CpuContext.cpp,src/percpu.cpp,src/percpu.hpp,kernel/fwd/KPtr.hpp"
                 # Name substrings: blocked-time noise and trivial helpers that only inflate the profile
                 "-finstrument-functions-exclude-function-list=schedule_next,Address<,span<,operator new,char_traits")
     endif ()
 endfunction()
 
 # Kernel components (Kernel/Components): object libraries compiled with the
-# kernel settings. Their src/ directory is the public include root, so
-# the core includes "gfx/..." and "user/..." headers.
-function(undos_kernel_component target)
+# kernel settings. Each component publishes its kernel interface in
+# include/ ("kernel/<name>/...") through an INTERFACE target <name>_Interface;
+# src/ stays private. Components use each other only via <name>_Interface.
+function(undos_kernel_component target name)
+    add_library(${name}_Interface INTERFACE)
+    target_include_directories(${name}_Interface INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_link_libraries(${name}_Interface INTERFACE libkcpp KernelHeaders KernelUserlandShared KernelSyscallDispatch)
+
     undos_kernel_compile_settings(${target})
-    target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(${target} PUBLIC ${name}_Interface)
+    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     # CMake would compile a library with -fPIC; match the kernel executable's -fPIE.
     get_target_property(_pic ${target} POSITION_INDEPENDENT_CODE)
     if (_pic)
@@ -39,96 +45,14 @@ endfunction()
 add_executable(kernel
         src/memchr.cpp
         src/strlen.cpp
-
         src/main.cpp
-
-        src/vmm.cpp
-        src/vmm.hpp
-        src/time.cpp
-        src/wait.cpp
-        src/wait.hpp
-        src/percpu.cpp
-        src/smp.cpp
-        src/smp.hpp
-
-        src/scheduler/ReadyQueue.hpp
-        src/scheduler/CpuContext.hpp
-        src/scheduler/CpuContext.cpp
-        src/scheduler/Scheduler.hpp
-        src/scheduler/SchedulerSwitch.cpp
-        src/scheduler/Scheduler.cpp
-        src/driver_loader.cpp
-        src/driver_loader.hpp
-        src/subsystem_loader.cpp
-        src/subsystem_loader.hpp
-        src/legacy_isa_enum.cpp
-        src/legacy_isa_enum.hpp
-        src/elf_loader.hpp
-        src/elf_loader.cpp
-        src/elf_segment_loader.hpp
-        src/elf_segment_loader.cpp
-        src/process.hpp
-        src/process.cpp
-        src/process_notify.hpp
-        src/process_notify.cpp
-        src/task_stats.hpp
-        src/task_stats.cpp
         "${UNDOS_SYSCALL_KERNEL_DIR}/handler_syscall.cpp"
-        src/pnp_manager.cpp
-        src/pnp_device_state.cpp
-        src/dma_manager.cpp
-        src/resource_manager.cpp
-        src/resource_manager.hpp
-        src/object_manager.cpp
-        src/object_manager.hpp
-
-        src/memory/Layout.hpp
-        src/memory/Layout.cpp
-        src/memory/Storage.hpp
-        src/memory/Storage.cpp
-        src/memory/Slab.hpp
-        src/memory/Slab.cpp
-        src/memory/Allocator.hpp
-        src/memory/Allocator.cpp
-        src/memory/Cache.hpp
-        src/memory/Cache.cpp
-        src/module/module_registry.cpp
-        src/module/module_registry.hpp
         src/guard/guard.cpp
         src/atexit.cpp
         src/crt_init.cpp
         src/crt_init.hpp
-        src/io.cpp
-        src/dispatch.cpp
-        src/dispatch.hpp
-        src/vfs.cpp
-        src/vfs.hpp
-        src/user_process.cpp
-        src/initial/boot_device_vfs.cpp
-        src/initial/boot_device_vfs.hpp
-        src/initial/root_volume_selector.cpp
-        src/initial/root_volume_selector.hpp
-        src/initial/mini_fat16.cpp
-        src/initial/mini_fat16.hpp
-        src/elf_loader.cpp
-        src/elf_loader.hpp
-        src/syscalls/DEBUG_Print.cpp
-        src/syscalls/CreateProcess.cpp
-        src/configuration_manager.cpp
-        src/configuration_manager_io.cpp
-        src/syscalls/IO.cpp
-        src/syscalls/GetStdHandle.cpp
         src/syscalls/ABI.cpp
-        src/syscalls/GetStdHandle.cpp
-        src/syscalls/TTY.cpp
-        src/input/input_manager.cpp
-        src/input/input_manager.hpp
-
-        src/tty/tty.cpp
-        src/tty/tty_device.cpp
         src/konsole.cpp
-        src/event_broadcaster.cpp
-        src/event_broadcaster.hpp
         src/kerror.cpp
         src/syscalls/KErrorToSysReturnCode.cpp
         src/syscalls/KErrorToSysReturnCode.hpp
@@ -136,14 +60,26 @@ add_executable(kernel
 )
 
 undos_kernel_compile_settings(kernel)
-target_link_libraries(kernel PRIVATE kernel_user kernel_gfx)
-
+target_link_libraries(kernel PRIVATE kernel_executive kernel_io kernel_user kernel_gfx kernel_initial kernel_input kernel_tty kernel_pnp kernel_loader Profiler_Interface)
 if (UNDOS_PROFILE)
-    target_sources(kernel PRIVATE src/profiler/profiler.cpp)
-    set_source_files_properties(src/profiler/profiler.cpp PROPERTIES COMPILE_OPTIONS -fno-instrument-functions)
+    target_link_libraries(kernel PRIVATE kernel_profiler)
 endif ()
 
 target_link_options(kernel PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden -flto)
+
+# Only UNDOS_KERNEL_PUBLIC_V1API symbols (plus the C++ ABI allowlist) may be
+# exported by the kernel and its components; everything else is private.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_custom_command(TARGET kernel POST_BUILD
+        # Replaceable operator new/delete ignore -fvisibility=hidden.
+        COMMAND "${CMAKE_OBJCOPY}" "--localize-symbols=${CMAKE_CURRENT_SOURCE_DIR}/kernel_localized_symbols.txt"
+                "$<TARGET_FILE:kernel>"
+        COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/check_exports.py"
+                "${CMAKE_READELF}" "$<TARGET_FILE:kernel>"
+                "${CMAKE_CURRENT_SOURCE_DIR}/kernel_exports_allowlist.txt"
+                "${UNDOS_ROOT}/Kernel/API" "${UNDOS_ROOT}/Kernel/KStd/include" "${UNDOS_ROOT}/Kernel/Source/src" "${UNDOS_ROOT}/Kernel/Components"
+        COMMENT "Checking kernel exports are UNDOS_KERNEL_PUBLIC_V1API"
+        VERBATIM)
 
 target_link_options(kernel PRIVATE
         "-T" "${CMAKE_CURRENT_SOURCE_DIR}/linker.ld"

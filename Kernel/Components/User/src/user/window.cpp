@@ -1,7 +1,8 @@
-#include "user/user.hpp"
+#include <kernel/gfx/screen.hpp>
+#include <kernel/user/user.hpp>
 
-#include "gfx/font/default_font.hpp"
 #include "user/ui_text.hpp"
+#include <kernel/gfx/ui_font.hpp>
 #include <kernel/kobject/KProcessObject.hpp>
 #include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/mutex.hpp>
@@ -37,7 +38,6 @@ constexpr int32_t kChildIconWidth = 88;
 constexpr int32_t kRootIconWidth = 144;
 constexpr int32_t kIconLabelPadding = 8;
 constexpr int32_t kFrameBorderTotal = 2 * kBorderWidth;
-Mutex g_lock;
 
 // The handle combines a generation with the one-based window-table index.
 kstd::array<KObjectPtr<KWindowObject>, kMaxWindows> g_windows;
@@ -64,7 +64,8 @@ void unlink_z(KWindowObject &w) noexcept {
 void link_top(KWindowObject &w) noexcept {
   w.above = nullptr;
   w.below = g_top;
-  if (g_top) g_top->above = &w;
+  if (g_top)
+    g_top->above = &w;
   g_top = &w;
 }
 
@@ -87,7 +88,8 @@ void raise_subtree(KWindowObject &w) noexcept {
 
   size_t count = 0;
   for (auto *it = g_top; it; it = it->below) {
-    if (it == &w || descendant_locked(*it, w)) members[count++] = it;
+    if (it == &w || descendant_locked(*it, w))
+      members[count++] = it;
   }
   for (size_t i = 0; i < count; ++i) {
     unlink_z(*members[i]);
@@ -125,18 +127,23 @@ void raise_subtree(KWindowObject &w) noexcept {
 }
 
 void raise_branch(KWindowObject &w) noexcept {
-  if (auto *p = lookup_locked(w.parent)) raise_branch(*p);
+  if (auto *p = lookup_locked(w.parent))
+    raise_branch(*p);
   raise_subtree(w);
 }
 
 void clear_input_for(KWindowObject &w) noexcept {
-  if (const auto *c = lookup_locked(g_capture); c && (c == &w || descendant_locked(*c, w))) set_capture_locked(0);
-  if (const auto *f = lookup_locked(g_focusHwnd); f && (f == &w || descendant_locked(*f, w))) (void) set_focus_locked(0);
-  if (const auto *a = lookup_locked(g_activeHwnd); a && (a == &w || descendant_locked(*a, w))) set_active_window_locked(0);
+  if (const auto *c = lookup_locked(g_capture); c && (c == &w || descendant_locked(*c, w)))
+    set_capture_locked(0);
+  if (const auto *f = lookup_locked(g_focusHwnd); f && (f == &w || descendant_locked(*f, w)))
+    (void) set_focus_locked(0);
+  if (const auto *a = lookup_locked(g_activeHwnd); a && (a == &w || descendant_locked(*a, w)))
+    set_active_window_locked(0);
 }
 
 void choose_active() noexcept {
-  if (g_activeHwnd) return;
+  if (g_activeHwnd)
+    return;
   for (const auto *w = g_top; w; w = w->below) {
     if (effectively_visible_locked(*w) && w->state != KWindowObject::State::Minimized) {
       (void) set_focus_locked(w->hwnd);
@@ -146,12 +153,18 @@ void choose_active() noexcept {
 }
 }// namespace
 
-void lock() noexcept { g_lock.lock(); }
+namespace {
+// Guards every window, queue and desktop structure. Taken before any GFX lock.
+Mutex g_windowLock;
+}// namespace
+
+void lock() noexcept { g_windowLock.lock(); }
 #if __STDC_HOSTED__
 namespace test_hooks {
 bool scene_locked() noexcept {
-  if (!g_lock.try_lock()) return true;
-  g_lock.unlock();
+  if (!g_windowLock.try_lock())
+    return true;
+  g_windowLock.unlock();
   return false;
 }
 }// namespace test_hooks
@@ -160,7 +173,7 @@ void unlock() noexcept {
   // Keep the last window references alive until the scene transaction ends.
   // Their destruction can release heap-backed resources and wait on the arena.
   auto retired = kstd::move(g_retiredWindows);
-  g_lock.unlock();
+  g_windowLock.unlock();
   while (retired) {
     auto next = kstd::move(retired->retiredNext);
     retired = kstd::move(next);
@@ -169,8 +182,10 @@ void unlock() noexcept {
 
 KWindowObject *lookup_locked(uint32_t hwnd) noexcept {
   const uint32_t index = (hwnd & kHandleIndexMask) - kIndexOffset;
-  if (index >= kMaxWindows) return nullptr;
-  if (g_generation[index] != (hwnd >> kHandleFieldShift) || !g_windows[index]) return nullptr;
+  if (index >= kMaxWindows)
+    return nullptr;
+  if (g_generation[index] != (hwnd >> kHandleFieldShift) || !g_windows[index])
+    return nullptr;
   return g_windows[index].get();
 }
 
@@ -183,24 +198,28 @@ KWindowObject *active_window_locked() noexcept {
 bool descendant_locked(const KWindowObject &window, const KWindowObject &ancestor) noexcept {
   const auto *w = lookup_locked(window.parent);
   for (uint32_t i = 0; w && i < kMaxWindows; ++i) {
-    if (w == &ancestor) return true;
+    if (w == &ancestor)
+      return true;
     w = lookup_locked(w->parent);
   }
   return false;
 }
 
 bool effectively_visible_locked(const KWindowObject &window) noexcept {
-  if (!window.Visible()) return false;
+  if (!window.Visible())
+    return false;
   const auto *w = lookup_locked(window.parent);
   for (uint32_t i = 0; w && i < kMaxWindows; ++i) {
-    if (!w->Visible() || w->state == KWindowObject::State::Minimized) return false;
+    if (!w->Visible() || w->state == KWindowObject::State::Minimized)
+      return false;
     w = lookup_locked(w->parent);
   }
   return true;
 }
 
 URect clipped_rect_locked(const KWindowObject &window) noexcept {
-  if (!effectively_visible_locked(window)) return {};
+  if (!effectively_visible_locked(window))
+    return {};
   URect rect = window.rect.Intersect(screen_rect());
   const auto *p = lookup_locked(window.parent);
 
@@ -253,19 +272,23 @@ KWindowObject *focused_window_locked() noexcept { return lookup_locked(g_focusHw
 kstd::error_code set_focus_locked(uint32_t hwnd) noexcept {
   auto *w = lookup_locked(hwnd);
 
-  if (hwnd && !w) return KernelError::InvalidHandle;
+  if (hwnd && !w)
+    return KernelError::InvalidHandle;
   if (w && (!effectively_visible_locked(*w) ||
-            (w->state == KWindowObject::State::Minimized && !w->parent))) return KernelError::InvalidState;
+            (w->state == KWindowObject::State::Minimized && !w->parent)))
+    return KernelError::InvalidState;
 
   const uint32_t oldHwnd = g_focusHwnd;
 
-  if (oldHwnd == hwnd) return {};
+  if (oldHwnd == hwnd)
+    return {};
   g_focusHwnd = hwnd;
 
   // Focus notifications are best effort: a full queue must not veto the
   // focus change the user already sees.
   if (auto *old = lookup_locked(oldHwnd)) {
-    if (old->queue) (void) post_locked(*old->queue, oldHwnd, kMsgKillFocus, hwnd, 0);
+    if (old->queue)
+      (void) post_locked(*old->queue, oldHwnd, kMsgKillFocus, hwnd, 0);
     draw_nonclient_locked(*old);
   }
 
@@ -282,7 +305,8 @@ kstd::error_code set_focus_locked(uint32_t hwnd) noexcept {
 
 void set_active_window_locked(uint32_t hwnd) noexcept {
   auto *next = lookup_locked(hwnd);
-  if (hwnd && (!next || !effectively_visible_locked(*next))) return;
+  if (hwnd && (!next || !effectively_visible_locked(*next)))
+    return;
   const bool targetIsRoot = next && !next->parent;
 
   URect targetRect{};
@@ -296,21 +320,25 @@ void set_active_window_locked(uint32_t hwnd) noexcept {
   const bool topRootChanged = g_top && root(*g_top)->hwnd != oldTopRoot;
 
   if (hwnd == g_activeHwnd) {
-    if (!targetRect.Empty() && (!targetIsRoot || topRootChanged)) expose_locked(targetRect);
+    if (!targetRect.Empty() && (!targetIsRoot || topRootChanged))
+      expose_locked(targetRect);
     return;
   }
 
   auto *old = active_window_locked();
-  if (next) expose_locked(topRootChanged ? next->rect : targetRect);
+  if (next)
+    expose_locked(topRootChanged ? next->rect : targetRect);
   g_activeHwnd = hwnd;// Both captions must observe the new activation state.
 
   if (old) {
-    if (old->queue) (void) post_locked(*old->queue, old->hwnd, kMsgActivate, 0, 0);
+    if (old->queue)
+      (void) post_locked(*old->queue, old->hwnd, kMsgActivate, 0, 0);
     draw_nonclient_locked(*old);
   }
 
   if (next) {
-    if (next->queue) (void) post_locked(*next->queue, next->hwnd, kMsgActivate, kActiveWindowActivation, 0);
+    if (next->queue)
+      (void) post_locked(*next->queue, next->hwnd, kMsgActivate, kActiveWindowActivation, 0);
     draw_nonclient_locked(*next);
   }
 }
@@ -318,20 +346,23 @@ void set_active_window_locked(uint32_t hwnd) noexcept {
 KWindowObject *window_from_point_locked(int32_t x, int32_t y) noexcept {
   for (KWindowObject *w = g_top; w; w = w->below) {
     const auto r = clipped_rect_locked(*w);
-    if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return w;
+    if (x >= r.left && x < r.right && y >= r.top && y < r.bottom)
+      return w;
   }
   return nullptr;
 }
 
 KWindowObject *mouse_target_locked(int32_t x, int32_t y) noexcept {
-  if (auto *window = lookup_locked(g_capture); window && effectively_visible_locked(*window)) return window;
+  if (auto *window = lookup_locked(g_capture); window && effectively_visible_locked(*window))
+    return window;
   return window_from_point_locked(x, y);
 }
 
 int32_t find_class_locked(const kstd::string_view &name, const KProcessObject *process) noexcept {
   for (uint32_t i = 0; i < kMaxClasses; ++i) {
     if (g_classes[i].used && (!process || g_classes[i].process == process) &&
-        g_classes[i].name == name) return static_cast<int32_t>(i);
+        g_classes[i].name == name)
+      return static_cast<int32_t>(i);
   }
   return -1;
 }
@@ -391,8 +422,10 @@ kstd::error_code register_class_locked(KProcessObject &proc, const kstd::string_
 
 kstd::expected<uint32_t, kstd::error_code> insert_window_locked(const KObjectPtr<KWindowObject> &window) noexcept {
   for (uint32_t i = 0; i < kMaxWindows; ++i) {
-    if (g_windows[i]) continue;
-    if (++g_generation[i] == 0) g_generation[i] = kFirstGeneration;
+    if (g_windows[i])
+      continue;
+    if (++g_generation[i] == 0)
+      g_generation[i] = kFirstGeneration;
     g_windows[i] = window;
     window->hwnd = (static_cast<uint32_t>(g_generation[i]) << kHandleFieldShift) |
                    (i + kIndexOffset);
@@ -413,7 +446,8 @@ void arrange_minimized_locked(uint32_t parent) noexcept;
 
 void destroy_window_locked(KWindowObject &window) noexcept {
   const uint32_t index = (window.hwnd & kHandleIndexMask) - kIndexOffset;
-  if (index >= kMaxWindows || g_windows[index].get() != &window) return;
+  if (index >= kMaxWindows || g_windows[index].get() != &window)
+    return;
   const URect old = window.rect;
   const bool wasVisible = effectively_visible_locked(window);
   close_menu_for_window_locked(window.hwnd);
@@ -421,22 +455,29 @@ void destroy_window_locked(KWindowObject &window) noexcept {
   window.style &= ~kStyleVisible;
   // Destroy children first; no surviving handle may name a dead parent.
   for (const auto &g_window: g_windows) {
-    if (g_window && g_window->parent == window.hwnd) destroy_window_locked(*g_window);
+    if (g_window && g_window->parent == window.hwnd)
+      destroy_window_locked(*g_window);
   }
   unlink_z(window);
-  if (window.queue) window.queue->ring.RemoveFor(window.hwnd);
+  if (window.queue)
+    window.queue->ring.RemoveFor(window.hwnd);
   // A paint DC already closed by the owner is not an error during teardown.
   const HDC paintDC = window.paintDC;
-  if (window.paintActive) abandon_paint_locked(window);
-  if (paintDC && window.process) (void) gfx::CloseDC(window.process, paintDC, window.retiredDC);
+  if (window.paintActive)
+    abandon_paint_locked(window);
+  if (paintDC && window.process)
+    (void) gfx::CloseDC(window.process, paintDC, window.retiredDC);
   const HDC windowDC = window.windowDC;
   abandon_window_dc_locked(window);
-  if (windowDC && window.process) (void) gfx::CloseDC(window.process, windowDC, window.retiredWindowDC);
+  if (windowDC && window.process)
+    (void) gfx::CloseDC(window.process, windowDC, window.retiredWindowDC);
   const auto keep = g_windows[index];
   window.retiredNext = kstd::move(g_retiredWindows);
   g_retiredWindows = kstd::move(g_windows[index]);
-  if (wasVisible) expose_locked(old);
-  if (wasVisible && window.state == KWindowObject::State::Minimized) arrange_minimized_locked(window.parent);
+  if (wasVisible)
+    expose_locked(old);
+  if (wasVisible && window.state == KWindowObject::State::Minimized)
+    arrange_minimized_locked(window.parent);
   choose_active();
 }
 
@@ -444,14 +485,16 @@ namespace {
 uint32_t g_iconOrder{0};
 
 URect minimized_bounds_locked(uint32_t parent) noexcept {
-  if (const auto *p = lookup_locked(parent)) return client_to_screen_locked(*p, client_rect_locked(*p));
+  if (const auto *p = lookup_locked(parent))
+    return client_to_screen_locked(*p, client_rect_locked(*p));
   return screen_rect();
 }
 
 // Child icons are wide enough for their measured label; root icons keep the
 // caption-bar width because their title is clipped like any caption.
 int32_t minimized_width_locked(const KWindowObject &window) noexcept {
-  if (!window.parent) return kRootIconWidth;
+  if (!window.parent)
+    return kRootIconWidth;
   const int64_t label = static_cast<int64_t>(
                             menu_text_locked().width(window.title.data(), window.title.size(), false)) +
                         kIconLabelPadding;
@@ -469,12 +512,14 @@ int32_t minimized_height_locked(const KWindowObject &window) noexcept {
 template<typename Place>
 void layout_minimized_locked(uint32_t parent, Place &&place) noexcept {
   const URect bounds = minimized_bounds_locked(parent);
-  if (bounds.Empty()) return;
+  if (bounds.Empty())
+    return;
   KWindowObject *icons[kMaxWindows]{};
   size_t count = 0;
   for (const auto &entry: g_windows) {
     auto *w = entry.get();
-    if (!w || w->parent != parent || w->state != KWindowObject::State::Minimized || !w->Visible()) continue;
+    if (!w || w->parent != parent || w->state != KWindowObject::State::Minimized || !w->Visible())
+      continue;
     size_t at = count++;
     while (at && icons[at - 1]->iconOrder > w->iconOrder) {
       icons[at] = icons[at - 1];
@@ -491,10 +536,12 @@ void layout_minimized_locked(uint32_t parent, Place &&place) noexcept {
     const int32_t height = minimized_height_locked(*icons[i]);
     if (x != bounds.left && width > bounds.right - x) {
       x = bounds.left;
-      if (bottom - height > bounds.top) bottom -= height;
+      if (bottom - height > bounds.top)
+        bottom -= height;
     }
     URect target{.left = x, .top = bottom - height, .right = x + width, .bottom = bottom};
-    if (target.top < bounds.top) target = target.Offset(0, bounds.top - target.top);
+    if (target.top < bounds.top)
+      target = target.Offset(0, bounds.top - target.top);
     place(*icons[i], target);
     x += width;
   }
@@ -510,26 +557,32 @@ void arrange_minimized_locked(uint32_t parent) noexcept {
 
 kstd::error_code move_window_locked(KWindowObject &window, const URect &rect) noexcept {
   const URect old = window.rect;
-  if (old == rect) return {};
-  if (rect.Empty()) return KernelError::InvalidSize;
+  if (old == rect)
+    return {};
+  if (rect.Empty())
+    return KernelError::InvalidSize;
   if (rect.left < kMinWindowCoordinate || rect.top < kMinWindowCoordinate ||
       rect.right > kMaxWindowCoordinate || rect.bottom > kMaxWindowCoordinate ||
       static_cast<int64_t>(rect.right) - rect.left > kMaxWindowCoordinate ||
-      static_cast<int64_t>(rect.bottom) - rect.top > kMaxWindowCoordinate) return KernelError::OutOfRange;
+      static_cast<int64_t>(rect.bottom) - rect.top > kMaxWindowCoordinate)
+    return KernelError::OutOfRange;
   const int32_t dx = rect.left - old.left, dy = rect.top - old.top;
   // Reject a move atomically if a descendant would exceed the supported range.
   for (const auto *w = g_top; w; w = w->below) {
-    if (!descendant_locked(*w, window)) continue;
+    if (!descendant_locked(*w, window))
+      continue;
     if (static_cast<int64_t>(w->rect.left) + dx < kMinWindowCoordinate ||
         static_cast<int64_t>(w->rect.top) + dy < kMinWindowCoordinate ||
         static_cast<int64_t>(w->rect.right) + dx > kMaxWindowCoordinate ||
-        static_cast<int64_t>(w->rect.bottom) + dy > kMaxWindowCoordinate) return KernelError::OutOfRange;
+        static_cast<int64_t>(w->rect.bottom) + dy > kMaxWindowCoordinate)
+      return KernelError::OutOfRange;
   }
   window.rect = rect;
   for (auto *w = g_top; w; w = w->below) {
     if (descendant_locked(*w, window)) {
       w->rect = w->rect.Offset(dx, dy);
-      if (!w->restoredRect.Empty()) w->restoredRect = w->restoredRect.Offset(dx, dy);
+      if (!w->restoredRect.Empty())
+        w->restoredRect = w->restoredRect.Offset(dx, dy);
     }
   }
   // Screen copies are unsafe with occlusion, ancestor clipping, cursor pixels,
@@ -554,32 +607,38 @@ kstd::error_code move_window_locked(KWindowObject &window, const URect &rect) no
 
       // Children were range-checked with the parent move above; refitting
       // within the parent's client area cannot leave the coordinate space.
-      if (w->state == KWindowObject::State::Maximized) (void) move_window_locked(*w, bounds);
+      if (w->state == KWindowObject::State::Maximized)
+        (void) move_window_locked(*w, bounds);
     }
-    if (!bounds.Empty()) arrange_minimized_locked(window.hwnd);
+    if (!bounds.Empty())
+      arrange_minimized_locked(window.hwnd);
   }
   return {};
 }
 
 void show_window_locked(KWindowObject &window, bool show) noexcept {
-  if (show == window.Visible()) return;
+  if (show == window.Visible())
+    return;
   const bool minimized = window.state == KWindowObject::State::Minimized;
   if (show) {
     window.style |= kStyleVisible;
     // A re-shown icon rejoins the flow in its minimize order.
-    if (minimized) arrange_minimized_locked(window.parent);
+    if (minimized)
+      arrange_minimized_locked(window.parent);
     expose_locked(window.rect);
   } else {
     window.style &= ~kStyleVisible;
     clear_input_for(window);
     expose_locked(window.rect);
-    if (minimized) arrange_minimized_locked(window.parent);
+    if (minimized)
+      arrange_minimized_locked(window.parent);
     choose_active();
   }
 }
 
 kstd::error_code show_command_locked(KWindowObject &window, uint32_t command) noexcept {
-  if (command > kShowCommandRestore) return KernelError::InvalidArgument;
+  if (command > kShowCommandRestore)
+    return KernelError::InvalidArgument;
   if (command == kShowCommandHide || command == kShowCommandShow) {
     show_window_locked(window, command == kShowCommandShow);
     return {};
@@ -591,15 +650,20 @@ kstd::error_code show_command_locked(KWindowObject &window, uint32_t command) no
     return {};
   }
   URect bounds = screen_rect();
-  if (const auto *p = lookup_locked(window.parent)) bounds = client_to_screen_locked(*p, client_rect_locked(*p));
-  if (bounds.Empty()) return KernelError::InvalidState;
+  if (const auto *p = lookup_locked(window.parent))
+    bounds = client_to_screen_locked(*p, client_rect_locked(*p));
+  if (bounds.Empty())
+    return KernelError::InvalidState;
   const auto oldState = window.state;
   const auto oldRestored = window.restoredRect;
-  if (window.state == KWindowObject::State::Restored) window.restoredRect = window.rect;
+  if (window.state == KWindowObject::State::Restored)
+    window.restoredRect = window.rect;
   window.state = next;
   auto target = window.restoredRect;
 
-  if (next == KWindowObject::State::Maximized) { target = bounds; }
+  if (next == KWindowObject::State::Maximized) {
+    target = bounds;
+  }
 
   const uint32_t oldIconOrder = window.iconOrder;
   if (next == KWindowObject::State::Minimized) {
@@ -608,7 +672,8 @@ kstd::error_code show_command_locked(KWindowObject &window, uint32_t command) no
     const uint32_t oldStyle = window.style;
     window.style |= kStyleVisible;
     layout_minimized_locked(window.parent, [&](KWindowObject &w, const URect &slot) {
-      if (&w == &window) target = slot;
+      if (&w == &window)
+        target = slot;
     });
     window.style = oldStyle;
   }
@@ -656,9 +721,12 @@ void cycle_window_locked(bool children, bool reverse) noexcept {
   // most recently raised windows.
   for (const auto &entry: g_windows) {
     auto *w = entry.get();
-    if (!w) continue;
-    if (!effectively_visible_locked(*w) || (w->state == KWindowObject::State::Minimized && !children)) continue;
-    if (children ? (!active || w->parent != active->hwnd) : w->parent != 0) continue;
+    if (!w)
+      continue;
+    if (!effectively_visible_locked(*w) || (w->state == KWindowObject::State::Minimized && !children))
+      continue;
+    if (children ? (!active || w->parent != active->hwnd) : w->parent != 0)
+      continue;
     if (w == (children ? focus : active)) {
       current = count;
       found = true;
@@ -672,7 +740,8 @@ void cycle_window_locked(bool children, bool reverse) noexcept {
 }
 
 void set_capture_locked(uint32_t hwnd) noexcept {
-  if (hwnd == g_capture) return;
+  if (hwnd == g_capture)
+    return;
   const auto old = g_capture;
   g_capture = hwnd;
   if (const auto *w = lookup_locked(old); w && w->queue)
@@ -687,7 +756,8 @@ void display_changed_locked(uint32_t bpp) noexcept {
   auto *bottom = g_top;
   while (bottom && bottom->below) bottom = bottom->below;
   for (auto *w = bottom; w; w = w->above) {
-    if (w->parent || bounds.Empty()) continue;
+    if (w->parent || bounds.Empty())
+      continue;
     const auto fit = [&](const URect &rect) {
       const auto width = rect.right - rect.left < bounds.right ? rect.right - rect.left : bounds.right;
       const auto height = rect.bottom - rect.top < bounds.bottom ? rect.bottom - rect.top : bounds.bottom;
@@ -697,26 +767,26 @@ void display_changed_locked(uint32_t bpp) noexcept {
                                                                             : rect.top;
       return URect{.left = left, .top = top, .right = left + width, .bottom = top + height};
     };
-    if (!w->restoredRect.Empty()) w->restoredRect = fit(w->restoredRect);
+    if (!w->restoredRect.Empty())
+      w->restoredRect = fit(w->restoredRect);
     auto target = w->state == KWindowObject::State::Maximized ? bounds : fit(w->rect);
-    if (w->state == KWindowObject::State::Minimized) target = target.Offset(0, bounds.bottom - target.bottom);
+    if (w->state == KWindowObject::State::Minimized)
+      target = target.Offset(0, bounds.bottom - target.bottom);
     if (const kstd::error_code moved = move_window_locked(*w, target); moved)
       KE_Print("USER: could not refit window {} after display change: {}", w->hwnd, moved.message());
-    if (w->state == KWindowObject::State::Restored) w->restoredRect = w->rect;
+    if (w->state == KWindowObject::State::Restored)
+      w->restoredRect = w->rect;
   }
   for (auto *w = g_top; w; w = w->below) {
     w->invalid = client_rect_locked(*w);
-    if (w->paintDC && w->process) {
-      if (auto *slot = gfx::FindDC(w->process, w->paintDC)) {
-        slot->presentationDirty = false;
-        slot->presentationBounds = {};
-      }
-    }
+    if (w->paintDC && w->process)
+      gfx::ResetDCPresentation(w->process, w->paintDC);
     w->pendingDisplayChange = true;
     w->displayBpp = bpp;
     w->displaySize = (static_cast<uint32_t>(bounds.bottom) << kPackedFieldShift) |
                      static_cast<uint32_t>(bounds.right);
-    if (w->queue) wake_locked(*w->queue);
+    if (w->queue)
+      wake_locked(*w->queue);
   }
   // Also refresh active paint clips when output became inactive.
   expose_locked(bounds);
@@ -729,11 +799,13 @@ void on_process_exit(KProcessObject &proc) noexcept {
   } queues;
   Guard guard;
   for (const auto &g_window: g_windows) {
-    if (g_window && g_window->process == &proc) destroy_window_locked(*g_window);
+    if (g_window && g_window->process == &proc)
+      destroy_window_locked(*g_window);
   }
   destroy_process_menus(proc);
   for (auto &c: g_classes) {
-    if (c.used && c.process == &proc) c = WindowClass{};
+    if (c.used && c.process == &proc)
+      c = WindowClass{};
   }
   queues.detached = free_queues_locked(proc);
 }
@@ -742,37 +814,48 @@ namespace {
 // Resolves a window the caller may modify.
 kstd::expected<KWindowObject *, kstd::error_code> owned_window_locked(const KProcessObject &caller, uint32_t hwnd) noexcept {
   auto *w = lookup_locked(hwnd);
-  if (!w) return kstd::unexpected(KernelError::InvalidHandle);
-  if (w->process != &caller) return kstd::unexpected(KernelError::AccessDenied);
+  if (!w)
+    return kstd::unexpected(KernelError::InvalidHandle);
+  if (w->process != &caller)
+    return kstd::unexpected(KernelError::AccessDenied);
   return w;
 }
 }// namespace
 
 kstd::expected<KProcessObject *, kstd::error_code> caller_process() noexcept {
   const auto thread = KE_SCHED_GetCurrentThread();
-  if (!thread) return kstd::unexpected(KernelError::NoCurrentThread);
-  if (!thread->owner_process) return kstd::unexpected(KernelError::NoCurrentProcess);
+  if (!thread)
+    return kstd::unexpected(KernelError::NoCurrentThread);
+  if (!thread->owner_process)
+    return kstd::unexpected(KernelError::NoCurrentProcess);
   return thread->owner_process;
 }
 
 kstd::error_code register_class(KProcessObject &caller, const kstd::string_view &name, uintptr_t wndProc,
                                 uint32_t background) noexcept {
-  if (name.empty()) return KernelError::InvalidArgument;
-  if (name.size() >= kWindowClassNameLen) return KernelError::NameTooLong;
+  if (name.empty())
+    return KernelError::InvalidArgument;
+  if (name.size() >= kWindowClassNameLen)
+    return KernelError::NameTooLong;
   Guard guard;
   return register_class_locked(caller, name, wndProc, background);
 }
 
 kstd::expected<uint32_t, kstd::error_code> create_window(KProcessObject &caller, const CreateWindowParams &params) noexcept {
-  if (params.width <= 0 || params.height <= 0) return kstd::unexpected(KernelError::InvalidSize);
-  if (params.className.size() >= kWindowClassNameLen) return kstd::unexpected(KernelError::NameTooLong);
-  if (params.title.size() >= kWindowTitleLen) return kstd::unexpected(KernelError::InvalidSize);
+  if (params.width <= 0 || params.height <= 0)
+    return kstd::unexpected(KernelError::InvalidSize);
+  if (params.className.size() >= kWindowClassNameLen)
+    return kstd::unexpected(KernelError::NameTooLong);
+  if (params.title.size() >= kWindowTitleLen)
+    return kstd::unexpected(KernelError::InvalidSize);
   const bool child = (params.style & kStyleChild) != 0;
-  if (child != (params.parent != 0)) return kstd::unexpected(KernelError::ParentMismatch);
+  if (child != (params.parent != 0))
+    return kstd::unexpected(KernelError::ParentMismatch);
 
   // Allocate outside the lock; only the table insert happens under it.
   auto created = CreateKObject<KWindowObject>("window");
-  if (!created) return kstd::unexpected(created.error());
+  if (!created)
+    return kstd::unexpected(created.error());
   const auto window = kstd::move(*created);
   window->title = params.title;
   window->style = params.style;
@@ -794,30 +877,36 @@ kstd::expected<uint32_t, kstd::error_code> create_window(KProcessObject &caller,
     return kstd::unexpected(error);
   Guard guard;
   if (child) {
-    if (const auto parent = owned_window_locked(caller, params.parent); !parent) return kstd::unexpected(parent.error());
+    if (const auto parent = owned_window_locked(caller, params.parent); !parent)
+      return kstd::unexpected(parent.error());
     if (const auto *parent = lookup_locked(params.parent))
       window->pendingFontGeneration = parent->pendingFontGeneration;
   }
 
   const auto placement = placement_rect_locked(*window, params.x, params.y, params.width, params.height);
-  if (!placement) return kstd::unexpected(placement.error());
+  if (!placement)
+    return kstd::unexpected(placement.error());
   window->rect = *placement;
 
   const int32_t cls = find_class_locked(params.className, &caller);
-  if (cls < 0) return kstd::unexpected(KernelError::NotFound);
+  if (cls < 0)
+    return kstd::unexpected(KernelError::NotFound);
   const auto *wc = class_at_locked(static_cast<uint32_t>(cls));
 
   window->classIndex = static_cast<uint32_t>(cls);
   window->wndProc = wc->wndProc;
   window->background = wc->background;
   const auto queue = queue_for_current_locked();
-  if (!queue) return kstd::unexpected(queue.error());
+  if (!queue)
+    return kstd::unexpected(queue.error());
   // The WM_CREATE posted below must not be dropped once the window exists.
-  if ((*queue)->ring.Full()) return kstd::unexpected(KernelError::QueueFull);
+  if ((*queue)->ring.Full())
+    return kstd::unexpected(KernelError::QueueFull);
   window->queue = *queue;
 
   const auto hwnd = insert_window_locked(window);
-  if (!hwnd) return kstd::unexpected(hwnd.error());
+  if (!hwnd)
+    return kstd::unexpected(hwnd.error());
 
   (void) post_locked(*window->queue, *hwnd, kMsgCreate, 0, 0);
   return *hwnd;
@@ -826,7 +915,8 @@ kstd::expected<uint32_t, kstd::error_code> create_window(KProcessObject &caller,
 kstd::error_code destroy_window(KProcessObject &caller, uint32_t hwnd) noexcept {
   Guard guard;
   const auto w = owned_window_locked(caller, hwnd);
-  if (!w) return w.error();
+  if (!w)
+    return w.error();
   destroy_window_locked(**w);
   return {};
 }
@@ -834,35 +924,43 @@ kstd::error_code destroy_window(KProcessObject &caller, uint32_t hwnd) noexcept 
 kstd::error_code show_window(KProcessObject &caller, uint32_t hwnd, uint32_t command) noexcept {
   Guard guard;
   const auto w = owned_window_locked(caller, hwnd);
-  if (!w) return w.error();
+  if (!w)
+    return w.error();
   return show_command_locked(**w, command);
 }
 
 kstd::error_code move_window(KProcessObject &caller, uint32_t hwnd, int32_t x, int32_t y, int32_t width,
                              int32_t height) noexcept {
-  if (width <= 0 || height <= 0) return KernelError::InvalidSize;
+  if (width <= 0 || height <= 0)
+    return KernelError::InvalidSize;
   Guard guard;
   const auto w = owned_window_locked(caller, hwnd);
-  if (!w) return w.error();
+  if (!w)
+    return w.error();
   KWindowObject &window = **w;
   const auto rect = placement_rect_locked(window, x, y, width, height);
-  if (!rect) return rect.error();
-  if (const kstd::error_code moved = move_window_locked(window, *rect); moved) return moved;
-  if (window.state == KWindowObject::State::Restored) window.restoredRect = *rect;
+  if (!rect)
+    return rect.error();
+  if (const kstd::error_code moved = move_window_locked(window, *rect); moved)
+    return moved;
+  if (window.state == KWindowObject::State::Restored)
+    window.restoredRect = *rect;
   return {};
 }
 
 kstd::expected<URect, kstd::error_code> get_window_rect(uint32_t hwnd) noexcept {
   Guard guard;
   const auto *w = lookup_locked(hwnd);
-  if (!w) return kstd::unexpected(KernelError::InvalidHandle);
+  if (!w)
+    return kstd::unexpected(KernelError::InvalidHandle);
   return w->rect;
 }
 
 kstd::expected<URect, kstd::error_code> get_client_rect(uint32_t hwnd) noexcept {
   Guard guard;
   const auto *w = lookup_locked(hwnd);
-  if (!w) return kstd::unexpected(KernelError::InvalidHandle);
+  if (!w)
+    return kstd::unexpected(KernelError::InvalidHandle);
   return client_rect_locked(*w);
 }
 
@@ -871,7 +969,8 @@ kstd::error_code invalidate_rect(KProcessObject &caller, uint32_t hwnd, const UR
     return KernelError::InvalidArgument;
   Guard guard;
   const auto w = owned_window_locked(caller, hwnd);
-  if (!w) return w.error();
+  if (!w)
+    return w.error();
   invalidate_locked(**w, clientRect ? *clientRect : client_rect_locked(**w), erase);
   return {};
 }
@@ -880,24 +979,29 @@ kstd::expected<PaintBegin, kstd::error_code> begin_paint(KProcessObject &caller,
   {
     Guard guard;
     const auto window = owned_window_locked(caller, hwnd);
-    if (!window) return kstd::unexpected(window.error());
-    if ((*window)->paintDC && gfx::FindDC(&caller, (*window)->paintDC))
+    if (!window)
+      return kstd::unexpected(window.error());
+    if ((*window)->paintDC && gfx::DCExists(&caller, (*window)->paintDC))
       return kstd::unexpected(KernelError::InvalidState);
   }
   const auto allocated = gfx::CreateDC(&caller);
-  if (!allocated) return kstd::unexpected(allocated.error());
+  if (!allocated)
+    return kstd::unexpected(allocated.error());
   struct Reservation {
     KProcessObject &caller;
     uint32_t handle;
     ~Reservation() {
-      if (handle) (void) gfx::CloseDC(&caller, handle);
+      if (handle)
+        (void) gfx::CloseDC(&caller, handle);
     }
-  } reservation{caller, allocated->second};
+  } reservation{caller, *allocated};
   Guard guard;
   const auto w = owned_window_locked(caller, hwnd);
-  if (!w) return kstd::unexpected(w.error());
+  if (!w)
+    return kstd::unexpected(w.error());
   const auto result = begin_paint_locked(caller, **w, reservation.handle);
-  if (result) reservation.handle = 0;
+  if (result)
+    reservation.handle = 0;
   return result;
 }
 
@@ -907,7 +1011,8 @@ kstd::error_code end_paint(KProcessObject &caller, uint32_t hwnd, HDC dc) noexce
   // the hardware here, once per paint cycle, and only the DC is released.
   Guard guard;
   const auto w = owned_window_locked(caller, hwnd);
-  if (!w) return w.error();
+  if (!w)
+    return w.error();
   return end_paint_locked(caller, **w, dc, released);
 }
 
@@ -915,23 +1020,28 @@ kstd::expected<HDC, kstd::error_code> get_window_dc(KProcessObject &caller, uint
   {
     Guard guard;
     const auto window = owned_window_locked(caller, hwnd);
-    if (!window) return kstd::unexpected(window.error());
-    if ((*window)->windowDC && gfx::FindDC(&caller, (*window)->windowDC))
+    if (!window)
+      return kstd::unexpected(window.error());
+    if ((*window)->windowDC && gfx::DCExists(&caller, (*window)->windowDC))
       return kstd::unexpected(KernelError::InvalidState);
   }
   const auto allocated = gfx::CreateDC(&caller);
-  if (!allocated) return kstd::unexpected(allocated.error());
+  if (!allocated)
+    return kstd::unexpected(allocated.error());
   struct Reservation {
     KProcessObject &caller;
     uint32_t handle;
     ~Reservation() {
-      if (handle) (void) gfx::CloseDC(&caller, handle);
+      if (handle)
+        (void) gfx::CloseDC(&caller, handle);
     }
-  } reservation{caller, allocated->second};
+  } reservation{caller, *allocated};
   Guard guard;
   const auto w = owned_window_locked(caller, hwnd);
-  if (!w) return kstd::unexpected(w.error());
-  if (const auto bound = bind_window_dc_locked(caller, **w, reservation.handle)) return kstd::unexpected(bound);
+  if (!w)
+    return kstd::unexpected(w.error());
+  if (const auto bound = bind_window_dc_locked(caller, **w, reservation.handle))
+    return kstd::unexpected(bound);
   const HDC handle = reservation.handle;
   reservation.handle = 0;
   return handle;
@@ -941,14 +1051,16 @@ kstd::error_code release_window_dc(KProcessObject &caller, uint32_t hwnd, HDC dc
   DetachedDC released;// dropped after the scene lock
   Guard guard;
   const auto w = owned_window_locked(caller, hwnd);
-  if (!w) return w.error();
+  if (!w)
+    return w.error();
   return release_window_dc_locked(caller, **w, dc, released);
 }
 
 kstd::expected<uintptr_t, kstd::error_code> get_window_long(uint32_t hwnd, uint32_t index) noexcept {
   Guard guard;
   const auto *w = lookup_locked(hwnd);
-  if (!w) return kstd::unexpected(KernelError::InvalidHandle);
+  if (!w)
+    return kstd::unexpected(KernelError::InvalidHandle);
   switch (index) {
     case WindowLongIndex_WndProc: return w->wndProc;
     case WindowLongIndex_UserData: return w->userData;
@@ -963,13 +1075,15 @@ namespace {
 // visible bit is applied through show_window_locked so input state and
 // exposure stay consistent.
 kstd::expected<uint32_t, kstd::error_code> set_style_locked(KWindowObject &w, uint32_t value) noexcept {
-  if ((value ^ w.style) & kStyleChild) return kstd::unexpected(KernelError::InvalidArgument);
+  if ((value ^ w.style) & kStyleChild)
+    return kstd::unexpected(KernelError::InvalidArgument);
   const int32_t borderDelta = ((value & kStyleBorder) ? kBorderWidth : 0) -
                               ((w.style & kStyleBorder) ? kBorderWidth : 0);
   const int32_t captionDelta = ((value & kStyleCaption) ? caption_height_locked() : 0) -
                                ((w.style & kStyleCaption) ? caption_height_locked() : 0);
   for (const auto *child = g_top; child; child = child->below) {
-    if (!descendant_locked(*child, w)) continue;
+    if (!descendant_locked(*child, w))
+      continue;
     if (child->rect.left + borderDelta < kMinWindowCoordinate || child->rect.right + borderDelta > kMaxWindowCoordinate ||
         child->rect.top + borderDelta + captionDelta < kMinWindowCoordinate ||
         child->rect.bottom + borderDelta + captionDelta > kMaxWindowCoordinate)
@@ -982,9 +1096,11 @@ kstd::expected<uint32_t, kstd::error_code> set_style_locked(KWindowObject &w, ui
   const auto newOrigin = client_to_screen_locked(w, {});
   const int32_t dx = newOrigin.left - oldOrigin.left, dy = newOrigin.top - oldOrigin.top;
   for (auto *child = g_top; child; child = child->below) {
-    if (!descendant_locked(*child, w)) continue;
+    if (!descendant_locked(*child, w))
+      continue;
     child->rect = child->rect.Offset(dx, dy);
-    if (!child->restoredRect.Empty()) child->restoredRect = child->restoredRect.Offset(dx, dy);
+    if (!child->restoredRect.Empty())
+      child->restoredRect = child->restoredRect.Offset(dx, dy);
   }
   show_window_locked(w, show);
   expose_locked(w.rect);
@@ -993,10 +1109,11 @@ kstd::expected<uint32_t, kstd::error_code> set_style_locked(KWindowObject &w, ui
 }// namespace
 
 kstd::expected<uintptr_t, kstd::error_code> set_window_long(KProcessObject &caller, uint32_t hwnd, uint32_t index,
-                                                           uintptr_t value) noexcept {
+                                                            uintptr_t value) noexcept {
   Guard guard;
   const auto owned = owned_window_locked(caller, hwnd);
-  if (!owned) return kstd::unexpected(owned.error());
+  if (!owned)
+    return kstd::unexpected(owned.error());
   KWindowObject &w = **owned;
   uintptr_t previous = 0;
   switch (index) {
@@ -1008,10 +1125,10 @@ kstd::expected<uintptr_t, kstd::error_code> set_window_long(KProcessObject &call
       previous = w.userData;
       w.userData = value;
       return previous;
-    case WindowLongIndex_Style:
-    {
+    case WindowLongIndex_Style: {
       const auto style = set_style_locked(w, static_cast<uint32_t>(value));
-      if (!style) return kstd::unexpected(style.error());
+      if (!style)
+        return kstd::unexpected(style.error());
       return static_cast<uintptr_t>(*style);
     }
     default:// WindowLongIndex_Parent is read-only.
@@ -1022,22 +1139,26 @@ kstd::expected<uintptr_t, kstd::error_code> set_window_long(KProcessObject &call
 kstd::error_code set_capture(KProcessObject &caller, uint32_t hwnd) noexcept {
   Guard guard;
   const auto w = owned_window_locked(caller, hwnd);
-  if (!w) return w.error();
-  if (!effectively_visible_locked(**w) || (*w)->state == KWindowObject::State::Minimized) return KernelError::InvalidState;
+  if (!w)
+    return w.error();
+  if (!effectively_visible_locked(**w) || (*w)->state == KWindowObject::State::Minimized)
+    return KernelError::InvalidState;
   set_capture_locked(hwnd);
   return {};
 }
 
 kstd::error_code release_capture(KProcessObject &caller) noexcept {
   Guard guard;
-  if (const auto *w = lookup_locked(g_capture); w && w->process == &caller) set_capture_locked(0);
+  if (const auto *w = lookup_locked(g_capture); w && w->process == &caller)
+    set_capture_locked(0);
   return {};
 }
 
 kstd::error_code set_focus(KProcessObject &caller, uint32_t hwnd) noexcept {
   Guard guard;
   if (hwnd) {
-    if (const auto w = owned_window_locked(caller, hwnd); !w) return w.error();
+    if (const auto w = owned_window_locked(caller, hwnd); !w)
+      return w.error();
   } else if (const auto *focused = focused_window_locked(); focused && focused->process != &caller) {
     return KernelError::AccessDenied;
   }
@@ -1045,15 +1166,18 @@ kstd::error_code set_focus(KProcessObject &caller, uint32_t hwnd) noexcept {
 }
 
 kstd::error_code set_window_text(KProcessObject &caller, uint32_t hwnd, const kstd::string_view &text) noexcept {
-  if (text.size() >= kWindowTitleLen) return KernelError::InvalidSize;
+  if (text.size() >= kWindowTitleLen)
+    return KernelError::InvalidSize;
   {
     Guard validation;
-    if (const auto w = owned_window_locked(caller, hwnd); !w) return w.error();
+    if (const auto w = owned_window_locked(caller, hwnd); !w)
+      return w.error();
   }
   UiText::snapshot_default().prewarm(text.data(), text.size());
   Guard guard;
   const auto w = owned_window_locked(caller, hwnd);
-  if (!w) return w.error();
+  if (!w)
+    return w.error();
   (*w)->title = text;
   draw_nonclient_locked(**w);
   return {};
@@ -1061,7 +1185,8 @@ kstd::error_code set_window_text(KProcessObject &caller, uint32_t hwnd, const ks
 
 namespace {
 void detach_menu_locked(KWindowObject &window) noexcept {
-  if (!window.menu) return;
+  if (!window.menu)
+    return;
   const auto oldOrigin = client_to_screen_locked(window, {});
   window.menu = 0;
   const auto newOrigin = client_to_screen_locked(window, {});
@@ -1069,7 +1194,8 @@ void detach_menu_locked(KWindowObject &window) noexcept {
   const int32_t dy = newOrigin.top - oldOrigin.top;
   bool canShift = true;
   for (const auto *child = g_top; child; child = child->below) {
-    if (!descendant_locked(*child, window)) continue;
+    if (!descendant_locked(*child, window))
+      continue;
     if (static_cast<int64_t>(child->rect.left) + dx < kMinWindowCoordinate ||
         static_cast<int64_t>(child->rect.right) + dx > kMaxWindowCoordinate ||
         static_cast<int64_t>(child->rect.top) + dy < kMinWindowCoordinate ||
@@ -1080,12 +1206,15 @@ void detach_menu_locked(KWindowObject &window) noexcept {
   }
   if (canShift) {
     for (auto *child = g_top; child; child = child->below) {
-      if (!descendant_locked(*child, window)) continue;
+      if (!descendant_locked(*child, window))
+        continue;
       child->rect = child->rect.Offset(dx, dy);
-      if (!child->restoredRect.Empty()) child->restoredRect = child->restoredRect.Offset(dx, dy);
+      if (!child->restoredRect.Empty())
+        child->restoredRect = child->restoredRect.Offset(dx, dy);
     }
   }
-  if (window.state == KWindowObject::State::Restored) window.restoredRect = window.rect;
+  if (window.state == KWindowObject::State::Restored)
+    window.restoredRect = window.rect;
   window.invalid = client_rect_locked(window);
   window.erasePending = true;
   if (window.queue) {
@@ -1103,10 +1232,13 @@ void detach_menu_locked(KWindowObject &window) noexcept {
 kstd::error_code set_menu(KProcessObject &caller, uint32_t hwnd, uint32_t handle) noexcept {
   Guard guard;
   const auto owned = owned_window_locked(caller, hwnd);
-  if (!owned) return owned.error();
+  if (!owned)
+    return owned.error();
   auto &window = **owned;
-  if (const auto error = validate_menu_attachment_locked(caller, handle); error) return error;
-  if (window.menu == handle) return {};
+  if (const auto error = validate_menu_attachment_locked(caller, handle); error)
+    return error;
+  if (window.menu == handle)
+    return {};
 
   const URect old = window.rect;
   const auto oldOrigin = client_to_screen_locked(window, {});
@@ -1116,7 +1248,8 @@ kstd::error_code set_menu(KProcessObject &caller, uint32_t hwnd, uint32_t handle
   const int32_t dx = newOrigin.left - oldOrigin.left;
   const int32_t dy = newOrigin.top - oldOrigin.top;
   for (auto *child = g_top; child; child = child->below) {
-    if (!descendant_locked(*child, window)) continue;
+    if (!descendant_locked(*child, window))
+      continue;
     if (static_cast<int64_t>(child->rect.left) + dx < kMinWindowCoordinate ||
         static_cast<int64_t>(child->rect.right) + dx > kMaxWindowCoordinate ||
         static_cast<int64_t>(child->rect.top) + dy < kMinWindowCoordinate ||
@@ -1126,11 +1259,14 @@ kstd::error_code set_menu(KProcessObject &caller, uint32_t hwnd, uint32_t handle
     }
   }
   for (auto *child = g_top; child; child = child->below) {
-    if (!descendant_locked(*child, window)) continue;
+    if (!descendant_locked(*child, window))
+      continue;
     child->rect = child->rect.Offset(dx, dy);
-    if (!child->restoredRect.Empty()) child->restoredRect = child->restoredRect.Offset(dx, dy);
+    if (!child->restoredRect.Empty())
+      child->restoredRect = child->restoredRect.Offset(dx, dy);
   }
-  if (window.state == KWindowObject::State::Restored) window.restoredRect = window.rect;
+  if (window.state == KWindowObject::State::Restored)
+    window.restoredRect = window.rect;
   window.invalid = client_rect_locked(window);
   window.erasePending = true;
   if (window.queue) {
@@ -1146,7 +1282,8 @@ kstd::error_code set_menu(KProcessObject &caller, uint32_t hwnd, uint32_t handle
 
 namespace {
 bool shifted_rect_in_range(const URect &rect, int64_t dy, int64_t bottomDelta = 0) noexcept {
-  if (rect.Empty()) return true;
+  if (rect.Empty())
+    return true;
   return static_cast<int64_t>(rect.left) >= kMinWindowCoordinate &&
          static_cast<int64_t>(rect.left) <= kMaxWindowCoordinate &&
          static_cast<int64_t>(rect.right) >= kMinWindowCoordinate &&
@@ -1160,15 +1297,19 @@ bool shifted_rect_in_range(const URect &rect, int64_t dy, int64_t bottomDelta = 
 void collect_menu_text_locked(uint32_t handle, bool (&needed)[128],
                               uint32_t (&visited)[kMaxMenus], uint32_t &visitedCount) noexcept {
   for (uint32_t i = 0; i < visitedCount; ++i)
-    if (visited[i] == handle) return;
-  if (visitedCount == kMaxMenus) return;
+    if (visited[i] == handle)
+      return;
+  if (visitedCount == kMaxMenus)
+    return;
   visited[visitedCount++] = handle;
   for (uint32_t i = 0; i < menu_item_count_locked(handle); ++i) {
     MenuItemView item{};
-    if (!menu_item_locked(handle, i, item)) continue;
+    if (!menu_item_locked(handle, i, item))
+      continue;
     for (size_t j = 0; j < item.text.size(); ++j) {
       const uint32_t codepoint = static_cast<uint8_t>(item.text[j]);
-      if (codepoint < 128) needed[codepoint] = true;
+      if (codepoint < 128)
+        needed[codepoint] = true;
     }
     if (item.flags & kMenuItemPopup)
       collect_menu_text_locked(item.item, needed, visited, visitedCount);
@@ -1176,9 +1317,10 @@ void collect_menu_text_locked(uint32_t handle, bool (&needed)[128],
 }
 
 kstd::error_code apply_default_font(void *, font::DefaultFont &defaults,
-                                    font::UiFont &&candidate) noexcept {
-  font::UiFont displacedDefault;
-  font::UiFont displacedMenu;
+                                    font::UiFont &&adopted) noexcept {
+  font::UiFontHandle candidate = font::UiFontHandle::adopt(static_cast<font::UiFont &&>(adopted));
+  font::UiFontHandle displacedDefault;
+  font::UiFontHandle displacedMenu;
   const UiText candidateText = UiText::of(candidate);
   const int32_t candidateTextHeight = candidateText.text_height();
   const int32_t candidateCaptionHeight =
@@ -1186,16 +1328,18 @@ kstd::error_code apply_default_font(void *, font::DefaultFont &defaults,
                                                    : kCaptionButtonSize;
   const int32_t candidateMenuHeight = candidateText.row_height();
   const int32_t candidateMinimizedHeight = 40 + candidateTextHeight;
-  const uint32_t generation = candidate.generation;
+  const uint32_t generation = candidate.generation();
   bool needed[128]{};
   {
     Guard snapshot;
     for (const auto &entry: g_windows) {
       const auto *window = entry.get();
-      if (!window) continue;
+      if (!window)
+        continue;
       for (size_t i = 0; i < window->title.size(); ++i) {
         const uint32_t codepoint = static_cast<uint8_t>(window->title[i]);
-        if (codepoint < 128) needed[codepoint] = true;
+        if (codepoint < 128)
+          needed[codepoint] = true;
       }
       if (window->menu) {
         uint32_t visited[kMaxMenus]{};
@@ -1204,9 +1348,10 @@ kstd::error_code apply_default_font(void *, font::DefaultFont &defaults,
       }
     }
   }
-  for (uint32_t codepoint = font::UiGlyphs::FirstCodepoint;
-       codepoint < font::UiGlyphs::FirstCodepoint + font::UiGlyphs::Count; ++codepoint) {
-    if (!needed[codepoint]) continue;
+  for (uint32_t codepoint = font::kUiFirstCodepoint;
+       codepoint < font::kUiFirstCodepoint + font::kUiCodepointCount; ++codepoint) {
+    if (!needed[codepoint])
+      continue;
     const char character = static_cast<char>(codepoint);
     candidateText.prewarm(&character, 1);
   }
@@ -1221,13 +1366,16 @@ kstd::error_code apply_default_font(void *, font::DefaultFont &defaults,
     int64_t shifts[kMaxWindows]{};
     for (size_t i = 0; i < kMaxWindows; ++i) {
       auto *window = g_windows[i].get();
-      if (!window) continue;
+      if (!window)
+        continue;
       int64_t ancestors = 0;
       for (auto *parent = lookup_locked(window->parent);
            parent && ancestors < static_cast<int64_t>(kMaxWindows);
            parent = lookup_locked(parent->parent)) {
-        if (parent->style & kStyleCaption) shifts[i] += captionDelta;
-        if (parent->menu) shifts[i] += rowDelta;
+        if (parent->style & kStyleCaption)
+          shifts[i] += captionDelta;
+        if (parent->menu)
+          shifts[i] += rowDelta;
         ++ancestors;
       }
       if (ancestors >= static_cast<int64_t>(kMaxWindows))
@@ -1243,17 +1391,19 @@ kstd::error_code apply_default_font(void *, font::DefaultFont &defaults,
     }
 
     close_all_menus_locked();
-    font::UiFont installedMenu = candidate;
-    defaults.commit(static_cast<font::UiFont &&>(candidate), displacedDefault);
-    install_menu_font_locked(static_cast<font::UiFont &&>(installedMenu), displacedMenu);
+    font::UiFontHandle installedMenu = candidate;
+    font::commit_default(defaults, static_cast<font::UiFontHandle &&>(candidate), displacedDefault);
+    install_menu_font_locked(static_cast<font::UiFontHandle &&>(installedMenu), displacedMenu);
 
     for (size_t i = 0; i < kMaxWindows; ++i) {
       auto *window = g_windows[i].get();
-      if (!window) continue;
+      if (!window)
+        continue;
       if (shifts[i]) {
         const int32_t dy = static_cast<int32_t>(shifts[i]);
         window->rect = window->rect.Offset(0, dy);
-        if (!window->restoredRect.Empty()) window->restoredRect = window->restoredRect.Offset(0, dy);
+        if (!window->restoredRect.Empty())
+          window->restoredRect = window->restoredRect.Offset(0, dy);
         window->moveParam = pack_fields(window->rect.top, window->rect.left);
         window->pendingGeometry |= kPendingGeometryMove;
       }
@@ -1274,29 +1424,14 @@ kstd::error_code apply_default_font(void *, font::DefaultFont &defaults,
         window->sizeParam = pack_fields(client.bottom, client.right);
         window->pendingGeometry |= kPendingGeometrySize;
       }
-      if (window->paintDC && window->process) {
-        if (auto *slot = gfx::FindDC(window->process, window->paintDC)) {
-          visible_region_locked(*window, window->paintClip);
-          if (effectively_visible_locked(*window))
-            window->paintClip.Intersect(client_to_screen_locked(*window, window->painting));
-          else
-            window->paintClip.Clear();
-          const URect origin = client_to_screen_locked(*window, {});
-          (void) slot->ChangeRenderState();
-          slot->originX = origin.left;
-          slot->originY = origin.top;
-          slot->clipRects = reinterpret_cast<const KClipRect *>(window->paintClip.rects);
-          slot->clipCount = window->paintClip.count;
-          slot->clipped = true;
-          slot->hwnd = window->hwnd;
-        }
-      }
+      rebind_paint_dc_locked(*window);
       rebind_window_dc_locked(*window);
       if (window->queue && window->process) {
         window->pendingFontGeneration = generation;
         wake_locked(*window->queue);
       }
-      if (window->queue && window->pendingGeometry) wake_locked(*window->queue);
+      if (window->queue && window->pendingGeometry)
+        wake_locked(*window->queue);
     }
     // Icon widths and heights follow the new label metrics; reflow every
     // minimized sibling set so no icon is stacked, shrunk, or dropped.
@@ -1311,27 +1446,30 @@ kstd::error_code apply_default_font(void *, font::DefaultFont &defaults,
 
 kstd::error_code set_default_font(font::DefaultFont &defaults, uint32_t regularHandle,
                                   uint32_t boldHandle, uint32_t ppem) noexcept {
-  return defaults.publish(regularHandle, boldHandle, ppem, apply_default_font, nullptr);
+  return font::publish_default(defaults, regularHandle, boldHandle, ppem, apply_default_font, nullptr);
 }
 
 kstd::error_code set_builtin_default_font(font::DefaultFont &defaults) noexcept {
-  return defaults.publish_builtin(apply_default_font, nullptr);
+  return font::publish_builtin_default(defaults, apply_default_font, nullptr);
 }
 
 void detach_menu_from_windows_locked(uint32_t menu) noexcept {
   for (const auto &window: g_windows)
-    if (window && window->menu == menu) detach_menu_locked(*window);
+    if (window && window->menu == menu)
+      detach_menu_locked(*window);
 }
 
 void refresh_attached_menu_locked(uint32_t menu) noexcept {
   for (const auto &window: g_windows)
-    if (window && window->menu == menu) expose_locked(window->rect);
+    if (window && window->menu == menu)
+      expose_locked(window->rect);
 }
 
 kstd::expected<uint32_t, kstd::error_code> get_menu(uint32_t hwnd) noexcept {
   Guard guard;
   const auto *window = lookup_locked(hwnd);
-  if (!window) return kstd::unexpected(KernelError::InvalidHandle);
+  if (!window)
+    return kstd::unexpected(KernelError::InvalidHandle);
   return window->menu;
 }
 

@@ -1,7 +1,7 @@
 
 #include "stdkrn.hpp"
 
-#include "gfx/gfx.hpp"
+#include <kernel/gfx/gfx.hpp>
 
 #include <kernel/configuration_manager.hpp>
 

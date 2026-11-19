@@ -1,8 +1,9 @@
-#include "user/user.hpp"
+#include <kernel/gfx/screen.hpp>
+#include <kernel/user/user.hpp>
 
 #include <Kernel.hpp>
-#include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/kobject/KProcessObject.hpp>
+#include <kernel/kobject/KThreadObject.hpp>
 #include <kernel/scheduler.hpp>
 #include <kernel/time.hpp>
 
@@ -11,9 +12,11 @@ namespace {
 // Message waits are alertable: a process exit ends them so the thread retires.
 kstd::error_code alertable_wait(KDispatcherHeader &header, kstd::chrono::milliseconds timeout) noexcept {
   const auto self = KE_SCHED_GetCurrentThread();
-  if (self) self->alertable = true;
+  if (self)
+    self->alertable = true;
   const auto status = KE_SCHED_WaitForHeader(header, timeout);
-  if (self) self->alertable = false;
+  if (self)
+    self->alertable = false;
   return status;
 }
 MessageQueue *g_queues{nullptr};
@@ -22,9 +25,10 @@ MessageQueue *g_queues{nullptr};
 // synthesised from it instead of being queued, which coalesces repaints.
 KWindowObject *paint_candidate_locked(const MessageQueue &queue) noexcept {
   for (auto *w = topmost_locked(); w; w = w->below) {
-    if (w->paintDC && w->process && !kernel::gfx::FindDC(w->process, w->paintDC))
+    if (w->paintDC && w->process && !kernel::gfx::DCExists(w->process, w->paintDC))
       abandon_paint_locked(*w);
-    if (w->queue == &queue && effectively_visible_locked(*w) && !w->paintDC && !w->invalid.Empty()) return w;
+    if (w->queue == &queue && effectively_visible_locked(*w) && !w->paintDC && !w->invalid.Empty())
+      return w;
   }
   return nullptr;
 }
@@ -43,23 +47,29 @@ bool should_serve_paint_before_input_locked(const MessageQueue &queue) noexcept 
 
 kstd::expected<MessageQueue *, kstd::error_code> queue_for_current_locked() noexcept {
   const auto self = KE_SCHED_GetCurrentThread();
-  if (!self) return kstd::unexpected(KernelError::NoCurrentThread);
+  if (!self)
+    return kstd::unexpected(KernelError::NoCurrentThread);
   for (auto *q = g_queues; q; q = q->next) {
-    if (q->thread == self.get()) return q;
+    if (q->thread == self.get())
+      return q;
   }
   return kstd::unexpected(KernelError::NotFound);
 }
 
 kstd::error_code ensure_current_queue() noexcept {
   const auto self = KE_SCHED_GetCurrentThread();
-  if (!self) return KernelError::NoCurrentThread;
+  if (!self)
+    return KernelError::NoCurrentThread;
   {
     Guard guard;
-    if (queue_for_current_locked()) return {};
+    if (queue_for_current_locked())
+      return {};
   }
-  if (!self->owner_process) return KernelError::NoCurrentProcess;
+  if (!self->owner_process)
+    return KernelError::NoCurrentProcess;
   void *p = KE_Malloc(sizeof(MessageQueue));
-  if (!p) return KernelError::OutOfMemory;
+  if (!p)
+    return KernelError::OutOfMemory;
   auto *q = new (p) MessageQueue{};
   q->thread = self.get();
   q->process = self->owner_process;
@@ -83,45 +93,49 @@ void wake_locked(MessageQueue &queue) noexcept {
 
 kstd::error_code post_locked(MessageQueue &queue, uint32_t hwnd, uint32_t message, uintptr_t wParam, uintptr_t lParam,
                              uint32_t keyState) noexcept {
-  const QueuedMessage m{.hwnd = hwnd, .message = message, .wParam = wParam, .lParam = lParam,
-                        .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000),
-                        .keyState = keyState};
-  if (const kstd::error_code pushed = queue.ring.Push(m); pushed) return pushed;
+  const QueuedMessage m{.hwnd = hwnd, .message = message, .wParam = wParam, .lParam = lParam, .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000), .keyState = keyState};
+  if (const kstd::error_code pushed = queue.ring.Push(m); pushed)
+    return pushed;
   wake_locked(queue);
   return {};
 }
 
 kstd::error_code post_message(uint32_t hwnd, uint32_t message, uintptr_t wParam, uintptr_t lParam) noexcept {
   if (!hwnd) {
-    if (const auto error = ensure_current_queue(); error) return error;
+    if (const auto error = ensure_current_queue(); error)
+      return error;
   }
   Guard guard;
   if (hwnd == 0) {
     const auto queue = queue_for_current_locked();
-    if (!queue) return queue.error();
+    if (!queue)
+      return queue.error();
     return post_locked(**queue, 0, message, wParam, lParam);
   }
   auto *w = lookup_locked(hwnd);
-  if (!w) return KernelError::InvalidHandle;
-  if (!w->queue) return KernelError::InvalidState;
+  if (!w)
+    return KernelError::InvalidHandle;
+  if (!w->queue)
+    return KernelError::InvalidState;
   return post_locked(*w->queue, hwnd, message, wParam, lParam);
 }
 
 bool geometry_message_locked(const MessageQueue &queue, QueuedMessage &out, bool remove) noexcept {
   for (auto *w = topmost_locked(); w; w = w->below) {
-    if (w->queue != &queue) continue;
+    if (w->queue != &queue)
+      continue;
     if (!w->pendingGeometry && w->pendingDisplayChange) {
-      out = QueuedMessage{.hwnd = w->hwnd, .message = kMsgDisplayChange, .wParam = w->displayBpp, .lParam = w->displaySize,
-                          .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
-      if (remove) w->pendingDisplayChange = false;
+      out = QueuedMessage{.hwnd = w->hwnd, .message = kMsgDisplayChange, .wParam = w->displayBpp, .lParam = w->displaySize, .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
+      if (remove)
+        w->pendingDisplayChange = false;
       return true;
     }
-    if (!w->pendingGeometry) continue;
+    if (!w->pendingGeometry)
+      continue;
     const bool move = (w->pendingGeometry & 1) != 0;
-    out = QueuedMessage{.hwnd = w->hwnd, .message = move ? kMsgMove : kMsgSize, .wParam = move ? 0 : static_cast<uint32_t>(w->state),
-                        .lParam = move ? w->moveParam : w->sizeParam,
-                        .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
-    if (remove) w->pendingGeometry &= static_cast<uint8_t>(move ? ~1u : ~2u);
+    out = QueuedMessage{.hwnd = w->hwnd, .message = move ? kMsgMove : kMsgSize, .wParam = move ? 0 : static_cast<uint32_t>(w->state), .lParam = move ? w->moveParam : w->sizeParam, .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
+    if (remove)
+      w->pendingGeometry &= static_cast<uint8_t>(move ? ~1u : ~2u);
     return true;
   }
   return false;
@@ -129,18 +143,19 @@ bool geometry_message_locked(const MessageQueue &queue, QueuedMessage &out, bool
 
 bool font_message_locked(const MessageQueue &queue, QueuedMessage &out, bool remove) noexcept {
   for (auto *w = topmost_locked(); w; w = w->below) {
-    if (w->queue != &queue || !w->pendingFontGeneration) continue;
-    out = QueuedMessage{.hwnd = w->hwnd, .message = kMsgFontChanged,
-                        .wParam = w->pendingFontGeneration, .lParam = 0,
-                        .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
-    if (remove) w->pendingFontGeneration = 0;
+    if (w->queue != &queue || !w->pendingFontGeneration)
+      continue;
+    out = QueuedMessage{.hwnd = w->hwnd, .message = kMsgFontChanged, .wParam = w->pendingFontGeneration, .lParam = 0, .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
+    if (remove)
+      w->pendingFontGeneration = 0;
     return true;
   }
   return false;
 }
 
 kstd::expected<QueuedMessage, kstd::error_code> get_message(bool block, bool remove) noexcept {
-  if (const auto error = ensure_current_queue(); error) return kstd::unexpected(error);
+  if (const auto error = ensure_current_queue(); error)
+    return kstd::unexpected(error);
   for (;;) {
     lock();
     const auto queue = queue_for_current_locked();
@@ -156,9 +171,7 @@ kstd::expected<QueuedMessage, kstd::error_code> get_message(bool block, bool rem
     }
     if (should_serve_paint_before_input_locked(*q)) {
       const auto *w = paint_candidate_locked(*q);
-      out = QueuedMessage{.hwnd = w->hwnd, .message = kMsgPaint, .wParam = 0,
-                          .lParam = 0,
-                          .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
+      out = QueuedMessage{.hwnd = w->hwnd, .message = kMsgPaint, .wParam = 0, .lParam = 0, .time = static_cast<uint32_t>(KE_TIME_GetSystemTime().count() / 1000000)};
       unlock();
       return out;
     }
@@ -179,16 +192,20 @@ kstd::expected<QueuedMessage, kstd::error_code> get_message(bool block, bool rem
     // cannot lose a wakeup: a later post sets the header again.
     reset_header(*q);
     unlock();
-    if (!block) return kstd::unexpected(KernelError::WouldBlock);
+    if (!block)
+      return kstd::unexpected(KernelError::WouldBlock);
     if (const kstd::error_code waited = alertable_wait(q->header, kstd::chrono::milliseconds(-1));
-        waited) return kstd::unexpected(waited);
+        waited)
+      return kstd::unexpected(waited);
   }
 }
 
 kstd::error_code wait_message(uint32_t timeoutMs) noexcept {
   const auto pending = get_message(false, false);
-  if (pending) return {};
-  if (pending.error() != KernelError::WouldBlock) return pending.error();
+  if (pending)
+    return {};
+  if (pending.error() != KernelError::WouldBlock)
+    return pending.error();
   // get_message reset the header under the lock, so a post after that point
   // sets it again and the wait below returns at once.
   lock();

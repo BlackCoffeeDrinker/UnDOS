@@ -117,6 +117,13 @@ struct KGraphicsAdapter : KObjectT<KGraphicsAdapter, 1, TYPE_GRAPHICS_ADAPTER> {
                                               const KObjectPtr<KSurface> &src, int x, int y)>
       ReadPixel;
 
+  // Optional CLUT hook: load `palette` entries [first, first + count) for a
+  // display surface. The kernel calls it after a mode commit and whenever the
+  // surface palette changes; drivers replay it after reprogramming the mode.
+  cfunc<void(const KObjectPtr<KGraphicsAdapter> &, const KObjectPtr<KSurface> &surface,
+             const KPalette &palette, uint32_t first, uint32_t count)>
+      SetPalette;
+
   // Optional present / flush hook. `rects` is a list of `count` screen
   // rectangles to transfer; nullptr / count == 0 means the whole surface.
   cfunc<void(const KObjectPtr<KGraphicsAdapter> &,

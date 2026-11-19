@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <__fwd/panic.hpp>
 
-// Modules resolve these through the exported symbol registry; keep them out of -fvisibility=hidden.
+// Modules import these; they are on Kernel/Source/kernel_exports_allowlist.txt.
 #define UNDOS_RUNTIME_EXPORT __attribute__((visibility("default"), used))
 
 extern "C" {
@@ -18,7 +18,7 @@ UNDOS_RUNTIME_EXPORT void __cxa_guard_release(uint64_t *guard) {
   *guard = 1;
 }
 
-UNDOS_RUNTIME_EXPORT void __cxa_guard_abort(uint64_t *) {
+void __cxa_guard_abort(uint64_t *) {
   // nothing needed
 }
 

@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "gfx/palette16.hpp"
 
 namespace kernel::gfx {
 
@@ -121,56 +122,6 @@ constexpr uint8_t BitmapGlyphRow(uint8_t character, uint32_t row) {
 
 constexpr uint64_t BitmapTextWidth(uint64_t length) {
   return length > UINT64_MAX / kFontCellWidth ? UINT64_MAX : static_cast<uint64_t>(length) * kFontCellWidth;
-}
-
-// Palette indices, not COLORREF/Win32 BGR: the same 16 VGA colors used by USER.
-constexpr uint32_t Palette16Rgb(uint32_t index) {
-  constexpr uint32_t colors[16] = {
-      0x000000, 0x0000aa, 0x00aa00, 0x00aaaa,
-      0xaa0000, 0xaa00aa, 0xaa5500, 0xaaaaaa,
-      0x555555, 0x5555ff, 0x55ff55, 0x55ffff,
-      0xff5555, 0xff55ff, 0xffff55, 0xffffff};
-  return colors[index & 15];
-}
-
-constexpr uint32_t RgbTo555(uint32_t rgb) {
-  return ((rgb >> 9) & 0x7c00) | ((rgb >> 6) & 0x03e0) | ((rgb >> 3) & 0x001f);
-}
-
-constexpr uint32_t RgbTo565(uint32_t rgb) {
-  return ((rgb >> 8) & 0xf800) | ((rgb >> 5) & 0x07e0) | ((rgb >> 3) & 0x001f);
-}
-
-// Cirrus packed INDEX8 programs a 3:3:2 DAC ramp; planar VGA uses palette16.
-constexpr uint32_t RgbTo332(uint32_t rgb) {
-  return ((rgb >> 16) & 0xe0) | ((rgb >> 11) & 0x1c) | ((rgb >> 6) & 3);
-}
-
-constexpr uint32_t Palette16ScreenColor(uint32_t index, uint32_t bitsPerPixel) {
-  const auto rgb = Palette16Rgb(index);
-  if (bitsPerPixel == 8) return RgbTo332(rgb);
-  if (bitsPerPixel == 15) return RgbTo555(rgb);
-  if (bitsPerPixel == 16) return RgbTo565(rgb);
-  if (bitsPerPixel == 24) return rgb;
-  if (bitsPerPixel == 32) return 0xff000000u | rgb;
-  return index;
-}
-
-constexpr uint32_t RgbToPalette16(uint32_t rgb) {
-  uint32_t best = 0;
-  uint32_t distance = UINT32_MAX;
-  for (uint32_t i = 0; i < 16; ++i) {
-    const auto candidate = Palette16Rgb(i);
-    const int32_t dr = static_cast<int32_t>((rgb >> 16) & 255) - static_cast<int32_t>((candidate >> 16) & 255);
-    const int32_t dg = static_cast<int32_t>((rgb >> 8) & 255) - static_cast<int32_t>((candidate >> 8) & 255);
-    const int32_t db = static_cast<int32_t>(rgb & 255) - static_cast<int32_t>(candidate & 255);
-    const auto d = static_cast<uint32_t>(dr * dr + dg * dg + db * db);
-    if (d < distance) {
-      best = i;
-      distance = d;
-    }
-  }
-  return best;
 }
 
 // Emits horizontal glyph runs in target coordinates. The caller clips every

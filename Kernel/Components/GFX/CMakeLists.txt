@@ -4,6 +4,8 @@ add_library(kernel_gfx OBJECT
         src/gfx/process_state.cpp
         src/gfx/gfx_management.cpp
         src/gfx/gfx_software_fallback.cpp
+        src/gfx/fill.cpp
+        src/gfx/screen.cpp
         src/gfx/gfx_dc_table.cpp
         src/gfx/font/font_resources.cpp
         src/gfx/font/glyph.cpp
@@ -14,13 +16,11 @@ add_library(kernel_gfx OBJECT
         src/gfx/font/scaler.cpp
         src/gfx/font/text.cpp
         src/gfx/font/font_system.cpp
+        src/gfx/font/ui_font.cpp
         src/gfx/font/vm.cpp
         src/gfx/font/vm_executor.cpp
         src/gfx/font/vm_points.cpp
         src/gfx/font/vm_hints.cpp
         src/gfx/monitor_config.cpp
 )
-undos_kernel_component(kernel_gfx)
-# GFX still calls into USER (scene lock, cursor exclusion, display-change
-# notifications), so it sees User's headers; untangling this is pending.
-target_include_directories(kernel_gfx PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../User/src")
+undos_kernel_component(kernel_gfx GFX)

@@ -9,6 +9,7 @@
 
 #include <kernel/__core.hpp>
 #include <kernel/gfx/clip_rect.hpp>
+#include <kernel/gfx/dc_fwd.hpp>
 #include <kernel/fwd/KDisplay.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
 #include <kernel/kerror.hpp>
@@ -17,12 +18,6 @@
 namespace kernel {
 struct KObject;
 struct KSurface;
-
-// GDI-style device context handle: bits 0-15 are the slot index, bits 16-31
-// are the slot's generation tag (bumped on every Close(), rejecting stale
-// handles that alias a reused index).
-using HDC = uint32_t;
-constexpr HDC INVALID_HDC = 0;
 
 namespace gfx {
 // Process that created a DC; used only by the exit sweep (no access check).
@@ -59,7 +54,7 @@ struct KDeviceContextSlot {
     ++renderGeneration;
     return true;
   }
-  // Slot fields are guarded by the USER scene lock (every GDI path holds it).
+  // Slot fields are guarded by the GFX scene lock (every GDI path holds it).
 
   KObjectPtr<KSurface> target;       // selected surface; its display (if any) gives adapter and screen
   KObjectPtr<KObject> selectedFont;  // immutable font snapshot selected for text drawing
@@ -82,27 +77,24 @@ struct KDeviceContextSlot {
   int32_t originX = 0;
   int32_t originY = 0;
   // When clipped, drawing is limited to clipRects[0..clipCount). The rects
-  // live in window `hwnd`'s paintClip; USER closes the DC before retiring the
-  // window and bumps renderGeneration on every rebind (the clip generation).
+  // live in window `hwnd`'s storage, copied there by gfx::BindWindowDC; USER
+  // closes or detaches the DC before retiring the window. Every rebind bumps
+  // renderGeneration (the clip generation).
   bool clipped = false;
   const KClipRect *clipRects = nullptr;
   uint32_t clipCount = 0;
   uint32_t hwnd = 0;// BeginPaint window, 0 if none (non-owning)
+  // A draw failed part way; CloseWindowDC reports it so the window repaints.
+  bool incompleteDraw = false;
 };
 
 // Maximum number of live DCs system-wide. Fixed so GDI calls never allocate.
 constexpr size_t kMaxDeviceContexts = 4096;
 static_assert(kMaxDeviceContexts <= UINT16_MAX + 1, "HDC index is 16 bits");
 
-// Owners moved out of a closed slot. Drop it after the USER scene lock is
-// released: the last release can free heap memory and wait on the arena.
-struct DetachedDC {
-  KObjectPtr<KSurface> target;
-  KObjectPtr<KObject> font;
-};
 
 // GFX-internal DC table (file-static in gfx_dc_table.cpp). Lock order: USER
-// scene lock -> GFX lock. The GFX lock never masks interrupts.
+// lock -> GFX scene lock -> DC table lock. The GFX lock never masks interrupts.
 namespace gfx {
 // ResourceLimitExceeded when all kMaxDeviceContexts are in use.
 kstd::expected<kstd::pair<KDeviceContextSlot *, HDC>, kstd::error_code> AllocateDC(ProcessKey owner) noexcept;
@@ -111,7 +103,7 @@ KDeviceContextSlot *ResolveDC(HDC hdc) noexcept;
 // Invalidates `hdc` and moves the slot's owners into `released`.
 kstd::error_code CloseDCSlot(HDC hdc, DetachedDC &released) noexcept;
 // Exit sweep only: closes every slot owned by `owner` (never kSystemOwner),
-// dropping owners with no lock held. Call without the USER scene lock.
+// dropping owners with no lock held. Call without the scene lock.
 size_t CloseAllOwnedBy(ProcessKey owner) noexcept;
 }// namespace gfx
 

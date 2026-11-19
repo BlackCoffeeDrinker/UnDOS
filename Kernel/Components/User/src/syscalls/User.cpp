@@ -1,6 +1,8 @@
 #include "stdkrn.hpp"
 #include "syscalls.hpp"
-#include "user/user.hpp"
+#include <kernel/gfx/screen.hpp>
+#include <kernel/gfx/ui_font.hpp>
+#include <kernel/user/user.hpp>
 
 namespace {
 using namespace kernel::user;
@@ -121,6 +123,30 @@ kstd::error_code handle_ReleaseDC_V1(__KRN_USER_RELEASEDC_V1 &&args) {
   const auto process = caller_process();
   if (!process) return process.error();
   return release_window_dc(**process, args.hwnd, args.dc);
+}
+
+kstd::error_code handle_SetSystemFont_V1(__KRN_USER_SETSYSTEMFONT_V1 &&args) {
+  args.generation = 0;
+  const auto process = caller_process();
+  if (!process) return process.error();
+  auto *defaults = kernel::font::system_default_font();
+  if (!defaults) return kernel::KernelError::OutOfMemory;
+  kstd::error_code result;
+  if (args.backend == FontBackend_BackendBuiltinBitmap) {
+    if (args.regularFace || args.boldFace || args.ppem)
+      return kernel::KernelError::InvalidArgument;
+    result = set_builtin_default_font(*defaults);
+  } else if (args.backend == FontBackend_BackendTrueType) {
+    const uint32_t regular = kernel::gfx::FontRegistryHandle(args.regularFace);
+    const uint32_t bold = kernel::gfx::FontRegistryHandle(args.boldFace);
+    if (!regular || !bold) return kernel::KernelError::InvalidHandle;
+    result = set_default_font(*defaults, regular, bold, args.ppem);
+  } else {
+    return kernel::KernelError::InvalidArgument;
+  }
+  if (result) return result;
+  args.generation = kernel::font::UiFontHandle::snapshot_default().generation();
+  return {};
 }
 
 kstd::error_code handle_GetMessage_V1(__KRN_USER_GETMESSAGE_V1 &&args) {

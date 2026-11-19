@@ -1,5 +1,6 @@
 #include "user/ui_text.hpp"
-#include "user/user.hpp"
+#include <kernel/gfx/screen.hpp>
+#include <kernel/user/user.hpp>
 #include <kernel/input.hpp>
 #include <kernel/process_notify.hpp>
 #include <kernel/scheduler.hpp>
@@ -103,7 +104,7 @@ void mouse_locked(const input::MouseInputEvent &event) noexcept {
                                                                                           : x);
   g_input.mouseY = static_cast<int32_t>(y < screen.top ? screen.top : y >= screen.bottom ? screen.bottom - 1
                                                                                          : y);
-  cursor_hide_locked();
+  gfx::BeginScreenDraw();
   // Each drag step redraws the moved window and what it uncovered, so plain
   // moves are applied once per queued burst. Button changes apply at once,
   // so a release ends the drag at its final position.
@@ -124,7 +125,8 @@ void mouse_locked(const input::MouseInputEvent &event) noexcept {
       g_input.buttons |= 2;
     if (event.buttonFlags & input::mouse_button_flags::RightUp)
       g_input.buttons &= ~2u;
-    cursor_move_locked(g_input.mouseX, g_input.mouseY);
+    gfx::SetCursorPosition(g_input.mouseX, g_input.mouseY);
+    gfx::EndScreenDraw();
     return;
   }
 
@@ -197,7 +199,8 @@ void mouse_locked(const input::MouseInputEvent &event) noexcept {
   if (!dragging && !g_input.dragHwnd && target && (event.lastX || event.lastY) &&
       (captured || hit_test_locked(*target, g_input.mouseX, g_input.mouseY) == HitTest::Client))
     post_mouse(*target, kMsgMouseMove);
-  cursor_move_locked(g_input.mouseX, g_input.mouseY);
+  gfx::SetCursorPosition(g_input.mouseX, g_input.mouseY);
+  gfx::EndScreenDraw();
 }
 
 void keyboard_locked(const input::KeyboardInputEvent &event) noexcept {
@@ -266,7 +269,7 @@ void raw_input_thread(void *) {
     const auto screen = screen_rect();
     g_input.mouseX = (screen.left + screen.right) / 2;
     g_input.mouseY = (screen.top + screen.bottom) / 2;
-    cursor_move_locked(g_input.mouseX, g_input.mouseY);
+    gfx::SetCursorPosition(g_input.mouseX, g_input.mouseY);
   }
 
   // Bounds the coalesced burst, so a steady event stream still moves the window.
@@ -280,9 +283,9 @@ void raw_input_thread(void *) {
       if (coalesced >= kMaxCoalescedMoves || !KE_INPUT_DequeueEvent(event)) {
         Guard guard;
         if (g_input.dragPending && g_input.dragHwnd) {
-          cursor_hide_locked();
+          gfx::BeginScreenDraw();
           drag_locked();
-          cursor_show_locked();
+          gfx::EndScreenDraw();
         }
         g_input.dragPending = false;
         coalesced = 0;
@@ -305,7 +308,19 @@ void raw_input_thread(void *) {
 }
 }// namespace
 
+namespace {
+// GFX reports screen events here; it has no notion of windows.
+void on_display_changed(const gfx::DisplayChange &change) noexcept {
+  Guard scene;
+  SceneDrawGuard drawing;
+  if (change.modeCommitted)
+    display_input_changed_locked(change.firstActivation);
+  display_changed_locked(change.bpp);
+}
+}// namespace
+
 kstd::error_code init() noexcept {
+  gfx::RegisterDisplayChangedHandler(on_display_changed);
   constexpr auto notify = [](ProcessEvent event, KProcessObject &process, void *) noexcept -> kstd::error_code {
     if (event == ProcessEvent::Exiting)
       on_process_exit(process);
@@ -336,6 +351,6 @@ void display_input_changed_locked(bool firstActivation) noexcept {
   g_input.mouseY = firstActivation ? screen.bottom / 2 : g_input.mouseY < 0            ? 0
                                                      : g_input.mouseY >= screen.bottom ? screen.bottom - 1
                                                                                        : g_input.mouseY;
-  cursor_move_locked(g_input.mouseX, g_input.mouseY);
+  gfx::SetCursorPosition(g_input.mouseX, g_input.mouseY);
 }
 }// namespace kernel::user

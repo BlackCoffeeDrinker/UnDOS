@@ -358,4 +358,14 @@ syscall V1 USER ReleaseDC [429] {
     dc:   IN c<uint32_t>;
 };
 
+// Installs the system default font. Keeps its original number from the GFX
+// range so the userland ABI is unchanged.
+syscall V1 USER SetSystemFont [363] {
+    backend: IN enum<FontBackend>;
+    regularFace: IN c<uint32_t>;
+    boldFace: IN c<uint32_t>;
+    ppem: IN c<uint32_t>;
+    generation: OUT c<uint32_t>;
+};
+
 // endregion

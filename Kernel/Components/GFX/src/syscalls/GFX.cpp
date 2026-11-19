@@ -1,15 +1,15 @@
-#include "gfx/gfx.hpp"
+#include <kernel/gfx/gfx.hpp>
+#include "gfx/process_state.hpp"
 #include "gfx/adapter_ops.hpp"
 #include "gfx/bitmap_font.hpp"
 #include "gfx/detail/raster_helpers.hpp"
 #include "gfx/font/FontObject.hpp"
 #include "gfx/font/font_system.hpp"
 #include "gfx/font/text.hpp"
-#include "gfx/process_state.hpp"
 
 #include "stdkrn.hpp"
 #include "syscalls.hpp"
-#include "user/user.hpp"
+#include "gfx/screen_internal.hpp"
 
 #include <expected.hpp>
 
@@ -23,8 +23,8 @@
 // contract. Unused object/region/stretch/alpha APIs remain explicitly unsupported.
 //
 // Device contexts (DCs) are ephemeral per-process state, not Object-Manager
-// resources: all DCs live in one fixed GFX-private table behind gfx::CreateDC /
-// FindDC / CloseDC, resolved via a generation-tagged HDC handle rather than
+// resources: all DCs live in one fixed GFX-private table behind gfx::create_dc_locked /
+// find_dc_locked / close_dc_locked, resolved via a generation-tagged HDC handle rather than
 // the generic ProcessHandleTable used for long-lived KObjects like KSurface.
 
 #if __STDC_HOSTED__
@@ -350,7 +350,7 @@ struct OwnedBitmap final : kernel::KSurface {
   }
 };
 
-kernel::user::URect DrawBounds(int64_t l, int64_t t, int64_t r, int64_t b) {
+kernel::gfx::ScreenRect DrawBounds(int64_t l, int64_t t, int64_t r, int64_t b) {
   const auto clamp = [](int64_t v) {
     return static_cast<int32_t>(v < INT32_MIN ? INT32_MIN : v > INT32_MAX ? INT32_MAX
                                                                           : v);
@@ -358,21 +358,21 @@ kernel::user::URect DrawBounds(int64_t l, int64_t t, int64_t r, int64_t b) {
   return {.left = clamp(l), .top = clamp(t), .right = clamp(r), .bottom = clamp(b)};
 }
 
-// USER's scene lock serializes screen writes with cursor save/restore and
+// The GFX scene lock serializes screen writes with cursor save/restore and
 // nonclient repaint. It must be taken before any per-DC lock.
 // The cursor is touched only when the draw can reach it: the slot targets the
 // cursor's surface and its clip and draw bounds overlap the cursor. Its restore and
 // redraw then share a single present.
 struct ScreenDrawGuard {
-  kernel::user::Guard scene;
-  kernel::user::URect restored{};
+  kernel::gfx::SceneGuard scene;
+  kernel::gfx::ScreenRect restored{};
   // Call with the slot locked, before any pixel is written. `draw` (target
   // coordinates) narrows the test to the pixels the operation can touch.
-  void exclude(const kernel::KDeviceContextSlot &slot, const kernel::user::URect *draw = nullptr) {
+  void exclude(const kernel::KDeviceContextSlot &slot, const kernel::gfx::ScreenRect *draw = nullptr) {
     if (!restored.Empty() || !slot.target) return;
-    kernel::user::URect bounds{.left = 0, .top = 0, .right = static_cast<int32_t>(slot.target->width), .bottom = static_cast<int32_t>(slot.target->height)};
+    kernel::gfx::ScreenRect bounds{.left = 0, .top = 0, .right = static_cast<int32_t>(slot.target->width), .bottom = static_cast<int32_t>(slot.target->height)};
     if (slot.clipped) {
-      kernel::user::URect clip{};
+      kernel::gfx::ScreenRect clip{};
       for (uint32_t i = 0; slot.clipRects && i < slot.clipCount; ++i) {
         const auto &c = slot.clipRects[i];
         clip = clip.Union({.left = c.left, .top = c.top, .right = c.right, .bottom = c.bottom});
@@ -381,9 +381,9 @@ struct ScreenDrawGuard {
     }
     if (draw) bounds = bounds.Intersect(*draw);
     if (bounds.Empty()) return;
-    restored = kernel::user::cursor_exclude_locked(slot.target.get(), bounds);
+    restored = kernel::gfx::cursor_exclude_locked(slot.target.get(), bounds);
   }
-  ~ScreenDrawGuard() { kernel::user::cursor_include_locked(restored); }
+  ~ScreenDrawGuard() { kernel::gfx::cursor_include_locked(restored); }
 };
 
 uint32_t BytesPerPixel(kernel::PixelFormat format) {
@@ -818,31 +818,6 @@ kstd::error_code handle_CloseFontResource_V1(__KRN_GFX_CLOSEFONTRESOURCE_V1 &&ar
   return fonts->close(args.handle);
 }
 
-kstd::error_code handle_SetSystemFont_V1(__KRN_GFX_SETSYSTEMFONT_V1 &&args) {
-  args.generation = 0;
-  auto *process = CurrentProcess();
-  if (!process) return kernel::KernelError::NoCurrentProcess;
-  auto *system = fontSystem();
-  if (!system) return kernel::KernelError::OutOfMemory;
-  kstd::error_code result;
-  if (args.backend == FontBackend_BackendBuiltinBitmap) {
-    if (args.regularFace || args.boldFace || args.ppem)
-      return kernel::KernelError::InvalidArgument;
-    result = kernel::user::set_builtin_default_font(system->defaults);
-  } else if (args.backend == FontBackend_BackendTrueType) {
-    auto *fonts = &kernel::gfx::font_resources();
-    const uint32_t regular = fonts->registry_handle(args.regularFace);
-    const uint32_t bold = fonts->registry_handle(args.boldFace);
-    if (!regular || !bold) return kernel::KernelError::InvalidHandle;
-    result = kernel::user::set_default_font(system->defaults, regular, bold, args.ppem);
-  } else {
-    return kernel::KernelError::InvalidArgument;
-  }
-  if (result) return result;
-  args.generation = system->defaults.snapshot().generation;
-  return {};
-}
-
 kstd::error_code handle_AcquireFont_V1(__KRN_GFX_ACQUIREFONT_V1 &&args) {
   args.font = args.generation = 0;
   if (args.source != FontSource_AcquireSystemDefault &&
@@ -899,10 +874,10 @@ kstd::error_code handle_SelectFont_V1(__KRN_GFX_SELECTFONT_V1 &&args) {
   kernel::KObjectPtr<kernel::KObject> previous;
   bool resolved = false;
   {
-    kernel::user::Guard scene;
+    kernel::gfx::SceneGuard scene;
     // Resolve under the scene lock so a concurrent DeleteDC or slot reuse is
     // seen through the generation check.
-    if (auto *slot = kernel::gfx::FindDC(process, args.dc)) {
+    if (auto *slot = kernel::gfx::find_dc_locked(process, args.dc)) {
       resolved = true;
       if (!slot->ChangeRenderState()) {
         (void) process->handles.Cancel(*reserved);
@@ -979,21 +954,13 @@ kstd::error_code handle_CreateDC_V1(__KRN_GFX_CREATEDC_V1 &&args) {
 
   const auto proc = CurrentProcess();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
-  {
-    kernel::user::Guard scene;
-    const auto display = kernel::gfx::active_video_present_target();
-    if (!memory && (!display || !display->surface || !display->isAttachedToDesktop))
-      return kernel::KernelError::Unsupported;
-  }
-  const auto allocated = kernel::gfx::CreateDC(proc);
+  kernel::gfx::SceneGuard scene;
+  const auto display = kernel::gfx::active_video_present_target();
+  if (!memory && (!display || !display->surface || !display->isAttachedToDesktop))
+    return kernel::KernelError::Unsupported;
+  const auto allocated = kernel::gfx::create_dc_locked(proc);
   if (!allocated) return allocated.error();
   auto [slot, hdc] = *allocated;
-  kernel::user::Guard scene;
-  const auto display = kernel::gfx::active_video_present_target();
-  if (!memory && (!display || !display->surface || !display->isAttachedToDesktop)) {
-    kernel::gfx::CloseDC(proc, hdc);
-    return kernel::KernelError::Unsupported;
-  }
 
   slot->memoryDC = memory;
   slot->noAccel = (flags & DCInitFlags_NoAccel) != 0;
@@ -1191,12 +1158,15 @@ kstd::error_code handle_CommitVideoPresentTopology_V1(__KRN_GFX_COMMITVIDEOPRESE
   out.degraded = committed->degraded;
   args.written = 1;
 
-  kernel::user::Guard scene;
-  kernel::user::SceneDrawGuard drawing;
-  kernel::user::cursor_reset_locked();
-  kernel::user::display_input_changed_locked(firstActivation);
+  {
+    kernel::gfx::SceneGuard scene;
+    kernel::gfx::cursor_reset_locked();
+  }
   const auto active = kernel::gfx::active_video_present_target();
-  kernel::user::display_changed_locked(active ? active->currentMode.bpp : 0);
+  kernel::gfx::notify_display_changed({.active = active,
+                                       .bpp = active ? active->currentMode.bpp : 0,
+                                       .modeCommitted = true,
+                                       .firstActivation = firstActivation});
   return {};
 }
 
@@ -1205,29 +1175,21 @@ kstd::error_code handle_DeleteDC_V1(__KRN_GFX_DELETEDC_V1 &&args) {
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   // Declared before the scene lock: the DC's owners are dropped after it.
   kernel::DetachedDC released;
-  kernel::user::Guard scene;
-
-  for (auto *window = kernel::user::topmost_locked(); window; window = window->below) {
-    if (window->process == proc && window->paintDC == args.dc) {
-      kernel::user::abandon_paint_locked(*window);
-      break;
-    }
-    if (window->process == proc && window->windowDC == args.dc) {
-      kernel::user::abandon_window_dc_locked(*window);
-      break;
-    }
-  }
-
-  return kernel::gfx::CloseDC(proc, args.dc, released);
+  kernel::gfx::SceneGuard scene;
+  const auto *slot = kernel::gfx::find_dc_locked(proc, args.dc);
+  if (!slot) return kernel::KernelError::InvalidHandle;
+  // A window DC belongs to USER until EndPaint or ReleaseDC.
+  if (slot->hwnd) return kernel::KernelError::AccessDenied;
+  return kernel::gfx::close_dc_locked(proc, args.dc, released);
 }
 
 kstd::error_code handle_SelectObject_V1(__KRN_GFX_SELECTOBJECT_V1 &&args) {
   const auto proc = CurrentProcess();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   kernel::KObjectPtr<kernel::KSurface> oldTarget;
-  kernel::user::Guard scene;
+  kernel::gfx::SceneGuard scene;
 
-  const auto slot = kernel::gfx::FindDC(proc, args.dc);
+  const auto slot = kernel::gfx::find_dc_locked(proc, args.dc);
   if (!slot) return kernel::KernelError::InvalidHandle;
 
   const auto resolved = ResolveSurface(*proc, args.object);
@@ -1300,7 +1262,7 @@ kstd::error_code CreateRamBitmap(uint32_t width, uint32_t height, kernel::PixelF
 
 kstd::error_code PublishBitmap(kernel::KProcessObject &proc, const kernel::KObjectPtr<kernel::KSurface> &bitmap,
                                uint32_t &handle) {
-  kernel::user::Guard scene;
+  kernel::gfx::SceneGuard scene;
   const auto allocated = proc.handles.Allocate(
       bitmap,
       kernel::ProcessHandleTable::HandleAccess::Read |
@@ -1339,9 +1301,9 @@ kstd::error_code handle_CreateCompatibleBitmap_V1(__KRN_GFX_CREATECOMPATIBLEBITM
   kernel::KObjectPtr<kernel::KSurface> bitmap;
   {
     // The scene and draw locks keep the engine fill ordered with other draws.
-    kernel::user::Guard scene;
-    kernel::user::SceneDrawGuard drawing;
-    const auto slot = kernel::gfx::FindDC(proc, args.dc);
+    kernel::gfx::SceneGuard scene;
+    kernel::gfx::ScreenDrawHold drawing;
+    const auto slot = kernel::gfx::find_dc_locked(proc, args.dc);
     if (!slot) return kernel::KernelError::InvalidHandle;
     if (!slot->target) return kernel::KernelError::InvalidState;
     format = slot->target->pixelFormat;
@@ -1365,7 +1327,7 @@ kstd::error_code handle_CreateCompatibleBitmap_V1(__KRN_GFX_CREATECOMPATIBLEBITM
 kstd::error_code handle_DeleteObject_V1(__KRN_GFX_DELETEOBJECT_V1 &&args) {
   const auto proc = CurrentProcess();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
-  kernel::user::Guard scene;
+  kernel::gfx::SceneGuard scene;
 
   const auto surface = ResolveSurface(*proc, args.object);
   if (!surface) return surface.error();
@@ -1376,9 +1338,9 @@ kstd::error_code handle_DeleteObject_V1(__KRN_GFX_DELETEOBJECT_V1 &&args) {
 kstd::error_code handle_MoveTo_V1(__KRN_GFX_MOVETO_V1 &&args) {
   const auto proc = CurrentProcess();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
-  kernel::user::Guard scene;
+  kernel::gfx::SceneGuard scene;
 
-  const auto slot = kernel::gfx::FindDC(proc, args.dc);
+  const auto slot = kernel::gfx::find_dc_locked(proc, args.dc);
   if (!slot) return kernel::KernelError::InvalidHandle;
 
   slot->currentX = args.x;
@@ -1392,7 +1354,7 @@ kstd::error_code handle_LineTo_V1(__KRN_GFX_LINETO_V1 &&args) {
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   ScreenDrawGuard draw;
 
-  const auto slot = kernel::gfx::FindDC(proc, args.dc);
+  const auto slot = kernel::gfx::find_dc_locked(proc, args.dc);
   if (!slot) return kernel::KernelError::InvalidHandle;
 
 
@@ -1431,7 +1393,7 @@ kstd::error_code handle_Rectangle_V1(__KRN_GFX_RECTANGLE_V1 &&args) {
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   ScreenDrawGuard draw;
 
-  const auto slot = kernel::gfx::FindDC(proc, args.dc);
+  const auto slot = kernel::gfx::find_dc_locked(proc, args.dc);
   if (!slot) return kernel::KernelError::InvalidHandle;
 
 
@@ -1472,8 +1434,8 @@ kstd::error_code handle_DrawText_V1(__KRN_GFX_DRAWTEXT_V1 &&args) {
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   TextRenderState state;
   {
-    kernel::user::Guard scene;
-    auto *slot = kernel::gfx::FindDC(proc, args.dc);
+    kernel::gfx::SceneGuard scene;
+    auto *slot = kernel::gfx::find_dc_locked(proc, args.dc);
     if (!slot) return kernel::KernelError::InvalidHandle;
     const auto error = state.capture(*slot);
     if (error) return error;
@@ -1511,7 +1473,7 @@ kstd::error_code handle_DrawText_V1(__KRN_GFX_DRAWTEXT_V1 &&args) {
     kstd::error_code error;
     {
       ScreenDrawGuard draw;
-      auto *slot = kernel::gfx::FindDC(proc, args.dc);
+      auto *slot = kernel::gfx::find_dc_locked(proc, args.dc);
       if (!slot) {
         error = kernel::KernelError::InvalidHandle;
       } else {
@@ -1526,15 +1488,13 @@ kstd::error_code handle_DrawText_V1(__KRN_GFX_DRAWTEXT_V1 &&args) {
                                   int64_t{args.y} + state.originY, cursor,
                                   done, processed, runs, dirty);
           Present(*slot, dirty);
+          // The window owner repaints when it closes the DC.
+          if (error) slot->incompleteDraw = true;
 #if __STDC_HOSTED__
           if (kernel::gfx::test_hooks::textSlice)
             kernel::gfx::test_hooks::textSlice(processed, runs);
 #endif
         }
-      }
-      if (error) {
-        if (auto *window = kernel::user::lookup_locked(state.hwnd))
-          kernel::user::invalidate_locked(*window, window->painting, false);
       }
     }
     if (error) return error;
@@ -1548,8 +1508,8 @@ kstd::error_code handle_BitBlt_V1(__KRN_GFX_BITBLT_V1 &&args) {
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   ScreenDrawGuard draw;
 
-  const auto dstSlot = kernel::gfx::FindDC(proc, args.dstDC);
-  const auto srcSlot = kernel::gfx::FindDC(proc, args.srcDC);
+  const auto dstSlot = kernel::gfx::find_dc_locked(proc, args.dstDC);
+  const auto srcSlot = kernel::gfx::find_dc_locked(proc, args.srcDC);
   if (!dstSlot || !srcSlot) return kernel::KernelError::InvalidHandle;
 
   if (!dstSlot->target || !srcSlot->target) {
@@ -1673,8 +1633,8 @@ kstd::error_code handle_SetDrawColors_V1(__KRN_GFX_SETDRAWCOLORS_V1 &&args) {
   const auto proc = CurrentProcess();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
   if (args.foreground > 15 || args.background > 15 || args.opaque > 1) return kernel::KernelError::InvalidArgument;
-  kernel::user::Guard scene;
-  const auto slot = kernel::gfx::FindDC(proc, args.dc);
+  kernel::gfx::SceneGuard scene;
+  const auto slot = kernel::gfx::find_dc_locked(proc, args.dc);
   if (!slot) return kernel::KernelError::InvalidHandle;
   if (!slot->ChangeRenderState()) {
     return kernel::KernelError::InvalidState;
@@ -1688,7 +1648,7 @@ kstd::error_code handle_SetDrawColors_V1(__KRN_GFX_SETDRAWCOLORS_V1 &&args) {
 kstd::error_code handle_GetBitmapBits_V1(__KRN_GFX_GETBITMAPBITS_V1 &&args) {
   const auto proc = CurrentProcess();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
-  kernel::user::Guard scene;
+  kernel::gfx::SceneGuard scene;
 
   const auto resolved = ResolveSurface(*proc, args.bitmap);
   if (!resolved) return resolved.error();
@@ -1708,7 +1668,7 @@ kstd::error_code handle_GetBitmapBits_V1(__KRN_GFX_GETBITMAPBITS_V1 &&args) {
 kstd::error_code handle_SetBitmapBits_V1(__KRN_GFX_SETBITMAPBITS_V1 &&args) {
   const auto proc = CurrentProcess();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
-  kernel::user::Guard scene;
+  kernel::gfx::SceneGuard scene;
 
   const auto resolved = ResolveSurface(*proc, args.bitmap);
   if (!resolved) return resolved.error();
@@ -1727,9 +1687,9 @@ kstd::error_code handle_SetBitmapBits_V1(__KRN_GFX_SETBITMAPBITS_V1 &&args) {
 kstd::error_code handle_GetDeviceCaps_V1(__KRN_GFX_GETDEVICECAPS_V1 &&args) {
   const auto proc = CurrentProcess();
   if (!proc) return kernel::KernelError::NoCurrentProcess;
-  kernel::user::Guard scene;
+  kernel::gfx::SceneGuard scene;
 
-  const auto slot = kernel::gfx::FindDC(proc, args.dc);
+  const auto slot = kernel::gfx::find_dc_locked(proc, args.dc);
   if (!slot) return kernel::KernelError::InvalidHandle;
 
 

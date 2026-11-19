@@ -20,6 +20,12 @@ enum class DeviceEvent : uint32_t {
   Started = 1,
   Stopped = 2,
   Changed = 3,
+  // Delivered synchronously by KE_PNP_ReportRemovedDevice, on the caller's
+  // thread, to every member of the stack before it is marked Removed.
+  Removing = 4,
+  // Raised (queued) on the PnP ROOT device when PnP parks a device whose
+  // driver service is not loaded yet; the loader drains the pending names.
+  DriverRequested = 5,
 };
 }// namespace kernel::pnp
 namespace kernel::event {

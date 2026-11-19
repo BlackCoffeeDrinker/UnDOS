@@ -3,6 +3,7 @@
 #include <kernel/__core.hpp>
 #include <kernel/fwd/KDisplay.hpp>
 #include <kernel/fwd/KObjectPtr.hpp>
+#include <kernel/gfx/palette.hpp>
 #include <kernel/kobject/KObjectT.hpp>
 #include <kernel/kobject/ObjectType.hpp>
 
@@ -109,6 +110,7 @@ struct KSurface : KObjectT<KSurface, 1, TYPE_SURFACE> {
   uint32_t bpp{0};                            // Bits per pixel
   size_t sizeInBytes{0};                      // Total buffer byte size (Win2k cjBits)
   PixelFormat pixelFormat{PixelFormat::RGB24};// Explicit pixel layout enum
+  KPalette palette{KDefaultPalette()};        // Color table for palette indices
 
   // Locking & Flags
   uint32_t flags{0};   // Bitfield of SurfaceFlags

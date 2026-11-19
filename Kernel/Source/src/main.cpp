@@ -1,32 +1,39 @@
 #include "stdkrn.hpp"
 
 #include "CommandLineParser.hpp"
-#include "configuration_manager.hpp"
+#include <kernel/pnp/configuration_manager.hpp>
 #include "crt_init.hpp"
-#include "dispatch.hpp"
-#include "driver_loader.hpp"
-#include "event_broadcaster.hpp"
-#include "gfx/gfx.hpp"
-#include "initial/boot_device_vfs.hpp"
-#include "initial/root_volume_selector.hpp"
-#include "input/input_manager.hpp"
-#include "module/module_registry.hpp"
-#include "object_manager.hpp"
-#include "pnp_manager.hpp"
-#include "profiler/profiler.hpp"
-#include "resource_manager.hpp"
-#include "scheduler/CpuContext.hpp"
-#include "scheduler/Scheduler.hpp"
-#include "smp.hpp"
-#include "subsystem_loader.hpp"
-#include "tty/tty_pump.hpp"
-#include "user/user.hpp"
-#include "vfs.hpp"
-#include "vmm.hpp"
+#include <kernel/executive/init.hpp>
+#include <kernel/loader/driver_loader.hpp>
+#include <kernel/ob/event_broadcaster.hpp>
+#include <kernel/gfx/gfx.hpp>
+#include <kernel/initial/boot_device_vfs.hpp>
+#include <kernel/initial/root_volume_selector.hpp>
+#include <kernel/input/input_manager.hpp>
+#include <kernel/loader/module_registry.hpp>
+#include <kernel/pnp/pnp_manager.hpp>
+#include <kernel/ps/process_image.hpp>
+#include <kernel/ps/process_stdio.hpp>
+#include <kernel/profiler/profiler.hpp>
+#include <kernel/pnp/resource_manager.hpp>
+#include <kernel/loader/subsystem_loader.hpp>
+#include <kernel/io/adapters.hpp>
+#include <kernel/konsole.hpp>
+#include <kernel/tty/tty_pump.hpp>
+#include <kernel/user/user.hpp>
+#include <kernel/io/vfs.hpp>
+#include <kernel/mm/vmm.hpp>
 
 uint32_t g_page_size;
 
 namespace {
+
+// IO default console provider: the TTY console sink as an opaque stream.
+kernel::KIOObjectResult OpenDefaultConsoleStream() noexcept {
+  const auto sink = KE_TTY_GetDefaultConsoleSink();
+  if (!sink) return kstd::unexpected(kernel::KernelError::NotFound);
+  return KE_IO_FromObject(sink);
+}
 
 const char *MappedRegionBaseName(kernel::MappedMemoryRegionType type) {
   switch (type) {
@@ -210,7 +217,7 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
   kernel::module::RegisterBootModules(boot_info);
   MemoryReclaim_BootStructures();
 
-  kernel::driver::init();
+  kernel::ps::SetImageLoader(kernel::driver::LoadUserImage);
   HAL_VMM_FinalizeInit();
   kernel::prof::prof_init();
   kernel::sched::init_bsp();
@@ -386,6 +393,10 @@ UNDOS_KERNEL_API_DEF [[noreturn]] void kernel_core_main(const kernel::BootInfoT 
 
   //DumpObjectTree(KE_OB_GetRootDirectory());
   //DumpDeviceTree();
+
+  // Processes without inherited handles get std streams on the TTY console.
+  kernel::io::SetDefaultConsoleProvider(OpenDefaultConsoleStream);
+  kernel::ps::SetStdioProvider(kernel::io::OpenDefaultConsole);
 
   // Try and find the init
   KE_Print("Loading init...");

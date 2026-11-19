@@ -1,0 +1,7 @@
+# Kernel exports that cannot use UNDOS_KERNEL_PUBLIC_V1API: C++ ABI symbols
+# with fixed (mangled) names that loadable modules import. Checked by
+# check_exports.py after every kernel link. Everything else must be V1API.
+_ZdlPvm               # operator delete(void*, size_t): virtual destructors
+__cxa_guard_acquire   # function-local statics
+__cxa_guard_release
+__cxa_pure_virtual

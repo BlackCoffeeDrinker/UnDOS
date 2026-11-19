@@ -1,7 +1,7 @@
 #include <Kernel.hpp>
 #include <__fwd/panic.hpp>
 
-extern "C" UNDOS_KERNEL_API_DEF [[noreturn]] void KE_RUNTIME_Panic(const char *message) {
+extern "C" UNDOS_KERNEL_API_DEF [[noreturn]] void KE_RUNTIME_Panic(const char *message) noexcept {
   HAL_PLATFORM_Panic(message, __FILE__, __LINE__);
 }
 
